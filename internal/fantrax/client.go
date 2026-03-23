@@ -21,6 +21,7 @@ type Player struct {
 	Status         string   // "Active", "Reserve", "Injured Reserve", "Minors"
 	NextGameDate   string   // "2026-03-22" or "" if no game found
 	InMinors       bool     // true if player is currently in the minor leagues (icon "4")
+	IsInjured      bool     // true if player is on IL, day-to-day, or out indefinitely
 }
 
 // Slot describes one active roster slot.
@@ -213,6 +214,7 @@ func toPlayer(rp models.RosterPlayer) Player {
 		Status:         rp.Status,
 		NextGameDate:   nextDate,
 		InMinors:       models.HasIcon(rp.Icons, models.IconMinorLeagues),
+		IsInjured:      models.HasInjury(rp.Icons),
 	}
 }
 
