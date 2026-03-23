@@ -157,47 +157,87 @@ func main() {
 		slotName[s.PosID] = s.PosName
 	}
 
-	// --- Per-date loop ---
-	for _, date := range cfg.Dates {
-		isToday := date.Equal(today)
-		period := fantrax.PeriodForDate(seasonStart, date)
+	// --- Parallel fetch + optimize for all dates ---
+	type dateResult struct {
+		date     time.Time
+		period   int
+		isToday  bool
+		result   optimizer.Result
+		warnings []string
+	}
+
+	results := make([]dateResult, len(cfg.Dates))
+	var mu sync.Mutex // protects log output during parallel fetch
+
+	var g errgroup.Group
+	for i, date := range cfg.Dates {
+		i, date := i, date
+		g.Go(func() error {
+			isToday := date.Equal(today)
+			period := fantrax.PeriodForDate(seasonStart, date)
+
+			var warnings []string
+
+			// Fetch roster for this period so we see what's already been set.
+			dateRoster := hitterRoster
+			if !isToday && period > 0 {
+				if r, err := ft.GetHitterRosterForPeriod(period); err == nil {
+					dateRoster = r
+				} else {
+					mu.Lock()
+					warnings = append(warnings, fmt.Sprintf("could not fetch roster for period %d (%v) — using current roster", period, err))
+					mu.Unlock()
+				}
+			}
+
+			// MLB schedule.
+			playingToday, err := schedClient.TeamsPlayingOn(date)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("mlb schedule unavailable for %s (%v) — assuming all teams play", date.Format("2006-01-02"), err))
+				playingToday = allTeamsPlaying(dateRoster)
+			}
+
+			// Optimize.
+			result := optimizer.OptimizeLineup(dateRoster, playingToday, projSrc, scoring, slots)
+
+			results[i] = dateResult{
+				date:     date,
+				period:   period,
+				isToday:  isToday,
+				result:   result,
+				warnings: warnings,
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		log.Fatalf("parallel optimize: %v", err)
+	}
+
+	if !multiDate && len(results) == 1 {
+		log.Printf("teams playing today: %d", len(results[0].result.Scored))
+	}
+
+	// --- Sequential print + apply ---
+	for _, dr := range results {
+		for _, w := range dr.warnings {
+			log.Printf("WARNING: %s", w)
+		}
 
 		if multiDate {
-			header := date.Format("2006-01-02")
-			if isToday {
+			header := dr.date.Format("2006-01-02")
+			if dr.isToday {
 				header += " (today)"
 			}
 			fmt.Printf("\n=== %s ===\n", header)
 		}
 
-		// Fetch roster for this period so we see what's already been set.
-		dateRoster := hitterRoster
-		if !isToday && period > 0 {
-			if r, err := ft.GetHitterRosterForPeriod(period); err == nil {
-				dateRoster = r
-			} else {
-				log.Printf("WARNING: could not fetch roster for period %d (%v) — using current roster", period, err)
-			}
-		}
-
-		// --- MLB schedule ---
-		playingToday, err := schedClient.TeamsPlayingOn(date)
-		if err != nil {
-			log.Printf("WARNING: mlb schedule unavailable for %s (%v) — assuming all teams play", date.Format("2006-01-02"), err)
-			playingToday = allTeamsPlaying(dateRoster)
-		}
-		if !multiDate {
-			log.Printf("teams playing today: %d", len(playingToday))
-		}
-
-		// --- Optimize ---
-		result := optimizer.OptimizeLineup(dateRoster, playingToday, projSrc, scoring, slots)
-
 		// --- Print ranking ---
 		fmt.Println("\n=== Hitter Ranking ===")
 		fmt.Printf("%-25s %-6s %-8s %s\n", "Player", "Team", "Pts/G", "Game?")
 		fmt.Println(repeatStr("-", 55))
-		for _, sp := range result.Scored {
+		for _, sp := range dr.result.Scored {
 			game := "no"
 			if sp.HasGame {
 				game = "YES"
@@ -207,7 +247,7 @@ func main() {
 
 		// --- Print planned moves ---
 		fmt.Println("\n=== Planned Lineup Changes ===")
-		if len(result.ToActivate) == 0 && len(result.ToBench) == 0 {
+		if len(dr.result.ToActivate) == 0 && len(dr.result.ToBench) == 0 {
 			fmt.Println("No changes needed.")
 			if !multiDate {
 				os.Exit(0)
@@ -215,10 +255,10 @@ func main() {
 			continue
 		}
 
-		for _, ps := range result.ToActivate {
+		for _, ps := range dr.result.ToActivate {
 			fmt.Printf("  ACTIVATE  %-25s → %s\n", playerName[ps.PlayerID], slotName[ps.PosID])
 		}
-		for _, id := range result.ToBench {
+		for _, id := range dr.result.ToBench {
 			fmt.Printf("  BENCH     %s\n", playerName[id])
 		}
 
@@ -228,15 +268,15 @@ func main() {
 		}
 
 		// --- Resolve period for this date ---
-		dateKey := date.Format("2006-01-02")
-		if period == 0 && !isToday {
+		dateKey := dr.date.Format("2006-01-02")
+		if dr.period == 0 && !dr.isToday {
 			fmt.Printf("\n[SKIP] No scoring period found for %s — changes not applied.\n", dateKey)
 			continue
 		}
 
-		// --- Apply ---
-		fmt.Printf("\nApplying lineup for %s (period %d)...\n", dateKey, period)
-		if err := ft.ApplyLineup(period, result.ToActivate, result.ToBench); err != nil {
+		// --- Apply (sequential — Fantrax API is not concurrent-safe) ---
+		fmt.Printf("\nApplying lineup for %s (period %d)...\n", dateKey, dr.period)
+		if err := ft.ApplyLineup(dr.period, dr.result.ToActivate, dr.result.ToBench); err != nil {
 			log.Fatalf("apply lineup: %v", err)
 		}
 		fmt.Println("Lineup applied successfully.")
