@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nixon-commits/fantrax-optimizer/internal/config"
@@ -14,6 +15,7 @@ import (
 	"github.com/nixon-commits/fantrax-optimizer/internal/projections"
 	"github.com/nixon-commits/fantrax-optimizer/internal/roster"
 	"github.com/nixon-commits/fantrax-optimizer/internal/schedule"
+	"golang.org/x/sync/errgroup"
 )
 
 func main() {
@@ -140,10 +142,10 @@ func main() {
 	multiDate := len(cfg.Dates) > 1
 	schedClient := schedule.NewClient()
 
-	// Build date→period map so we can set lineups for future dates.
-	dateToPeriod, err := ft.GetDateToPeriodMap()
+	// Get season start date for period calculation (period 1 = season start day).
+	seasonStart, _, err := ft.GetSeasonDateRange()
 	if err != nil {
-		log.Printf("WARNING: could not build date-to-period map (%v) — only today's lineup can be set", err)
+		log.Printf("WARNING: could not get season start (%v) — only today's lineup can be set", err)
 	}
 
 	playerName := make(map[string]string)
@@ -158,6 +160,7 @@ func main() {
 	// --- Per-date loop ---
 	for _, date := range cfg.Dates {
 		isToday := date.Equal(today)
+		period := fantrax.PeriodForDate(seasonStart, date)
 
 		if multiDate {
 			header := date.Format("2006-01-02")
@@ -167,18 +170,28 @@ func main() {
 			fmt.Printf("\n=== %s ===\n", header)
 		}
 
+		// Fetch roster for this period so we see what's already been set.
+		dateRoster := hitterRoster
+		if !isToday && period > 0 {
+			if r, err := ft.GetHitterRosterForPeriod(period); err == nil {
+				dateRoster = r
+			} else {
+				log.Printf("WARNING: could not fetch roster for period %d (%v) — using current roster", period, err)
+			}
+		}
+
 		// --- MLB schedule ---
 		playingToday, err := schedClient.TeamsPlayingOn(date)
 		if err != nil {
 			log.Printf("WARNING: mlb schedule unavailable for %s (%v) — assuming all teams play", date.Format("2006-01-02"), err)
-			playingToday = allTeamsPlaying(hitterRoster)
+			playingToday = allTeamsPlaying(dateRoster)
 		}
 		if !multiDate {
 			log.Printf("teams playing today: %d", len(playingToday))
 		}
 
 		// --- Optimize ---
-		result := optimizer.OptimizeLineup(hitterRoster, playingToday, projSrc, scoring, slots)
+		result := optimizer.OptimizeLineup(dateRoster, playingToday, projSrc, scoring, slots)
 
 		// --- Print ranking ---
 		fmt.Println("\n=== Hitter Ranking ===")
@@ -216,12 +229,10 @@ func main() {
 
 		// --- Resolve period for this date ---
 		dateKey := date.Format("2006-01-02")
-		period, ok := dateToPeriod[dateKey]
-		if !ok && !isToday {
+		if period == 0 && !isToday {
 			fmt.Printf("\n[SKIP] No scoring period found for %s — changes not applied.\n", dateKey)
 			continue
 		}
-		// period=0 tells the API to auto-detect current period (works for today).
 
 		// --- Apply ---
 		fmt.Printf("\nApplying lineup for %s (period %d)...\n", dateKey, period)

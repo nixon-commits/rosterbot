@@ -89,7 +89,19 @@ func NewClient(leagueID, teamID string) (*Client, error) {
 
 // GetHitterRoster returns all hitters on the team (active + reserve; excludes IL/minors).
 func (c *Client) GetHitterRoster() ([]Player, error) {
-	roster, err := c.auth.GetCurrentPeriodTeamRosterInfo(c.teamID)
+	return c.GetHitterRosterForPeriod(0)
+}
+
+// GetHitterRosterForPeriod returns all hitters for the given scoring period.
+// Pass 0 to use the current period.
+func (c *Client) GetHitterRosterForPeriod(period int) ([]Player, error) {
+	var roster *models.TeamRoster
+	var err error
+	if period == 0 {
+		roster, err = c.auth.GetCurrentPeriodTeamRosterInfo(c.teamID)
+	} else {
+		roster, err = c.auth.GetTeamRosterInfo(fmt.Sprintf("%d", period), c.teamID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get team roster: %w", err)
 	}
@@ -194,32 +206,73 @@ func (c *Client) GetScoringWeights() (ScoringWeights, error) {
 // ApplyLineup sends the updated lineup to Fantrax for the given scoring period.
 // Pass 0 to auto-detect the current period.
 func (c *Client) ApplyLineup(period int, active []PlayerSlot, reserve []string) error {
-	editor, err := c.auth.NewRosterEditor(period, c.teamID, false, true)
-	if err != nil {
-		return fmt.Errorf("create roster editor: %w", err)
+	// Auto-detect period if 0.
+	if period == 0 {
+		p, err := c.auth.GetCurrentPeriod()
+		if err != nil {
+			return fmt.Errorf("auto-detect period: %w", err)
+		}
+		period = p
 	}
 
+	// Fetch roster and build fieldMap for this period.
+	rawRoster, err := c.auth.GetTeamRosterInfoRaw(fmt.Sprintf("%d", period), c.teamID)
+	if err != nil {
+		return fmt.Errorf("get roster for period %d: %w", period, err)
+	}
+	fieldMap := auth_client.BuildFieldMapFromRoster(rawRoster)
+
+	// Apply moves to fieldMap.
 	for _, ps := range active {
-		if err := editor.MoveToActive(ps.PlayerID, ps.PosID); err != nil {
-			return fmt.Errorf("move %s to active: %w", ps.PlayerID, err)
+		pos, ok := fieldMap[ps.PlayerID]
+		if !ok {
+			return fmt.Errorf("player %s not found in roster", ps.PlayerID)
 		}
+		pos.StID = "1" // Active
+		pos.PosID = ps.PosID
+		fieldMap[ps.PlayerID] = pos
 	}
 	for _, id := range reserve {
-		if err := editor.MoveToReserve(id); err != nil {
-			return fmt.Errorf("move %s to reserve: %w", id, err)
+		pos, ok := fieldMap[id]
+		if !ok {
+			return fmt.Errorf("player %s not found in roster", id)
 		}
+		pos.StID = "2" // Reserve
+		pos.PosID = ""
+		fieldMap[id] = pos
 	}
 
-	result, err := editor.Apply(false)
+	// First call — may return a confirmation prompt for future periods.
+	rawResp, err := c.auth.ConfirmOrExecuteTeamRosterChangesRaw(period, c.teamID, fieldMap, false, true, false)
 	if err != nil {
 		return fmt.Errorf("apply roster changes: %w", err)
 	}
-	if !result.Success {
-		if strings.Contains(result.ErrorMessage, "no changes detected") ||
-			strings.Contains(strings.ToLower(result.ErrorMessage), "same lineup") {
-			return nil // already optimal
+
+	if len(rawResp.Responses) > 0 {
+		data := rawResp.Responses[0].Data
+		// Fantrax returns a confirmation prompt for future periods — retry to confirm.
+		if data.FantasyResponse.MainMsg != "" && strings.Contains(data.FantasyResponse.MainMsg, "Please confirm") {
+			rawResp, err = c.auth.ConfirmOrExecuteTeamRosterChangesRaw(period, c.teamID, fieldMap, false, true, false)
+			if err != nil {
+				return fmt.Errorf("confirm roster changes: %w", err)
+			}
+			if len(rawResp.Responses) > 0 {
+				data = rawResp.Responses[0].Data
+				if data.FantasyResponse.MainMsg != "" && !strings.Contains(data.FantasyResponse.MainMsg, "Please confirm") {
+					return fmt.Errorf("roster change rejected after confirm: %s", data.FantasyResponse.MainMsg)
+				}
+			}
+			return nil
 		}
-		return fmt.Errorf("roster change rejected: %s", result.ErrorMessage)
+		// Real error.
+		if data.FantasyResponse.MainMsg != "" {
+			msg := data.FantasyResponse.MainMsg
+			if strings.Contains(msg, "no changes detected") ||
+				strings.Contains(strings.ToLower(msg), "same lineup") {
+				return nil
+			}
+			return fmt.Errorf("roster change rejected: %s", msg)
+		}
 	}
 	return nil
 }
