@@ -101,11 +101,21 @@ func main() {
 	if len(result.ToActivate) == 0 && len(result.ToBench) == 0 {
 		fmt.Println("No changes needed.")
 	}
+
+	playerName := make(map[string]string)
+	for _, p := range roster {
+		playerName[p.ID] = p.Name
+	}
+	slotName := make(map[string]string)
+	for _, s := range slots {
+		slotName[s.PosID] = s.PosName
+	}
+
 	for _, ps := range result.ToActivate {
-		fmt.Printf("  ACTIVATE  %s → slot %s\n", ps.PlayerID, ps.PosID)
+		fmt.Printf("  ACTIVATE  %-25s → %s\n", playerName[ps.PlayerID], slotName[ps.PosID])
 	}
 	for _, id := range result.ToBench {
-		fmt.Printf("  BENCH     %s\n", id)
+		fmt.Printf("  BENCH     %s\n", playerName[id])
 	}
 
 	if cfg.DryRun {
