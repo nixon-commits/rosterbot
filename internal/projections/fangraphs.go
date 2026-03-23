@@ -113,7 +113,7 @@ func NewFanGraphsSource() (*FanGraphsSource, error) {
 // GetProjection looks up a player's projection by name and MLB team.
 func (s *FanGraphsSource) GetProjection(name, mlbTeam string) (*Projection, bool) {
 	// Try exact name+team match first.
-	key := projKey(name, strings.ToUpper(mlbTeam))
+	key := projKey(name, mlbTeam)
 	if p, ok := s.projections[key]; ok {
 		return p, true
 	}
@@ -138,7 +138,32 @@ func (s *FanGraphsSource) GetProjection(name, mlbTeam string) (*Projection, bool
 }
 
 func projKey(name, team string) string {
-	return NormalizeName(name) + "|" + strings.ToUpper(team)
+	return NormalizeName(name) + "|" + NormalizeTeam(team)
+}
+
+// NormalizeTeam maps team abbreviations from various sources (FanGraphs, MLB API)
+// to the Fantrax convention, which is the canonical form used throughout the system.
+func NormalizeTeam(team string) string {
+	switch strings.ToUpper(strings.TrimSpace(team)) {
+	case "SDP":
+		return "SD"
+	case "SFG":
+		return "SF"
+	case "KCR":
+		return "KC"
+	case "WSN":
+		return "WSH"
+	case "TBR":
+		return "TB"
+	case "AZ":
+		return "ARI"
+	case "CWS":
+		return "CHW"
+	case "OAK":
+		return "ATH"
+	default:
+		return strings.ToUpper(strings.TrimSpace(team))
+	}
 }
 
 func NormalizeName(name string) string {

@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nixon-commits/fantrax-optimizer/internal/config"
@@ -122,6 +121,14 @@ func main() {
 	}
 	log.Printf("pitcher scoring weights: %d categories", len(pitcherScoring))
 
+	// --- Current period (shared by hitter + pitcher blending) ---
+	currentPeriod, periodErr := ft.GetCurrentPeriod()
+	if periodErr != nil {
+		log.Printf("WARNING: could not get current period (%v) — using Steamer only", periodErr)
+	} else {
+		log.Printf("current period: %d", currentPeriod)
+	}
+
 	// --- Hitter projections (shared across dates) ---
 	var hitterProjSrc projections.Source
 	fgSrc, err := projections.NewFanGraphsSource()
@@ -133,15 +140,13 @@ func main() {
 		rolling := projections.NewRollingSource()
 		baseSrc := projections.NewChainedSource(fgSrc, rolling)
 
-		currentPeriod, err := ft.GetCurrentPeriod()
-		if err != nil {
-			log.Printf("WARNING: could not get current period (%v) — using Steamer only", err)
-			hitterProjSrc = baseSrc
-		} else if currentPeriod <= 1 {
-			log.Printf("season not started (period %d) — using Steamer only", currentPeriod)
+		if periodErr != nil || currentPeriod <= 1 {
+			if currentPeriod <= 1 {
+				log.Printf("season not started (period %d) — using Steamer only", currentPeriod)
+			}
 			hitterProjSrc = baseSrc
 		} else {
-			log.Printf("current period: %d, fetching last 10 periods...", currentPeriod)
+			log.Printf("fetching last 10 hitter periods...")
 			recentStats, err := ft.GetRecentStats(currentPeriod, 10)
 			if err != nil {
 				log.Printf("WARNING: recent hitter stats unavailable (%v) — using Steamer only", err)
@@ -168,11 +173,7 @@ func main() {
 		pitRolling := projections.NewPitcherRollingSource()
 		pitBaseSrc := projections.NewPitcherChainedSource(fgPitSrc, pitRolling)
 
-		currentPeriod, err := ft.GetCurrentPeriod()
-		if err != nil {
-			log.Printf("WARNING: could not get current period for pitchers (%v) — using Steamer only", err)
-			pitcherProjSrc = pitBaseSrc
-		} else if currentPeriod <= 1 {
+		if periodErr != nil || currentPeriod <= 1 {
 			pitcherProjSrc = pitBaseSrc
 		} else {
 			recentPitStats, err := ft.GetRecentPitcherStats(currentPeriod, 10)
@@ -228,7 +229,6 @@ func main() {
 	}
 
 	results := make([]dateResult, len(cfg.Dates))
-	var mu sync.Mutex
 
 	var g errgroup.Group
 	for i, date := range cfg.Dates {
@@ -246,16 +246,12 @@ func main() {
 				if r, err := ft.GetHitterRosterForPeriod(period); err == nil {
 					dateHitterRoster = r
 				} else {
-					mu.Lock()
 					warnings = append(warnings, fmt.Sprintf("could not fetch hitter roster for period %d (%v) — using current", period, err))
-					mu.Unlock()
 				}
 				if r, err := ft.GetPitcherRosterForPeriod(period); err == nil {
 					datePitcherRoster = r
 				} else {
-					mu.Lock()
 					warnings = append(warnings, fmt.Sprintf("could not fetch pitcher roster for period %d (%v) — using current", period, err))
-					mu.Unlock()
 				}
 			}
 
@@ -383,13 +379,6 @@ func main() {
 func parseDates(s string, today time.Time) ([]time.Time, error) {
 	if s == "" {
 		return []time.Time{today}, nil
-	}
-	if s == "all" {
-		dates := make([]time.Time, 14)
-		for i := range dates {
-			dates[i] = today.AddDate(0, 0, i)
-		}
-		return dates, nil
 	}
 	if parts := strings.SplitN(s, ":", 2); len(parts) == 2 {
 		start, err := time.Parse("2006-01-02", parts[0])

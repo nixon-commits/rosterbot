@@ -110,7 +110,7 @@ func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
 
 // GetPitcherProjection looks up a pitcher's projection by name and MLB team.
 func (s *FanGraphsPitcherSource) GetPitcherProjection(name, mlbTeam string) (*PitcherProjection, bool) {
-	key := projKey(name, strings.ToUpper(mlbTeam))
+	key := projKey(name, mlbTeam)
 	if p, ok := s.projections[key]; ok {
 		return p, true
 	}

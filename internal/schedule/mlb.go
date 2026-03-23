@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/nixon-commits/fantrax-optimizer/internal/projections"
 )
 
 var mlbScheduleURL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&hydrate=team&date=%s"
@@ -57,8 +59,8 @@ func (c *Client) TeamsPlayingOn(date time.Time) (map[string]bool, error) {
 	playing := make(map[string]bool)
 	for _, d := range payload.Dates {
 		for _, g := range d.Games {
-			playing[g.Teams.Away.Team.Abbreviation] = true
-			playing[g.Teams.Home.Team.Abbreviation] = true
+			playing[projections.NormalizeTeam(g.Teams.Away.Team.Abbreviation)] = true
+			playing[projections.NormalizeTeam(g.Teams.Home.Team.Abbreviation)] = true
 		}
 	}
 	return playing, nil

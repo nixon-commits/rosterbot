@@ -8,8 +8,6 @@ import (
 	"github.com/pmurley/go-fantrax/auth_client"
 )
 
-const rpAppearanceRate = 0.55
-
 // ScoredPitcher pairs a pitcher with their expected fantasy points per game.
 type ScoredPitcher struct {
 	Player      fantrax.Player
@@ -139,7 +137,7 @@ func scorePitcherRoster(
 				} else {
 					// Team plays but pitcher not listed as probable: bench.
 					// However, dual SP/RP players can still pitch in relief.
-					if !spEligible || isRPEligible(p.Positions) {
+					if isRPEligible(p.Positions) {
 						// Dual eligible: treat as RP when not starting.
 						hasGame = teamPlays
 					} else {
@@ -172,11 +170,6 @@ func scorePitcherRoster(
 			if ok && proj.G > 0 {
 				pts = pitcherExpectedPts(proj, scoring)
 			}
-		}
-
-		// Apply RP appearance discount for non-starters.
-		if !isStarter && hasGame {
-			pts *= rpAppearanceRate
 		}
 
 		scored = append(scored, ScoredPitcher{

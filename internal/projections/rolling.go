@@ -29,6 +29,7 @@ func (s *RollingSource) AddPlayer(
 	}
 	scale := 162.0 / float64(gamesPlayed)
 	s.stats[NormalizeName(name)] = &Projection{
+		G:       162,
 		PA:      float64(gamesPlayed) * 4.0 * scale, // rough 4 PA/game estimate
 		H:       h * scale,
 		Doubles: doubles * scale,

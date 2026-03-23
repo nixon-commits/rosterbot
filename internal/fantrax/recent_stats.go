@@ -92,7 +92,7 @@ func parseMatchupDate(s string) (time.Time, error) {
 // PeriodForDate returns the daily scoring period number for the given date.
 // Periods are 1-indexed days from the season start (period 1 = seasonStart).
 func PeriodForDate(seasonStart, date time.Time) int {
-	days := int(date.Sub(seasonStart.Truncate(24*time.Hour)).Hours() / 24)
+	days := int(date.Truncate(24*time.Hour).Sub(seasonStart.Truncate(24*time.Hour)).Hours() / 24)
 	return days + 1 // period 1 = day 0
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/nixon-commits/fantrax-optimizer/internal/projections"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -60,10 +61,10 @@ func (c *Client) ProbableStarters(date time.Time) (map[string]string, error) {
 	for _, d := range payload.Dates {
 		for _, g := range d.Games {
 			if pp := g.Teams.Away.ProbablePitcher; pp != nil && pp.FullName != "" {
-				starters[normalizePitcherName(pp.FullName)] = g.Teams.Away.Team.Abbreviation
+				starters[normalizePitcherName(pp.FullName)] = projections.NormalizeTeam(g.Teams.Away.Team.Abbreviation)
 			}
 			if pp := g.Teams.Home.ProbablePitcher; pp != nil && pp.FullName != "" {
-				starters[normalizePitcherName(pp.FullName)] = g.Teams.Home.Team.Abbreviation
+				starters[normalizePitcherName(pp.FullName)] = projections.NormalizeTeam(g.Teams.Home.Team.Abbreviation)
 			}
 		}
 	}
