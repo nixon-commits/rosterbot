@@ -104,6 +104,29 @@ func (c *Client) GetHitterRoster() ([]Player, error) {
 	return players, nil
 }
 
+// GetFullHitterRoster returns all hitters including IL and Minors slots.
+func (c *Client) GetFullHitterRoster() ([]Player, error) {
+	roster, err := c.auth.GetCurrentPeriodTeamRosterInfo(c.teamID)
+	if err != nil {
+		return nil, fmt.Errorf("get team roster: %w", err)
+	}
+
+	var all []models.RosterPlayer
+	all = append(all, roster.ActiveRoster...)
+	all = append(all, roster.ReserveRoster...)
+	all = append(all, roster.InjuredReserve...)
+	all = append(all, roster.MinorsRoster...)
+
+	var players []Player
+	for _, rp := range all {
+		if !isHitter(rp) {
+			continue
+		}
+		players = append(players, toPlayer(rp))
+	}
+	return players, nil
+}
+
 // GetActiveSlots returns the ordered list of active hitter slots for the league.
 func (c *Client) GetActiveSlots() ([]Slot, error) {
 	info, err := c.public.GetLeagueInfo(c.leagueID)

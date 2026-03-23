@@ -14,10 +14,10 @@ type Config struct {
 	LeagueID string
 	TeamID   string
 	DryRun   bool
-	Date     time.Time
+	Dates    []time.Time
 }
 
-func Load(dryRun bool, date time.Time) (*Config, error) {
+func Load(dryRun bool, dates []time.Time) (*Config, error) {
 	// Load .env if present (local dev); ignore error if missing (GHA uses env directly)
 	_ = godotenv.Load()
 
@@ -27,7 +27,7 @@ func Load(dryRun bool, date time.Time) (*Config, error) {
 		LeagueID: os.Getenv("FANTRAX_LEAGUE_ID"),
 		TeamID:   os.Getenv("FANTRAX_TEAM_ID"),
 		DryRun:   dryRun,
-		Date:     date,
+		Dates:    dates,
 	}
 
 	var missing []string
