@@ -249,6 +249,29 @@ func TestOptimizeLineup_UsesBlendedPtsPerGame(t *testing.T) {
 	}
 }
 
+func TestOptimizeLineup_ILPlayerNotActivated(t *testing.T) {
+	scoring := fantrax.ScoringWeights{"HR": 4.0}
+
+	proj := newStubProj(map[string]*projections.Projection{
+		"IL Player":      {G: 150, PA: 600, HR: 40}, // best hitter but on IL
+		"Healthy Player": {G: 100, PA: 400, HR: 10},
+	})
+
+	roster := []fantrax.Player{
+		{ID: "il1", Name: "IL Player", MLBTeam: "NYY", Positions: []string{"012", "014"}, Status: "Injured Reserve"},
+		{ID: "h1", Name: "Healthy Player", MLBTeam: "NYY", Positions: []string{"012", "014"}, Status: "Reserve"},
+	}
+
+	slots := []fantrax.Slot{{PosID: "012", PosName: "OF"}}
+	playingToday := map[string]bool{"NYY": true}
+
+	result := OptimizeLineup(roster, playingToday, proj, scoring, slots)
+
+	if len(result.ToActivate) != 1 || result.ToActivate[0].PlayerID != "h1" {
+		t.Errorf("expected healthy player activated, got %+v", result.ToActivate)
+	}
+}
+
 func TestExpectedPts_Calculation(t *testing.T) {
 	// 150 games, 30 HR, 90 RBI, 120 singles
 	proj := &projections.Projection{

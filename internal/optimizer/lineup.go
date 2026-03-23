@@ -185,7 +185,7 @@ func scoreRoster(
 
 	scored := make([]ScoredPlayer, 0, len(roster))
 	for _, p := range roster {
-		hasGame := playingToday[p.MLBTeam]
+		hasGame := playingToday[p.MLBTeam] && p.Status != "Injured Reserve" && p.Status != "Minors"
 		var pts float64
 		found := false
 
