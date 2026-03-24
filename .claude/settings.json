@@ -3,15 +3,25 @@
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "command": "cd /Users/jnixon/fantrax && go vet ./... 2>&1",
-        "description": "Run go vet after file changes"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /Users/jnixon/fantrax && go vet ./... 2>&1",
+            "description": "Run go vet after file changes"
+          }
+        ]
       }
     ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
-        "command": "case \"$CLAUDE_FILE_PATH\" in *.env|*.env.*|*/.fantrax-cache/*|*/.prospects-cache/*) echo 'BLOCKED: refusing to edit sensitive/cache file' >&2; exit 1;; *) exit 0;; esac",
-        "description": "Block edits to credential and cache files"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "case \"$CLAUDE_FILE_PATH\" in *.env|*.env.*|*/.fantrax-cache/*|*/.prospects-cache/*) echo 'BLOCKED: refusing to edit sensitive/cache file' >&2; exit 1;; *) exit 0;; esac",
+            "description": "Block edits to credential and cache files"
+          }
+        ]
       }
     ]
   }

@@ -434,14 +434,14 @@ func extractDate(dt string) string {
 
 // EligibleForSlot returns true if the player's position IDs include the slot's position ID.
 // UT ("014") accepts all hitters.
-// INF ("008") accepts C, 1B, 2B, 3B, SS.
+// INF ("008") accepts 1B, 2B, 3B, SS (not C).
 func EligibleForSlot(playerPositions []string, slot Slot) bool {
 	if slot.PosID == auth_client.PosUtil { // "014" - UT accepts anyone
 		return true
 	}
-	// INF accepts infield positions.
+	// INF accepts infield positions (not catcher).
 	if slot.PosID == "008" {
-		infPosIDs := map[string]bool{"001": true, "002": true, "003": true, "004": true, "005": true}
+		infPosIDs := map[string]bool{"002": true, "003": true, "004": true, "005": true}
 		for _, pos := range playerPositions {
 			if infPosIDs[pos] {
 				return true

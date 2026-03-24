@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-var fangraphsPitchingURL = "https://www.fangraphs.com/api/projections?type=steamer&stats=pit&pos=all&team=0&players=0&lg=all"
+var fangraphsPitchingURL = "https://www.fangraphs.com/api/projections?type=fangraphsdc&stats=pit&pos=all&team=0&players=0&lg=all"
 
 // PitcherProjection holds projected season counting stats for a pitcher.
 // All values are season totals; per-game rates are derived by dividing by G.

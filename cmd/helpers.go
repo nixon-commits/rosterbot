@@ -4,11 +4,30 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/roster"
 )
+
+// padRight pads s with spaces to the given display width (rune count).
+func padRight(s string, width int) string {
+	w := utf8.RuneCountInString(s)
+	if w >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-w)
+}
+
+// truncName truncates a name to maxLen runes.
+func truncName(name string, maxLen int) string {
+	runes := []rune(name)
+	if len(runes) <= maxLen {
+		return name
+	}
+	return string(runes[:maxLen])
+}
 
 // parseDates parses the --dates flag value into a slice of dates.
 func parseDates(s string, today time.Time) ([]time.Time, error) {

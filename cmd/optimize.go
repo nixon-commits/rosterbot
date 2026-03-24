@@ -245,6 +245,16 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 	multiDate := len(cfg.Dates) > 1
 	schedClient := schedule.NewClient()
 
+	// --- Fetch park factors from Statcast (shared across dates) ---
+	var parkFactors map[string]projections.ParkFactors
+	pf, err := schedClient.FetchParkFactorsWithFallback()
+	if err != nil {
+		log.Printf("WARNING: statcast park factors unavailable (%v) — using neutral park", err)
+	} else {
+		parkFactors = pf
+		log.Printf("statcast park factors loaded: %d parks", len(parkFactors))
+	}
+
 	// Get season start date for period calculation.
 	// If we already fetched the season range for --dates all, reuse seasonStart from above.
 	if !needsSeasonLookup {
@@ -356,6 +366,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		hitterResult  optimizer.Result
 		pitcherResult optimizer.PitcherResult
 		warnings      []string
+		venues        map[string]string // team → home team (for park factor display)
 	}
 
 	results := make([]dateResult, len(cfg.Dates))
@@ -399,8 +410,23 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				probableStarters = map[string]string{} // empty = default to start
 			}
 
-			// Optimize hitters.
-			hitterResult := optimizer.OptimizeLineup(dateHitterRoster, playingToday, hitterProjSrc, hitterScoring, hitterSlots)
+			// Fetch game venues for park factor adjustment.
+			var venues map[string]string
+			if parkFactors != nil {
+				v, err := schedClient.GameVenues(date)
+				if err != nil {
+					warnings = append(warnings, fmt.Sprintf("game venues unavailable for %s (%v) — using neutral park", date.Format("2006-01-02"), err))
+				} else {
+					venues = v
+				}
+			}
+
+			// Optimize hitters (with park factor adjustment if available).
+			dateHitterSrc := hitterProjSrc
+			if venues != nil && parkFactors != nil {
+				dateHitterSrc = projections.NewParkAdjustedSource(hitterProjSrc, parkFactors, venues)
+			}
+			hitterResult := optimizer.OptimizeLineup(dateHitterRoster, playingToday, dateHitterSrc, hitterScoring, hitterSlots)
 
 			// Optimize pitchers.
 			// GS budget gate only applies to today — for future dates the budget
@@ -419,6 +445,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				hitterResult:  hitterResult,
 				pitcherResult: pitcherResult,
 				warnings:      warnings,
+				venues:        venues,
 			}
 			return nil
 		})
@@ -434,111 +461,160 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			log.Printf("WARNING: %s", w)
 		}
 
+		// --- Build side-by-side hitter/pitcher display ---
+		const (
+			colL = 43 // hitter column width (runes)
+			colR = 48 // pitcher column width (runes)
+		)
+
 		// Date header
 		dateLabel := dr.date.Format("Mon Jan 2")
 		if dr.isToday {
 			dateLabel += " (today)"
 		}
 		if multiDate {
-			fmt.Printf("\n╔══════════════════════════════════════════════════════════════╗\n")
-			fmt.Printf("║  %-58s  ║\n", dateLabel)
-			fmt.Printf("╚══════════════════════════════════════════════════════════════╝\n")
+			boxW := colL + 3 + colR
+			fmt.Printf("\n  ╔%s╗\n", strings.Repeat("═", boxW))
+			fmt.Printf("  ║  %-*s║\n", boxW-2, dateLabel)
+			fmt.Printf("  ╚%s╝\n", strings.Repeat("═", boxW))
 		}
 
-		// --- Print hitter ranking ---
-		hitterWidth := 60
-		fmt.Printf("\n  Hitters %s\n", strings.Repeat("─", hitterWidth-9))
-		fmt.Printf("  %-23s %-5s %7s  %-4s  %s\n", "Player", "Team", "Pts/G", "Slot", "Game")
-		fmt.Printf("  %s\n", strings.Repeat("─", hitterWidth))
+		// --- Hitter lines ---
+		var hLines []string
+		hLines = append(hLines, "Hitters "+strings.Repeat("─", colL-8))
+		hLines = append(hLines, "  "+padRight("Player", 19)+" "+padRight("Team", 4)+" "+fmt.Sprintf("%6s", "Pts/G")+" "+padRight("Slot", 4)+" Game")
+		hLines = append(hLines, strings.Repeat("─", colL))
+
 		var hitterStartingPts float64
-		var hitterStartCount int
-		benchSeparatorPrinted := false
+		var hActive, hBench []optimizer.ScoredPlayer
 		for _, sp := range dr.hitterResult.Scored {
-			slot := ""
-			isActive := sp.Player.Status == "Active"
-			if isActive {
-				if name, ok := slotName[sp.Player.RosterPosition]; ok {
-					slot = name
-				}
+			if sp.Player.Status == "Active" {
+				hActive = append(hActive, sp)
 				if sp.HasGame {
 					hitterStartingPts += sp.ExpectedPts
-					hitterStartCount++
 				}
-			} else if !benchSeparatorPrinted {
-				fmt.Printf("  %s\n", strings.Repeat("·", hitterWidth))
-				benchSeparatorPrinted = true
+			} else {
+				hBench = append(hBench, sp)
 			}
-
-			game := "  "
-			if sp.HasGame {
-				game = "✓ "
-			}
-
-			marker := " "
-			if isActive {
-				marker = "▸"
-			}
-
-			fmt.Printf("  %s %-22s %-5s %7.2f  %-4s  %s\n", marker, sp.Player.Name, sp.Player.MLBTeam, sp.ExpectedPts, slot, game)
 		}
-		fmt.Printf("  %s\n", strings.Repeat("─", hitterWidth))
-		fmt.Printf("  %-23s %5s %7.2f  (%d starting)\n", "Total", "", hitterStartingPts, hitterStartCount)
 
-		// --- Print pitcher ranking ---
-		pitcherWidth := 68
-		fmt.Printf("\n  Pitchers %s\n", strings.Repeat("─", pitcherWidth-10))
-		fmt.Printf("  %-23s %-5s %7s  %-4s  %-3s %-5s %s\n", "Player", "Team", "Pts/G", "Slot", "Pos", "Prob", "Game")
-		fmt.Printf("  %s\n", strings.Repeat("─", pitcherWidth))
-		var pitcherStartingPts float64
-		var pitcherStartCount int
-		benchSeparatorPrinted = false
-		for _, sp := range dr.pitcherResult.Scored {
+		for _, sp := range hActive {
 			slot := ""
-			isActive := sp.Player.Status == "Active"
-			if isActive {
-				if name, ok := slotName[sp.Player.RosterPosition]; ok {
-					slot = name
-				}
-				if sp.HasGame {
-					pitcherStartingPts += sp.ExpectedPts
-					pitcherStartCount++
-				}
-			} else if !benchSeparatorPrinted {
-				fmt.Printf("  %s\n", strings.Repeat("·", pitcherWidth))
-				benchSeparatorPrinted = true
+			if name, ok := slotName[sp.Player.RosterPosition]; ok {
+				slot = name
 			}
+			game := " "
+			if sp.HasGame {
+				game = "✓"
+			}
+			line := padRight("▸", 1) + " " + padRight(truncName(sp.Player.Name, 19), 19) + " " +
+				padRight(sp.Player.MLBTeam, 4) + " " + fmt.Sprintf("%6.2f", sp.ExpectedPts) +
+				" " + padRight(slot, 4) + " " + game
+			hLines = append(hLines, line)
+		}
+		if len(hBench) > 0 {
+			hLines = append(hLines, strings.Repeat("·", colL))
+			for _, sp := range hBench {
+				game := " "
+				if sp.HasGame {
+					game = "✓"
+				}
+				line := "  " + padRight(truncName(sp.Player.Name, 19), 19) + " " +
+					padRight(sp.Player.MLBTeam, 4) + " " + fmt.Sprintf("%6.2f", sp.ExpectedPts) +
+					" " + padRight("", 4) + " " + game
+				hLines = append(hLines, line)
+			}
+		}
 
+		// --- Pitcher lines ---
+		var pLines []string
+		pLines = append(pLines, "Pitchers "+strings.Repeat("─", colR-9))
+		pLines = append(pLines, "  "+padRight("Player", 19)+" "+padRight("Team", 4)+" "+fmt.Sprintf("%6s", "Pts/G")+" "+padRight("Slot", 4)+" "+padRight("Pos", 4)+" Game")
+		pLines = append(pLines, strings.Repeat("─", colR))
+
+		var pitcherStartingPts float64
+		var pActive, pBench []optimizer.ScoredPitcher
+		for _, sp := range dr.pitcherResult.Scored {
+			if sp.Player.Status == "Active" {
+				pActive = append(pActive, sp)
+				isRP := !strings.Contains(sp.Player.PosShortNames, "SP")
+				if sp.HasGame && (sp.IsStarter || isRP) {
+					pitcherStartingPts += sp.ExpectedPts
+				}
+			} else {
+				pBench = append(pBench, sp)
+			}
+		}
+		for _, sp := range pActive {
+			slot := ""
+			if name, ok := slotName[sp.Player.RosterPosition]; ok {
+				slot = name
+			}
 			role := sp.Player.PosShortNames
 			if role == "" {
 				role = "P"
 			}
-			prob := ""
 			if sp.IsStarter {
-				prob = "★"
+				role += "★"
 			}
-
-			game := "  "
+			game := " "
 			if sp.HasGame {
-				game = "✓ "
+				game = "✓"
 			}
-
-			marker := " "
-			if isActive {
-				marker = "▸"
-			}
-
-			fmt.Printf("  %s %-22s %-5s %7.2f  %-4s  %-3s %-5s %s\n", marker, sp.Player.Name, sp.Player.MLBTeam, sp.ExpectedPts, slot, role, prob, game)
+			line := padRight("▸", 1) + " " + padRight(truncName(sp.Player.Name, 19), 19) + " " +
+				padRight(sp.Player.MLBTeam, 4) + " " + fmt.Sprintf("%6.2f", sp.ExpectedPts) + " " +
+				padRight(slot, 4) + " " + padRight(role, 4) + " " + game
+			pLines = append(pLines, line)
 		}
-		fmt.Printf("  %s\n", strings.Repeat("─", pitcherWidth))
-		fmt.Printf("  %-23s %5s %7.2f  (%d starting)\n", "Total", "", pitcherStartingPts, pitcherStartCount)
+		if len(pBench) > 0 {
+			pLines = append(pLines, strings.Repeat("·", colR))
+			for _, sp := range pBench {
+				role := sp.Player.PosShortNames
+				if role == "" {
+					role = "P"
+				}
+				if sp.IsStarter {
+					role += "★"
+				}
+				game := " "
+				if sp.HasGame {
+					game = "✓"
+				}
+				line := "  " + padRight(truncName(sp.Player.Name, 19), 19) + " " +
+					padRight(sp.Player.MLBTeam, 4) + " " + fmt.Sprintf("%6.2f", sp.ExpectedPts) + " " +
+					padRight("", 4) + " " + padRight(role, 4) + " " + game
+				pLines = append(pLines, line)
+			}
+		}
+		// Pad data sections to same height so totals align.
+		for len(hLines) < len(pLines) {
+			hLines = append(hLines, "")
+		}
+		for len(pLines) < len(hLines) {
+			pLines = append(pLines, "")
+		}
+
+		// Append footer lines (separator + total) — now on the same row.
+		hLines = append(hLines, strings.Repeat("─", colL))
+		hLines = append(hLines, "  "+padRight("Total", 19)+" "+padRight("", 4)+" "+fmt.Sprintf("%6.2f", hitterStartingPts))
+
+		pLines = append(pLines, strings.Repeat("─", colR))
+		pLines = append(pLines, "  "+padRight("Total", 19)+" "+padRight("", 4)+" "+fmt.Sprintf("%6.2f", pitcherStartingPts))
 		if gsBudget != nil {
 			remaining := gsBudget.Remaining()
-			fmt.Printf("  GS budget: %d/%d used (%d remaining, %.1f projected future)\n",
-				gsBudget.Used, gsBudget.Limit, remaining, gsBudget.FutureDemand())
+			hLines = append(hLines, "")
+			pLines = append(pLines, fmt.Sprintf("GS: %d/%d used (%d rem, %.1f future)",
+				gsBudget.Used, gsBudget.Limit, remaining, gsBudget.FutureDemand()))
 		}
 
-		// --- Combined total ---
-		fmt.Printf("\n  %-23s %5s %7.2f\n", "Combined Expected", "", hitterStartingPts+pitcherStartingPts)
+		// Print side by side.
+		fmt.Println()
+		for i := range hLines {
+			fmt.Printf("  %s │ %s\n", padRight(hLines[i], colL), padRight(pLines[i], colR))
+		}
+
+		// Combined total.
+		fmt.Printf("\n  %-26s %6.2f\n", "Combined Expected", hitterStartingPts+pitcherStartingPts)
 
 		// --- Combine changes ---
 		allActivate := append(dr.hitterResult.ToActivate, dr.pitcherResult.ToActivate...)
@@ -550,13 +626,28 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		changesWidth := 60
-		fmt.Printf("\n  Changes %s\n", strings.Repeat("─", changesWidth-9))
+		// Build pts lookup for optimization delta.
+		ptsMap := make(map[string]float64)
+		for _, sp := range dr.hitterResult.Scored {
+			ptsMap[sp.Player.ID] = sp.ExpectedPts
+		}
+		for _, sp := range dr.pitcherResult.Scored {
+			ptsMap[sp.Player.ID] = sp.ExpectedPts
+		}
+		var delta float64
 		for _, ps := range allActivate {
-			fmt.Printf("    ↑ %-25s → %s\n", playerName[ps.PlayerID], slotName[ps.PosID])
+			delta += ptsMap[ps.PlayerID]
 		}
 		for _, id := range allBench {
-			fmt.Printf("    ↓ %-25s → BN\n", playerName[id])
+			delta -= ptsMap[id]
+		}
+
+		fmt.Printf("\n  Changes (%+.2f pts) %s\n", delta, strings.Repeat("─", 35))
+		for _, ps := range allActivate {
+			fmt.Printf("    ↑ %-22s → %-4s  %+6.2f\n", playerName[ps.PlayerID], slotName[ps.PosID], ptsMap[ps.PlayerID])
+		}
+		for _, id := range allBench {
+			fmt.Printf("    ↓ %-22s → BN    %+6.2f\n", playerName[id], -ptsMap[id])
 		}
 
 		if cfg.DryRun {
