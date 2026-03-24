@@ -30,9 +30,11 @@ type PitcherProjection struct {
 	HBP float64 // Hit batsmen (pitcher)
 	WP  float64 // Wild pitches
 	BK  float64 // Balks
-	CG  float64 // Complete games
-	SHO float64 // Shutouts
-	PKO float64 // Pickoffs
+	CG     float64 // Complete games
+	SHO    float64 // Shutouts
+	PKO    float64 // Pickoffs
+	Throws string  // "R" or "L"
+	FIP    float64 // Fielding Independent Pitching
 }
 
 // PitcherSource can look up a pitcher projection for a player.
@@ -63,6 +65,8 @@ type fgPitchRow struct {
 	CG         float64 `json:"CG"`
 	SHO        float64 `json:"SHO"`
 	PKO        float64 `json:"PKO"`
+	Throws     string  `json:"Throws"`
+	FIP        float64 `json:"FIP"`
 }
 
 // FanGraphsPitcherSource fetches Steamer pitching projections from FanGraphs.
@@ -102,10 +106,36 @@ func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
 			SV: row.SV, HLD: row.HLD, BS: row.BS,
 			HBP: row.HBP, WP: row.WP, BK: row.BK,
 			CG: row.CG, SHO: row.SHO, PKO: row.PKO,
+			Throws: row.Throws,
+			FIP:    row.FIP,
 		}
 		src.projections[projKey(name, team)] = p
 	}
 	return src, nil
+}
+
+// PitcherInfo returns pitcher handedness, FIP, and IP-weighted league average FIP.
+func (s *FanGraphsPitcherSource) PitcherInfo() (handedness map[string]string, fip map[string]float64, leagueAvgFIP float64) {
+	handedness = make(map[string]string, len(s.projections))
+	fip = make(map[string]float64, len(s.projections))
+	var totalFIPxIP, totalIP float64
+	for key, proj := range s.projections {
+		name := strings.SplitN(key, "|", 2)[0]
+		if t := strings.ToUpper(proj.Throws); t == "R" || t == "L" {
+			handedness[name] = t
+		}
+		if proj.FIP > 0 {
+			fip[name] = proj.FIP
+		}
+		if proj.IP > 0 && proj.FIP > 0 {
+			totalFIPxIP += proj.FIP * proj.IP
+			totalIP += proj.IP
+		}
+	}
+	if totalIP > 0 {
+		leagueAvgFIP = totalFIPxIP / totalIP
+	}
+	return
 }
 
 // GetPitcherProjection looks up a pitcher's projection by name and MLB team.
