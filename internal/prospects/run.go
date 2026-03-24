@@ -79,7 +79,7 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 	g := new(errgroup.Group)
 
 	g.Go(func() error {
-		source := NewChainedRankingSource(&FantraxRankingSource{Client: ft}, &FanGraphsRankingSource{})
+		source := NewChainedRankingSource(&FanGraphsRankingSource{}, &FantraxRankingSource{Client: ft})
 		r, err := LoadRankings(source, today.Year(), cfg.ProspectRankCacheHours)
 		if err != nil {
 			return fmt.Errorf("loading rankings: %w", err)
@@ -146,14 +146,14 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 		norm := projections.NormalizeName(p.Name)
 		if rank, ok := rankingsMap[norm]; ok && rank > 0 {
 			myRanked = append(myRanked, RankedProspect{
-				Name:    norm,
+				Name:    p.Name,
 				MLBTeam: p.MLBTeam,
 				Rank:    rank,
 			})
 		} else {
 			// Include unranked rostered prospects too — FindUpgrades handles them
 			myRanked = append(myRanked, RankedProspect{
-				Name:    norm,
+				Name:    p.Name,
 				MLBTeam: p.MLBTeam,
 				Rank:    0,
 			})

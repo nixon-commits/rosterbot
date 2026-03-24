@@ -11,10 +11,73 @@ import (
 	"time"
 )
 
-// --- FantraxRankingSource uses a live client, tested via integration ---
-// Unit tests focus on the pure functions and interface contracts.
-
 // --- FanGraphsRankingSource ---
+
+func TestFanGraphsRankingSource_ParsesResponse(t *testing.T) {
+	fixture := []map[string]interface{}{
+		{
+			"playerName":  "Konnor Griffin",
+			"Team":        "PIT",
+			"Position":    "SS",
+			"Ovr_Rank":    1,
+			"FV_Current":  70,
+			"ETA_Current": 2026,
+			"mlevel":      "AA",
+		},
+		{
+			"playerName":  "Nolan McLean",
+			"Team":        "NYM",
+			"Position":    "SP",
+			"Ovr_Rank":    3,
+			"FV_Current":  65,
+			"ETA_Current": 2026,
+			"mlevel":      "AAA",
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(fixture)
+	}))
+	defer srv.Close()
+
+	origURL := fgProspectURL
+	fgProspectURL = srv.URL + "?draft=%dprospect&season=%d"
+	defer func() { fgProspectURL = origURL }()
+
+	src := &FanGraphsRankingSource{}
+	prospects, err := src.GetTopProspects(2026)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(prospects) != 2 {
+		t.Fatalf("expected 2 prospects, got %d", len(prospects))
+	}
+
+	p := prospects[0]
+	if p.Name != "Konnor Griffin" {
+		t.Errorf("expected name 'Konnor Griffin', got %q", p.Name)
+	}
+	if p.MLBTeam != "PIT" {
+		t.Errorf("expected team PIT, got %q", p.MLBTeam)
+	}
+	if p.Rank != 1 {
+		t.Errorf("expected rank 1, got %d", p.Rank)
+	}
+	if p.FV != 70 {
+		t.Errorf("expected FV 70, got %d", p.FV)
+	}
+	if p.ETA != "2026" {
+		t.Errorf("expected ETA 2026, got %q", p.ETA)
+	}
+	if p.IsPitcher {
+		t.Error("expected SS to not be marked as pitcher")
+	}
+
+	p2 := prospects[1]
+	if !p2.IsPitcher {
+		t.Error("expected SP to be marked as pitcher")
+	}
+}
 
 func TestFanGraphsRankingSource_Returns403(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -23,7 +86,7 @@ func TestFanGraphsRankingSource_Returns403(t *testing.T) {
 	defer srv.Close()
 
 	origURL := fgProspectURL
-	fgProspectURL = srv.URL
+	fgProspectURL = srv.URL + "?draft=%dprospect&season=%d"
 	defer func() { fgProspectURL = origURL }()
 
 	src := &FanGraphsRankingSource{}

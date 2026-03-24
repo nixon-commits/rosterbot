@@ -17,18 +17,94 @@ import (
 )
 
 // fgProspectURL is a var so tests can override it.
-var fgProspectURL = "https://www.fangraphs.com/api/prospects/board/prospect-list?type=prospects&pos=all"
+// The draft param format is "{season}prospect" for current-year report.
+var fgProspectURL = "https://www.fangraphs.com/api/prospects/board/data?draft=%dprospect&season=%d"
 
 // ErrSourceUnavailable indicates a ranking source is temporarily unavailable
 // (e.g. 401/403). ChainedRankingSource uses this to fall through to the next source.
 var ErrSourceUnavailable = errors.New("ranking source unavailable")
 
 // ---------------------------------------------------------------------------
-// 1. FantraxRankingSource
+// 1. FanGraphsRankingSource (primary)
+// ---------------------------------------------------------------------------
+
+// FanGraphsRankingSource fetches prospect rankings from The Board on FanGraphs.
+// Free endpoint, no auth required.
+type FanGraphsRankingSource struct{}
+
+func (s *FanGraphsRankingSource) GetTopProspects(season int) ([]RankedProspect, error) {
+	url := fmt.Sprintf(fgProspectURL, season, season)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fangraphs prospects fetch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("fangraphs prospects: HTTP %d — authentication required: %w", resp.StatusCode, ErrSourceUnavailable)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fangraphs prospects: status %d", resp.StatusCode)
+	}
+
+	var rows []struct {
+		PlayerName string `json:"playerName"`
+		Team       string `json:"Team"`
+		Position   string `json:"Position"`
+		OvrRank    int    `json:"Ovr_Rank"`
+		FV         int    `json:"FV_Current"`
+		ETA        int    `json:"ETA_Current"`
+		Level      string `json:"mlevel"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return nil, fmt.Errorf("fangraphs prospects json: %w", err)
+	}
+
+	result := make([]RankedProspect, 0, len(rows))
+	for _, row := range rows {
+		if row.OvrRank == 0 {
+			continue // unranked in the overall list
+		}
+		pos := strings.TrimSpace(row.Position)
+		eta := ""
+		if row.ETA > 0 {
+			eta = strconv.Itoa(row.ETA)
+		}
+		result = append(result, RankedProspect{
+			Name:      row.PlayerName,
+			MLBTeam:   projections.NormalizeTeam(row.Team),
+			Position:  pos,
+			Rank:      row.OvrRank,
+			FV:        row.FV,
+			ETA:       eta,
+			Level:     row.Level,
+			IsPitcher: isPitcherPosition(pos),
+		})
+	}
+
+	// Sort by rank ascending (FG data may not be pre-sorted).
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Rank < result[j].Rank
+	})
+
+	return result, nil
+}
+
+func isPitcherPosition(pos string) bool {
+	switch pos {
+	case "SP", "RP", "P":
+		return true
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// 2. FantraxRankingSource (fallback)
 // ---------------------------------------------------------------------------
 
 // FantraxRankingSource ranks minors-eligible players from the Fantrax player pool
-// by %Rostered descending. This provides a fantasy-community-derived prospect ranking.
+// by %Rostered descending. Used as fallback when FanGraphs is unavailable.
 type FantraxRankingSource struct {
 	Client *fantrax.Client
 }
@@ -47,7 +123,6 @@ func (s *FantraxRankingSource) GetTopProspects(season int) ([]RankedProspect, er
 		return pool[i].FantasyPtsPerG > pool[j].FantasyPtsPerG
 	})
 
-	// Take top 100 (or fewer).
 	limit := 100
 	if len(pool) < limit {
 		limit = len(pool)
@@ -57,7 +132,7 @@ func (s *FantraxRankingSource) GetTopProspects(season int) ([]RankedProspect, er
 	for i := 0; i < limit; i++ {
 		p := pool[i]
 		if p.PercentRostered == 0 && p.FantasyPtsPerG == 0 {
-			break // no point ranking completely unknown players
+			break
 		}
 		pos := p.PosShortNames
 		result = append(result, RankedProspect{
@@ -65,66 +140,6 @@ func (s *FantraxRankingSource) GetTopProspects(season int) ([]RankedProspect, er
 			MLBTeam:   projections.NormalizeTeam(p.MLBTeam),
 			Position:  pos,
 			Rank:      i + 1,
-			IsPitcher: isPitcherPosition(pos),
-		})
-	}
-	return result, nil
-}
-
-func isPitcherPosition(pos string) bool {
-	switch pos {
-	case "SP", "RP", "P":
-		return true
-	}
-	return false
-}
-
-// ---------------------------------------------------------------------------
-// 2. FanGraphsRankingSource
-// ---------------------------------------------------------------------------
-
-// FanGraphsRankingSource fetches prospect rankings from FanGraphs.
-type FanGraphsRankingSource struct{}
-
-func (s *FanGraphsRankingSource) GetTopProspects(season int) ([]RankedProspect, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(fgProspectURL)
-	if err != nil {
-		return nil, fmt.Errorf("fangraphs prospects fetch: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("fangraphs prospects: HTTP %d — authentication required: %w", resp.StatusCode, ErrSourceUnavailable)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fangraphs prospects: status %d", resp.StatusCode)
-	}
-
-	var rows []struct {
-		PlayerName string `json:"PlayerName"`
-		Team       string `json:"Team"`
-		Pos        string `json:"Pos"`
-		Rank       int    `json:"Rank"`
-		FV         int    `json:"FV"`
-		ETA        string `json:"ETA"`
-		Level      string `json:"Level"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
-		return nil, fmt.Errorf("fangraphs prospects json: %w", err)
-	}
-
-	result := make([]RankedProspect, 0, len(rows))
-	for _, row := range rows {
-		pos := strings.TrimSpace(row.Pos)
-		result = append(result, RankedProspect{
-			Name:      projections.NormalizeName(row.PlayerName),
-			MLBTeam:   projections.NormalizeTeam(row.Team),
-			Position:  pos,
-			Rank:      row.Rank,
-			FV:        row.FV,
-			ETA:       row.ETA,
-			Level:     row.Level,
 			IsPitcher: isPitcherPosition(pos),
 		})
 	}
