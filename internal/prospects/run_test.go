@@ -84,12 +84,17 @@ func TestFormatReport_Markdown(t *testing.T) {
 				Rank:       22,
 			},
 		},
-		Upgrades: []UpgradeCandidate{
+		Upgrades: []UpgradeSet{
 			{
-				Drop:     RankedProspect{Name: "Tyler Black", Rank: 92},
-				Add:      RankedProspect{Name: "Ethan Salas", Rank: 18, ETA: "2026"},
-				RankGap:  74,
-				NearTerm: true,
+				Source: "FanGraphs",
+				Candidates: []UpgradeCandidate{
+					{
+						Drop:     RankedProspect{Name: "Tyler Black", Rank: 92},
+						Add:      RankedProspect{Name: "Ethan Salas", Rank: 18, ETA: "2026"},
+						RankGap:  74,
+						NearTerm: true,
+					},
+				},
 			},
 		},
 	}
@@ -125,7 +130,7 @@ func TestFormatReport_Markdown(t *testing.T) {
 	}
 
 	// Check upgrades table
-	if !strings.Contains(content, "### Upgrade Opportunities") {
+	if !strings.Contains(content, "### Upgrades (FanGraphs)") {
 		t.Error("missing upgrades section header")
 	}
 	if !strings.Contains(content, "| Tyler Black (#92) | Ethan Salas (#18) | +74 | yes |") {
@@ -200,12 +205,17 @@ func TestPrintReport_WithAlerts(t *testing.T) {
 		Alerts: []ProspectAlert{
 			{Kind: CalledUp, Priority: "high", PlayerName: "Test Player", MLBTeam: "MIL", Detail: "Called up"},
 		},
-		Upgrades: []UpgradeCandidate{
+		Upgrades: []UpgradeSet{
 			{
-				Drop:    RankedProspect{Name: "Drop Guy", Rank: 90},
-				Add:     RankedProspect{Name: "Add Guy", Rank: 10, ETA: "2026"},
-				RankGap: 80,
-				NearTerm: true,
+				Source: "FanGraphs",
+				Candidates: []UpgradeCandidate{
+					{
+						Drop:     RankedProspect{Name: "Drop Guy", Rank: 90},
+						Add:      RankedProspect{Name: "Add Guy", Rank: 10, ETA: "2026"},
+						RankGap:  80,
+						NearTerm: true,
+					},
+				},
 			},
 		},
 	}

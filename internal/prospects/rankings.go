@@ -115,12 +115,13 @@ func (s *FantraxRankingSource) GetTopProspects(season int) ([]RankedProspect, er
 		return nil, fmt.Errorf("fantrax prospect pool: %w", err)
 	}
 
-	// Sort by %Rostered descending (most rostered = highest ranked prospect).
+	// Sort by Fantrax overall rank ascending (lower = better).
+	// When %Rostered is available (in-season), use it as primary sort.
 	sort.SliceStable(pool, func(i, j int) bool {
 		if pool[i].PercentRostered != pool[j].PercentRostered {
 			return pool[i].PercentRostered > pool[j].PercentRostered
 		}
-		return pool[i].FantasyPtsPerG > pool[j].FantasyPtsPerG
+		return pool[i].FantraxRank < pool[j].FantraxRank
 	})
 
 	limit := 100
@@ -131,12 +132,9 @@ func (s *FantraxRankingSource) GetTopProspects(season int) ([]RankedProspect, er
 	result := make([]RankedProspect, 0, limit)
 	for i := 0; i < limit; i++ {
 		p := pool[i]
-		if p.PercentRostered == 0 && p.FantasyPtsPerG == 0 {
-			break
-		}
 		pos := p.PosShortNames
 		result = append(result, RankedProspect{
-			Name:      projections.NormalizeName(p.Name),
+			Name:      p.Name,
 			MLBTeam:   projections.NormalizeTeam(p.MLBTeam),
 			Position:  pos,
 			Rank:      i + 1,

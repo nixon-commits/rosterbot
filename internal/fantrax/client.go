@@ -180,6 +180,7 @@ func (c *Client) GetMinorsRoster() ([]Player, error) {
 // ProspectPoolPlayer extends Player with fantasy ranking data from the Fantrax player pool.
 type ProspectPoolPlayer struct {
 	Player
+	FantraxRank     int     // Fantrax overall player rank (lower = better)
 	PercentRostered float64
 	FantasyPtsPerG  float64
 }
@@ -233,6 +234,7 @@ func (c *Client) GetMinorsEligiblePool() ([]ProspectPoolPlayer, error) {
 				PosShortNames: pp.PosShortNames,
 				InMinors:      true,
 			},
+			FantraxRank:     pp.Rank,
 			PercentRostered: pp.PercentRostered,
 			FantasyPtsPerG:  pp.FantasyPointsPerG,
 		})

@@ -72,19 +72,30 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 		myMinors[projections.NormalizeName(p.Name)] = true
 	}
 
-	// Parallel: load rankings + fetch available prospects
-	var rankings []RankedProspect
+	// Parallel: load FanGraphs rankings, Fantrax rankings, and available prospects
+	var fgRankings []RankedProspect
+	var ftxRankings []RankedProspect
 	var availablePlayers []fantrax.Player
 
 	g := new(errgroup.Group)
 
 	g.Go(func() error {
-		source := NewChainedRankingSource(&FanGraphsRankingSource{}, &FantraxRankingSource{Client: ft})
-		r, err := LoadRankings(source, today.Year(), cfg.ProspectRankCacheHours)
+		r, err := LoadRankings(&FanGraphsRankingSource{}, today.Year(), cfg.ProspectRankCacheHours)
 		if err != nil {
-			return fmt.Errorf("loading rankings: %w", err)
+			log.Printf("WARNING: FanGraphs rankings failed: %v", err)
+			return nil // non-fatal
 		}
-		rankings = r
+		fgRankings = r
+		return nil
+	})
+
+	g.Go(func() error {
+		r, err := (&FantraxRankingSource{Client: ft}).GetTopProspects(today.Year())
+		if err != nil {
+			log.Printf("WARNING: Fantrax rankings failed: %v", err)
+			return nil // non-fatal
+		}
+		ftxRankings = r
 		return nil
 	})
 
@@ -102,9 +113,14 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 		return err
 	}
 
-	// Build rankings map (normalized name → rank)
-	rankingsMap := make(map[string]int, len(rankings))
-	for _, r := range rankings {
+	// Use FanGraphs as primary rankings map for transaction/performance alerts.
+	// Fall back to Fantrax if FanGraphs unavailable.
+	primaryRankings := fgRankings
+	if len(primaryRankings) == 0 {
+		primaryRankings = ftxRankings
+	}
+	rankingsMap := make(map[string]int, len(primaryRankings))
+	for _, r := range primaryRankings {
 		rankingsMap[projections.NormalizeName(r.Name)] = r.Rank
 	}
 
@@ -140,49 +156,70 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 		return priorityOrder[allAlerts[i].Priority] < priorityOrder[allAlerts[j].Priority]
 	})
 
-	// Build rostered ranked prospects and available ranked prospects for upgrades
-	var myRanked []RankedProspect
-	for _, p := range minorsRoster {
-		norm := projections.NormalizeName(p.Name)
-		if rank, ok := rankingsMap[norm]; ok && rank > 0 {
-			myRanked = append(myRanked, RankedProspect{
-				Name:    p.Name,
-				MLBTeam: p.MLBTeam,
-				Rank:    rank,
-			})
-		} else {
-			// Include unranked rostered prospects too — FindUpgrades handles them
-			myRanked = append(myRanked, RankedProspect{
-				Name:    p.Name,
-				MLBTeam: p.MLBTeam,
-				Rank:    0,
-			})
-		}
-	}
+	// Compute upgrades from both ranking sources independently.
+	currentYear := strconv.Itoa(today.Year())
+	var upgradeSets []UpgradeSet
 
-	var faRanked []RankedProspect
-	for _, p := range availablePlayers {
-		norm := projections.NormalizeName(p.Name)
-		if rank, ok := rankingsMap[norm]; ok && rank > 0 {
-			// Find full ranking info
-			for _, r := range rankings {
-				if projections.NormalizeName(r.Name) == norm {
-					faRanked = append(faRanked, r)
-					break
+	for _, src := range []struct {
+		name     string
+		rankings []RankedProspect
+	}{
+		{"FanGraphs", fgRankings},
+		{"Fantrax", ftxRankings},
+	} {
+		if len(src.rankings) == 0 {
+			continue
+		}
+		srcMap := make(map[string]int, len(src.rankings))
+		for _, r := range src.rankings {
+			srcMap[projections.NormalizeName(r.Name)] = r.Rank
+		}
+
+		var myRanked []RankedProspect
+		for _, p := range minorsRoster {
+			norm := projections.NormalizeName(p.Name)
+			if rank, ok := srcMap[norm]; ok && rank > 0 {
+				myRanked = append(myRanked, RankedProspect{
+					Name:    p.Name,
+					MLBTeam: p.MLBTeam,
+					Rank:    rank,
+				})
+			} else {
+				myRanked = append(myRanked, RankedProspect{
+					Name:    p.Name,
+					MLBTeam: p.MLBTeam,
+					Rank:    0,
+				})
+			}
+		}
+
+		var faRanked []RankedProspect
+		for _, p := range availablePlayers {
+			norm := projections.NormalizeName(p.Name)
+			if _, ok := srcMap[norm]; ok {
+				for _, r := range src.rankings {
+					if projections.NormalizeName(r.Name) == norm {
+						faRanked = append(faRanked, r)
+						break
+					}
 				}
 			}
-			_ = rank // used above
+		}
+
+		candidates := FindUpgrades(myRanked, faRanked, currentYear)
+		if len(candidates) > 0 {
+			upgradeSets = append(upgradeSets, UpgradeSet{
+				Source:     src.name,
+				Candidates: candidates,
+			})
 		}
 	}
-
-	currentYear := strconv.Itoa(today.Year())
-	upgrades := FindUpgrades(myRanked, faRanked, currentYear)
 
 	report := Report{
 		Date:     today,
 		Alerts:   allAlerts,
-		Rankings: myRanked,
-		Upgrades: upgrades,
+		Rankings: nil, // rankings displayed per-source in upgrades
+		Upgrades: upgradeSets,
 	}
 
 	printReport(report)
@@ -221,10 +258,19 @@ func alertKindLabel(kind AlertKind) string {
 	}
 }
 
+func hasUpgrades(sets []UpgradeSet) bool {
+	for _, s := range sets {
+		if len(s.Candidates) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func printReport(r Report) {
 	fmt.Printf("=== Prospect Report (%s) ===\n", r.Date.Format("2006-01-02"))
 
-	if len(r.Alerts) == 0 && len(r.Upgrades) == 0 {
+	if len(r.Alerts) == 0 && !hasUpgrades(r.Upgrades) {
 		fmt.Println("No prospect alerts today.")
 		fmt.Println("=== End Prospect Report ===")
 		return
@@ -240,14 +286,14 @@ func printReport(r Report) {
 		fmt.Printf("[%-4s]  %-14s %-25s (%s)   %s\n", prio, label, a.PlayerName, team, a.Detail)
 	}
 
-	if len(r.Upgrades) > 0 {
-		fmt.Println("---")
-		for _, u := range r.Upgrades {
+	for _, set := range r.Upgrades {
+		fmt.Printf("--- Upgrades (%s) ---\n", set.Source)
+		for _, u := range set.Candidates {
 			nearTerm := ""
 			if u.NearTerm {
 				nearTerm = fmt.Sprintf(", ETA %s", u.Add.ETA)
 			}
-			fmt.Printf("Upgrade: Drop %s (#%d) → Add %s (#%d) [+%d spots%s]\n",
+			fmt.Printf("  Drop %s (#%d) → Add %s (#%d) [+%d spots%s]\n",
 				u.Drop.Name, u.Drop.Rank, u.Add.Name, u.Add.Rank, u.RankGap, nearTerm)
 		}
 	}
@@ -270,7 +316,7 @@ func writeGHASummary(r Report, path string) {
 	fmt.Fprintln(f, "## Prospect Report")
 	fmt.Fprintln(f)
 
-	if len(r.Alerts) == 0 && len(r.Upgrades) == 0 {
+	if len(r.Alerts) == 0 && !hasUpgrades(r.Upgrades) {
 		fmt.Fprintln(f, "No prospect alerts today.")
 		return
 	}
@@ -291,11 +337,11 @@ func writeGHASummary(r Report, path string) {
 		fmt.Fprintln(f)
 	}
 
-	if len(r.Upgrades) > 0 {
-		fmt.Fprintln(f, "### Upgrade Opportunities")
+	for _, set := range r.Upgrades {
+		fmt.Fprintf(f, "### Upgrades (%s)\n", set.Source)
 		fmt.Fprintln(f, "| Drop | Add | Rank Gap | Near-Term |")
 		fmt.Fprintln(f, "|------|-----|----------|-----------|")
-		for _, u := range r.Upgrades {
+		for _, u := range set.Candidates {
 			nearTerm := ""
 			if u.NearTerm {
 				nearTerm = "yes"

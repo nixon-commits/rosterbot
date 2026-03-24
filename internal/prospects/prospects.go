@@ -49,12 +49,18 @@ type UpgradeCandidate struct {
 	NearTerm bool   // true if Add's ETA is current or next season
 }
 
+// UpgradeSet groups upgrade candidates from a single ranking source.
+type UpgradeSet struct {
+	Source     string             // "FanGraphs" or "Fantrax"
+	Candidates []UpgradeCandidate
+}
+
 // Report is the full prospect report for a given day.
 type Report struct {
 	Date     time.Time
 	Alerts   []ProspectAlert
-	Rankings []RankedProspect   // your rostered prospects, sorted by rank
-	Upgrades []UpgradeCandidate
+	Rankings []RankedProspect // your rostered prospects, sorted by rank
+	Upgrades []UpgradeSet
 }
 
 // RankingSource provides prospect ranking data.
