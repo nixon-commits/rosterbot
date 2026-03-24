@@ -13,6 +13,7 @@ make dry-run            # run optimizer locally without applying changes
 go run . optimize --dry-run --dates 2026-04-01  # test a specific date
 go run . optimize --dry-run --dates 2026-03-26:2026-03-28  # test a date range
 go run . optimize --dry-run --dates all  # test full season from today
+go run . optimize --dry-run --matchup    # test remaining days in current matchup period
 go run . prospects --dry-run  # run prospect report locally
 ```
 
@@ -20,7 +21,7 @@ Tests require no credentials — all network dependencies are mocked via interfa
 
 For local dev, create a `.env` file (gitignored) with `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`. Loaded automatically by `godotenv`.
 
-Optional prospect report env vars (all have defaults): `PROSPECT_ROLLING_DAYS` (14), `PROSPECT_MIN_GAMES` (8), `PROSPECT_RANK_CACHE_HOURS` (168), `PROSPECT_UPGRADE_RANK_THRESHOLD` (20).
+Optional env vars with defaults: `FANTRAX_GS` (0 = no limit) — weekly game-start limit per matchup period. `PROSPECT_ROLLING_DAYS` (14), `PROSPECT_MIN_GAMES` (8), `PROSPECT_RANK_CACHE_HOURS` (168), `PROSPECT_UPGRADE_RANK_THRESHOLD` (20).
 
 ## Architecture
 
@@ -58,9 +59,17 @@ fangraphs proj  ──┘
 
 **`internal/optimizer`** — pure functions, no I/O. Two parallel optimizers:
 - **Hitters** (`OptimizeLineup`): backtracking with pruning to find globally optimal slot assignment maximizing total expected points. Checks `PtsPerGameSource` (type assertion) before falling back to `expectedPts`. `EligibleForSlot` in `fantrax/client.go` handles UT (accepts any hitter) and INF (accepts any infield position ID).
-- **Pitchers** (`OptimizePitcherLineup`): sorts by hasGame → expectedPts → ID, then assigns to slots. Uses probable starter data to determine if SPs start; when no probable data is available (future dates), SPs default to "has game" if their team plays.
+- **Pitchers** (`OptimizePitcherLineup`): sorts by hasGame → expectedPts → ID, then assigns to slots. Uses probable starter data to determine if SPs start; when no probable data is available (future dates), SPs default to "has game" if their team plays. Accepts an optional `*GSBudget` for weekly game-start limit awareness.
 
 **Scoring model** — this league scores: `1B`, `2B`, `3B`, `HR`, `RBI`, `R`, `BB`, `SB`, `CS`, `HBP`, `SO`, `GIDP`, `XBH`, `TB`, `CYC`. The `expectedPts` function derives `1B = H - 2B - 3B - HR`, `XBH = 2B + 3B + HR`, `TB = 1B + 2×2B + 3×3B + 4×HR` before applying weights.
+
+**GS budget** — weekly game-start limit awareness (`FANTRAX_GS` env var, 0 = disabled). When enabled, the pitcher optimizer gates SP starts to avoid exhausting the weekly GS allocation on low-value starters while better aces pitch later in the matchup week.
+- **Matchup week boundaries** derived from `GetAllMatchups()`: consecutive daily scoring periods where the team faces the same opponent form a matchup week. Computed in `fantrax/matchup_weeks.go` via `MatchupWeekBounds`.
+- **Past GS counting**: for each past day in the current matchup week, the `ProbableStarters` API is checked to count how many rostered SPs started.
+- **Future demand forecasting** uses a hybrid approach: days with confirmed probable starters use exact counts; days without probables estimate `roster SPs whose team plays / 5` (standard 5-man rotation).
+- **Conservative gate** (`optimizer/gs_budget.go`): computes `slack = remaining GS - projected future demand`. If slack < today's starters, the lowest-value starters have `IsStarter` flipped to false, applying the existing 0.10x non-starter discount. Uses `eps = 1e-9` for float comparison consistency.
+- The gate only applies to today's optimization (the daily GHA run). Future dates in `--dates` ranges are optimized without the gate since each day gets its own run.
+- The `--matchup` flag on the optimize command resolves to all remaining days in the current matchup period (from today through the matchup week end).
 
 ## Idempotency
 
@@ -73,4 +82,4 @@ The optimizer must produce identical output given the same inputs. Key invariant
 
 ## GHA
 
-`.github/workflows/lineup.yml` runs daily at 10am UTC (6am ET) and on `workflow_dispatch`. Requires six repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`. Chrome is installed via `browser-actions/setup-chrome@v2` before the Go run step.
+`.github/workflows/lineup.yml` runs daily at 10am UTC (6am ET) and on `workflow_dispatch`. Requires six repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`. Optional: `FANTRAX_GS` (weekly GS limit). Chrome is installed via `browser-actions/setup-chrome@v2` before the Go run step.

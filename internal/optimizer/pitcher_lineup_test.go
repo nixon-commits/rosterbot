@@ -41,7 +41,7 @@ func TestOptimizePitcherLineup_NonStartingSPFillsEmptySlot(t *testing.T) {
 	scoring := fantrax.ScoringWeights{"K": 1.0, "W": 5.0, "IP": 1.0}
 	slots := makeSlots("P")
 
-	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots)
+	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots, nil)
 
 	// Non-starting SP whose team plays should fill an empty slot (at reduced value).
 	if len(result.ToActivate) != 1 {
@@ -68,7 +68,7 @@ func TestOptimizePitcherLineup_RPPreferredOverNonStartingSP(t *testing.T) {
 	scoring := fantrax.ScoringWeights{"K": 1.0, "W": 5.0, "IP": 1.0, "SV": 5.0}
 	slots := makeSlots("P") // only 1 slot
 
-	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots)
+	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots, nil)
 
 	if len(result.ToActivate) != 1 {
 		t.Fatalf("expected 1 activation, got %d", len(result.ToActivate))
@@ -91,7 +91,7 @@ func TestOptimizePitcherLineup_SPStartedWhenProbable(t *testing.T) {
 	scoring := fantrax.ScoringWeights{"K": 1.0, "W": 5.0, "IP": 1.0}
 	slots := makeSlots("P")
 
-	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots)
+	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots, nil)
 
 	if len(result.ToActivate) != 1 {
 		t.Fatalf("expected 1 activation (SP is probable), got %d", len(result.ToActivate))
@@ -113,7 +113,7 @@ func TestOptimizePitcherLineup_RPStartedWhenTeamPlays(t *testing.T) {
 	scoring := fantrax.ScoringWeights{"K": 1.0, "HLD": 3.0, "IP": 1.0}
 	slots := makeSlots("RP")
 
-	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots)
+	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots, nil)
 
 	if len(result.ToActivate) != 1 {
 		t.Fatalf("expected 1 activation (RP team plays), got %d", len(result.ToActivate))
@@ -137,7 +137,7 @@ func TestOptimizePitcherLineup_PSlotPicksBestAvailable(t *testing.T) {
 	scoring := fantrax.ScoringWeights{"K": 1.0, "W": 5.0, "IP": 1.0, "HLD": 3.0}
 	slots := makeSlots("P") // only 1 P slot
 
-	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots)
+	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots, nil)
 
 	if len(result.ToActivate) != 1 {
 		t.Fatalf("expected 1 activation, got %d", len(result.ToActivate))
@@ -160,7 +160,7 @@ func TestOptimizePitcherLineup_NoProbableDataDefaultsToStart(t *testing.T) {
 	scoring := fantrax.ScoringWeights{"K": 1.0, "W": 5.0, "IP": 1.0}
 	slots := makeSlots("P")
 
-	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots)
+	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots, nil)
 
 	// With no probable data, SPs should default to starting.
 	if len(result.ToActivate) != 1 {
@@ -183,7 +183,7 @@ func TestOptimizePitcherLineup_Idempotent(t *testing.T) {
 	slots := makeSlots("P")
 
 	// First run.
-	r1 := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots)
+	r1 := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots, nil)
 
 	// Second run with the result applied: Ace is already in P slot.
 	if len(r1.ToActivate) == 0 && len(r1.ToBench) == 0 {
@@ -213,7 +213,7 @@ func TestOptimizePitcherLineup_Idempotent(t *testing.T) {
 		}
 	}
 
-	r2 := OptimizePitcherLineup(roster2, playing, probables, src, scoring, slots)
+	r2 := OptimizePitcherLineup(roster2, playing, probables, src, scoring, slots, nil)
 	if len(r2.ToActivate) != 0 || len(r2.ToBench) != 0 {
 		t.Errorf("second run should produce no changes, got %d activations, %d benches",
 			len(r2.ToActivate), len(r2.ToBench))

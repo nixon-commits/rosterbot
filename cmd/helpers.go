@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/roster"
 )
 
@@ -80,6 +81,21 @@ func allTeamsPlaying(players []fantrax.Player) map[string]bool {
 	m := make(map[string]bool)
 	for _, p := range players {
 		m[p.MLBTeam] = true
+	}
+	return m
+}
+
+// rosterSPNames returns a map of normalized pitcher name → Player for all
+// SP-eligible, non-injured, non-minors pitchers on the roster.
+func rosterSPNames(roster []fantrax.Player) map[string]fantrax.Player {
+	m := make(map[string]fantrax.Player)
+	for _, p := range roster {
+		if p.InMinors || p.IsInjured {
+			continue
+		}
+		if strings.Contains(p.PosShortNames, "SP") {
+			m[projections.NormalizeName(p.Name)] = p
+		}
 	}
 	return m
 }

@@ -16,9 +16,10 @@ import (
 )
 
 var (
-	datesStr    string
-	daysAhead   int
-	checkRoster bool
+	datesStr       string
+	daysAhead      int
+	checkRoster    bool
+	matchupPeriod  bool
 )
 
 var optimizeCmd = &cobra.Command{
@@ -30,6 +31,7 @@ var optimizeCmd = &cobra.Command{
 func init() {
 	optimizeCmd.Flags().StringVar(&datesStr, "dates", "", "date(s) for schedule lookup: YYYY-MM-DD, YYYY-MM-DD:YYYY-MM-DD, or 'all' (default: today)")
 	optimizeCmd.Flags().IntVar(&daysAhead, "days", 0, "optimize for the next N days starting from today")
+	optimizeCmd.Flags().BoolVar(&matchupPeriod, "matchup", false, "optimize for all remaining days in the current matchup period")
 	optimizeCmd.Flags().BoolVar(&checkRoster, "check-roster", true, "check for roster slot mismatches (IL/minors)")
 	rootCmd.AddCommand(optimizeCmd)
 }
@@ -37,17 +39,28 @@ func init() {
 func runOptimize(cmd *cobra.Command, args []string) error {
 	today := time.Now().Truncate(24 * time.Hour)
 
-	// Parse dates early for non-"all" cases; "all" needs the Fantrax client.
-	if daysAhead > 0 && datesStr != "" {
-		return fmt.Errorf("--days and --dates are mutually exclusive")
+	// Parse dates early for non-"all" cases; "all" and "matchup" need the Fantrax client.
+	flagCount := 0
+	if daysAhead > 0 {
+		flagCount++
+	}
+	if datesStr != "" {
+		flagCount++
+	}
+	if matchupPeriod {
+		flagCount++
+	}
+	if flagCount > 1 {
+		return fmt.Errorf("--days, --dates, and --matchup are mutually exclusive")
 	}
 	var dates []time.Time
 	needsSeasonLookup := datesStr == "all"
+	needsMatchupLookup := matchupPeriod
 	if daysAhead > 0 {
 		for i := 0; i < daysAhead; i++ {
 			dates = append(dates, today.AddDate(0, 0, i))
 		}
-	} else if !needsSeasonLookup {
+	} else if !needsSeasonLookup && !needsMatchupLookup {
 		var err error
 		dates, err = parseDates(datesStr, today)
 		if err != nil {
@@ -60,21 +73,42 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Resolve "all" now that the client is available.
+	// Resolve "all" or "--matchup" now that the client is available.
 	var seasonStart time.Time // used later for period calculation
-	if needsSeasonLookup {
+	if needsSeasonLookup || needsMatchupLookup {
 		start, end, err := ft.GetSeasonDateRange()
 		if err != nil {
 			return fmt.Errorf("get season date range: %w", err)
 		}
 		seasonStart = start
-		if start.Before(today) {
-			start = today
+
+		if needsMatchupLookup {
+			weekStart, weekEnd, err := ft.GetMatchupWeekBounds(today, seasonStart)
+			if err != nil {
+				return fmt.Errorf("get matchup week: %w", err)
+			}
+			if weekStart.IsZero() {
+				return fmt.Errorf("no matchup week found for today")
+			}
+			// Start from today (skip past days in the matchup).
+			mStart := weekStart
+			if mStart.Before(today) {
+				mStart = today
+			}
+			for d := mStart; !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
+				cfg.Dates = append(cfg.Dates, d)
+			}
+			log.Printf("matchup period: %s to %s (%d days remaining)",
+				weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"), len(cfg.Dates))
+		} else {
+			if start.Before(today) {
+				start = today
+			}
+			for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+				cfg.Dates = append(cfg.Dates, d)
+			}
+			log.Printf("season range: %s to %s", start.Format("2006-01-02"), end.Format("2006-01-02"))
 		}
-		for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-			cfg.Dates = append(cfg.Dates, d)
-		}
-		log.Printf("season range: %s to %s", start.Format("2006-01-02"), end.Format("2006-01-02"))
 	}
 
 	log.Printf("dates=%s dry-run=%v", formatDates(cfg.Dates), cfg.DryRun)
@@ -229,6 +263,75 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// --- GS Budget (weekly game-start limit awareness) ---
+	var gsBudget *optimizer.GSBudget
+	if cfg.GSLimit > 0 && !seasonStart.IsZero() {
+		weekStart, weekEnd, err := ft.GetMatchupWeekBounds(today, seasonStart)
+		if err != nil {
+			log.Printf("WARNING: could not determine matchup week (%v) — GS limit disabled", err)
+		} else if weekStart.IsZero() {
+			log.Printf("WARNING: no matchup week found for today — GS limit disabled")
+		} else {
+			log.Printf("GS limit: %d per week (%s to %s)",
+				cfg.GSLimit,
+				weekStart.Format("2006-01-02"),
+				weekEnd.Format("2006-01-02"))
+
+			// Count past GS: for each past day in the week, check probable starters
+			// and count how many of our rostered SPs started.
+			spNames := rosterSPNames(pitcherRoster)
+			usedGS := 0
+			for d := weekStart; d.Before(today); d = d.AddDate(0, 0, 1) {
+				probs, err := schedClient.ProbableStarters(d)
+				if err != nil || len(probs) == 0 {
+					continue
+				}
+				for normName, team := range probs {
+					if p, ours := spNames[normName]; ours && p.MLBTeam == team {
+						usedGS++
+					}
+				}
+			}
+
+			// Build forecast for remaining days (today+1 through weekEnd).
+			var forecast []optimizer.DayForecast
+			for d := today.AddDate(0, 0, 1); !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
+				playing, _ := schedClient.TeamsPlayingOn(d)
+				probs, _ := schedClient.ProbableStarters(d)
+
+				df := optimizer.DayForecast{Date: d}
+				if len(probs) > 0 {
+					// Confirmed probables available — count our roster SPs.
+					for normName, team := range probs {
+						if p, ours := spNames[normName]; ours && p.MLBTeam == team {
+							df.Confirmed++
+						}
+					}
+				} else {
+					// No probables — estimate: roster SPs whose team plays / 5 (standard rotation).
+					var spPlaying float64
+					for _, p := range spNames {
+						if playing[p.MLBTeam] {
+							spPlaying++
+						}
+					}
+					df.Estimated = spPlaying / 5.0
+				}
+				forecast = append(forecast, df)
+			}
+
+			gsBudget = &optimizer.GSBudget{
+				Limit:    cfg.GSLimit,
+				Used:     usedGS,
+				Today:    today,
+				WeekEnd:  weekEnd,
+				Forecast: forecast,
+			}
+			log.Printf("GS budget: %d/%d used, %.1f projected future starts",
+				usedGS, cfg.GSLimit, gsBudget.FutureDemand())
+		}
+	}
+
 	// Build name/slot lookup maps for display.
 	playerName := make(map[string]string)
 	for _, p := range hitterRoster {
@@ -300,7 +403,14 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			hitterResult := optimizer.OptimizeLineup(dateHitterRoster, playingToday, hitterProjSrc, hitterScoring, hitterSlots)
 
 			// Optimize pitchers.
-			pitcherResult := optimizer.OptimizePitcherLineup(datePitcherRoster, playingToday, probableStarters, pitcherProjSrc, pitcherScoring, pitcherSlots)
+			// GS budget gate only applies to today — for future dates the budget
+			// would need to be recomputed per-date, and the daily GHA run handles
+			// each day as it arrives.
+			dateBudget := gsBudget
+			if !isToday {
+				dateBudget = nil
+			}
+			pitcherResult := optimizer.OptimizePitcherLineup(datePitcherRoster, playingToday, probableStarters, pitcherProjSrc, pitcherScoring, pitcherSlots, dateBudget)
 
 			results[i] = dateResult{
 				date:          date,
@@ -421,6 +531,11 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Printf("  %s\n", strings.Repeat("─", pitcherWidth))
 		fmt.Printf("  %-23s %5s %7.2f  (%d starting)\n", "Total", "", pitcherStartingPts, pitcherStartCount)
+		if gsBudget != nil {
+			remaining := gsBudget.Remaining()
+			fmt.Printf("  GS budget: %d/%d used (%d remaining, %.1f projected future)\n",
+				gsBudget.Used, gsBudget.Limit, remaining, gsBudget.FutureDemand())
+		}
 
 		// --- Combined total ---
 		fmt.Printf("\n  %-23s %5s %7.2f\n", "Combined Expected", "", hitterStartingPts+pitcherStartingPts)

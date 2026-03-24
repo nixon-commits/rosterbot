@@ -28,6 +28,8 @@ type PitcherResult struct {
 // probableStarters maps normalized pitcher name → team abbreviation.
 // An empty probableStarters map means no data available (future date/TBD);
 // in that case SPs default to "has game" if their team plays.
+// gsBudget is optional (nil = no GS limit); when set, the gate suppresses
+// low-value SP starts to conserve weekly game-start budget.
 func OptimizePitcherLineup(
 	roster []fantrax.Player,
 	playingToday map[string]bool,
@@ -35,8 +37,10 @@ func OptimizePitcherLineup(
 	projSrc projections.PitcherSource,
 	scoring fantrax.ScoringWeights,
 	slots []fantrax.Slot,
+	gsBudget *GSBudget,
 ) PitcherResult {
 	scored := scorePitcherRoster(roster, playingToday, probableStarters, projSrc, scoring)
+	scored = applyGSGate(scored, gsBudget)
 
 	// Sort: hasGame first, then by pts desc, then by ID for stability.
 	sort.Slice(scored, func(i, j int) bool {
@@ -230,5 +234,3 @@ func isSPEligible(positions []string) bool {
 	}
 	return false
 }
-
-
