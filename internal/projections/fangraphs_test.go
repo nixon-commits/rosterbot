@@ -73,6 +73,46 @@ func TestFanGraphsSource_NameFallback(t *testing.T) {
 	}
 }
 
+func TestFanGraphsSource_HitterBats(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]map[string]interface{}{
+			{"PlayerName": "Aaron Judge", "Team": "NYY", "G": 150.0, "PA": 600.0, "H": 160.0,
+				"1B": 80.0, "2B": 30.0, "3B": 2.0, "HR": 48.0, "RBI": 120.0, "R": 100.0,
+				"BB": 90.0, "SB": 5.0, "CS": 2.0, "HBP": 10.0, "SO": 170.0, "GDP": nil,
+				"Bats": "R"},
+			{"PlayerName": "Juan Soto", "Team": "NYM", "G": 155.0, "PA": 650.0, "H": 165.0,
+				"1B": 90.0, "2B": 32.0, "3B": 1.0, "HR": 35.0, "RBI": 100.0, "R": 110.0,
+				"BB": 120.0, "SB": 3.0, "CS": 1.0, "HBP": 8.0, "SO": 130.0, "GDP": 10.0,
+				"Bats": "L"},
+			{"PlayerName": "Ozzie Albies", "Team": "ATL", "G": 140.0, "PA": 580.0, "H": 150.0,
+				"1B": 85.0, "2B": 30.0, "3B": 5.0, "HR": 25.0, "RBI": 80.0, "R": 85.0,
+				"BB": 35.0, "SB": 15.0, "CS": 5.0, "HBP": 3.0, "SO": 100.0, "GDP": 12.0,
+				"Bats": "B"},
+		})
+	}))
+	defer srv.Close()
+
+	old := fangraphsBattingURL
+	fangraphsBattingURL = srv.URL
+	defer func() { fangraphsBattingURL = old }()
+
+	src, err := NewFanGraphsSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bats := src.HitterBats()
+	if bats["aaron judge"] != "R" {
+		t.Errorf("Judge: got %q, want R", bats["aaron judge"])
+	}
+	if bats["juan soto"] != "L" {
+		t.Errorf("Soto: got %q, want L", bats["juan soto"])
+	}
+	if bats["ozzie albies"] != "S" {
+		t.Errorf("Albies: got %q, want S (normalized from B)", bats["ozzie albies"])
+	}
+}
+
 func TestChainedSource_FallsThrough(t *testing.T) {
 	primary := &FanGraphsSource{projections: map[string]*Projection{
 		"aaron judge|NYY": {G: 141, HR: 40},

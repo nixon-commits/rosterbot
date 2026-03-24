@@ -31,6 +31,7 @@ type Projection struct {
 	HBP     float64
 	SO      float64
 	GIDP    float64
+	Bats    string // "R", "L", or "S" (switch)
 }
 
 // Source can look up a projection for a player.
@@ -56,6 +57,7 @@ type fgRow struct {
 	HBP        float64 `json:"HBP"`
 	SO         float64 `json:"SO"`
 	GIDP       float64 `json:"GDP"`
+	Bats       string  `json:"Bats"`
 }
 
 // FanGraphsSource fetches Steamer projections from FanGraphs.
@@ -104,6 +106,7 @@ func NewFanGraphsSource() (*FanGraphsSource, error) {
 			HBP:     row.HBP,
 			SO:      row.SO,
 			GIDP:    row.GIDP,
+			Bats:    row.Bats,
 		}
 		src.projections[projKey(name, team)] = p
 	}
@@ -164,6 +167,23 @@ func NormalizeTeam(team string) string {
 	default:
 		return strings.ToUpper(strings.TrimSpace(team))
 	}
+}
+
+// HitterBats returns a map of NormalizeName(name) → bat side ("R", "L", "S").
+// Normalizes "B" (both) to "S" (switch).
+func (s *FanGraphsSource) HitterBats() map[string]string {
+	bats := make(map[string]string, len(s.projections))
+	for key, proj := range s.projections {
+		name := strings.SplitN(key, "|", 2)[0]
+		b := strings.ToUpper(proj.Bats)
+		if b == "B" {
+			b = "S"
+		}
+		if b == "R" || b == "L" || b == "S" {
+			bats[name] = b
+		}
+	}
+	return bats
 }
 
 func NormalizeName(name string) string {
