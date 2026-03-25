@@ -1,13 +1,10 @@
 package projections
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -125,39 +122,12 @@ func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
 
 // NewFanGraphsPitcherSourceFromCSV loads Steamer pitching projections from a local CSV file.
 func NewFanGraphsPitcherSourceFromCSV(path string) (*FanGraphsPitcherSource, error) {
-	f, err := os.Open(path)
+	required := []string{"Name", "Team", "G", "GS", "IP", "SO", "BB", "H", "ER", "HR", "W", "L", "QS", "SV", "HLD", "HBP", "FIP", "MLBAMID"}
+	f, r, col, err := openCSV(path, required)
 	if err != nil {
-		return nil, fmt.Errorf("open csv: %w", err)
+		return nil, err
 	}
 	defer f.Close()
-
-	// Strip BOM if present.
-	bom := make([]byte, 3)
-	if _, err := io.ReadFull(f, bom); err != nil {
-		return nil, fmt.Errorf("read csv: %w", err)
-	}
-	if bom[0] != 0xEF || bom[1] != 0xBB || bom[2] != 0xBF {
-		if _, err := f.Seek(0, 0); err != nil {
-			return nil, fmt.Errorf("seek csv: %w", err)
-		}
-	}
-
-	r := csv.NewReader(f)
-	header, err := r.Read()
-	if err != nil {
-		return nil, fmt.Errorf("csv header: %w", err)
-	}
-	col := make(map[string]int, len(header))
-	for i, h := range header {
-		col[strings.TrimSpace(h)] = i
-	}
-
-	required := []string{"Name", "Team", "G", "GS", "IP", "SO", "BB", "H", "ER", "HR", "W", "L", "QS", "SV", "HLD", "HBP", "FIP", "MLBAMID"}
-	for _, c := range required {
-		if _, ok := col[c]; !ok {
-			return nil, fmt.Errorf("csv missing required column: %s", c)
-		}
-	}
 
 	src := &FanGraphsPitcherSource{
 		projections: make(map[string]*PitcherProjection),
@@ -193,13 +163,13 @@ func NewFanGraphsPitcherSourceFromCSV(path string) (*FanGraphsPitcherSource, err
 			QS:  csvFloat(record, col, "QS"),
 			SV:  csvFloat(record, col, "SV"),
 			HLD: csvFloat(record, col, "HLD"),
-			BS:  csvFloatOpt(record, col, "BS"),
+			BS:  csvFloat(record, col, "BS"),
 			HBP: csvFloat(record, col, "HBP"),
-			WP:  csvFloatOpt(record, col, "WP"),
-			BK:  csvFloatOpt(record, col, "BK"),
-			CG:  csvFloatOpt(record, col, "CG"),
-			SHO: csvFloatOpt(record, col, "SHO"),
-			PKO: csvFloatOpt(record, col, "PKO"),
+			WP:  csvFloat(record, col, "WP"),
+			BK:  csvFloat(record, col, "BK"),
+			CG:  csvFloat(record, col, "CG"),
+			SHO: csvFloat(record, col, "SHO"),
+			PKO: csvFloat(record, col, "PKO"),
 			FIP: csvFloat(record, col, "FIP"),
 		}
 		src.projections[projKey(name, team)] = p
@@ -210,16 +180,6 @@ func NewFanGraphsPitcherSourceFromCSV(path string) (*FanGraphsPitcherSource, err
 	}
 
 	return src, nil
-}
-
-// csvFloatOpt returns 0 if the column doesn't exist in the CSV.
-func csvFloatOpt(record []string, col map[string]int, name string) float64 {
-	idx, ok := col[name]
-	if !ok {
-		return 0
-	}
-	v, _ := strconv.ParseFloat(strings.TrimSpace(record[idx]), 64)
-	return v
 }
 
 // PitcherInfo returns pitcher FIP and IP-weighted league average FIP.

@@ -1,13 +1,10 @@
 package projections
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -123,43 +120,14 @@ func NewFanGraphsSource() (*FanGraphsSource, error) {
 }
 
 // NewFanGraphsSourceFromCSV loads Steamer batting projections from a local CSV file
-// (exported from FanGraphs leaderboard). Falls back to the API if the file doesn't exist.
+// (exported from FanGraphs leaderboard).
 func NewFanGraphsSourceFromCSV(path string) (*FanGraphsSource, error) {
-	f, err := os.Open(path)
+	required := []string{"Name", "Team", "G", "PA", "H", "1B", "2B", "3B", "HR", "RBI", "R", "BB", "SB", "CS", "HBP", "SO", "GDP", "MLBAMID"}
+	f, r, col, err := openCSV(path, required)
 	if err != nil {
-		return nil, fmt.Errorf("open csv: %w", err)
+		return nil, err
 	}
 	defer f.Close()
-
-	// Strip BOM if present.
-	bom := make([]byte, 3)
-	if _, err := io.ReadFull(f, bom); err != nil {
-		return nil, fmt.Errorf("read csv: %w", err)
-	}
-	if bom[0] != 0xEF || bom[1] != 0xBB || bom[2] != 0xBF {
-		// No BOM — seek back to start.
-		if _, err := f.Seek(0, 0); err != nil {
-			return nil, fmt.Errorf("seek csv: %w", err)
-		}
-	}
-
-	r := csv.NewReader(f)
-	header, err := r.Read()
-	if err != nil {
-		return nil, fmt.Errorf("csv header: %w", err)
-	}
-	col := make(map[string]int, len(header))
-	for i, h := range header {
-		col[strings.TrimSpace(h)] = i
-	}
-
-	// Verify required columns exist.
-	required := []string{"Name", "Team", "G", "PA", "H", "1B", "2B", "3B", "HR", "RBI", "R", "BB", "SB", "CS", "HBP", "SO", "GDP", "MLBAMID"}
-	for _, c := range required {
-		if _, ok := col[c]; !ok {
-			return nil, fmt.Errorf("csv missing required column: %s", c)
-		}
-	}
 
 	src := &FanGraphsSource{
 		projections: make(map[string]*Projection),
@@ -206,16 +174,6 @@ func NewFanGraphsSourceFromCSV(path string) (*FanGraphsSource, error) {
 	}
 
 	return src, nil
-}
-
-func csvFloat(record []string, col map[string]int, name string) float64 {
-	v, _ := strconv.ParseFloat(strings.TrimSpace(record[col[name]]), 64)
-	return v
-}
-
-func csvInt(record []string, col map[string]int, name string) int {
-	v, _ := strconv.Atoi(strings.TrimSpace(record[col[name]]))
-	return v
 }
 
 // GetProjection looks up a player's projection by name and MLB team.
