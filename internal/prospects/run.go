@@ -160,18 +160,10 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 	currentYear := strconv.Itoa(today.Year())
 	var upgradeSets []UpgradeSet
 
-	for _, src := range []struct {
-		name     string
-		rankings []RankedProspect
-	}{
-		{"FanGraphs", fgRankings},
-		{"Fantrax", ftxRankings},
-	} {
-		if len(src.rankings) == 0 {
-			continue
-		}
-		srcMap := make(map[string]int, len(src.rankings))
-		for _, r := range src.rankings {
+	// --- FanGraphs: rank-based upgrades ---
+	if len(fgRankings) > 0 {
+		srcMap := make(map[string]int, len(fgRankings))
+		for _, r := range fgRankings {
 			srcMap[projections.NormalizeName(r.Name)] = r.Rank
 		}
 
@@ -184,12 +176,6 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 					MLBTeam: p.MLBTeam,
 					Rank:    rank,
 				})
-			} else {
-				myRanked = append(myRanked, RankedProspect{
-					Name:    p.Name,
-					MLBTeam: p.MLBTeam,
-					Rank:    0,
-				})
 			}
 		}
 
@@ -197,7 +183,7 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 		for _, p := range availablePlayers {
 			norm := projections.NormalizeName(p.Name)
 			if _, ok := srcMap[norm]; ok {
-				for _, r := range src.rankings {
+				for _, r := range fgRankings {
 					if projections.NormalizeName(r.Name) == norm {
 						faRanked = append(faRanked, r)
 						break
@@ -209,7 +195,41 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 		candidates := FindUpgrades(myRanked, faRanked, currentYear)
 		if len(candidates) > 0 {
 			upgradeSets = append(upgradeSets, UpgradeSet{
-				Source:     src.name,
+				Source:     "FanGraphs",
+				Candidates: candidates,
+			})
+		}
+	}
+
+	// --- Fantrax: %Rostered-based upgrades ---
+	if len(ftxRankings) > 0 {
+		ftxMap := make(map[string]RankedProspect, len(ftxRankings))
+		for _, r := range ftxRankings {
+			ftxMap[projections.NormalizeName(r.Name)] = r
+		}
+
+		var myRanked []RankedProspect
+		for _, p := range minorsRoster {
+			norm := projections.NormalizeName(p.Name)
+			if rp, ok := ftxMap[norm]; ok {
+				rp.Name = p.Name // preserve original name casing
+				rp.MLBTeam = p.MLBTeam
+				myRanked = append(myRanked, rp)
+			}
+		}
+
+		var faRanked []RankedProspect
+		for _, p := range availablePlayers {
+			norm := projections.NormalizeName(p.Name)
+			if rp, ok := ftxMap[norm]; ok {
+				faRanked = append(faRanked, rp)
+			}
+		}
+
+		candidates := FindPctRosteredUpgrades(myRanked, faRanked, 15.0)
+		if len(candidates) > 0 {
+			upgradeSets = append(upgradeSets, UpgradeSet{
+				Source:     "Fantrax",
 				Candidates: candidates,
 			})
 		}
@@ -289,12 +309,19 @@ func printReport(r Report) {
 	for _, set := range r.Upgrades {
 		fmt.Printf("--- Upgrades (%s) ---\n", set.Source)
 		for _, u := range set.Candidates {
-			nearTerm := ""
-			if u.NearTerm {
-				nearTerm = fmt.Sprintf(", ETA %s", u.Add.ETA)
+			if u.PctGap > 0 {
+				// %Rostered-based (Fantrax)
+				fmt.Printf("  Drop %s (%.0f%%) → Add %s (%.0f%%) [+%.0f%%]\n",
+					u.Drop.Name, u.Drop.PctRostered, u.Add.Name, u.Add.PctRostered, u.PctGap)
+			} else {
+				// Rank-based (FanGraphs)
+				nearTerm := ""
+				if u.NearTerm {
+					nearTerm = fmt.Sprintf(", ETA %s", u.Add.ETA)
+				}
+				fmt.Printf("  Drop %s (#%d) → Add %s (#%d) [+%d spots%s]\n",
+					u.Drop.Name, u.Drop.Rank, u.Add.Name, u.Add.Rank, u.RankGap, nearTerm)
 			}
-			fmt.Printf("  Drop %s (#%d) → Add %s (#%d) [+%d spots%s]\n",
-				u.Drop.Name, u.Drop.Rank, u.Add.Name, u.Add.Rank, u.RankGap, nearTerm)
 		}
 	}
 
@@ -339,15 +366,24 @@ func writeGHASummary(r Report, path string) {
 
 	for _, set := range r.Upgrades {
 		fmt.Fprintf(f, "### Upgrades (%s)\n", set.Source)
-		fmt.Fprintln(f, "| Drop | Add | Rank Gap | Near-Term |")
-		fmt.Fprintln(f, "|------|-----|----------|-----------|")
-		for _, u := range set.Candidates {
-			nearTerm := ""
-			if u.NearTerm {
-				nearTerm = "yes"
+		if set.Source == "Fantrax" {
+			fmt.Fprintln(f, "| Drop | Add | %Rost Gap |")
+			fmt.Fprintln(f, "|------|-----|-----------|")
+			for _, u := range set.Candidates {
+				fmt.Fprintf(f, "| %s (%.0f%%) | %s (%.0f%%) | +%.0f%% |\n",
+					u.Drop.Name, u.Drop.PctRostered, u.Add.Name, u.Add.PctRostered, u.PctGap)
 			}
-			fmt.Fprintf(f, "| %s (#%d) | %s (#%d) | +%d | %s |\n",
-				u.Drop.Name, u.Drop.Rank, u.Add.Name, u.Add.Rank, u.RankGap, nearTerm)
+		} else {
+			fmt.Fprintln(f, "| Drop | Add | Rank Gap | Near-Term |")
+			fmt.Fprintln(f, "|------|-----|----------|-----------|")
+			for _, u := range set.Candidates {
+				nearTerm := ""
+				if u.NearTerm {
+					nearTerm = "yes"
+				}
+				fmt.Fprintf(f, "| %s (#%d) | %s (#%d) | +%d | %s |\n",
+					u.Drop.Name, u.Drop.Rank, u.Add.Name, u.Add.Rank, u.RankGap, nearTerm)
+			}
 		}
 		fmt.Fprintln(f)
 	}

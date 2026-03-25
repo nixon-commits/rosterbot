@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -9,6 +10,11 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/spf13/cobra"
 )
+
+func init() {
+	log.SetFlags(0)
+	log.SetPrefix("⚡ ")
+}
 
 var dryRun bool
 

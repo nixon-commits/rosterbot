@@ -82,13 +82,30 @@ func resolveMLBPlayerID(name, team string, cache map[string]int) (int, bool) {
 	normName := projections.NormalizeName(name)
 	normTeam := strings.ToLower(projections.NormalizeTeam(team))
 
+	// First pass: exact name + team match.
+	// Second pass: name-only match for prospects whose currentTeam is missing
+	// from the API (common for players without MLB service time).
+	var nameOnlyMatch int
+	var nameOnlyCount int
 	for _, p := range result.People {
 		pName := projections.NormalizeName(p.FullName)
+		if pName != normName {
+			continue
+		}
 		pTeam := strings.ToLower(projections.NormalizeTeam(p.CurrentTeam.Abbreviation))
-		if pName == normName && pTeam == normTeam {
+		if pTeam == normTeam {
 			cache[key] = p.ID
 			return p.ID, true
 		}
+		if pTeam == "" {
+			nameOnlyMatch = p.ID
+			nameOnlyCount++
+		}
+	}
+	// Accept a name-only match when exactly one result had no team.
+	if nameOnlyCount == 1 && nameOnlyMatch != 0 {
+		cache[key] = nameOnlyMatch
+		return nameOnlyMatch, true
 	}
 
 	log.Printf("WARNING: no MLB ID found for %q (%s) — skipping", name, team)

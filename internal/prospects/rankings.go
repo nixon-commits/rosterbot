@@ -124,21 +124,18 @@ func (s *FantraxRankingSource) GetTopProspects(season int) ([]RankedProspect, er
 		return pool[i].FantraxRank < pool[j].FantraxRank
 	})
 
-	limit := 100
-	if len(pool) < limit {
-		limit = len(pool)
-	}
-
-	result := make([]RankedProspect, 0, limit)
-	for i := 0; i < limit; i++ {
+	// Return all players with their %Rostered value for comparison.
+	result := make([]RankedProspect, 0, len(pool))
+	for i := 0; i < len(pool); i++ {
 		p := pool[i]
 		pos := p.PosShortNames
 		result = append(result, RankedProspect{
-			Name:      p.Name,
-			MLBTeam:   projections.NormalizeTeam(p.MLBTeam),
-			Position:  pos,
-			Rank:      i + 1,
-			IsPitcher: isPitcherPosition(pos),
+			Name:        p.Name,
+			MLBTeam:     projections.NormalizeTeam(p.MLBTeam),
+			Position:    pos,
+			Rank:        i + 1,
+			PctRostered: p.PercentRostered,
+			IsPitcher:   isPitcherPosition(pos),
 		})
 	}
 	return result, nil
@@ -246,8 +243,8 @@ func LoadRankings(source RankingSource, season int, cacheHours int) ([]RankedPro
 // upgradeThreshold returns the minimum rank gap needed for a given rostered rank.
 func upgradeThreshold(rank int) int {
 	switch {
-	case rank == 0:
-		return 1 // unranked: any ranked FA is an upgrade
+	case rank <= 0:
+		return 1 // unranked: any ranked FA is an upgrade (shouldn't happen in practice)
 	case rank <= 10:
 		return 5
 	case rank <= 50:
@@ -326,6 +323,49 @@ func FindUpgrades(rostered, available []RankedProspect, currentYear string) []Up
 	// Sort by rank gap descending
 	sort.Slice(upgrades, func(i, j int) bool {
 		return upgrades[i].RankGap > upgrades[j].RankGap
+	})
+
+	return upgrades
+}
+
+// FindPctRosteredUpgrades compares rostered prospects against available FAs
+// using %Rostered as the metric. An FA is an upgrade when its %Rostered
+// exceeds the rostered player's by at least minGap percentage points.
+func FindPctRosteredUpgrades(rostered, available []RankedProspect, minGap float64) []UpgradeCandidate {
+	if len(rostered) == 0 || len(available) == 0 {
+		return nil
+	}
+
+	var upgrades []UpgradeCandidate
+
+	for _, drop := range rostered {
+		var bestFA *RankedProspect
+		var bestGap float64
+
+		for i := range available {
+			add := &available[i]
+			gap := add.PctRostered - drop.PctRostered
+			if gap < minGap {
+				continue
+			}
+			if bestFA == nil || add.PctRostered > bestFA.PctRostered {
+				cp := *add
+				bestFA = &cp
+				bestGap = gap
+			}
+		}
+
+		if bestFA != nil {
+			upgrades = append(upgrades, UpgradeCandidate{
+				Drop:   drop,
+				Add:    *bestFA,
+				PctGap: bestGap,
+			})
+		}
+	}
+
+	sort.Slice(upgrades, func(i, j int) bool {
+		return upgrades[i].PctGap > upgrades[j].PctGap
 	})
 
 	return upgrades

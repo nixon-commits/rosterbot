@@ -341,6 +341,9 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			}
 
 			// Build forecast for remaining days (today+1 through weekEnd).
+			// Cap SP counts at the number of active P slots since bench SPs
+			// don't accrue GS — only pitchers in active lineup slots do.
+			numPSlots := len(pitcherSlots)
 			var forecast []optimizer.DayForecast
 			for d := today.AddDate(0, 0, 1); !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
 				playing, _ := schedClient.TeamsPlayingOn(d)
@@ -348,19 +351,27 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 				df := optimizer.DayForecast{Date: d}
 				if len(probs) > 0 {
-					// Confirmed probables available — count our roster SPs.
+					// Confirmed probables available — count our roster SPs,
+					// capped at active P slots (bench SPs don't consume GS).
 					for normName, team := range probs {
 						if p, ours := spNames[normName]; ours && p.MLBTeam == team {
 							df.Confirmed++
 						}
 					}
+					if df.Confirmed > numPSlots {
+						df.Confirmed = numPSlots
+					}
 				} else {
-					// No probables — estimate: roster SPs whose team plays / 5 (standard rotation).
+					// No probables — estimate: roster SPs whose team plays / 5 (standard rotation),
+					// capped at active P slots since only active-slot SPs consume GS.
 					var spPlaying float64
 					for _, p := range spNames {
 						if playing[p.MLBTeam] {
 							spPlaying++
 						}
+					}
+					if spPlaying > float64(numPSlots) {
+						spPlaying = float64(numPSlots)
 					}
 					df.Estimated = spPlaying / 5.0
 				}
@@ -721,13 +732,26 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Build pts lookup for optimization delta.
+		// Build effective-pts lookup for optimization delta.
+		// Hitters contribute full ExpectedPts when they have a game.
+		// Pitchers: RPs and confirmed starters contribute full pts;
+		// non-starting SPs contribute 10% (the optimizer's discount).
 		ptsMap := make(map[string]float64)
 		for _, sp := range dr.hitterResult.Scored {
-			ptsMap[sp.Player.ID] = sp.ExpectedPts
+			if sp.HasGame {
+				ptsMap[sp.Player.ID] = sp.ExpectedPts
+			}
 		}
 		for _, sp := range dr.pitcherResult.Scored {
-			ptsMap[sp.Player.ID] = sp.ExpectedPts
+			if !sp.HasGame {
+				continue
+			}
+			isRP := !strings.Contains(sp.Player.PosShortNames, "SP")
+			if sp.IsStarter || isRP {
+				ptsMap[sp.Player.ID] = sp.ExpectedPts
+			} else {
+				ptsMap[sp.Player.ID] = sp.ExpectedPts * 0.10
+			}
 		}
 		var delta float64
 		for _, ps := range allActivate {
