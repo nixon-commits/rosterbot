@@ -1,16 +1,17 @@
 package projections
 
 import (
+	"math"
+
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/pmurley/go-fantrax/auth_client"
 )
 
 const (
-	spSteamerWeight = 0.85
-	spRecentWeight  = 0.15
-	rpSteamerWeight = 0.70
-	rpRecentWeight  = 0.30
-	minGPForBlend   = 4 // minimum games played before blending recent data
+	spStabilizationGP    = 15.0  // 50/50 at 15 starts
+	rpStabilizationGP    = 25.0  // 50/50 at 25 appearances
+	pitcherSteamerFloor  = 0.35  // pitchers are more volatile, higher floor
+	minGPForBlend        = 4     // minimum games played before blending recent data
 )
 
 // PitcherPtsPerGameSource can provide a pre-computed pitcher points-per-game value.
@@ -19,8 +20,8 @@ type PitcherPtsPerGameSource interface {
 }
 
 // PitcherBlendedSource wraps a pitcher projection source and blends its per-game
-// value with recent Fantrax pitching data. Uses role-aware weights:
-// SPs get 85/15 Steamer/recent; RPs get 70/30.
+// value with recent Fantrax pitching data. Uses role-aware dynamic weights based
+// on games played, with SP stabilization at 15 GP and RP at 25 GP.
 type PitcherBlendedSource struct {
 	inner      PitcherSource
 	recent     map[string]fantrax.RecentStat
@@ -47,7 +48,7 @@ func (b *PitcherBlendedSource) GetPitcherProjection(name, mlbTeam string) (*Pitc
 	return b.inner.GetPitcherProjection(name, mlbTeam)
 }
 
-// GetPitcherPtsPerGame returns blended FP/G with role-aware weights.
+// GetPitcherPtsPerGame returns blended FP/G with role-aware dynamic weights.
 // Falls back to 100% Steamer if no recent data or insufficient games.
 func (b *PitcherBlendedSource) GetPitcherPtsPerGame(name, mlbTeam string, scoring fantrax.ScoringWeights) (float64, bool) {
 	proj, ok := b.inner.GetPitcherProjection(name, mlbTeam)
@@ -69,13 +70,29 @@ func (b *PitcherBlendedSource) GetPitcherPtsPerGame(name, mlbTeam string, scorin
 
 	recentPtsPerGame := recent.TotalFP / float64(recent.GamesPlayed)
 
-	// Determine role from position eligibility.
-	sw, rw := rpSteamerWeight, rpRecentWeight
-	if isSPEligible(b.playerPos[playerID]) {
-		sw, rw = spSteamerWeight, spRecentWeight
-	}
+	// Determine role from position eligibility, then compute dynamic weights.
+	isSP := isSPEligible(b.playerPos[playerID])
+	sw, rw := pitcherBlendWeights(recent.GamesPlayed, isSP)
 
 	return sw*steamerPts + rw*recentPtsPerGame, true
+}
+
+// pitcherBlendWeights computes dynamic Steamer/recent weights based on games played and role.
+func pitcherBlendWeights(gamesPlayed int, isSP bool) (steamer, season float64) {
+	stabilization := rpStabilizationGP
+	if isSP {
+		stabilization = spStabilizationGP
+	}
+	gp := float64(gamesPlayed)
+	seasonWeight := gp / (gp + stabilization)
+	steamer = math.Max(1-seasonWeight, pitcherSteamerFloor)
+	season = 1 - steamer
+	return
+}
+
+// PitcherBlendWeightsForDisplay returns the Steamer/season weight percentages for display.
+func PitcherBlendWeightsForDisplay(gamesPlayed int, isSP bool) (steamerPct, seasonPct float64) {
+	return pitcherBlendWeights(gamesPlayed, isSP)
 }
 
 // isSPEligible returns true if the player has SP position eligibility.

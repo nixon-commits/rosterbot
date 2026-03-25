@@ -195,8 +195,15 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			}
 			hitterProjSrc = baseSrc
 		} else {
-			log.Printf("fetching last 10 hitter periods...")
-			recentStats, err := ft.GetRecentStats(currentPeriod, 10)
+			lookback := currentPeriod - 1
+			if lookback > 60 {
+				lookback = 60
+			}
+			if lookback < 10 {
+				lookback = 10
+			}
+			log.Printf("fetching last %d hitter periods...", lookback)
+			recentStats, err := ft.GetRecentStats(currentPeriod, lookback)
 			if err != nil {
 				log.Printf("WARNING: recent hitter stats unavailable (%v) — using Steamer only", err)
 				hitterProjSrc = baseSrc
@@ -231,7 +238,14 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		if periodErr != nil || currentPeriod <= 1 {
 			pitcherProjSrc = pitBaseSrc
 		} else {
-			recentPitStats, err := ft.GetRecentPitcherStats(currentPeriod, 10)
+			pitLookback := currentPeriod - 1
+			if pitLookback > 60 {
+				pitLookback = 60
+			}
+			if pitLookback < 10 {
+				pitLookback = 10
+			}
+			recentPitStats, err := ft.GetRecentPitcherStats(currentPeriod, pitLookback)
 			if err != nil {
 				log.Printf("WARNING: recent pitcher stats unavailable (%v) — using Steamer only", err)
 				pitcherProjSrc = pitBaseSrc

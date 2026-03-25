@@ -1,13 +1,16 @@
 package projections
 
 import (
+	"math"
+
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 )
 
 const (
-	steamerWeight       = 0.70
-	recentWeight        = 0.30
-	minGPForHitterBlend = 4 // require at least 4 games before blending recent stats
+	hitterStabilizationPA = 250.0 // 50/50 at ~66 GP (roughly mid-June)
+	hitterPAPerGame       = 3.8   // approximate PA per game played
+	hitterSteamerFloor    = 0.30  // Steamer never drops below 30%
+	minGPForHitterBlend   = 4     // require at least 4 games before blending recent stats
 )
 
 // PtsPerGameSource can provide a pre-computed points-per-game value.
@@ -38,7 +41,7 @@ func (b *BlendedSource) GetProjection(name, mlbTeam string) (*Projection, bool) 
 	return b.inner.GetProjection(name, mlbTeam)
 }
 
-// GetPtsPerGame returns blended FP/G: 60% Steamer + 40% recent.
+// GetPtsPerGame returns blended FP/G using PA-based dynamic weights.
 // Falls back to 100% Steamer if no recent data. Returns false if no Steamer projection.
 func (b *BlendedSource) GetPtsPerGame(name, mlbTeam string, scoring fantrax.ScoringWeights) (float64, bool) {
 	proj, ok := b.inner.GetProjection(name, mlbTeam)
@@ -59,7 +62,22 @@ func (b *BlendedSource) GetPtsPerGame(name, mlbTeam string, scoring fantrax.Scor
 	}
 
 	recentPtsPerGame := recent.TotalFP / float64(recent.GamesPlayed)
-	return steamerWeight*steamerPts + recentWeight*recentPtsPerGame, true
+	sw, rw := hitterBlendWeights(recent.GamesPlayed)
+	return sw*steamerPts + rw*recentPtsPerGame, true
+}
+
+// hitterBlendWeights computes dynamic Steamer/recent weights based on games played.
+func hitterBlendWeights(gamesPlayed int) (steamer, season float64) {
+	approxPA := float64(gamesPlayed) * hitterPAPerGame
+	seasonWeight := approxPA / (approxPA + hitterStabilizationPA)
+	steamer = math.Max(1-seasonWeight, hitterSteamerFloor)
+	season = 1 - steamer
+	return
+}
+
+// HitterBlendWeightsForDisplay returns the Steamer/season weight percentages for display.
+func HitterBlendWeightsForDisplay(gamesPlayed int) (steamerPct, seasonPct float64) {
+	return hitterBlendWeights(gamesPlayed)
 }
 
 // ExpectedPtsFromProj computes per-game fantasy points from a projection.
