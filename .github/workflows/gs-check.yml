@@ -8,7 +8,7 @@ on:
       force:
         description: 'Skip end-of-period check (use latest period)'
         type: boolean
-        default: false
+        default: true
       dry_run:
         description: 'Dry run — print report but skip notifications'
         type: boolean
