@@ -36,6 +36,9 @@ type schedulePayload struct {
 					} `json:"team"`
 				} `json:"home"`
 			} `json:"teams"`
+			Status struct {
+				AbstractGameState string `json:"abstractGameState"` // "Preview", "Live", "Final"
+			} `json:"status"`
 		} `json:"games"`
 	} `json:"dates"`
 }
@@ -74,6 +77,27 @@ func (c *Client) TeamsPlayingOn(date time.Time) (map[string]bool, error) {
 		}
 	}
 	return playing, nil
+}
+
+// LockedTeams returns the set of teams whose game is currently in progress or final.
+// Players on these teams cannot be moved in Fantrax for that scoring period.
+func (c *Client) LockedTeams(date time.Time) (map[string]bool, error) {
+	payload, err := c.fetchSchedule(date)
+	if err != nil {
+		return nil, err
+	}
+
+	locked := make(map[string]bool)
+	for _, d := range payload.Dates {
+		for _, g := range d.Games {
+			state := g.Status.AbstractGameState
+			if state == "Live" || state == "Final" {
+				locked[projections.NormalizeTeam(g.Teams.Away.Team.Abbreviation)] = true
+				locked[projections.NormalizeTeam(g.Teams.Home.Team.Abbreviation)] = true
+			}
+		}
+	}
+	return locked, nil
 }
 
 // GameVenues returns a map of team abbreviation → home team abbreviation

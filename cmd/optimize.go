@@ -16,10 +16,11 @@ import (
 )
 
 var (
-	datesStr       string
-	daysAhead      int
-	checkRoster    bool
-	matchupPeriod  bool
+	datesStr         string
+	daysAhead        int
+	checkRoster      bool
+	matchupPeriod    bool
+	projectionSystem string
 )
 
 var optimizeCmd = &cobra.Command{
@@ -33,10 +34,16 @@ func init() {
 	optimizeCmd.Flags().IntVar(&daysAhead, "days", 0, "optimize for the next N days starting from today")
 	optimizeCmd.Flags().BoolVar(&matchupPeriod, "matchup", false, "optimize for all remaining days in the current matchup period")
 	optimizeCmd.Flags().BoolVar(&checkRoster, "check-roster", true, "check for roster slot mismatches (IL/minors)")
+	optimizeCmd.Flags().StringVar(&projectionSystem, "projections", "depthcharts", "projection system: steamer, depthcharts, thebatx")
 	rootCmd.AddCommand(optimizeCmd)
 }
 
 func runOptimize(cmd *cobra.Command, args []string) error {
+	if err := projections.SetProjectionSystem(projectionSystem); err != nil {
+		return err
+	}
+	log.Printf("projection system: %s", projectionSystem)
+
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 
@@ -401,6 +408,23 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				forecast = append(forecast, df)
 			}
 
+			// Count today's locked active SP starters toward used GS.
+			// If their game is in progress or final, their GS is consumed.
+			lockedTeams, lockErr := schedClient.LockedTeams(today)
+			if lockErr == nil {
+				for _, p := range pitcherRoster {
+					if p.Status != "Active" || p.InMinors || p.IsInjured {
+						continue
+					}
+					if !lockedTeams[p.MLBTeam] {
+						continue
+					}
+					if strings.Contains(p.PosShortNames, "SP") {
+						usedGS++
+					}
+				}
+			}
+
 			gsBudget = &optimizer.GSBudget{
 				Limit:    cfg.GSLimit,
 				Used:     usedGS,
@@ -473,6 +497,25 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				warnings = append(warnings, fmt.Sprintf("mlb schedule unavailable for %s (%v) — assuming all teams play", date.Format("2006-01-02"), err))
 				allPlayers := append(dateHitterRoster, datePitcherRoster...)
 				playingToday = allTeamsPlaying(allPlayers)
+			}
+
+			// Detect locked teams (game in progress or final) — only for today.
+			if isToday {
+				lockedTeams, err := schedClient.LockedTeams(date)
+				if err != nil {
+					warnings = append(warnings, fmt.Sprintf("locked teams unavailable (%v) — proceeding without lock detection", err))
+				} else if len(lockedTeams) > 0 {
+					for i := range dateHitterRoster {
+						if lockedTeams[dateHitterRoster[i].MLBTeam] && !dateHitterRoster[i].InMinors && !dateHitterRoster[i].IsInjured {
+							dateHitterRoster[i].Locked = true
+						}
+					}
+					for i := range datePitcherRoster {
+						if lockedTeams[datePitcherRoster[i].MLBTeam] && !datePitcherRoster[i].InMinors && !datePitcherRoster[i].IsInjured {
+							datePitcherRoster[i].Locked = true
+						}
+					}
+				}
 			}
 
 			probableStarters, err := schedClient.ProbableStarters(date)
@@ -607,7 +650,9 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				slot = name
 			}
 			game := " "
-			if sp.HasGame {
+			if sp.Player.Locked {
+				game = "🔒"
+			} else if sp.HasGame {
 				game = "✓"
 			}
 			line := padRight("▸", 1) + " " + padRight(truncName(sp.Player.Name, 19), 19) + " " +
@@ -621,7 +666,9 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			hGreen = append(hGreen, false)
 			for _, sp := range hBench {
 				game := " "
-				if sp.HasGame {
+				if sp.Player.Locked {
+					game = "🔒"
+				} else if sp.HasGame {
 					game = "✓"
 				}
 				line := "  " + padRight(truncName(sp.Player.Name, 19), 19) + " " +
@@ -668,7 +715,9 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				role += "★"
 			}
 			game := " "
-			if sp.HasGame {
+			if sp.Player.Locked {
+				game = "🔒"
+			} else if sp.HasGame {
 				game = "✓"
 			}
 			line := padRight("▸", 1) + " " + padRight(truncName(sp.Player.Name, 19), 19) + " " +
@@ -689,7 +738,9 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 					role += "★"
 				}
 				game := " "
-				if sp.HasGame {
+				if sp.Player.Locked {
+					game = "🔒"
+				} else if sp.HasGame {
 					game = "✓"
 				}
 				line := "  " + padRight(truncName(sp.Player.Name, 19), 19) + " " +

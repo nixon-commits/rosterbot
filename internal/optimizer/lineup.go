@@ -51,9 +51,23 @@ func OptimizeLineup(
 		}
 	}
 
+	// Partition locked active players: they keep their current slot.
+	// Remove their slots from available pool so the optimizer works around them.
+	availableSlots, lockedAssign := partitionLockedSlots(scored, slots, currentAssign)
+
+	// Exclude locked players from optimizer candidates.
+	var unlocked []ScoredPlayer
+	for _, sp := range scored {
+		if !sp.Player.Locked {
+			unlocked = append(unlocked, sp)
+		}
+	}
+
 	// Use backtracking to find the assignment that maximizes total points.
-	// Pass current assignments so tied scores prefer fewer changes (stability).
-	toActivate := optimalAssignment(scored, slots, currentAssign, fantrax.EligibleForSlot)
+	toActivate := optimalAssignment(unlocked, availableSlots, currentAssign, fantrax.EligibleForSlot)
+
+	// Merge locked assignments back in.
+	toActivate = append(toActivate, lockedAssign...)
 
 	// Build set of players in the optimal lineup.
 	assigned := make(map[string]bool)
@@ -62,6 +76,7 @@ func OptimizeLineup(
 	}
 
 	// Only emit changes: activations where player isn't already in that slot.
+	// Never emit locked players.
 	var changedActivate []fantrax.PlayerSlot
 	for _, ps := range toActivate {
 		if currentAssign[ps.PlayerID] != ps.PosID {
@@ -70,9 +85,10 @@ func OptimizeLineup(
 	}
 
 	// Bench players who are currently active but not in the optimal lineup.
+	// Never bench locked players.
 	var toBench []string
 	for _, p := range roster {
-		if p.Status == "Active" && !assigned[p.ID] {
+		if p.Status == "Active" && !assigned[p.ID] && !p.Locked {
 			toBench = append(toBench, p.ID)
 		}
 	}
@@ -192,6 +208,38 @@ func optimalAssignment(scored []ScoredPlayer, slots []fantrax.Slot, currentAssig
 		}
 	}
 	return result
+}
+
+// partitionLockedSlots separates locked active players from the optimization.
+// Locked players keep their current slot; those slots are removed from the
+// available pool so the optimizer only considers movable players and open slots.
+func partitionLockedSlots(scored []ScoredPlayer, slots []fantrax.Slot, currentAssign map[string]string) (available []fantrax.Slot, locked []fantrax.PlayerSlot) {
+	// Count how many slots each posID type is consumed by locked players.
+	consumed := make(map[string]int)
+	for _, sp := range scored {
+		if !sp.Player.Locked {
+			continue
+		}
+		posID, ok := currentAssign[sp.Player.ID]
+		if !ok {
+			continue // locked bench player — stays on bench, no slot consumed
+		}
+		locked = append(locked, fantrax.PlayerSlot{
+			PlayerID: sp.Player.ID,
+			PosID:    posID,
+		})
+		consumed[posID]++
+	}
+
+	// Remove consumed slots from the pool (slots can repeat, e.g. 4x OF).
+	for _, s := range slots {
+		if consumed[s.PosID] > 0 {
+			consumed[s.PosID]--
+			continue
+		}
+		available = append(available, s)
+	}
+	return available, locked
 }
 
 func scoreRoster(

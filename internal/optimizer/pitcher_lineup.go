@@ -92,7 +92,21 @@ func OptimizePitcherLineup(
 		}
 	}
 
-	toActivate := optimalAssignment(generic, slots, currentAssign, fantrax.EligibleForPitcherSlot)
+	// Partition locked active players: they keep their current slot.
+	availableSlots, lockedAssign := partitionLockedSlots(generic, slots, currentAssign)
+
+	// Exclude locked players from optimizer candidates.
+	var unlocked []ScoredPlayer
+	for _, sp := range generic {
+		if !sp.Player.Locked {
+			unlocked = append(unlocked, sp)
+		}
+	}
+
+	toActivate := optimalAssignment(unlocked, availableSlots, currentAssign, fantrax.EligibleForPitcherSlot)
+
+	// Merge locked assignments back in.
+	toActivate = append(toActivate, lockedAssign...)
 
 	// Build set of players in the optimal lineup.
 	assigned := make(map[string]bool)
@@ -100,7 +114,7 @@ func OptimizePitcherLineup(
 		assigned[ps.PlayerID] = true
 	}
 
-	// Only emit changes.
+	// Only emit changes. Never emit locked players.
 	var changedActivate []fantrax.PlayerSlot
 	for _, ps := range toActivate {
 		if currentAssign[ps.PlayerID] != ps.PosID {
@@ -109,9 +123,10 @@ func OptimizePitcherLineup(
 	}
 
 	// Bench pitchers who are currently active but not in the optimal lineup.
+	// Never bench locked players.
 	var toBench []string
 	for _, p := range roster {
-		if p.Status == "Active" && !assigned[p.ID] {
+		if p.Status == "Active" && !assigned[p.ID] && !p.Locked {
 			toBench = append(toBench, p.ID)
 		}
 	}

@@ -23,6 +23,7 @@ type Player struct {
 	NextGameDate   string   // "2026-03-22" or "" if no game found
 	InMinors       bool     // true if player is currently in the minor leagues (icon "4")
 	IsInjured      bool     // true if player is on IL, day-to-day, or out indefinitely
+	Locked         bool     // true if player's game is in progress or final (cannot be moved)
 }
 
 // Slot describes one active roster slot.

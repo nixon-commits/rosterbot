@@ -14,6 +14,33 @@ import (
 
 var fangraphsBattingURL = "https://www.fangraphs.com/api/projections?type=fangraphsdc&stats=bat&pos=all&team=0&players=0&lg=all"
 
+// Supported FanGraphs projection systems.
+const (
+	ProjectionSteamer     = "steamer"
+	ProjectionDepthCharts = "depthcharts"
+	ProjectionBatX        = "thebatx"
+)
+
+// fgProjectionType maps our flag names to FanGraphs API type parameter values.
+var fgProjectionType = map[string]string{
+	ProjectionSteamer:     "steamer",
+	ProjectionDepthCharts: "fangraphsdc",
+	ProjectionBatX:        "thebatx",
+}
+
+// SetProjectionSystem updates the FanGraphs API URLs to use the given projection system.
+// Valid values: "steamer", "depthcharts", "thebatx". Returns an error for unknown systems.
+func SetProjectionSystem(system string) error {
+	apiType, ok := fgProjectionType[system]
+	if !ok {
+		return fmt.Errorf("unknown projection system %q (valid: steamer, depthcharts, thebatx)", system)
+	}
+	base := "https://www.fangraphs.com/api/projections?type=%s&stats=%s&pos=all&team=0&players=0&lg=all"
+	fangraphsBattingURL = fmt.Sprintf(base, apiType, "bat")
+	fangraphsPitchingURL = fmt.Sprintf(base, apiType, "pit")
+	return nil
+}
+
 // Projection holds projected season counting stats for a hitter.
 // All values are season totals; per-game rates are derived by dividing by G.
 type Projection struct {

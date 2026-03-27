@@ -1,9 +1,10 @@
-name: Optimize Daily Lineup
+name: Optimize Lineup
 
 on:
   schedule:
-    - cron: '0 10 * * *'   # 10am UTC (6am ET) every day
-  workflow_dispatch:         # on-demand trigger from GitHub Actions tab
+    - cron: '0 16-23 * * *'  # 8am–3pm PST (4pm–11pm UTC)
+    - cron: '0 0-3 * * *'    # 4pm–7pm PST (12am–3am UTC next day)
+  workflow_dispatch:           # on-demand trigger from GitHub Actions tab
 
 jobs:
   optimize-lineup:
@@ -21,7 +22,7 @@ jobs:
       - uses: browser-actions/setup-chrome@v2
 
       - name: Optimize lineup
-        run: go run . optimize
+        run: go run . optimize --matchup
         env:
           FANTRAX_USERNAME: ${{ secrets.FANTRAX_USERNAME }}
           FANTRAX_PASSWORD: ${{ secrets.FANTRAX_PASSWORD }}

@@ -132,6 +132,90 @@ func TestGameVenues_ParsesResponse(t *testing.T) {
 	}
 }
 
+func TestLockedTeams_LiveAndFinal(t *testing.T) {
+	fixture := map[string]interface{}{
+		"dates": []map[string]interface{}{
+			{
+				"games": []map[string]interface{}{
+					{
+						"teams": map[string]interface{}{
+							"away": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "NYY"},
+							},
+							"home": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "BOS"},
+							},
+						},
+						"status": map[string]interface{}{
+							"abstractGameState": "Live",
+						},
+					},
+					{
+						"teams": map[string]interface{}{
+							"away": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "LAD"},
+							},
+							"home": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "SF"},
+							},
+						},
+						"status": map[string]interface{}{
+							"abstractGameState": "Final",
+						},
+					},
+					{
+						"teams": map[string]interface{}{
+							"away": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "CHC"},
+							},
+							"home": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "MIL"},
+							},
+						},
+						"status": map[string]interface{}{
+							"abstractGameState": "Preview",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(fixture)
+	}))
+	defer srv.Close()
+
+	origURL := mlbScheduleURL
+	mlbScheduleURL = srv.URL + "?date=%s"
+	defer func() { mlbScheduleURL = origURL }()
+
+	c := NewClient()
+	locked, err := c.LockedTeams(time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Live game: NYY @ BOS should be locked.
+	for _, team := range []string{"NYY", "BOS"} {
+		if !locked[team] {
+			t.Errorf("expected %s to be locked (Live)", team)
+		}
+	}
+	// Final game: LAD @ SF should be locked.
+	for _, team := range []string{"LAD", "SF"} {
+		if !locked[team] {
+			t.Errorf("expected %s to be locked (Final)", team)
+		}
+	}
+	// Preview game: CHC @ MIL should NOT be locked.
+	for _, team := range []string{"CHC", "MIL"} {
+		if locked[team] {
+			t.Errorf("expected %s NOT to be locked (Preview)", team)
+		}
+	}
+}
+
 func TestTeamsPlayingOn_EmptySchedule(t *testing.T) {
 	fixture := map[string]interface{}{"dates": []interface{}{}}
 

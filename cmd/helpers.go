@@ -4,20 +4,35 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/roster"
 )
 
-// padRight pads s with spaces to the given display width (rune count).
+// padRight pads s with spaces to the given display width.
+// Accounts for double-width characters (emoji, CJK) that occupy 2 terminal columns.
 func padRight(s string, width int) string {
-	w := utf8.RuneCountInString(s)
+	w := displayWidth(s)
 	if w >= width {
 		return s
 	}
 	return s + strings.Repeat(" ", width-w)
+}
+
+// displayWidth returns the number of terminal columns a string occupies.
+// Characters in the Supplementary Multilingual Plane (U+10000+) like emoji
+// are double-width; BMP characters (★, ✓, ▸) are single-width.
+func displayWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		if r >= 0x10000 {
+			w += 2
+		} else {
+			w++
+		}
+	}
+	return w
 }
 
 // truncName truncates a name to maxLen runes.

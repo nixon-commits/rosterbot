@@ -264,6 +264,44 @@ func TestOptimizeLineup_MinorLeaguerOnReserve_NotActivated(t *testing.T) {
 	}
 }
 
+func TestOptimizeLineup_LockedPlayersImmovable(t *testing.T) {
+	scoring := fantrax.ScoringWeights{"HR": 4.0}
+
+	proj := newStubProj(map[string]*projections.Projection{
+		"Locked Active":    {G: 100, PA: 400, HR: 5},  // low value but locked in slot
+		"Better Reserve":   {G: 100, PA: 400, HR: 30}, // higher value, should fill remaining slot
+		"Locked Bench":     {G: 100, PA: 400, HR: 40}, // highest value but locked on bench
+	})
+
+	roster := []fantrax.Player{
+		{ID: "la", Name: "Locked Active", MLBTeam: "NYY", Positions: []string{"012", "014"}, Status: "Active", RosterPosition: "012", Locked: true},
+		{ID: "br", Name: "Better Reserve", MLBTeam: "BOS", Positions: []string{"012", "014"}, Status: "Reserve"},
+		{ID: "lb", Name: "Locked Bench", MLBTeam: "NYY", Positions: []string{"012", "014"}, Status: "Reserve", Locked: true},
+	}
+
+	slots := []fantrax.Slot{
+		{PosID: "012", PosName: "OF"},
+		{PosID: "014", PosName: "UT"},
+	}
+
+	playingToday := map[string]bool{"NYY": true, "BOS": true}
+
+	result := OptimizeLineup(roster, playingToday, proj, scoring, slots)
+
+	// Locked Active should stay in OF slot (not benched despite low value).
+	// Better Reserve should fill the remaining UT slot.
+	// Locked Bench should NOT be activated despite highest value.
+	if len(result.ToActivate) != 1 {
+		t.Fatalf("expected 1 activation, got %d: %+v", len(result.ToActivate), result.ToActivate)
+	}
+	if result.ToActivate[0].PlayerID != "br" {
+		t.Errorf("expected Better Reserve activated, got %s", result.ToActivate[0].PlayerID)
+	}
+	if len(result.ToBench) != 0 {
+		t.Errorf("expected no benchings (locked player should not be benched), got %v", result.ToBench)
+	}
+}
+
 func TestExpectedPts_Calculation(t *testing.T) {
 	proj := &projections.Projection{
 		G:       150,
