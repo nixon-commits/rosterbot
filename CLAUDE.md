@@ -75,7 +75,7 @@ fangraphs proj  ──┘
 - **Matchup week boundaries** derived from `GetAllMatchups()`: consecutive daily scoring periods where the team faces the same opponent form a matchup week. Computed in `fantrax/matchup_weeks.go` via `MatchupWeekBounds`.
 - **Past GS counting**: for each past day in the current matchup week, the `ProbableStarters` API is checked to count how many rostered SPs started.
 - **Future demand forecasting** uses a hybrid approach: days with confirmed probable starters use exact counts; days without probables estimate `roster SPs whose team plays / 5` (standard 5-man rotation).
-- **Conservative gate** (`optimizer/gs_budget.go`): computes `slack = remaining GS - projected future demand`. If slack < today's starters, the lowest-value starters have `IsStarter` flipped to false, applying the existing 0.10x non-starter discount. Uses `eps = 1e-9` for float comparison consistency.
+- **Proportional gate** (`optimizer/gs_budget.go`): allocates remaining GS proportionally across today and future days (`allowToday = round(remaining * todayStarters / totalDemand)`). When budget is tight, the highest-value starters are kept and lowest-value starters have `IsStarter` flipped to false, applying the existing 0.10x non-starter discount. Uses `eps = 1e-9` for float comparison consistency.
 - The gate only applies to today's optimization (the daily GHA run). Future dates in `--dates` ranges are optimized without the gate since each day gets its own run.
 - The `--matchup` flag on the optimize command resolves to all remaining days in the current matchup period (from today through the matchup week end).
 
@@ -87,6 +87,10 @@ The optimizer must produce identical output given the same inputs. Key invariant
 - **Minimal changes**: when two assignments produce the same total points (within epsilon), the optimizer prefers the one with fewer roster moves (`changes < bestChanges`).
 - **Period-specific roster**: for future dates, the optimizer fetches the roster for that period (`GetHitterRosterForPeriod`) so it sees already-applied lineups. A second run with the same inputs produces "No changes needed".
 - **Verification**: after any optimizer change, run the command twice with the same inputs and confirm the second run shows "No changes needed" for all dates.
+
+## README
+
+When adding new commands, flags, env vars, or changing architecture, update `README.md` to keep it in sync. The README covers user-facing features (commands, flags, setup, configuration) while CLAUDE.md covers internal implementation details.
 
 ## GHA
 

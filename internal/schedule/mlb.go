@@ -10,6 +10,7 @@ import (
 )
 
 var mlbScheduleURL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&hydrate=team&date=%s"
+var mlbLineupsURL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&hydrate=lineups,team&date=%s"
 
 // Client fetches the MLB game schedule.
 type Client struct {
@@ -98,6 +99,97 @@ func (c *Client) LockedTeams(date time.Time) (map[string]bool, error) {
 		}
 	}
 	return locked, nil
+}
+
+// lineupsPayload is the decoded MLB schedule API response with lineup hydration.
+type lineupsPayload struct {
+	Dates []struct {
+		Games []struct {
+			Teams struct {
+				Away struct {
+					Team struct {
+						Abbreviation string `json:"abbreviation"`
+					} `json:"team"`
+				} `json:"away"`
+				Home struct {
+					Team struct {
+						Abbreviation string `json:"abbreviation"`
+					} `json:"team"`
+				} `json:"home"`
+			} `json:"teams"`
+			Lineups *struct {
+				HomePlayers []struct {
+					FullName string `json:"fullName"`
+				} `json:"homePlayers"`
+				AwayPlayers []struct {
+					FullName string `json:"fullName"`
+				} `json:"awayPlayers"`
+			} `json:"lineups"`
+		} `json:"games"`
+	} `json:"dates"`
+}
+
+// BenchedPlayers returns the set of normalized player names who are confirmed
+// NOT in today's starting lineup. rosterPlayers maps normalized name → team
+// abbreviation for rostered hitters. A player is only marked benched when
+// their team's game has lineups posted and the player is absent from the lineup.
+// If lineups are not yet posted for a game, no players from those teams are affected.
+func (c *Client) BenchedPlayers(date time.Time, rosterPlayers map[string]string) (map[string]bool, error) {
+	url := fmt.Sprintf(mlbLineupsURL, date.Format("2006-01-02"))
+	resp, err := c.http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("mlb lineups fetch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("mlb lineups: status %d", resp.StatusCode)
+	}
+
+	var payload lineupsPayload
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("mlb lineups decode: %w", err)
+	}
+
+	// Collect confirmed starters by team. Only teams with posted lineups
+	// (non-empty player lists) are included.
+	teamStarters := make(map[string]map[string]bool) // team abbr → set of normalized names
+	for _, d := range payload.Dates {
+		for _, g := range d.Games {
+			if g.Lineups == nil {
+				continue
+			}
+			homeTeam := projections.NormalizeTeam(g.Teams.Home.Team.Abbreviation)
+			awayTeam := projections.NormalizeTeam(g.Teams.Away.Team.Abbreviation)
+
+			if len(g.Lineups.HomePlayers) > 0 {
+				starters := make(map[string]bool)
+				for _, p := range g.Lineups.HomePlayers {
+					starters[normalizePitcherName(p.FullName)] = true
+				}
+				teamStarters[homeTeam] = starters
+			}
+			if len(g.Lineups.AwayPlayers) > 0 {
+				starters := make(map[string]bool)
+				for _, p := range g.Lineups.AwayPlayers {
+					starters[normalizePitcherName(p.FullName)] = true
+				}
+				teamStarters[awayTeam] = starters
+			}
+		}
+	}
+
+	benched := make(map[string]bool)
+	for normalizedName, team := range rosterPlayers {
+		starters, hasLineup := teamStarters[team]
+		if !hasLineup {
+			continue // lineups not posted for this team — assume player plays
+		}
+		if !starters[normalizedName] {
+			benched[normalizedName] = true
+		}
+	}
+	return benched, nil
 }
 
 // GameVenues returns a map of team abbreviation → home team abbreviation

@@ -237,3 +237,161 @@ func TestTeamsPlayingOn_EmptySchedule(t *testing.T) {
 		t.Errorf("expected empty map, got %v", playing)
 	}
 }
+
+func TestBenchedPlayers_LineupsPosted(t *testing.T) {
+	fixture := map[string]interface{}{
+		"dates": []map[string]interface{}{
+			{
+				"games": []map[string]interface{}{
+					{
+						"teams": map[string]interface{}{
+							"away": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "NYY"},
+							},
+							"home": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "BOS"},
+							},
+						},
+						"lineups": map[string]interface{}{
+							"awayPlayers": []map[string]interface{}{
+								{"fullName": "Aaron Judge"},
+								{"fullName": "Juan Soto"},
+							},
+							"homePlayers": []map[string]interface{}{
+								{"fullName": "Rafael Devers"},
+								{"fullName": "Masataka Yoshida"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(fixture)
+	}))
+	defer srv.Close()
+
+	origURL := mlbLineupsURL
+	mlbLineupsURL = srv.URL + "?date=%s"
+	defer func() { mlbLineupsURL = origURL }()
+
+	roster := map[string]string{
+		"aaron judge":      "NYY",
+		"anthony volpe":    "NYY", // not in lineup
+		"rafael devers":    "BOS",
+		"masataka yoshida": "BOS",
+	}
+
+	c := NewClient()
+	benched, err := c.BenchedPlayers(time.Now(), roster)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !benched["anthony volpe"] {
+		t.Error("expected anthony volpe to be benched (not in lineup)")
+	}
+	if benched["aaron judge"] {
+		t.Error("aaron judge should NOT be benched (in lineup)")
+	}
+	if benched["rafael devers"] {
+		t.Error("rafael devers should NOT be benched (in lineup)")
+	}
+}
+
+func TestBenchedPlayers_LineupsNotPosted(t *testing.T) {
+	// Game exists but lineups field is null (not yet posted).
+	fixture := map[string]interface{}{
+		"dates": []map[string]interface{}{
+			{
+				"games": []map[string]interface{}{
+					{
+						"teams": map[string]interface{}{
+							"away": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "NYY"},
+							},
+							"home": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "BOS"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(fixture)
+	}))
+	defer srv.Close()
+
+	origURL := mlbLineupsURL
+	mlbLineupsURL = srv.URL + "?date=%s"
+	defer func() { mlbLineupsURL = origURL }()
+
+	roster := map[string]string{
+		"aaron judge":   "NYY",
+		"anthony volpe": "NYY",
+	}
+
+	c := NewClient()
+	benched, err := c.BenchedPlayers(time.Now(), roster)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(benched) != 0 {
+		t.Errorf("expected no benched players when lineups not posted, got %v", benched)
+	}
+}
+
+func TestBenchedPlayers_EmptyLineups(t *testing.T) {
+	// Lineups field exists but with empty player lists (not yet posted).
+	fixture := map[string]interface{}{
+		"dates": []map[string]interface{}{
+			{
+				"games": []map[string]interface{}{
+					{
+						"teams": map[string]interface{}{
+							"away": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "NYY"},
+							},
+							"home": map[string]interface{}{
+								"team": map[string]interface{}{"abbreviation": "BOS"},
+							},
+						},
+						"lineups": map[string]interface{}{
+							"awayPlayers": []map[string]interface{}{},
+							"homePlayers": []map[string]interface{}{},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(fixture)
+	}))
+	defer srv.Close()
+
+	origURL := mlbLineupsURL
+	mlbLineupsURL = srv.URL + "?date=%s"
+	defer func() { mlbLineupsURL = origURL }()
+
+	roster := map[string]string{
+		"aaron judge": "NYY",
+	}
+
+	c := NewClient()
+	benched, err := c.BenchedPlayers(time.Now(), roster)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(benched) != 0 {
+		t.Errorf("expected no benched players with empty lineups, got %v", benched)
+	}
+}

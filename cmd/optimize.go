@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/roster"
@@ -21,6 +22,7 @@ var (
 	checkRoster      bool
 	matchupPeriod    bool
 	projectionSystem string
+	showBlend        bool
 )
 
 var optimizeCmd = &cobra.Command{
@@ -35,6 +37,7 @@ func init() {
 	optimizeCmd.Flags().BoolVar(&matchupPeriod, "matchup", false, "optimize for all remaining days in the current matchup period")
 	optimizeCmd.Flags().BoolVar(&checkRoster, "check-roster", true, "check for roster slot mismatches (IL/minors)")
 	optimizeCmd.Flags().StringVar(&projectionSystem, "projections", "depthcharts", "projection system: steamer, depthcharts, thebatx")
+	optimizeCmd.Flags().BoolVar(&showBlend, "blend", false, "show hitter blend breakdown (Steamer vs recent)")
 	rootCmd.AddCommand(optimizeCmd)
 }
 
@@ -194,8 +197,9 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		fgSrc, err = projections.NewFanGraphsSource()
 	}
 	if err != nil {
-		log.Printf("WARNING: fangraphs batting unavailable (%v) — using rolling stats only", err)
-		hitterProjSrc = projections.NewRollingSource()
+		msg := fmt.Sprintf("batting projections unavailable: %v", err)
+		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, msg)
+		return fmt.Errorf(msg)
 	} else {
 		log.Printf("fangraphs batting projections loaded")
 		rolling := projections.NewRollingSource()
@@ -244,8 +248,9 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		fgPitSrc, err = projections.NewFanGraphsPitcherSource()
 	}
 	if err != nil {
-		log.Printf("WARNING: fangraphs pitching unavailable (%v) — using rolling stats only", err)
-		pitcherProjSrc = projections.NewPitcherRollingSource()
+		msg := fmt.Sprintf("pitching projections unavailable: %v", err)
+		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, msg)
+		return fmt.Errorf(msg)
 	} else {
 		log.Printf("fangraphs pitching projections loaded")
 		pitRolling := projections.NewPitcherRollingSource()
@@ -461,7 +466,9 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		hitterResult  optimizer.Result
 		pitcherResult optimizer.PitcherResult
 		warnings      []string
-		venues        map[string]string // team → home team (for park factor display)
+		venues        map[string]string            // team → home team (for park factor display)
+		benchedToday  map[string]bool              // normalized names confirmed out of real-life lineup
+		hitterBreakdowns map[string]*projections.HitterBreakdown // playerID → breakdown
 	}
 
 	results := make([]dateResult, len(cfg.Dates))
@@ -533,6 +540,23 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				venues = v
 			}
 
+			// Fetch benched hitters (confirmed out of real-life starting lineup).
+			// Only for today — lineups aren't posted days in advance.
+			var benchedToday map[string]bool
+			if isToday {
+				rosterNames := make(map[string]string, len(dateHitterRoster))
+				for _, p := range dateHitterRoster {
+					if !p.InMinors && !p.IsInjured {
+						rosterNames[projections.NormalizeName(p.Name)] = p.MLBTeam
+					}
+				}
+				if b, err := schedClient.BenchedPlayers(date, rosterNames); err != nil {
+					warnings = append(warnings, fmt.Sprintf("starting lineups unavailable (%v) — assuming all hitters play", err))
+				} else if len(b) > 0 {
+					benchedToday = b
+				}
+			}
+
 			// Optimize hitters (with park factor adjustment if available).
 			dateHitterSrc := hitterProjSrc
 			if venues != nil && parkFactors != nil {
@@ -568,7 +592,20 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 					dateHitterSrc = projections.NewMatchupAdjustedSource(dateHitterSrc, opposingPitchers, hitterBats, leagueAvgFIP)
 				}
 			}
-			hitterResult := optimizer.OptimizeLineup(dateHitterRoster, playingToday, dateHitterSrc, hitterScoring, hitterSlots)
+			hitterResult := optimizer.OptimizeLineup(dateHitterRoster, playingToday, dateHitterSrc, hitterScoring, hitterSlots, benchedToday)
+
+			// Compute hitter blending breakdowns if --blend flag is set.
+			var hitterBreakdowns map[string]*projections.HitterBreakdown
+			if showBlend {
+				if blended, ok := hitterProjSrc.(*projections.BlendedSource); ok {
+					hitterBreakdowns = make(map[string]*projections.HitterBreakdown)
+					for _, sp := range hitterResult.Scored {
+						if bd := blended.GetHitterBreakdown(sp.Player.Name, sp.Player.MLBTeam, hitterScoring); bd != nil {
+							hitterBreakdowns[sp.Player.ID] = bd
+						}
+					}
+				}
+			}
 
 			// Optimize pitchers.
 			// GS budget gate only applies to today — for future dates the budget
@@ -581,13 +618,15 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			pitcherResult := optimizer.OptimizePitcherLineup(datePitcherRoster, playingToday, probableStarters, pitcherProjSrc, pitcherScoring, pitcherSlots, dateBudget)
 
 			results[i] = dateResult{
-				date:          date,
-				period:        period,
-				isToday:       isToday,
-				hitterResult:  hitterResult,
-				pitcherResult: pitcherResult,
-				warnings:      warnings,
-				venues:        venues,
+				date:             date,
+				period:           period,
+				isToday:          isToday,
+				hitterResult:     hitterResult,
+				pitcherResult:    pitcherResult,
+				warnings:         warnings,
+				venues:           venues,
+				benchedToday:     benchedToday,
+				hitterBreakdowns: hitterBreakdowns,
 			}
 			return nil
 		})
@@ -652,6 +691,8 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			game := " "
 			if sp.Player.Locked {
 				game = "🔒"
+			} else if dr.benchedToday[projections.NormalizeName(sp.Player.Name)] {
+				game = "❌"
 			} else if sp.HasGame {
 				game = "✓"
 			}
@@ -668,6 +709,8 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				game := " "
 				if sp.Player.Locked {
 					game = "🔒"
+				} else if dr.benchedToday[projections.NormalizeName(sp.Player.Name)] {
+					game = "❌"
 				} else if sp.HasGame {
 					game = "✓"
 				}
@@ -796,6 +839,31 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		// Combined total.
 		fmt.Printf("\n  %-26s %6.2f\n", "Combined Expected", hitterStartingPts+pitcherStartingPts)
 
+		// --- Hitter blend breakdown ---
+		if len(dr.hitterBreakdowns) > 0 {
+			fmt.Println()
+			fmt.Println("  Hitter Blend Breakdown ──────────────────────────────────────────────")
+			fmt.Println("    Player              Steamer  Recent  Wt(S/R)     Blended  GP")
+			fmt.Println("  ────────────────────────────────────────────────────────────────────")
+			for _, sp := range dr.hitterResult.Scored {
+				bd, ok := dr.hitterBreakdowns[sp.Player.ID]
+				if !ok {
+					continue
+				}
+				if bd.HasRecent {
+					fmt.Printf("    %-19s  %6.2f   %6.2f  %2.0f%%/%2.0f%%    %6.2f   %d\n",
+						truncName(sp.Player.Name, 19),
+						bd.SteamerPts, bd.RecentFPG,
+						bd.SteamerWt*100, bd.RecentWt*100,
+						bd.BlendedPts, bd.GamesPlayed)
+				} else {
+					fmt.Printf("    %-19s  %6.2f        —  100%%/ 0%%    %6.2f   —\n",
+						truncName(sp.Player.Name, 19),
+						bd.SteamerPts, bd.BlendedPts)
+				}
+			}
+		}
+
 		// --- Combine changes ---
 		allActivate := append(dr.hitterResult.ToActivate, dr.pitcherResult.ToActivate...)
 		allBench := append(dr.hitterResult.ToBench, dr.pitcherResult.ToBench...)
@@ -861,7 +929,37 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("apply lineup: %w", err)
 		}
 		fmt.Println("Lineup applied successfully.")
+
+		// Send Pushover notification summarizing the changes.
+		nHitter := len(dr.hitterResult.ToActivate) + len(dr.hitterResult.ToBench)
+		nPitcher := len(dr.pitcherResult.ToActivate) + len(dr.pitcherResult.ToBench)
+		var parts []string
+		if nHitter > 0 {
+			parts = append(parts, fmt.Sprintf("%d hitter", nHitter))
+		}
+		if nPitcher > 0 {
+			parts = append(parts, fmt.Sprintf("%d pitcher", nPitcher))
+		}
+		summary := fmt.Sprintf("%s: %s changes (%+.2f pts)",
+			dr.date.Format("Mon Jan 2"), strings.Join(parts, " + "), delta)
+		for _, ps := range allActivate {
+			summary += fmt.Sprintf("\n  ↑ %s → %s", playerName[ps.PlayerID], slotName[ps.PosID])
+		}
+		for _, id := range allBench {
+			summary += fmt.Sprintf("\n  ↓ %s → BN", playerName[id])
+		}
+		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, summary)
 	}
 
 	return nil
+}
+
+// sendOptimizeNotify sends a Pushover notification if credentials are configured.
+func sendOptimizeNotify(userKey, apiToken, message string) {
+	if userKey == "" || apiToken == "" {
+		return
+	}
+	if err := notify.SendPushover(userKey, apiToken, "Fantrax Lineup", message); err != nil {
+		log.Printf("WARNING: pushover notification failed: %v", err)
+	}
 }

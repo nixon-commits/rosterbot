@@ -88,18 +88,27 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) []ScoredPitcher {
 
 	futureDemand := budget.FutureDemand()
 
-	// How many GS can we spend today without squeezing future days?
-	// slack = remaining - futureDemand = GS available for today.
-	// Use epsilon to avoid floating-point rounding issues (same pattern as optimalAssignment).
+	// Allocate remaining GS proportionally across today and future days.
+	// This ensures today always gets a fair share rather than hoarding all
+	// GS for the future. The highest-value starters are kept (sorted below).
 	const eps = 1e-9
+	totalDemand := float64(todayStarters) + futureDemand
 	slack := float64(remaining) - futureDemand
-	allowToday := int(math.Floor(slack + eps))
-	if allowToday >= todayStarters {
+	var allowToday int
+	if slack+eps >= float64(todayStarters) {
 		// Enough budget for all today's starters plus future demand.
 		return scored
-	}
-	if allowToday < 0 {
-		allowToday = 0
+	} else if totalDemand <= eps {
+		return scored
+	} else {
+		// Proportional allocation: today gets its fair share of remaining GS.
+		allowToday = int(math.Round(float64(remaining) * float64(todayStarters) / totalDemand))
+		if allowToday > todayStarters {
+			allowToday = todayStarters
+		}
+		if allowToday < 0 {
+			allowToday = 0
+		}
 	}
 
 	// Suppress the lowest-scoring starters beyond the allowed count.

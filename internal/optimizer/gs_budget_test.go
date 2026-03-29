@@ -167,9 +167,9 @@ func TestOptimizePitcherLineup_GSBudgetCapsStarter(t *testing.T) {
 	scoring := fantrax.ScoringWeights{"K": 1.0, "W": 5.0, "IP": 1.0, "SV": 5.0}
 	slots := makeSlots("SP", "P") // 2 slots
 
-	// Budget: only 1 GS remaining, 1 projected future start.
-	// Slack = 1 - 1 = 0, so 0 starters allowed today.
-	// Both SPs should be suppressed; the RP (Closer) should fill the RP-eligible slot.
+	// Budget: only 1 GS remaining, 1 projected future start, 2 today starters.
+	// Proportional allocation: round(1 * 2/3) = 1 allowed today.
+	// Ace SP (highest value) keeps IsStarter; Back SP is suppressed.
 	budget := &GSBudget{
 		Limit:   12,
 		Used:    11,
@@ -182,10 +182,17 @@ func TestOptimizePitcherLineup_GSBudgetCapsStarter(t *testing.T) {
 
 	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots, budget)
 
-	// Ace SP and Back SP should both be suppressed (IsStarter=false).
+	// Ace SP should keep IsStarter (highest value), Back SP should be suppressed.
 	for _, sp := range result.Scored {
-		if sp.IsStarter {
-			t.Errorf("expected all starters suppressed, but %s is still IsStarter", sp.Player.Name)
+		switch sp.Player.Name {
+		case "Ace SP":
+			if !sp.IsStarter {
+				t.Error("Ace SP should still be IsStarter (highest value gets the GS)")
+			}
+		case "Back SP":
+			if sp.IsStarter {
+				t.Error("Back SP should be suppressed (lower value)")
+			}
 		}
 	}
 }

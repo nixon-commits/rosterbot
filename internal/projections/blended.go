@@ -80,6 +80,50 @@ func HitterBlendWeightsForDisplay(gamesPlayed int) (steamerPct, seasonPct float6
 	return hitterBlendWeights(gamesPlayed)
 }
 
+// HitterBreakdown holds the individual components of a blended hitter score.
+type HitterBreakdown struct {
+	SteamerPts   float64
+	RecentFPG    float64
+	SteamerWt    float64
+	RecentWt     float64
+	BlendedPts   float64
+	GamesPlayed  int
+	HasRecent    bool // true if recent data was used in blending
+}
+
+// GetHitterBreakdown returns the blending components for a player.
+// Returns nil if the player has no Steamer projection.
+func (b *BlendedSource) GetHitterBreakdown(name, mlbTeam string, scoring fantrax.ScoringWeights) *HitterBreakdown {
+	proj, ok := b.inner.GetProjection(name, mlbTeam)
+	if !ok || proj.G <= 0 {
+		return nil
+	}
+
+	steamerPts := ExpectedPtsFromProj(proj, scoring)
+	bd := &HitterBreakdown{
+		SteamerPts: steamerPts,
+		SteamerWt:  1.0,
+		BlendedPts: steamerPts,
+	}
+
+	playerID, idOK := b.nameToID[NormalizeName(name)]
+	if !idOK {
+		return bd
+	}
+
+	recent, statOK := b.recent[playerID]
+	if !statOK || recent.GamesPlayed < minGPForHitterBlend {
+		return bd
+	}
+
+	bd.HasRecent = true
+	bd.GamesPlayed = recent.GamesPlayed
+	bd.RecentFPG = recent.TotalFP / float64(recent.GamesPlayed)
+	bd.SteamerWt, bd.RecentWt = hitterBlendWeights(recent.GamesPlayed)
+	bd.BlendedPts = bd.SteamerWt*steamerPts + bd.RecentWt*bd.RecentFPG
+	return bd
+}
+
 // ExpectedPtsFromProj computes per-game fantasy points from a projection.
 // This is the canonical implementation; optimizer.expectedPts delegates here.
 func ExpectedPtsFromProj(proj *Projection, scoring fantrax.ScoringWeights) float64 {

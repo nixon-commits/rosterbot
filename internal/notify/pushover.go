@@ -9,7 +9,7 @@ import (
 )
 
 // SendPushover sends a push notification via the Pushover API.
-func SendPushover(userKey, apiToken, message string) error {
+func SendPushover(userKey, apiToken, title, message string) error {
 	if len(message) > 1024 {
 		message = message[:1024]
 	}
@@ -19,7 +19,7 @@ func SendPushover(userKey, apiToken, message string) error {
 		"user":     {userKey},
 		"message":  {message},
 		"priority": {"1"},
-		"title":    {"Fantrax GS Alert"},
+		"title":    {title},
 	}
 
 	resp, err := http.PostForm("https://api.pushover.net/1/messages.json", data)

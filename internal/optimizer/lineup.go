@@ -23,14 +23,18 @@ type Result struct {
 }
 
 // OptimizeLineup computes the optimal daily hitter lineup.
+// benchedToday contains normalized player names confirmed out of their team's
+// real-life starting lineup. These players are treated as having no game.
+// Pass nil or an empty map to disable (all players on playing teams get HasGame).
 func OptimizeLineup(
 	roster []fantrax.Player,
 	playingToday map[string]bool,
 	projSrc projections.Source,
 	scoring fantrax.ScoringWeights,
 	slots []fantrax.Slot,
+	benchedToday map[string]bool,
 ) Result {
-	scored := scoreRoster(roster, playingToday, projSrc, scoring)
+	scored := scoreRoster(roster, playingToday, projSrc, scoring, benchedToday)
 
 	// Sort for display and backtracking (hasGame first, then by pts desc, then by ID for stability).
 	sort.Slice(scored, func(i, j int) bool {
@@ -247,12 +251,13 @@ func scoreRoster(
 	playingToday map[string]bool,
 	projSrc projections.Source,
 	scoring fantrax.ScoringWeights,
+	benchedToday map[string]bool,
 ) []ScoredPlayer {
 	pps, hasPPS := projSrc.(projections.PtsPerGameSource)
 
 	scored := make([]ScoredPlayer, 0, len(roster))
 	for _, p := range roster {
-		hasGame := playingToday[p.MLBTeam] && !p.InMinors && !p.IsInjured
+		hasGame := playingToday[p.MLBTeam] && !p.InMinors && !p.IsInjured && !benchedToday[projections.NormalizeName(p.Name)]
 		var pts float64
 		found := false
 
