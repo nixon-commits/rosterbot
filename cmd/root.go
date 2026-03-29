@@ -19,6 +19,7 @@ func init() {
 var (
 	dryRun  bool
 	noCache bool
+	verbose bool
 )
 
 var rootCmd = &cobra.Command{
@@ -29,6 +30,7 @@ var rootCmd = &cobra.Command{
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "print planned moves without applying them")
 	rootCmd.PersistentFlags().BoolVar(&noCache, "no-cache", false, "bypass file cache and fetch fresh data from APIs")
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "show detailed log output instead of progress display")
 }
 
 // Execute runs the root command.
