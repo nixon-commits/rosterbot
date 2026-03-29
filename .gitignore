@@ -2,7 +2,7 @@
 rosterbot
 *.test
 .claude/settings.local.json
+.cache/
 .fantrax-cache/
-.prospects-cache/
 fangraphs-leaderboard-projections*.csv
 verify_periods

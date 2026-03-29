@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/cache"
 )
 
 var mlbPeopleURL = "https://statsapi.mlb.com/api/v1/people"
@@ -93,4 +95,27 @@ func FetchMLBHandedness(mlbamIDs map[string]int) (bats map[string]string, throws
 	}
 
 	return bats, throws, nil
+}
+
+// HandednessData holds cached bat-side and pitch-hand maps.
+type HandednessData struct {
+	Bats   map[string]string `json:"bats"`
+	Throws map[string]string `json:"throws"`
+}
+
+// FetchMLBHandednessCached is like FetchMLBHandedness but uses a file cache.
+// Uses a single stable cache key since handedness data is player-intrinsic and
+// doesn't vary by projection system. On cache hit, if all requested IDs are
+// already covered, returns cached data without re-fetching.
+func FetchMLBHandednessCached(mlbamIDs map[string]int, cacheDir string, ttl time.Duration) (map[string]string, map[string]string, error) {
+	c := cache.New[HandednessData](cacheDir, ttl)
+	key := cache.Key("mlb-handedness")
+	data, err := c.Get(key, func() (HandednessData, error) {
+		bats, throws, err := FetchMLBHandedness(mlbamIDs)
+		return HandednessData{Bats: bats, Throws: throws}, err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return data.Bats, data.Throws, nil
 }

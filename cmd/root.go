@@ -16,7 +16,10 @@ func init() {
 	log.SetPrefix("⚡ ")
 }
 
-var dryRun bool
+var (
+	dryRun  bool
+	noCache bool
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "rosterbot",
@@ -25,6 +28,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "print planned moves without applying them")
+	rootCmd.PersistentFlags().BoolVar(&noCache, "no-cache", false, "bypass file cache and fetch fresh data from APIs")
 }
 
 // Execute runs the root command.

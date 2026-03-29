@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 )
 
@@ -110,6 +111,24 @@ func (c *Client) FetchParkFactorsWithFallback() (map[string]projections.ParkFact
 	}
 	// Fallback to previous year.
 	return c.FetchParkFactors(year - 1)
+}
+
+// FetchParkFactorsWithFallbackCached is like FetchParkFactorsWithFallback but uses a file cache.
+func (c *Client) FetchParkFactorsWithFallbackCached(cacheDir string, ttl time.Duration) (map[string]projections.ParkFactors, error) {
+	fc := cache.New[map[string]projections.ParkFactors](cacheDir, ttl)
+	year := time.Now().Year()
+	key := cache.Key("park-factors", strconv.Itoa(year))
+	factors, err := fc.Get(key, func() (map[string]projections.ParkFactors, error) {
+		return c.FetchParkFactors(year)
+	})
+	if err == nil && len(factors) >= 20 {
+		return factors, nil
+	}
+	// Fallback to previous year (separate cache key).
+	prevKey := cache.Key("park-factors", strconv.Itoa(year-1))
+	return fc.Get(prevKey, func() (map[string]projections.ParkFactors, error) {
+		return c.FetchParkFactors(year - 1)
+	})
 }
 
 // parseFactorStr parses a Statcast index value string (centered at 100) into a

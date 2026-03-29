@@ -19,6 +19,8 @@ go run . gs-check --dry-run --force  # check GS violations for most recent perio
 go run . gs-check --dry-run          # check GS violations (only if yesterday ended a period)
 ```
 
+After making code changes, always run `go vet ./...` and `go mod tidy` to catch issues early.
+
 Tests require no credentials — all network dependencies are mocked via interfaces or test servers.
 
 For local dev, create a `.env` file (gitignored) with `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`. Loaded automatically by `godotenv`.
@@ -36,6 +38,8 @@ fantrax client  ──┐
 mlb schedule    ──┼──► optimizer ──► apply lineup (or dry-run print)
 fangraphs proj  ──┘
 ```
+
+**`internal/cache`** — generic TTL file cache using Go generics (`FileCache[T]`). Stores JSON in `.cache/` with a `fetched_at` timestamp envelope. `Get(key, fetchFunc)` returns cached data if fresh, otherwise calls `fetchFunc`, saves, and returns. All I/O errors are non-fatal. TTL of 0 bypasses cache (`--no-cache` flag). Used by FanGraphs projections (12h TTL), park factors (7d), and handedness (7d).
 
 **`internal/config`** — loads env vars via `godotenv`, validates that all four required vars are set, and returns a `Config` struct used by the CLI commands to wire everything together.
 
@@ -55,7 +59,7 @@ fangraphs proj  ──┘
 - **Hitters** (`BlendedSource`): `0.60 * steamerPtsPerGame + 0.40 * recentFP/G`. `PtsPerGameSource` interface (type assertion) lets the optimizer use pre-computed values.
 - **Pitchers** (`PitcherBlendedSource`): role-aware weights — SP: `0.85/0.15`, RP: `0.70/0.30` Steamer/recent. Requires minimum 4 GP before blending. `PitcherPtsPerGameSource` interface.
 
-**`internal/prospects`** — monitors minor league prospects across MLB transactions, MiLB performance breakouts, and prospect ranking sources (MLB Pipeline primary, FanGraphs fallback). Produces a daily prospect report in the GHA job summary with call-up alerts, hot streak detection, free agent watch, and upgrade recommendations. Separate from roster alerts (which detect slot mismatches); this focuses on external data to find new players to pick up. Rankings are cached in `.prospects-cache/` (168h default TTL). Breakout detection uses level-adjusted thresholds (AAA/AA/A-ball). Transaction tracking uses a cursor to avoid duplicate alerts across runs.
+**`internal/prospects`** — monitors minor league prospects across MLB transactions, MiLB performance breakouts, and prospect ranking sources (MLB Pipeline primary, FanGraphs fallback). Produces a daily prospect report in the GHA job summary with call-up alerts, hot streak detection, free agent watch, and upgrade recommendations. Separate from roster alerts (which detect slot mismatches); this focuses on external data to find new players to pick up. Rankings are cached in `.cache/` (168h default TTL). Breakout detection uses level-adjusted thresholds (AAA/AA/A-ball). Transaction tracking uses a cursor to avoid duplicate alerts across runs.
 
 **`internal/gscheck`** — league-wide GS violation checker. `RunGSCheck` fetches all scoring periods and teams via `getStandings`, iterates every team to tally active-slot pitcher GS for a completed period, detects violations (GS > cap), and sends a Pushover notification. The `gs-check` CLI command validates that `GS_CAP`, `PUSHOVER_USER_KEY`, and `PUSHOVER_API_TOKEN` are set before running.
 
@@ -87,6 +91,16 @@ The optimizer must produce identical output given the same inputs. Key invariant
 - **Minimal changes**: when two assignments produce the same total points (within epsilon), the optimizer prefers the one with fewer roster moves (`changes < bestChanges`).
 - **Period-specific roster**: for future dates, the optimizer fetches the roster for that period (`GetHitterRosterForPeriod`) so it sees already-applied lineups. A second run with the same inputs produces "No changes needed".
 - **Verification**: after any optimizer change, run the command twice with the same inputs and confirm the second run shows "No changes needed" for all dates.
+
+## Claude Code Agents
+
+Specialized agents are available for this project:
+
+- **`fantasy-baseball-model-auditor`** — audit projection models, scoring systems, and data products for accuracy and validity before deployment.
+- **`fantasy-baseball-strategist`** — review and improve the automation codebase: scoring models, lineup optimization, projection blending, scheduling logic, and GHA workflows.
+- **`fantasy-baseball-edge-finder`** — strategic analysis, roster optimization insights, and identifying exploitable edges in H2H points leagues (statcast-driven player evaluation, scoring setting exploitation, streaming strategies).
+
+Use the strategist agent after making changes to optimizer logic, blending weights, or scoring models. Use the model auditor when building or updating projection pipelines. Use the edge finder for in-season roster decisions and waiver wire analysis.
 
 ## README
 

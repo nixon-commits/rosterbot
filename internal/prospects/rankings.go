@@ -174,7 +174,7 @@ func (c *ChainedRankingSource) GetTopProspects(season int) ([]RankedProspect, er
 // 4. Cache helpers
 // ---------------------------------------------------------------------------
 
-var rankingsCacheFile = ".prospects-cache/rankings.json"
+var rankingsCacheFile = ".cache/rankings.json"
 
 type rankingsCache struct {
 	FetchedAt time.Time        `json:"fetched_at"`

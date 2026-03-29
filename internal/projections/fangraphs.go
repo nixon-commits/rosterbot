@@ -9,23 +9,34 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/nixon-commits/rosterbot/internal/cache"
 	"golang.org/x/text/unicode/norm"
 )
 
 var fangraphsBattingURL = "https://www.fangraphs.com/api/projections?type=fangraphsdc&stats=bat&pos=all&team=0&players=0&lg=all"
 
+// currentAPIType tracks the FanGraphs API type parameter (e.g. "fangraphsdc", "steamerr")
+// set by SetProjectionSystem. Used as part of the cache key.
+var currentAPIType = "fangraphsdc"
+
 // Supported FanGraphs projection systems.
 const (
-	ProjectionSteamer     = "steamer"
-	ProjectionDepthCharts = "depthcharts"
-	ProjectionBatX        = "thebatx"
+	ProjectionSteamer        = "steamer"
+	ProjectionDepthCharts    = "depthcharts"
+	ProjectionBatX           = "thebatx"
+	ProjectionSteamerRoS     = "steamer-ros"
+	ProjectionDepthChartsRoS = "depthcharts-ros"
+	ProjectionBatXRoS        = "thebatx-ros"
 )
 
 // fgProjectionType maps our flag names to FanGraphs API type parameter values.
 var fgProjectionType = map[string]string{
-	ProjectionSteamer:     "steamer",
-	ProjectionDepthCharts: "fangraphsdc",
-	ProjectionBatX:        "thebatx",
+	ProjectionSteamer:        "steamer",
+	ProjectionDepthCharts:    "fangraphsdc",
+	ProjectionBatX:           "thebatx",
+	ProjectionSteamerRoS:     "steamerr",
+	ProjectionDepthChartsRoS: "rfangraphsdc",
+	ProjectionBatXRoS:        "rthebatx",
 }
 
 // SetProjectionSystem updates the FanGraphs API URLs to use the given projection system.
@@ -33,12 +44,18 @@ var fgProjectionType = map[string]string{
 func SetProjectionSystem(system string) error {
 	apiType, ok := fgProjectionType[system]
 	if !ok {
-		return fmt.Errorf("unknown projection system %q (valid: steamer, depthcharts, thebatx)", system)
+		return fmt.Errorf("unknown projection system %q (valid: steamer, depthcharts, thebatx, steamer-ros, depthcharts-ros, thebatx-ros)", system)
 	}
+	currentAPIType = apiType
 	base := "https://www.fangraphs.com/api/projections?type=%s&stats=%s&pos=all&team=0&players=0&lg=all"
 	fangraphsBattingURL = fmt.Sprintf(base, apiType, "bat")
 	fangraphsPitchingURL = fmt.Sprintf(base, apiType, "pit")
 	return nil
+}
+
+// CurrentAPIType returns the active FanGraphs API type parameter for cache key construction.
+func CurrentAPIType() string {
+	return currentAPIType
 }
 
 // Projection holds projected season counting stats for a hitter.
@@ -93,8 +110,8 @@ type FanGraphsSource struct {
 	mlbamIDs    map[string]int // NormalizeName(name) → MLBAM ID
 }
 
-// NewFanGraphsSource fetches and parses the FanGraphs batting projections JSON.
-func NewFanGraphsSource() (*FanGraphsSource, error) {
+// fetchBattingRows fetches raw batting projection rows from the FanGraphs API.
+func fetchBattingRows() ([]fgRow, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(fangraphsBattingURL)
 	if err != nil {
@@ -110,7 +127,11 @@ func NewFanGraphsSource() (*FanGraphsSource, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
 		return nil, fmt.Errorf("fangraphs json: %w", err)
 	}
+	return rows, nil
+}
 
+// buildFanGraphsSource constructs a FanGraphsSource from raw rows.
+func buildFanGraphsSource(rows []fgRow) *FanGraphsSource {
 	src := &FanGraphsSource{
 		projections: make(map[string]*Projection, len(rows)),
 		mlbamIDs:    make(map[string]int, len(rows)),
@@ -143,7 +164,27 @@ func NewFanGraphsSource() (*FanGraphsSource, error) {
 			src.mlbamIDs[NormalizeName(name)] = row.MLBAMID
 		}
 	}
-	return src, nil
+	return src
+}
+
+// NewFanGraphsSource fetches and parses the FanGraphs batting projections JSON.
+func NewFanGraphsSource() (*FanGraphsSource, error) {
+	rows, err := fetchBattingRows()
+	if err != nil {
+		return nil, err
+	}
+	return buildFanGraphsSource(rows), nil
+}
+
+// NewFanGraphsSourceCached is like NewFanGraphsSource but uses a file cache.
+func NewFanGraphsSourceCached(cacheDir string, ttl time.Duration) (*FanGraphsSource, error) {
+	c := cache.New[[]fgRow](cacheDir, ttl)
+	key := cache.Key("fangraphs", "bat", currentAPIType)
+	rows, err := c.Get(key, fetchBattingRows)
+	if err != nil {
+		return nil, err
+	}
+	return buildFanGraphsSource(rows), nil
 }
 
 // NewFanGraphsSourceFromCSV loads Steamer batting projections from a local CSV file

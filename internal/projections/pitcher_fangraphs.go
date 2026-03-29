@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/cache"
 )
 
 var fangraphsPitchingURL = "https://www.fangraphs.com/api/projections?type=fangraphsdc&stats=pit&pos=all&team=0&players=0&lg=all"
@@ -75,8 +77,8 @@ type FanGraphsPitcherSource struct {
 	mlbamIDs    map[string]int // NormalizeName(name) → MLBAM ID
 }
 
-// NewFanGraphsPitcherSource fetches and parses the FanGraphs pitching projections JSON.
-func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
+// fetchPitchingRows fetches raw pitching projection rows from the FanGraphs API.
+func fetchPitchingRows() ([]fgPitchRow, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(fangraphsPitchingURL)
 	if err != nil {
@@ -92,7 +94,11 @@ func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
 		return nil, fmt.Errorf("fangraphs pitching json: %w", err)
 	}
+	return rows, nil
+}
 
+// buildFanGraphsPitcherSource constructs a FanGraphsPitcherSource from raw rows.
+func buildFanGraphsPitcherSource(rows []fgPitchRow) *FanGraphsPitcherSource {
 	src := &FanGraphsPitcherSource{
 		projections: make(map[string]*PitcherProjection, len(rows)),
 		mlbamIDs:    make(map[string]int, len(rows)),
@@ -117,7 +123,27 @@ func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
 			src.mlbamIDs[NormalizeName(name)] = row.MLBAMID
 		}
 	}
-	return src, nil
+	return src
+}
+
+// NewFanGraphsPitcherSource fetches and parses the FanGraphs pitching projections JSON.
+func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
+	rows, err := fetchPitchingRows()
+	if err != nil {
+		return nil, err
+	}
+	return buildFanGraphsPitcherSource(rows), nil
+}
+
+// NewFanGraphsPitcherSourceCached is like NewFanGraphsPitcherSource but uses a file cache.
+func NewFanGraphsPitcherSourceCached(cacheDir string, ttl time.Duration) (*FanGraphsPitcherSource, error) {
+	c := cache.New[[]fgPitchRow](cacheDir, ttl)
+	key := cache.Key("fangraphs", "pit", currentAPIType)
+	rows, err := c.Get(key, fetchPitchingRows)
+	if err != nil {
+		return nil, err
+	}
+	return buildFanGraphsPitcherSource(rows), nil
 }
 
 // NewFanGraphsPitcherSourceFromCSV loads Steamer pitching projections from a local CSV file.

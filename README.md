@@ -55,8 +55,12 @@ rosterbot optimize --dry-run --matchup
 # Show Steamer vs recent stats blend breakdown
 rosterbot optimize --dry-run --blend
 
-# Switch projection system (steamer, depthcharts, thebatx)
+# Switch projection system (steamer, depthcharts, thebatx, steamer-ros, depthcharts-ros, thebatx-ros)
 rosterbot optimize --dry-run --projections steamer
+rosterbot optimize --dry-run --projections steamer-ros   # Rest-of-Season variant
+
+# Bypass API cache (force fresh data)
+rosterbot optimize --dry-run --no-cache
 
 # Run prospect report
 rosterbot prospects --dry-run

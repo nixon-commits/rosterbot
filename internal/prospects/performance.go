@@ -21,7 +21,7 @@ var mlbPlayerSearchURL = "https://statsapi.mlb.com/api/v1/people/search?names=%s
 var mlbGameLogURL = "https://statsapi.mlb.com/api/v1/people/%d/stats?stats=gameLog&group=%s&season=%d&sportId=11,12,13,14"
 
 // Player ID cache file path.
-var playerIDCacheFile = ".prospects-cache/player-ids.json"
+var playerIDCacheFile = ".cache/player-ids.json"
 
 // ---------------------------------------------------------------------------
 // Player ID cache

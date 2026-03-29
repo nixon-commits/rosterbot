@@ -20,7 +20,7 @@ import (
 // Transaction cursor
 // ---------------------------------------------------------------------------
 
-var txnCursorFile = ".prospects-cache/last-transactions.json"
+var txnCursorFile = ".cache/last-transactions.json"
 
 type txnCursor struct {
 	LastChecked time.Time `json:"lastChecked"`
@@ -58,7 +58,7 @@ func saveTxnCursor(date time.Time) error {
 // minors roster, available prospects, transactions, and performance data,
 // then prints the report and optionally writes a GHA summary.
 func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) error {
-	if err := os.MkdirAll(".prospects-cache", 0o755); err != nil {
+	if err := os.MkdirAll(".cache", 0o755); err != nil {
 		return fmt.Errorf("creating cache dir: %w", err)
 	}
 

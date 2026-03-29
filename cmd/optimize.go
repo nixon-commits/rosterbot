@@ -16,6 +16,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const cacheDir = ".cache"
+
 var (
 	datesStr         string
 	daysAhead        int
@@ -26,9 +28,12 @@ var (
 
 	// projDisplayName maps projection system flag values to display-friendly names.
 	projDisplayName = map[string]string{
-		"steamer":     "Steamer",
-		"depthcharts": "DepthCharts",
-		"thebatx":     "TheBatX",
+		"steamer":          "Steamer",
+		"depthcharts":      "DepthCharts",
+		"thebatx":          "TheBatX",
+		"steamer-ros":      "Steamer RoS",
+		"depthcharts-ros":  "DepthCharts RoS",
+		"thebatx-ros":      "TheBatX RoS",
 	}
 
 )
@@ -44,9 +49,16 @@ func init() {
 	optimizeCmd.Flags().IntVar(&daysAhead, "days", 0, "optimize for the next N days starting from today")
 	optimizeCmd.Flags().BoolVar(&matchupPeriod, "matchup", false, "optimize for all remaining days in the current matchup period")
 	optimizeCmd.Flags().BoolVar(&checkRoster, "check-roster", true, "check for roster slot mismatches (IL/minors)")
-	optimizeCmd.Flags().StringVar(&projectionSystem, "projections", "depthcharts", "projection system: steamer, depthcharts, thebatx")
+	optimizeCmd.Flags().StringVar(&projectionSystem, "projections", "depthcharts", "projection system: steamer, depthcharts, thebatx, steamer-ros, depthcharts-ros, thebatx-ros")
 	optimizeCmd.Flags().BoolVar(&showBlend, "blend", false, "show hitter blend breakdown (projections vs recent)")
 	rootCmd.AddCommand(optimizeCmd)
+}
+
+func cacheTTL(d time.Duration) time.Duration {
+	if noCache {
+		return 0
+	}
+	return d
 }
 
 func runOptimize(cmd *cobra.Command, args []string) error {
@@ -54,6 +66,10 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	log.Printf("projection system: %s", projectionSystem)
+
+	// Cache TTLs (0 when --no-cache is set).
+	projTTL := cacheTTL(12 * time.Hour)
+	staticTTL := cacheTTL(7 * 24 * time.Hour)
 
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
@@ -202,12 +218,12 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 	fgSrc, err := projections.NewFanGraphsSourceFromCSV("fangraphs-leaderboard-projections_batters.csv")
 	if err != nil {
 		log.Printf("CSV batting projections unavailable (%v) — trying API", err)
-		fgSrc, err = projections.NewFanGraphsSource()
+		fgSrc, err = projections.NewFanGraphsSourceCached(cacheDir, projTTL)
 	}
 	if err != nil {
 		msg := fmt.Sprintf("batting projections unavailable: %v", err)
 		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, msg)
-		return fmt.Errorf(msg)
+		return fmt.Errorf("batting projections unavailable: %w", err)
 	} else {
 		log.Printf("fangraphs batting projections loaded")
 		rolling := projections.NewRollingSource()
@@ -246,12 +262,12 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 	fgPitSrc, err := projections.NewFanGraphsPitcherSourceFromCSV("fangraphs-leaderboard-projections_pitchers.csv")
 	if err != nil {
 		log.Printf("CSV pitching projections unavailable (%v) — trying API", err)
-		fgPitSrc, err = projections.NewFanGraphsPitcherSource()
+		fgPitSrc, err = projections.NewFanGraphsPitcherSourceCached(cacheDir, projTTL)
 	}
 	if err != nil {
 		msg := fmt.Sprintf("pitching projections unavailable: %v", err)
 		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, msg)
-		return fmt.Errorf(msg)
+		return fmt.Errorf("pitching projections unavailable: %w", err)
 	} else {
 		log.Printf("fangraphs pitching projections loaded")
 		pitRolling := projections.NewPitcherRollingSource()
@@ -298,7 +314,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		allMLBAMIDs[k] = v
 	}
 	if len(allMLBAMIDs) > 0 {
-		bats, throws, err := projections.FetchMLBHandedness(allMLBAMIDs)
+		bats, throws, err := projections.FetchMLBHandednessCached(allMLBAMIDs, cacheDir, staticTTL)
 		if err != nil {
 			log.Printf("WARNING: MLB handedness unavailable (%v) — matchup adjustments disabled", err)
 		} else {
@@ -313,7 +329,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 	// --- Fetch park factors from Statcast (shared across dates) ---
 	var parkFactors map[string]projections.ParkFactors
-	pf, err := schedClient.FetchParkFactorsWithFallback()
+	pf, err := schedClient.FetchParkFactorsWithFallbackCached(cacheDir, staticTTL)
 	if err != nil {
 		log.Printf("WARNING: statcast park factors unavailable (%v) — using neutral park", err)
 	} else {
@@ -838,7 +854,11 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			fmt.Println()
 			fmt.Println("  Hitter Blend Breakdown ──────────────────────────────────────────────")
 			projLabel := projDisplayName[projectionSystem]
-			fmt.Printf("    Player              %-8s Recent  Wt(S/R)     Blended  GP\n", projLabel)
+			lw := len(projLabel)
+			if lw < 6 {
+				lw = 6
+			}
+			fmt.Printf("    %-19s  %*s  Recent  Wt(S / R)    Blended   GP\n", "Player", lw, projLabel)
 			fmt.Println("  ────────────────────────────────────────────────────────────────────")
 			for _, sp := range dr.hitterResult.Scored {
 				bd, ok := dr.hitterBreakdowns[sp.Player.ID]
@@ -846,15 +866,15 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 					continue
 				}
 				if bd.HasRecent {
-					fmt.Printf("    %-19s  %6.2f   %6.2f  %2.0f%%/%2.0f%%    %6.2f   %d\n",
+					fmt.Printf("    %-19s  %*.2f  %6.2f  %3.0f%% / %-4s  %6.2f  %2d\n",
 						truncName(sp.Player.Name, 19),
-						bd.SteamerPts, bd.RecentFPG,
-						bd.SteamerWt*100, bd.RecentWt*100,
+						lw, bd.SteamerPts, bd.RecentFPG,
+						bd.SteamerWt*100, fmt.Sprintf("%.0f%%", bd.RecentWt*100),
 						bd.BlendedPts, bd.GamesPlayed)
 				} else {
-					fmt.Printf("    %-19s  %6.2f        —  100%%/ 0%%    %6.2f   —\n",
+					fmt.Printf("    %-19s  %*.2f  %6s  100%% / %-4s  %6.2f  %2s\n",
 						truncName(sp.Player.Name, 19),
-						bd.SteamerPts, bd.BlendedPts)
+						lw, bd.SteamerPts, "—", "0%", bd.BlendedPts, "—")
 				}
 			}
 		}
