@@ -106,6 +106,57 @@ func isSPEligible(positions []string) bool {
 	return false
 }
 
+// PitcherBreakdown holds the blending components for a pitcher, used by the pipeline display.
+type PitcherBreakdown struct {
+	BasePts     float64
+	RecentFPG   float64
+	BaseWt      float64
+	RecentWt    float64
+	BlendedPts  float64
+	GamesPlayed int
+	HasRecent   bool
+	IsSP        bool
+}
+
+// GetPitcherBreakdown returns the blending components for a pitcher.
+// Returns nil if the pitcher has no projection from the active system.
+func (b *PitcherBlendedSource) GetPitcherBreakdown(name, mlbTeam string, scoring fantrax.ScoringWeights) *PitcherBreakdown {
+	proj, ok := b.inner.GetPitcherProjection(name, mlbTeam)
+	if !ok || proj.G <= 0 {
+		return nil
+	}
+
+	basePts := PitcherExpectedPtsFromProj(proj, scoring)
+	playerID, idOK := b.nameToID[NormalizeName(name)]
+	isSP := false
+	if idOK {
+		isSP = isSPEligible(b.playerPos[playerID])
+	}
+
+	bd := &PitcherBreakdown{
+		BasePts:    basePts,
+		BaseWt:     1.0,
+		BlendedPts: basePts,
+		IsSP:       isSP,
+	}
+
+	if !idOK {
+		return bd
+	}
+
+	recent, statOK := b.recent[playerID]
+	if !statOK || recent.GamesPlayed < b.minGP {
+		return bd
+	}
+
+	bd.HasRecent = true
+	bd.GamesPlayed = recent.GamesPlayed
+	bd.RecentFPG = recent.FPtsPerGame
+	bd.BaseWt, bd.RecentWt = pitcherBlendWeights(recent.GamesPlayed, isSP)
+	bd.BlendedPts = bd.BaseWt*basePts + bd.RecentWt*bd.RecentFPG
+	return bd
+}
+
 // PitcherExpectedPtsFromProj computes per-game fantasy points from a pitcher projection.
 func PitcherExpectedPtsFromProj(proj *PitcherProjection, scoring fantrax.ScoringWeights) float64 {
 	if proj.G <= 0 {

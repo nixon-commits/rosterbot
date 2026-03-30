@@ -510,10 +510,11 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		hitterResult     optimizer.Result
 		pitcherResult    optimizer.PitcherResult
 		warnings         []string
-		venues           map[string]string                            // team → home team (for matchup adjustments)
-		benchedToday     map[string]bool                              // normalized names confirmed out of real-life lineup
-		hitterBreakdowns map[string]*projections.HitterBreakdown      // playerID → breakdown
-		hitterPipelines  map[string]*projections.HitterPipelineDetail // playerID → pipeline detail
+		venues           map[string]string                             // team → home team (for matchup adjustments)
+		benchedToday     map[string]bool                               // normalized names confirmed out of real-life lineup
+		hitterBreakdowns map[string]*projections.HitterBreakdown       // playerID → breakdown
+		hitterPipelines  map[string]*projections.HitterPipelineDetail  // playerID → pipeline detail
+		pitcherPipelines map[string]*projections.PitcherPipelineDetail // playerID → pipeline detail
 	}
 
 	results := make([]dateResult, len(cfg.Dates))
@@ -717,6 +718,83 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			}
 			pitcherResult := optimizer.OptimizePitcherLineup(datePitcherRoster, playingToday, probableStarters, pitcherProjSrc, pitcherScoring, pitcherSlots, dateBudget)
 
+			// Compute pitcher pipeline details if --pipeline flag is set.
+			var pitcherPipelines map[string]*projections.PitcherPipelineDetail
+			if showPipeline {
+				pitcherPipelines = make(map[string]*projections.PitcherPipelineDetail)
+
+				// Get breakdowns from blended source if available.
+				var pitcherBreakdowns map[string]*projections.PitcherBreakdown
+				if blended, ok := pitcherProjSrc.(*projections.PitcherBlendedSource); ok {
+					pitcherBreakdowns = make(map[string]*projections.PitcherBreakdown)
+					for _, sp := range pitcherResult.Scored {
+						if bd := blended.GetPitcherBreakdown(sp.Player.Name, sp.Player.MLBTeam, pitcherScoring); bd != nil {
+							pitcherBreakdowns[sp.Player.ID] = bd
+						}
+					}
+				}
+
+				for _, sp := range pitcherResult.Scored {
+					if !sp.HasGame {
+						continue
+					}
+
+					// Determine base pts from breakdown or direct projection lookup.
+					var basePts float64
+					if bd, ok := pitcherBreakdowns[sp.Player.ID]; ok {
+						basePts = bd.BasePts
+					} else if proj, ok := pitcherProjSrc.GetPitcherProjection(sp.Player.Name, sp.Player.MLBTeam); ok && proj.G > 0 {
+						basePts = projections.PitcherExpectedPtsFromProj(proj, pitcherScoring)
+					} else {
+						continue
+					}
+
+					role := "RP"
+					spEligible := strings.Contains(sp.Player.PosShortNames, "SP")
+					if spEligible {
+						role = "SP"
+					}
+
+					pd := &projections.PitcherPipelineDetail{
+						PlayerName:     sp.Player.Name,
+						PlayerID:       sp.Player.ID,
+						MLBTeam:        sp.Player.MLBTeam,
+						Role:           role,
+						BasePtsPerGame: basePts,
+					}
+
+					// Stage 2: Blend
+					if bd, ok := pitcherBreakdowns[sp.Player.ID]; ok {
+						pd.BlendedPtsPerGame = bd.BlendedPts
+						pd.HasRecent = bd.HasRecent
+						pd.BaseWt = bd.BaseWt
+						pd.RecentFPG = bd.RecentFPG
+						pd.GamesPlayed = bd.GamesPlayed
+					} else {
+						pd.BlendedPtsPerGame = basePts
+					}
+					pd.BlendDelta = pd.BlendedPtsPerGame - pd.BasePtsPerGame
+
+					// Stage 3: GS Gate — detect if this SP was a probable starter
+					// but got suppressed by the GS budget gate.
+					if spEligible && dateBudget != nil {
+						normalizedName := projections.NormalizeName(sp.Player.Name)
+						_, wasProbable := probableStarters[normalizedName]
+						if wasProbable && !sp.IsStarter {
+							pd.WasGated = true
+							pd.FinalPtsPerGame = pd.BlendedPtsPerGame * 0.10
+							pd.GateDelta = pd.FinalPtsPerGame - pd.BlendedPtsPerGame
+						} else {
+							pd.FinalPtsPerGame = pd.BlendedPtsPerGame
+						}
+					} else {
+						pd.FinalPtsPerGame = pd.BlendedPtsPerGame
+					}
+
+					pitcherPipelines[sp.Player.ID] = pd
+				}
+			}
+
 			results[i] = dateResult{
 				date:             date,
 				period:           period,
@@ -728,6 +806,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				benchedToday:     benchedToday,
 				hitterBreakdowns: hitterBreakdowns,
 				hitterPipelines:  hitterPipelines,
+				pitcherPipelines: pitcherPipelines,
 			}
 			return nil
 		})
@@ -977,6 +1056,46 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 					colorDelta(pd.BlendDelta),
 					colorDelta(pd.PlatoonDelta),
 					colorDelta(pd.QualityDelta),
+					pd.FinalPtsPerGame,
+				)
+			}
+		}
+
+		// --- Pitcher pipeline detail ---
+		if showPipeline && len(dr.pitcherPipelines) > 0 {
+			fmt.Println()
+
+			// Sort by final pts descending.
+			pitPipelineSorted := make([]optimizer.ScoredPitcher, 0, len(dr.pitcherPipelines))
+			for _, sp := range dr.pitcherResult.Scored {
+				if _, ok := dr.pitcherPipelines[sp.Player.ID]; ok {
+					pitPipelineSorted = append(pitPipelineSorted, sp)
+				}
+			}
+			sort.Slice(pitPipelineSorted, func(i, j int) bool {
+				pi := dr.pitcherPipelines[pitPipelineSorted[i].Player.ID]
+				pj := dr.pitcherPipelines[pitPipelineSorted[j].Player.ID]
+				return pi.FinalPtsPerGame > pj.FinalPtsPerGame
+			})
+
+			// Header — columns: Player(19) + Role(4) + Base(7) + Blend(7) + Gate(7) + Final(7)
+			// "    %-19s  %4s  %7s  %7s  %7s  %7s│" = 4+19 + (2+4) + 4*(2+7) + 1 = 66 visible chars.
+			const pitWidth = 66
+			titlePrefix := "  Pitcher Pipeline "
+			dashes := pitWidth - len(titlePrefix) - 1
+			fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", dashes))
+			fmt.Printf("    %-19s  %4s  %7s  %7s  %7s  %7s│\n",
+				"Player", "Role", "Base", "Blend", "Gate", "Final")
+			fmt.Printf("  %s╯\n", strings.Repeat("─", pitWidth-2-1))
+
+			for _, sp := range pitPipelineSorted {
+				pd := dr.pitcherPipelines[sp.Player.ID]
+				fmt.Printf("    %-19s  %4s  %7.2f  %s  %s  %7.2f\n",
+					truncName(sp.Player.Name, 19),
+					pd.Role,
+					pd.BasePtsPerGame,
+					colorDelta(pd.BlendDelta),
+					colorDelta(pd.GateDelta),
 					pd.FinalPtsPerGame,
 				)
 			}
