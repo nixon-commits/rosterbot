@@ -33,9 +33,9 @@ type PitcherProjection struct {
 	HBP float64 // Hit batsmen (pitcher)
 	WP  float64 // Wild pitches
 	BK  float64 // Balks
-	CG     float64 // Complete games
-	SHO    float64 // Shutouts
-	PKO    float64 // Pickoffs
+	CG  float64 // Complete games
+	SHO float64 // Shutouts
+	PKO float64 // Pickoffs
 	FIP float64 // Fielding Independent Pitching
 }
 
@@ -208,6 +208,9 @@ func NewFanGraphsPitcherSourceFromCSV(path string) (*FanGraphsPitcherSource, err
 	return src, nil
 }
 
+// Len returns the number of players in this source.
+func (s *FanGraphsPitcherSource) Len() int { return len(s.projections) }
+
 // PitcherInfo returns pitcher FIP and IP-weighted league average FIP.
 func (s *FanGraphsPitcherSource) PitcherInfo() (fip map[string]float64, leagueAvgFIP float64) {
 	fip = make(map[string]float64, len(s.projections))
@@ -256,4 +259,56 @@ func (s *FanGraphsPitcherSource) GetPitcherProjection(name, mlbTeam string) (*Pi
 		return match, true
 	}
 	return nil, false
+}
+
+// LoadPitcherProjections tries to load pitcher projections with RoS-first priority.
+// For base systems (e.g. "depthcharts"): RoS API → Preseason API → CSV.
+// For explicit RoS systems (e.g. "depthcharts-ros"): RoS API → CSV.
+func LoadPitcherProjections(system, cacheDir string, ttl time.Duration) (*FanGraphsPitcherSource, LoadResult, error) {
+	result := LoadResult{System: system}
+
+	// Build the list of systems to try via API.
+	systems := []string{}
+	if ros, ok := rosVariant[system]; ok {
+		systems = append(systems, ros, system)
+	} else {
+		systems = append(systems, system)
+	}
+
+	// Try each API system in order.
+	for i, sys := range systems {
+		if err := SetProjectionSystem(sys); err != nil {
+			continue
+		}
+		src, err := NewFanGraphsPitcherSourceCached(cacheDir, ttl)
+		if err != nil {
+			if i < len(systems)-1 {
+				continue
+			}
+			break
+		}
+		if src.Len() == 0 {
+			if i < len(systems)-1 {
+				result.FellBack = true
+				continue
+			}
+			break
+		}
+		result.System = sys
+		return src, result, nil
+	}
+
+	// Restore the original system for display/cache key consistency.
+	SetProjectionSystem(system)
+
+	// CSV fallback.
+	src, err := NewFanGraphsPitcherSourceFromCSV("fangraphs-leaderboard-projections_pitchers.csv")
+	if err != nil {
+		return nil, result, fmt.Errorf("all pitching projection sources unavailable: %w", err)
+	}
+	if src.Len() == 0 {
+		return nil, result, fmt.Errorf("CSV pitching projections file is empty")
+	}
+	result.FromCSV = true
+	return src, result, nil
 }

@@ -39,6 +39,9 @@ var fgProjectionType = map[string]string{
 	ProjectionBatXRoS:        "rthebatx",
 }
 
+// fgBaseURL is the FanGraphs API base URL template. Tests can override this.
+var fgBaseURL = "https://www.fangraphs.com/api/projections?type=%s&stats=%s&pos=all&team=0&players=0&lg=all"
+
 // SetProjectionSystem updates the FanGraphs API URLs to use the given projection system.
 // Valid values: "steamer", "depthcharts", "thebatx". Returns an error for unknown systems.
 func SetProjectionSystem(system string) error {
@@ -47,9 +50,8 @@ func SetProjectionSystem(system string) error {
 		return fmt.Errorf("unknown projection system %q (valid: steamer, depthcharts, thebatx, steamer-ros, depthcharts-ros, thebatx-ros)", system)
 	}
 	currentAPIType = apiType
-	base := "https://www.fangraphs.com/api/projections?type=%s&stats=%s&pos=all&team=0&players=0&lg=all"
-	fangraphsBattingURL = fmt.Sprintf(base, apiType, "bat")
-	fangraphsPitchingURL = fmt.Sprintf(base, apiType, "pit")
+	fangraphsBattingURL = fmt.Sprintf(fgBaseURL, apiType, "bat")
+	fangraphsPitchingURL = fmt.Sprintf(fgBaseURL, apiType, "pit")
 	return nil
 }
 
@@ -244,6 +246,9 @@ func NewFanGraphsSourceFromCSV(path string) (*FanGraphsSource, error) {
 	return src, nil
 }
 
+// Len returns the number of players in this source.
+func (s *FanGraphsSource) Len() int { return len(s.projections) }
+
 // GetProjection looks up a player's projection by name and MLB team.
 func (s *FanGraphsSource) GetProjection(name, mlbTeam string) (*Projection, bool) {
 	// Try exact name+team match first.
@@ -315,4 +320,72 @@ func NormalizeName(name string) string {
 		}
 	}
 	return strings.ToLower(b.String())
+}
+
+// rosVariant maps base projection systems to their RoS equivalents.
+var rosVariant = map[string]string{
+	ProjectionSteamer:     ProjectionSteamerRoS,
+	ProjectionDepthCharts: ProjectionDepthChartsRoS,
+	ProjectionBatX:        ProjectionBatXRoS,
+}
+
+// LoadResult describes what projection source was loaded and whether fallback occurred.
+type LoadResult struct {
+	System   string // The system that was actually loaded (e.g. "depthcharts-ros")
+	FellBack bool   // True if RoS was tried but empty, and preseason was used instead
+	FromCSV  bool   // True if loaded from CSV as last resort
+}
+
+// LoadBattingProjections tries to load batting projections with RoS-first priority.
+// For base systems (e.g. "depthcharts"): RoS API → Preseason API → CSV.
+// For explicit RoS systems (e.g. "depthcharts-ros"): RoS API → CSV.
+func LoadBattingProjections(system, cacheDir string, ttl time.Duration) (*FanGraphsSource, LoadResult, error) {
+	result := LoadResult{System: system}
+
+	// Build the list of systems to try via API.
+	systems := []string{}
+	if ros, ok := rosVariant[system]; ok {
+		// Base system: try RoS first, then preseason.
+		systems = append(systems, ros, system)
+	} else {
+		// Already a RoS variant or no RoS variant exists.
+		systems = append(systems, system)
+	}
+
+	// Try each API system in order.
+	for i, sys := range systems {
+		if err := SetProjectionSystem(sys); err != nil {
+			continue
+		}
+		src, err := NewFanGraphsSourceCached(cacheDir, ttl)
+		if err != nil {
+			if i < len(systems)-1 {
+				continue
+			}
+			break
+		}
+		if src.Len() == 0 {
+			if i < len(systems)-1 {
+				result.FellBack = true
+				continue
+			}
+			break
+		}
+		result.System = sys
+		return src, result, nil
+	}
+
+	// Restore the original system for display/cache key consistency.
+	SetProjectionSystem(system)
+
+	// CSV fallback.
+	src, err := NewFanGraphsSourceFromCSV("fangraphs-leaderboard-projections_batters.csv")
+	if err != nil {
+		return nil, result, fmt.Errorf("all batting projection sources unavailable: %w", err)
+	}
+	if src.Len() == 0 {
+		return nil, result, fmt.Errorf("CSV batting projections file is empty")
+	}
+	result.FromCSV = true
+	return src, result, nil
 }

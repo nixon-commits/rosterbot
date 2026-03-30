@@ -32,14 +32,13 @@ var (
 
 	// projDisplayName maps projection system flag values to display-friendly names.
 	projDisplayName = map[string]string{
-		"steamer":          "Steamer",
-		"depthcharts":      "DepthCharts",
-		"thebatx":          "TheBatX",
-		"steamer-ros":      "Steamer RoS",
-		"depthcharts-ros":  "DepthCharts RoS",
-		"thebatx-ros":      "TheBatX RoS",
+		"steamer":         "Steamer",
+		"depthcharts":     "DepthCharts",
+		"thebatx":         "TheBatX",
+		"steamer-ros":     "Steamer RoS",
+		"depthcharts-ros": "DepthCharts RoS",
+		"thebatx-ros":     "TheBatX RoS",
 	}
-
 )
 
 var optimizeCmd = &cobra.Command{
@@ -157,7 +156,21 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	prog.Header(projDisplayName[projectionSystem], formatDates(cfg.Dates), cfg.DryRun)
+	// --- Load projections early to determine system for header ---
+	fgSrc, batLoadResult, err := projections.LoadBattingProjections(projectionSystem, cacheDir, projTTL)
+	if err != nil {
+		msg := fmt.Sprintf("batting projections unavailable: %v", err)
+		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, msg)
+		return fmt.Errorf("batting projections unavailable: %w", err)
+	}
+	fgPitSrc, pitLoadResult, err := projections.LoadPitcherProjections(projectionSystem, cacheDir, projTTL)
+	if err != nil {
+		msg := fmt.Sprintf("pitching projections unavailable: %v", err)
+		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, msg)
+		return fmt.Errorf("pitching projections unavailable: %w", err)
+	}
+
+	prog.Header(projDisplayName[batLoadResult.System], formatDates(cfg.Dates), cfg.DryRun)
 
 	// --- Roster alerts (if requested) ---
 	if checkRoster {
@@ -230,43 +243,44 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 	// --- Hitter projections (shared across dates) ---
 	prog.Start("Projections")
+	if batLoadResult.FellBack {
+		prog.Logf("WARNING: %s RoS projections unavailable — using %s preseason", projDisplayName[projectionSystem], projDisplayName[projectionSystem])
+	}
+	if batLoadResult.FromCSV {
+		prog.Logf("WARNING: API projections unavailable — using CSV file")
+	}
+	prog.Logf("fangraphs batting projections loaded (%s, %d players)", projDisplayName[batLoadResult.System], fgSrc.Len())
+	if pitLoadResult.FellBack {
+		prog.Logf("WARNING: %s RoS pitching projections unavailable — using %s preseason", projDisplayName[projectionSystem], projDisplayName[projectionSystem])
+	}
+	if pitLoadResult.FromCSV {
+		prog.Logf("WARNING: API pitching projections unavailable — using CSV file")
+	}
+	prog.Logf("fangraphs pitching projections loaded (%s, %d players)", projDisplayName[pitLoadResult.System], fgPitSrc.Len())
 	var recentHitterCount, recentPitcherCount int
 	var hitterProjSrc projections.Source
-	fgSrc, err := projections.NewFanGraphsSourceFromCSV("fangraphs-leaderboard-projections_batters.csv")
-	if err != nil {
-		prog.Logf("CSV batting projections unavailable (%v) — trying API", err)
-		fgSrc, err = projections.NewFanGraphsSourceCached(cacheDir, projTTL)
-	}
-	if err != nil {
-		prog.Finish()
-		msg := fmt.Sprintf("batting projections unavailable: %v", err)
-		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, msg)
-		return fmt.Errorf("batting projections unavailable: %w", err)
-	} else {
-		prog.Logf("fangraphs batting projections loaded")
-		rolling := projections.NewRollingSource()
-		baseSrc := projections.NewChainedSource(fgSrc, rolling)
+	rolling := projections.NewRollingSource()
+	baseSrc := projections.NewChainedSource(fgSrc, rolling)
 
-		if periodErr != nil || currentPeriod <= 1 {
-			if currentPeriod <= 1 {
-				prog.Logf("season not started (period %d) — using %s only", currentPeriod, projDisplayName[projectionSystem])
-			}
+	if periodErr != nil || currentPeriod <= 1 {
+		if currentPeriod <= 1 {
+			prog.Logf("season not started (period %d) — using %s only", currentPeriod, projDisplayName[projectionSystem])
+		}
+		hitterProjSrc = baseSrc
+	} else {
+		prog.Logf("fetching recent hitter stats (YTD through period %d)...", currentPeriod-1)
+		recentStats, err := ft.GetRecentStats(currentPeriod, 0)
+		if err != nil {
+			prog.Logf("WARNING: recent hitter stats unavailable (%v) — using %s only", err, projDisplayName[projectionSystem])
 			hitterProjSrc = baseSrc
 		} else {
-			prog.Logf("fetching recent hitter stats (YTD through period %d)...", currentPeriod-1)
-			recentStats, err := ft.GetRecentStats(currentPeriod, 0)
-			if err != nil {
-				prog.Logf("WARNING: recent hitter stats unavailable (%v) — using %s only", err, projDisplayName[projectionSystem])
-				hitterProjSrc = baseSrc
-			} else {
-				recentHitterCount = len(recentStats)
-				prog.Logf("recent hitter stats loaded: %d players with data", len(recentStats))
-				nameToID := make(map[string]string)
-				for _, p := range hitterRoster {
-					nameToID[projections.NormalizeName(p.Name)] = p.ID
-				}
-				hitterProjSrc = projections.NewBlendedSource(baseSrc, recentStats, hitterScoring, nameToID, cfg.BlendMinGP)
+			recentHitterCount = len(recentStats)
+			prog.Logf("recent hitter stats loaded: %d players with data", len(recentStats))
+			nameToID := make(map[string]string)
+			for _, p := range hitterRoster {
+				nameToID[projections.NormalizeName(p.Name)] = p.ID
 			}
+			hitterProjSrc = projections.NewBlendedSource(baseSrc, recentStats, hitterScoring, nameToID, cfg.BlendMinGP)
 		}
 	}
 
@@ -278,39 +292,26 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 	// --- Pitcher projections (shared across dates) ---
 	var pitcherProjSrc projections.PitcherSource
-	fgPitSrc, err := projections.NewFanGraphsPitcherSourceFromCSV("fangraphs-leaderboard-projections_pitchers.csv")
-	if err != nil {
-		prog.Logf("CSV pitching projections unavailable (%v) — trying API", err)
-		fgPitSrc, err = projections.NewFanGraphsPitcherSourceCached(cacheDir, projTTL)
-	}
-	if err != nil {
-		prog.Finish()
-		msg := fmt.Sprintf("pitching projections unavailable: %v", err)
-		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, msg)
-		return fmt.Errorf("pitching projections unavailable: %w", err)
-	} else {
-		prog.Logf("fangraphs pitching projections loaded")
-		pitRolling := projections.NewPitcherRollingSource()
-		pitBaseSrc := projections.NewPitcherChainedSource(fgPitSrc, pitRolling)
+	pitRolling := projections.NewPitcherRollingSource()
+	pitBaseSrc := projections.NewPitcherChainedSource(fgPitSrc, pitRolling)
 
-		if periodErr != nil || currentPeriod <= 1 {
+	if periodErr != nil || currentPeriod <= 1 {
+		pitcherProjSrc = pitBaseSrc
+	} else {
+		recentPitStats, err := ft.GetRecentPitcherStats(currentPeriod, 0)
+		if err != nil {
+			prog.Logf("WARNING: recent pitcher stats unavailable (%v) — using %s only", err, projDisplayName[projectionSystem])
 			pitcherProjSrc = pitBaseSrc
 		} else {
-			recentPitStats, err := ft.GetRecentPitcherStats(currentPeriod, 0)
-			if err != nil {
-				prog.Logf("WARNING: recent pitcher stats unavailable (%v) — using %s only", err, projDisplayName[projectionSystem])
-				pitcherProjSrc = pitBaseSrc
-			} else {
-				recentPitcherCount = len(recentPitStats)
-				prog.Logf("recent pitcher stats loaded: %d players with data", len(recentPitStats))
-				pitNameToID := make(map[string]string)
-				pitPlayerPos := make(map[string][]string)
-				for _, p := range pitcherRoster {
-					pitNameToID[projections.NormalizeName(p.Name)] = p.ID
-					pitPlayerPos[p.ID] = p.Positions
-				}
-				pitcherProjSrc = projections.NewPitcherBlendedSource(pitBaseSrc, recentPitStats, pitcherScoring, pitNameToID, pitPlayerPos, cfg.BlendMinGP)
+			recentPitcherCount = len(recentPitStats)
+			prog.Logf("recent pitcher stats loaded: %d players with data", len(recentPitStats))
+			pitNameToID := make(map[string]string)
+			pitPlayerPos := make(map[string][]string)
+			for _, p := range pitcherRoster {
+				pitNameToID[projections.NormalizeName(p.Name)] = p.ID
+				pitPlayerPos[p.ID] = p.Positions
 			}
+			pitcherProjSrc = projections.NewPitcherBlendedSource(pitBaseSrc, recentPitStats, pitcherScoring, pitNameToID, pitPlayerPos, cfg.BlendMinGP)
 		}
 	}
 	prog.Done("Projections", "batting + pitching loaded")
@@ -517,14 +518,14 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 	// --- Parallel fetch + optimize for all dates ---
 	type dateResult struct {
-		date          time.Time
-		period        int
-		isToday       bool
-		hitterResult  optimizer.Result
-		pitcherResult optimizer.PitcherResult
-		warnings      []string
-		venues        map[string]string            // team → home team (for park factor display)
-		benchedToday  map[string]bool              // normalized names confirmed out of real-life lineup
+		date             time.Time
+		period           int
+		isToday          bool
+		hitterResult     optimizer.Result
+		pitcherResult    optimizer.PitcherResult
+		warnings         []string
+		venues           map[string]string                       // team → home team (for park factor display)
+		benchedToday     map[string]bool                         // normalized names confirmed out of real-life lineup
 		hitterBreakdowns map[string]*projections.HitterBreakdown // playerID → breakdown
 	}
 
@@ -902,14 +903,17 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		// --- Hitter blend breakdown ---
 		if len(dr.hitterBreakdowns) > 0 {
 			fmt.Println()
-			fmt.Println("  Hitter Blend Breakdown ──────────────────────────────────────────────")
 			projLabel := projDisplayName[projectionSystem]
 			lw := len(projLabel)
 			if lw < 6 {
 				lw = 6
 			}
-			fmt.Printf("    %-19s  %*s  Recent  Wt(S / R)    Blended   GP\n", "Player", lw, projLabel)
-			fmt.Println("  ────────────────────────────────────────────────────────────────────")
+			// Row width: "    %-19s  %*s  Recent  ProjWt  Blended  GP" = 4+19+2+lw+2+6+2+6+2+7+2+2 = lw+54
+			rowWidth := lw + 54
+			titlePrefix := "  Hitter Blend Breakdown "
+			fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", rowWidth-len(titlePrefix)+4))
+			fmt.Printf("    %-19s  %*s  Recent  ProjWt  Blended  GP    │\n", "Player", lw, projLabel)
+			fmt.Printf("  %s╯\n", strings.Repeat("─", rowWidth+2))
 
 			// Sort by blended score descending.
 			blendSorted := make([]optimizer.ScoredPlayer, 0, len(dr.hitterBreakdowns))
@@ -927,15 +931,15 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			for _, sp := range blendSorted {
 				bd := dr.hitterBreakdowns[sp.Player.ID]
 				if bd.HasRecent {
-					fmt.Printf("    %-19s  %*.2f  %6.2f  %3.0f%% / %-4s  %6.2f  %2d\n",
+					fmt.Printf("    %-19s  %*.2f  %6.2f  %5.0f%%  %7.2f  %2d\n",
 						truncName(sp.Player.Name, 19),
 						lw, bd.SteamerPts, bd.RecentFPG,
-						bd.SteamerWt*100, fmt.Sprintf("%.0f%%", bd.RecentWt*100),
+						bd.SteamerWt*100,
 						bd.BlendedPts, bd.GamesPlayed)
 				} else {
-					fmt.Printf("    %-19s  %*.2f  %6s  100%% / %-4s  %6.2f  %2s\n",
+					fmt.Printf("    %-19s  %*.2f  %6s  %5s%%  %7.2f  %2s\n",
 						truncName(sp.Player.Name, 19),
-						lw, bd.SteamerPts, "—", "0%", bd.BlendedPts, "—")
+						lw, bd.SteamerPts, "—", "100", bd.BlendedPts, "—")
 				}
 			}
 		}
