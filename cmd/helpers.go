@@ -35,6 +35,19 @@ func displayWidth(s string) int {
 	return w
 }
 
+// colorDelta formats a pipeline delta with ANSI green (positive) or red (negative).
+// All branches use the same ANSI prefix/suffix lengths (\033[XXm … \033[0m) so
+// the total byte length is consistent and fmt.Printf %s columns stay aligned.
+func colorDelta(delta float64) string {
+	if delta > 0.005 {
+		return fmt.Sprintf("\033[32m%+7.2f\033[0m", delta)
+	}
+	if delta < -0.005 {
+		return fmt.Sprintf("\033[31m%7.2f\033[0m", delta)
+	}
+	return "\033[90m      -\033[0m"
+}
+
 // truncName truncates a name to maxLen runes.
 func truncName(name string, maxLen int) string {
 	runes := []rune(name)

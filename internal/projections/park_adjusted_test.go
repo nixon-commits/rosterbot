@@ -134,6 +134,51 @@ func TestParkAdjustedSource_ParkFactor(t *testing.T) {
 	}
 }
 
+func TestParkAdjustedSource_ComputeParkAdjustment(t *testing.T) {
+	inner := &stubSource{proj: map[string]*Projection{
+		"test player": {G: 100, H: 100, Singles: 60, Doubles: 20, Triples: 5, HR: 15, RBI: 50, R: 40, BB: 30, SO: 80},
+	}}
+	scoring := fantrax.ScoringWeights{"HR": 4.0, "1B": 1.0, "2B": 2.0, "3B": 3.0, "R": 1.0, "RBI": 1.0, "BB": 1.0, "SO": -1.0, "XBH": 1.0, "TB": 1.0}
+
+	parkFactors := map[string]ParkFactors{
+		"COL": {Team: "COL", HR: 1.06, H: 1.17, R: 1.28, BB: 1.01, SO: 0.90, H1B: 1.16, H2B: 1.19, H3B: 2.02},
+	}
+	venues := map[string]string{"NYY": "COL"}
+
+	src := NewParkAdjustedSource(inner, parkFactors, venues)
+
+	// ComputeParkAdjustment should return the same multiplier used internally.
+	adj := src.ComputeParkAdjustment("Test Player", "NYY", scoring)
+	if adj <= 1.0 {
+		t.Errorf("expected Coors park adjustment > 1.0, got %.4f", adj)
+	}
+
+	// Verify it matches the ratio of adjusted/base pts.
+	basePts := ExpectedPtsFromProj(inner.proj["test player"], scoring)
+	adjPts, _ := src.GetPtsPerGame("Test Player", "NYY", scoring)
+	expectedAdj := adjPts / basePts
+	if math.Abs(adj-expectedAdj) > 0.0001 {
+		t.Errorf("ComputeParkAdjustment=%.4f, but GetPtsPerGame ratio=%.4f", adj, expectedAdj)
+	}
+}
+
+func TestParkAdjustedSource_ComputeParkAdjustment_NoVenue(t *testing.T) {
+	inner := &stubSource{proj: map[string]*Projection{
+		"test player": {G: 100, HR: 20, RBI: 60},
+	}}
+	scoring := fantrax.ScoringWeights{"HR": 4.0, "RBI": 1.0}
+
+	parkFactors := map[string]ParkFactors{
+		"COL": {Team: "COL", HR: 1.06, R: 1.28},
+	}
+	src := NewParkAdjustedSource(inner, parkFactors, map[string]string{})
+
+	adj := src.ComputeParkAdjustment("Test Player", "NYY", scoring)
+	if adj != 1.0 {
+		t.Errorf("expected 1.0 for missing venue, got %.4f", adj)
+	}
+}
+
 func TestParkAdjustedSource_WithBlendedInner(t *testing.T) {
 	innerProj := &stubSource{proj: map[string]*Projection{
 		"test player": {G: 100, H: 100, Singles: 60, Doubles: 20, Triples: 5, HR: 15, RBI: 50, R: 40, BB: 30},

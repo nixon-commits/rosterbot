@@ -22,7 +22,7 @@ type ParkFactors struct {
 // adjustments based on the venue each player is playing in today.
 type ParkAdjustedSource struct {
 	inner       Source
-	innerPPS    PtsPerGameSource      // may be nil if inner doesn't implement PtsPerGameSource
+	innerPPS    PtsPerGameSource       // may be nil if inner doesn't implement PtsPerGameSource
 	parkFactors map[string]ParkFactors // home team abbr → factors
 	venues      map[string]string      // team abbr → home team abbr (today's games)
 }
@@ -102,6 +102,24 @@ func (s *ParkAdjustedSource) ParkFactor(mlbTeam string) float64 {
 		return 1.0
 	}
 	return pf.R
+}
+
+// ComputeParkAdjustment returns the weighted park factor multiplier for a player
+// at their game's venue. Returns 1.0 if no park data or venue is unavailable.
+func (s *ParkAdjustedSource) ComputeParkAdjustment(name, mlbTeam string, scoring fantrax.ScoringWeights) float64 {
+	homeTeam, venueOK := s.venues[mlbTeam]
+	if !venueOK {
+		return 1.0
+	}
+	pf, pfOK := s.parkFactors[homeTeam]
+	if !pfOK {
+		return 1.0
+	}
+	proj, projOK := s.inner.GetProjection(name, mlbTeam)
+	if !projOK || proj.G <= 0 {
+		return pf.R
+	}
+	return computeParkAdjustment(proj, pf, scoring)
 }
 
 // computeParkAdjustment calculates a weighted park factor multiplier based on

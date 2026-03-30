@@ -52,8 +52,8 @@ rosterbot optimize --dry-run --dates 2026-03-26:2026-03-28
 # Optimize remaining days in current matchup period
 rosterbot optimize --dry-run --matchup
 
-# Show Steamer vs recent stats blend breakdown
-rosterbot optimize --dry-run --blend
+# Show full hitter adjustment pipeline (base → blend → park → platoon → opp SP → final)
+rosterbot optimize --dry-run --pipeline
 
 # Switch projection system (steamer, depthcharts, thebatx, steamer-ros, depthcharts-ros, thebatx-ros)
 rosterbot optimize --dry-run --projections steamer

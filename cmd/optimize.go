@@ -28,7 +28,7 @@ var (
 	checkRoster      bool
 	matchupPeriod    bool
 	projectionSystem string
-	showBlend        bool
+	showPipeline     bool
 
 	// projDisplayName maps projection system flag values to display-friendly names.
 	projDisplayName = map[string]string{
@@ -53,7 +53,7 @@ func init() {
 	optimizeCmd.Flags().BoolVar(&matchupPeriod, "matchup", false, "optimize for all remaining days in the current matchup period")
 	optimizeCmd.Flags().BoolVar(&checkRoster, "check-roster", true, "check for roster slot mismatches (IL/minors)")
 	optimizeCmd.Flags().StringVar(&projectionSystem, "projections", "depthcharts", "projection system: steamer, depthcharts, thebatx, steamer-ros, depthcharts-ros, thebatx-ros")
-	optimizeCmd.Flags().BoolVar(&showBlend, "blend", false, "show hitter blend breakdown (projections vs recent)")
+	optimizeCmd.Flags().BoolVar(&showPipeline, "pipeline", false, "show full hitter adjustment pipeline detail")
 	rootCmd.AddCommand(optimizeCmd)
 }
 
@@ -523,9 +523,10 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		hitterResult     optimizer.Result
 		pitcherResult    optimizer.PitcherResult
 		warnings         []string
-		venues           map[string]string                       // team → home team (for park factor display)
-		benchedToday     map[string]bool                         // normalized names confirmed out of real-life lineup
-		hitterBreakdowns map[string]*projections.HitterBreakdown // playerID → breakdown
+		venues           map[string]string                            // team → home team (for park factor display)
+		benchedToday     map[string]bool                              // normalized names confirmed out of real-life lineup
+		hitterBreakdowns map[string]*projections.HitterBreakdown      // playerID → breakdown
+		hitterPipelines  map[string]*projections.HitterPipelineDetail // playerID → pipeline detail
 	}
 
 	results := make([]dateResult, len(cfg.Dates))
@@ -617,8 +618,11 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 			// Optimize hitters (with park factor adjustment if available).
 			dateHitterSrc := hitterProjSrc
+			var parkSrc *projections.ParkAdjustedSource
+			var matchupSrc *projections.MatchupAdjustedSource
 			if venues != nil && parkFactors != nil {
-				dateHitterSrc = projections.NewParkAdjustedSource(hitterProjSrc, parkFactors, venues)
+				parkSrc = projections.NewParkAdjustedSource(hitterProjSrc, parkFactors, venues)
+				dateHitterSrc = parkSrc
 			}
 
 			// Build opposing pitcher map for matchup adjustments.
@@ -647,14 +651,15 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 					}
 				}
 				if len(opposingPitchers) > 0 {
-					dateHitterSrc = projections.NewMatchupAdjustedSource(dateHitterSrc, opposingPitchers, hitterBats, leagueAvgFIP)
+					matchupSrc = projections.NewMatchupAdjustedSource(dateHitterSrc, opposingPitchers, hitterBats, leagueAvgFIP)
+					dateHitterSrc = matchupSrc
 				}
 			}
 			hitterResult := optimizer.OptimizeLineup(dateHitterRoster, playingToday, dateHitterSrc, hitterScoring, hitterSlots, benchedToday)
 
-			// Compute hitter blending breakdowns if --blend flag is set.
+			// Compute hitter blending breakdowns if --pipeline flag is set.
 			var hitterBreakdowns map[string]*projections.HitterBreakdown
-			if showBlend {
+			if showPipeline {
 				if blended, ok := hitterProjSrc.(*projections.BlendedSource); ok {
 					hitterBreakdowns = make(map[string]*projections.HitterBreakdown)
 					for _, sp := range hitterResult.Scored {
@@ -662,6 +667,71 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 							hitterBreakdowns[sp.Player.ID] = bd
 						}
 					}
+				}
+			}
+
+			// Compute full pipeline details if --pipeline flag is set.
+			var hitterPipelines map[string]*projections.HitterPipelineDetail
+			if showPipeline {
+				hitterPipelines = make(map[string]*projections.HitterPipelineDetail)
+				for _, sp := range hitterResult.Scored {
+					if !sp.HasGame {
+						continue
+					}
+					proj, projOK := hitterProjSrc.GetProjection(sp.Player.Name, sp.Player.MLBTeam)
+					if !projOK || proj.G <= 0 {
+						continue
+					}
+					pd := &projections.HitterPipelineDetail{
+						PlayerName:     sp.Player.Name,
+						PlayerID:       sp.Player.ID,
+						MLBTeam:        sp.Player.MLBTeam,
+						BasePtsPerGame: projections.ExpectedPtsFromProj(proj, hitterScoring),
+						ParkMultiplier: 1.0,
+						PlatoonMult:    1.0,
+						QualityMult:    1.0,
+					}
+
+					// Stage 2: Blend
+					if bd, ok := hitterBreakdowns[sp.Player.ID]; ok {
+						pd.BlendedPtsPerGame = bd.BlendedPts
+						pd.HasRecent = bd.HasRecent
+						pd.SteamerWt = bd.SteamerWt
+						pd.RecentFPG = bd.RecentFPG
+						pd.GamesPlayed = bd.GamesPlayed
+					} else {
+						pd.BlendedPtsPerGame = pd.BasePtsPerGame
+					}
+					pd.BlendDelta = pd.BlendedPtsPerGame - pd.BasePtsPerGame
+
+					// Stage 3: Park factor
+					if parkSrc != nil {
+						pd.ParkMultiplier = parkSrc.ComputeParkAdjustment(sp.Player.Name, sp.Player.MLBTeam, hitterScoring)
+						pd.ParkAdjPtsPerGame = pd.BlendedPtsPerGame * pd.ParkMultiplier
+					} else {
+						pd.ParkAdjPtsPerGame = pd.BlendedPtsPerGame
+					}
+					pd.ParkDelta = pd.ParkAdjPtsPerGame - pd.BlendedPtsPerGame
+
+					// Stage 4: Matchup (platoon + quality)
+					afterPlatoon := pd.ParkAdjPtsPerGame
+					if matchupSrc != nil {
+						md := matchupSrc.GetMatchupDetail(sp.Player.Name, sp.Player.MLBTeam)
+						pd.PlatoonMult = md.PlatoonMult
+						pd.PlatoonFavorable = md.Favorable
+						pd.QualityMult = md.QualityMult
+						pd.OpposingPitcher = md.OpposingPitcher
+						pd.OpposingFIP = md.OpposingFIP
+						pd.LeagueAvgFIP = md.LeagueAvgFIP
+						afterPlatoon = pd.ParkAdjPtsPerGame * md.PlatoonMult
+						pd.FinalPtsPerGame = pd.ParkAdjPtsPerGame * md.CombinedMult
+					} else {
+						pd.FinalPtsPerGame = pd.ParkAdjPtsPerGame
+					}
+					pd.PlatoonDelta = afterPlatoon - pd.ParkAdjPtsPerGame
+					pd.QualityDelta = pd.FinalPtsPerGame - afterPlatoon
+
+					hitterPipelines[sp.Player.ID] = pd
 				}
 			}
 
@@ -685,6 +755,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				venues:           venues,
 				benchedToday:     benchedToday,
 				hitterBreakdowns: hitterBreakdowns,
+				hitterPipelines:  hitterPipelines,
 			}
 			return nil
 		})
@@ -899,47 +970,44 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		// Combined total.
 		fmt.Printf("\n  %-26s %6.2f\n", "Combined Expected", hitterStartingPts+pitcherStartingPts)
 
-		// --- Hitter blend breakdown ---
-		if len(dr.hitterBreakdowns) > 0 {
+		// --- Hitter pipeline detail ---
+		if showPipeline && len(dr.hitterPipelines) > 0 {
 			fmt.Println()
-			projLabel := projDisplayName[projectionSystem]
-			lw := len(projLabel)
-			if lw < 6 {
-				lw = 6
-			}
-			// Row width: "    %-19s  %*s  Recent  ProjWt  Blended  GP" = 4+19+2+lw+2+6+2+6+2+7+2+2 = lw+54
-			rowWidth := lw + 54
-			titlePrefix := "  Hitter Blend Breakdown "
-			fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", rowWidth-len(titlePrefix)+4))
-			fmt.Printf("    %-19s  %*s  Recent  ProjWt  Blended  GP    │\n", "Player", lw, projLabel)
-			fmt.Printf("  %s╯\n", strings.Repeat("─", rowWidth+2))
 
-			// Sort by blended score descending.
-			blendSorted := make([]optimizer.ScoredPlayer, 0, len(dr.hitterBreakdowns))
+			// Sort by final pts descending.
+			pipelineSorted := make([]optimizer.ScoredPlayer, 0, len(dr.hitterPipelines))
 			for _, sp := range dr.hitterResult.Scored {
-				if _, ok := dr.hitterBreakdowns[sp.Player.ID]; ok {
-					blendSorted = append(blendSorted, sp)
+				if _, ok := dr.hitterPipelines[sp.Player.ID]; ok {
+					pipelineSorted = append(pipelineSorted, sp)
 				}
 			}
-			sort.Slice(blendSorted, func(i, j int) bool {
-				bi := dr.hitterBreakdowns[blendSorted[i].Player.ID]
-				bj := dr.hitterBreakdowns[blendSorted[j].Player.ID]
-				return bi.BlendedPts > bj.BlendedPts
+			sort.Slice(pipelineSorted, func(i, j int) bool {
+				pi := dr.hitterPipelines[pipelineSorted[i].Player.ID]
+				pj := dr.hitterPipelines[pipelineSorted[j].Player.ID]
+				return pi.FinalPtsPerGame > pj.FinalPtsPerGame
 			})
 
-			for _, sp := range blendSorted {
-				bd := dr.hitterBreakdowns[sp.Player.ID]
-				if bd.HasRecent {
-					fmt.Printf("    %-19s  %*.2f  %6.2f  %5.0f%%  %7.2f  %2d\n",
-						truncName(sp.Player.Name, 19),
-						lw, bd.SteamerPts, bd.RecentFPG,
-						bd.SteamerWt*100,
-						bd.BlendedPts, bd.GamesPlayed)
-				} else {
-					fmt.Printf("    %-19s  %*.2f  %6s  %5s%%  %7.2f  %2s\n",
-						truncName(sp.Player.Name, 19),
-						lw, bd.SteamerPts, "—", "100", bd.BlendedPts, "—")
-				}
+			// Header — 7-char columns with 2-space gaps.
+			// Header row = "    %-19s  %7s×6│" = 4+19 + 6*(2+7) + 1 = 78 visible chars.
+			// Title/footer lines must also be 78 visible chars (including ╮/╯).
+			titlePrefix := "  Hitter Pipeline "
+			dashes := 78 - len(titlePrefix) - 1 // -1 for ╮
+			fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", dashes))
+			fmt.Printf("    %-19s  %7s  %7s  %7s  %7s  %7s  %7s│\n",
+				"Player", "Base", "Blend", "Park", "Platoon", "Opp SP", "Final")
+			fmt.Printf("  %s╯\n", strings.Repeat("─", 78-2-1)) // -2 for indent, -1 for ╯
+
+			for _, sp := range pipelineSorted {
+				pd := dr.hitterPipelines[sp.Player.ID]
+				fmt.Printf("    %-19s  %7.2f  %s  %s  %s  %s  %7.2f\n",
+					truncName(sp.Player.Name, 19),
+					pd.BasePtsPerGame,
+					colorDelta(pd.BlendDelta),
+					colorDelta(pd.ParkDelta),
+					colorDelta(pd.PlatoonDelta),
+					colorDelta(pd.QualityDelta),
+					pd.FinalPtsPerGame,
+				)
 			}
 		}
 
