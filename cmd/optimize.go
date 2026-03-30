@@ -81,8 +81,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 	projTTL := cacheTTL(12 * time.Hour)
 	staticTTL := cacheTTL(7 * 24 * time.Hour)
 
-	now := time.Now()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	today := todayET()
 
 	// Parse dates early for non-"all" cases; "all" and "matchup" need the Fantrax client.
 	flagCount := 0

@@ -41,6 +41,15 @@ func Execute() {
 	}
 }
 
+// todayET returns today's date in America/New_York as a UTC midnight timestamp.
+// This ensures GHA (which runs on UTC) uses the correct Eastern-time date for
+// Fantrax scoring periods.
+func todayET() time.Time {
+	loc, _ := time.LoadLocation("America/New_York")
+	now := time.Now().In(loc)
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+}
+
 // initApp loads configuration and creates a Fantrax client.
 func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 	cfg, err := config.Load(dryRun, dates)

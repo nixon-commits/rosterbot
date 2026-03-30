@@ -23,8 +23,7 @@ func init() {
 }
 
 func runGSCheck(cmd *cobra.Command, args []string) error {
-	now := time.Now()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	today := todayET()
 	cfg, ft, err := initApp([]time.Time{today})
 	if err != nil {
 		return err
