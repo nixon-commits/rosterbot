@@ -45,9 +45,9 @@ func TestGSBudget_FutureDemand(t *testing.T) {
 		Today:   today,
 		WeekEnd: date("2026-04-12"),
 		Forecast: []DayForecast{
-			{Date: date("2026-04-07"), Confirmed: 2},              // confirmed
+			{Date: date("2026-04-07"), Confirmed: 2},                 // confirmed
 			{Date: date("2026-04-08"), Confirmed: 0, Estimated: 1.4}, // estimated
-			{Date: date("2026-04-09"), Confirmed: 1},              // confirmed
+			{Date: date("2026-04-09"), Confirmed: 1},                 // confirmed
 		},
 	}
 	got := budget.FutureDemand()

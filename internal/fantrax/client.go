@@ -38,8 +38,8 @@ type ScoringWeights map[string]float64
 
 // posNameToID maps league position constraint keys to auth_client position ID strings.
 var posNameToID = map[string]string{
-	"C":   auth_client.PosC,    // "001"
-	"1B":  auth_client.Pos1B,   // "002"
+	"C":   auth_client.PosC,  // "001"
+	"1B":  auth_client.Pos1B, // "002"
 	"2B":  "003",
 	"3B":  auth_client.Pos3B,   // "004"
 	"SS":  auth_client.PosSS,   // "005"
@@ -195,7 +195,7 @@ func (c *Client) GetMinorsRoster() ([]Player, error) {
 // ProspectPoolPlayer extends Player with fantasy ranking data from the Fantrax player pool.
 type ProspectPoolPlayer struct {
 	Player
-	FantraxRank     int     // Fantrax overall player rank (lower = better)
+	FantraxRank     int // Fantrax overall player rank (lower = better)
 	PercentRostered float64
 	FantasyPtsPerG  float64
 }
@@ -431,7 +431,6 @@ func extractDate(dt string) string {
 	}
 	return t.Format("2006-01-02")
 }
-
 
 // EligibleForSlot returns true if the player's position IDs include the slot's position ID.
 // UT ("014") accepts all hitters.

@@ -83,9 +83,9 @@ func TestBlendedSource_GetProjection_Delegates(t *testing.T) {
 
 func TestHitterBlendWeights_Progression(t *testing.T) {
 	tests := []struct {
-		gp           int
-		expectSteam  float64 // approximate expected Steamer weight
-		tolerance    float64
+		gp          int
+		expectSteam float64 // approximate expected Steamer weight
+		tolerance   float64
 	}{
 		{4, 0.94, 0.02},   // early season: ~94% Steamer
 		{66, 0.50, 0.02},  // mid-June: ~50/50

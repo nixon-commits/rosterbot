@@ -18,9 +18,9 @@ type mlbPeopleResponse struct {
 }
 
 type mlbPerson struct {
-	ID       int         `json:"id"`
-	FullName string      `json:"fullName"`
-	BatSide  mlbHandSide `json:"batSide"`
+	ID        int         `json:"id"`
+	FullName  string      `json:"fullName"`
+	BatSide   mlbHandSide `json:"batSide"`
 	PitchHand mlbHandSide `json:"pitchHand"`
 }
 

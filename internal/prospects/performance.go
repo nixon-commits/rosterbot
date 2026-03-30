@@ -145,18 +145,18 @@ func fetchGameLogs(playerID int, group string, season int) ([]gameLogEntry, erro
 					Abbreviation string `json:"abbreviation"`
 				} `json:"sport"`
 				Stat struct {
-					AtBats       int     `json:"atBats"`
-					Hits         int     `json:"hits"`
-					Doubles      int     `json:"doubles"`
-					Triples      int     `json:"triples"`
-					HomeRuns     int     `json:"homeRuns"`
-					BaseOnBalls  int     `json:"baseOnBalls"`
-					HitByPitch   int     `json:"hitByPitch"`
-					SacFlies     int     `json:"sacFlies"`
+					AtBats         int    `json:"atBats"`
+					Hits           int    `json:"hits"`
+					Doubles        int    `json:"doubles"`
+					Triples        int    `json:"triples"`
+					HomeRuns       int    `json:"homeRuns"`
+					BaseOnBalls    int    `json:"baseOnBalls"`
+					HitByPitch     int    `json:"hitByPitch"`
+					SacFlies       int    `json:"sacFlies"`
 					InningsPitched string `json:"inningsPitched"`
-					EarnedRuns   int     `json:"earnedRuns"`
-					StrikeOuts   int     `json:"strikeOuts"`
-					HitsAllowed  int     `json:"hitsAllowed"`
+					EarnedRuns     int    `json:"earnedRuns"`
+					StrikeOuts     int    `json:"strikeOuts"`
+					HitsAllowed    int    `json:"hitsAllowed"`
 				} `json:"stat"`
 			} `json:"splits"`
 		} `json:"stats"`
@@ -170,20 +170,20 @@ func fetchGameLogs(playerID int, group string, season int) ([]gameLogEntry, erro
 		for _, split := range st.Splits {
 			level := sportAbbrevToLevel(split.Sport.Abbreviation)
 			e := gameLogEntry{
-				Date:     split.Date,
-				Level:    level,
-				AB:       split.Stat.AtBats,
-				H:        split.Stat.Hits,
-				Doubles:  split.Stat.Doubles,
-				Triples:  split.Stat.Triples,
-				HR:       split.Stat.HomeRuns,
-				BB:       split.Stat.BaseOnBalls,
-				HBP:      split.Stat.HitByPitch,
-				SF:       split.Stat.SacFlies,
-				ER:       split.Stat.EarnedRuns,
-				SO:       split.Stat.StrikeOuts,
-				BBA:      split.Stat.BaseOnBalls,
-				HA:       split.Stat.HitsAllowed,
+				Date:    split.Date,
+				Level:   level,
+				AB:      split.Stat.AtBats,
+				H:       split.Stat.Hits,
+				Doubles: split.Stat.Doubles,
+				Triples: split.Stat.Triples,
+				HR:      split.Stat.HomeRuns,
+				BB:      split.Stat.BaseOnBalls,
+				HBP:     split.Stat.HitByPitch,
+				SF:      split.Stat.SacFlies,
+				ER:      split.Stat.EarnedRuns,
+				SO:      split.Stat.StrikeOuts,
+				BBA:     split.Stat.BaseOnBalls,
+				HA:      split.Stat.HitsAllowed,
 			}
 			e.IP = parseIP(split.Stat.InningsPitched)
 			entries = append(entries, e)
@@ -324,7 +324,7 @@ func computePitcherBreakout(logs []gameLogEntry, minGames int, level string) (ho
 	recentERA, recentK9 := computePitcherStats(recent)
 
 	eraDelta := recentERA - seasonERA // negative = improvement
-	k9Delta := recentK9 - seasonK9   // positive = improvement
+	k9Delta := recentK9 - seasonK9    // positive = improvement
 
 	eraThresh, ok := eraHotThreshold[level]
 	if !ok {

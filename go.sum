@@ -26,8 +26,8 @@ github.com/orisano/pixelmatch v0.0.0-20220722002657-fb0b55479cde h1:x0TT0RDC7UhA
 github.com/orisano/pixelmatch v0.0.0-20220722002657-fb0b55479cde/go.mod h1:nZgzbfBr3hhjoZnS66nKrHmduYNpc34ny7RK4z5/HM0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/pmurley/go-fantrax v0.1.10 h1:MZZ0i7omrauV1ziyXSAi3HWFmkTWv1sIDQU9gvCgKrI=
-github.com/pmurley/go-fantrax v0.1.10/go.mod h1:Pp07jXcboe1JbxToDLS07PTNsnPpYmeq73FsNUiv31g=
+github.com/pmurley/go-fantrax v0.1.13 h1:6oSQUIaEPsX6OUbuuF+g4J5iC80f9E35zWBSsq6dmW4=
+github.com/pmurley/go-fantrax v0.1.13/go.mod h1:Pp07jXcboe1JbxToDLS07PTNsnPpYmeq73FsNUiv31g=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
 github.com/sirupsen/logrus v1.9.3 h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=
 github.com/sirupsen/logrus v1.9.3/go.mod h1:naHLuLoDiP4jHNo9R0sCBMtWGeIprob74mVsIT4qYEQ=

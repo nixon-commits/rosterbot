@@ -26,11 +26,11 @@ func TestFetchMLBHandedness(t *testing.T) {
 	defer func() { mlbPeopleURL = old }()
 
 	ids := map[string]int{
-		"aaron judge":    592450,
-		"juan soto":      665742,
-		"ozzie albies":   645277,
-		"gerrit cole":    543037,
-		"yusei kikuchi":  579328,
+		"aaron judge":   592450,
+		"juan soto":     665742,
+		"ozzie albies":  645277,
+		"gerrit cole":   543037,
+		"yusei kikuchi": 579328,
 	}
 
 	bats, throws, err := FetchMLBHandedness(ids)

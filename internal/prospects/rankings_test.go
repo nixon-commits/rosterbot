@@ -196,8 +196,8 @@ func TestLoadRankings_FetchesWhenStale(t *testing.T) {
 // --- FindUpgrades ---
 
 func TestFindUpgrades_TieredThreshold(t *testing.T) {
-	rostered := []RankedProspect{{Name: "a", Rank: 40}}      // tier 11-50, threshold 15
-	available := []RankedProspect{{Name: "b", Rank: 24}}      // gap = 16, meets threshold
+	rostered := []RankedProspect{{Name: "a", Rank: 40}}  // tier 11-50, threshold 15
+	available := []RankedProspect{{Name: "b", Rank: 24}} // gap = 16, meets threshold
 	upgrades := FindUpgrades(rostered, available, "2026")
 	if len(upgrades) != 1 {
 		t.Fatalf("expected 1 upgrade, got %d", len(upgrades))
@@ -207,7 +207,7 @@ func TestFindUpgrades_TieredThreshold(t *testing.T) {
 	}
 
 	// gap of 14 should NOT meet threshold for rank 40
-	available2 := []RankedProspect{{Name: "c", Rank: 26}}     // gap = 14
+	available2 := []RankedProspect{{Name: "c", Rank: 26}} // gap = 14
 	upgrades2 := FindUpgrades(rostered, available2, "2026")
 	if len(upgrades2) != 0 {
 		t.Errorf("expected 0 upgrades for gap 14 (threshold 15), got %d", len(upgrades2))

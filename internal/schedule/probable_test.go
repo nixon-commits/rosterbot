@@ -16,12 +16,12 @@ func TestProbableStarters_ParsesResponse(t *testing.T) {
 					{
 						"teams": map[string]interface{}{
 							"away": map[string]interface{}{
-								"team":             map[string]interface{}{"abbreviation": "NYY"},
-								"probablePitcher":  map[string]interface{}{"fullName": "Gerrit Cole"},
+								"team":            map[string]interface{}{"abbreviation": "NYY"},
+								"probablePitcher": map[string]interface{}{"fullName": "Gerrit Cole"},
 							},
 							"home": map[string]interface{}{
-								"team":             map[string]interface{}{"abbreviation": "BOS"},
-								"probablePitcher":  map[string]interface{}{"fullName": "Brayan Bello"},
+								"team":            map[string]interface{}{"abbreviation": "BOS"},
+								"probablePitcher": map[string]interface{}{"fullName": "Brayan Bello"},
 							},
 						},
 					},
@@ -32,8 +32,8 @@ func TestProbableStarters_ParsesResponse(t *testing.T) {
 								// No probable pitcher (TBD)
 							},
 							"home": map[string]interface{}{
-								"team":             map[string]interface{}{"abbreviation": "SF"},
-								"probablePitcher":  map[string]interface{}{"fullName": "Logan Webb"},
+								"team":            map[string]interface{}{"abbreviation": "SF"},
+								"probablePitcher": map[string]interface{}{"fullName": "Logan Webb"},
 							},
 						},
 					},

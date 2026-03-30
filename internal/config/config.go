@@ -27,12 +27,12 @@ func envIntWithFallback(primary, deprecated string, fallback int) int {
 }
 
 type Config struct {
-	Username     string
-	Password     string
-	LeagueID     string
-	TeamID       string
-	DryRun       bool
-	Dates        []time.Time
+	Username    string
+	Password    string
+	LeagueID    string
+	TeamID      string
+	DryRun      bool
+	Dates       []time.Time
 	ILSlots     int
 	MinorsSlots int
 	GSCap       int // max game starts per matchup week (0 = no limit); also used by gs-check
@@ -62,8 +62,8 @@ func Load(dryRun bool, dates []time.Time) (*Config, error) {
 		Dates:       dates,
 		ILSlots:     envInt("FANTRAX_IL_SLOTS", 0),
 		MinorsSlots: envInt("FANTRAX_MINORS_SLOTS", 0),
-		GSCap:      envIntWithFallback("GS_CAP", "FANTRAX_GS", 0),
-		BlendMinGP: envInt("BLEND_MIN_GP", 2),
+		GSCap:       envIntWithFallback("GS_CAP", "FANTRAX_GS", 0),
+		BlendMinGP:  envInt("BLEND_MIN_GP", 2),
 
 		ProspectRollingDays:    envInt("PROSPECT_ROLLING_DAYS", 14),
 		ProspectMinGames:       envInt("PROSPECT_MIN_GAMES", 8),

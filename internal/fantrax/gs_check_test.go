@@ -145,9 +145,9 @@ func TestSumGSFromTables(t *testing.T) {
 			Rows: []models.PlayerRow{
 				{Scorer: models.Player{Name: "P1"}, Cells: []models.Cell{{Content: "1"}, {Content: "3"}, {Content: "20"}}},
 				{Scorer: models.Player{Name: "P2"}, Cells: []models.Cell{{Content: "0"}, {Content: "5"}, {Content: "30"}}},
-				{Scorer: models.Player{Name: "P3"}, Cells: []models.Cell{{Content: "0"}, {Content: ""}, {Content: "10"}}},  // empty GS
+				{Scorer: models.Player{Name: "P3"}, Cells: []models.Cell{{Content: "0"}, {Content: ""}, {Content: "10"}}},   // empty GS
 				{Scorer: models.Player{Name: "P4"}, Cells: []models.Cell{{Content: "0"}, {Content: "2.0"}, {Content: "5"}}}, // float GS
-				{Cells: []models.Cell{{Content: "0"}, {Content: "10"}, {Content: "65"}}, StatusID: "y"}, // totals row, should be skipped
+				{Cells: []models.Cell{{Content: "0"}, {Content: "10"}, {Content: "65"}}, StatusID: "y"},                     // totals row, should be skipped
 			},
 		},
 	}

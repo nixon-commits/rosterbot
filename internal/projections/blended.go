@@ -83,13 +83,13 @@ func HitterBlendWeightsForDisplay(gamesPlayed int) (steamerPct, seasonPct float6
 
 // HitterBreakdown holds the individual components of a blended hitter score.
 type HitterBreakdown struct {
-	SteamerPts   float64
-	RecentFPG    float64
-	SteamerWt    float64
-	RecentWt     float64
-	BlendedPts   float64
-	GamesPlayed  int
-	HasRecent    bool // true if recent data was used in blending
+	SteamerPts  float64
+	RecentFPG   float64
+	SteamerWt   float64
+	RecentWt    float64
+	BlendedPts  float64
+	GamesPlayed int
+	HasRecent   bool // true if recent data was used in blending
 }
 
 // GetHitterBreakdown returns the blending components for a player.

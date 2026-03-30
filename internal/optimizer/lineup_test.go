@@ -268,9 +268,9 @@ func TestOptimizeLineup_LockedPlayersImmovable(t *testing.T) {
 	scoring := fantrax.ScoringWeights{"HR": 4.0}
 
 	proj := newStubProj(map[string]*projections.Projection{
-		"Locked Active":    {G: 100, PA: 400, HR: 5},  // low value but locked in slot
-		"Better Reserve":   {G: 100, PA: 400, HR: 30}, // higher value, should fill remaining slot
-		"Locked Bench":     {G: 100, PA: 400, HR: 40}, // highest value but locked on bench
+		"Locked Active":  {G: 100, PA: 400, HR: 5},  // low value but locked in slot
+		"Better Reserve": {G: 100, PA: 400, HR: 30}, // higher value, should fill remaining slot
+		"Locked Bench":   {G: 100, PA: 400, HR: 40}, // highest value but locked on bench
 	})
 
 	roster := []fantrax.Player{
