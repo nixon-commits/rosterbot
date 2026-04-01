@@ -1,6 +1,7 @@
 package fantrax
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -11,6 +12,81 @@ import (
 	"github.com/pmurley/go-fantrax/auth_client"
 	"github.com/pmurley/go-fantrax/models"
 )
+
+// PendingTrade represents a single player move within a pending trade.
+type PendingTrade struct {
+	PlayerName string
+	Position   string // e.g. "SP", "3B,INF,OF"
+	FromTeam   string // fantasy team name
+	ToTeam     string // fantasy team name
+	TradeID    string // groups players in the same trade
+}
+
+// GetPendingTrades returns all pending trades visible in the league home info.
+func (c *Client) GetPendingTrades() ([]PendingTrade, error) {
+	raw, err := c.auth.GetLeagueHomeInfoRaw()
+	if err != nil {
+		return nil, fmt.Errorf("get league home info: %w", err)
+	}
+
+	var envelope struct {
+		Responses []struct {
+			Data struct {
+				PendingTransactions struct {
+					Sets []struct {
+						ID           string `json:"id"`
+						Transactions []struct {
+							ScorerID     string `json:"scorerId"`
+							SourceTeamID string `json:"sourceTeamId"`
+							DestTeamID   string `json:"destinationTeamId"`
+						} `json:"transactions"`
+					} `json:"pendingTransactionSets"`
+					ScorerMap map[string]struct {
+						Name          string `json:"name"`
+						PosShortNames string `json:"posShortNames"`
+					} `json:"scorerMap"`
+				} `json:"pendingTransactions"`
+				FantasyTeams []struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"fantasyTeams"`
+			} `json:"data"`
+		} `json:"responses"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, fmt.Errorf("parse home info: %w", err)
+	}
+	if len(envelope.Responses) == 0 {
+		return nil, nil
+	}
+
+	resp := envelope.Responses[0].Data
+	teamMap := make(map[string]string, len(resp.FantasyTeams))
+	for _, ft := range resp.FantasyTeams {
+		teamMap[ft.ID] = ft.Name
+	}
+	teamName := func(id string) string {
+		if name, ok := teamMap[id]; ok {
+			return name
+		}
+		return id
+	}
+
+	var pending []PendingTrade
+	for _, set := range resp.PendingTransactions.Sets {
+		for _, tx := range set.Transactions {
+			scorer := resp.PendingTransactions.ScorerMap[tx.ScorerID]
+			pending = append(pending, PendingTrade{
+				PlayerName: scorer.Name,
+				Position:   scorer.PosShortNames,
+				FromTeam:   teamName(tx.SourceTeamID),
+				ToTeam:     teamName(tx.DestTeamID),
+				TradeID:    set.ID,
+			})
+		}
+	}
+	return pending, nil
+}
 
 // GetRecentTrades fetches all executed trades and returns those processed after since.
 func (c *Client) GetRecentTrades(since time.Time) ([]models.Transaction, error) {
