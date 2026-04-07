@@ -49,6 +49,7 @@ jobs:
           FANTRAX_TEAM_ID: ${{ secrets.FANTRAX_TEAM_ID }}
           FANTRAX_IL_SLOTS: ${{ secrets.FANTRAX_IL_SLOTS }}
           FANTRAX_MINORS_SLOTS: ${{ secrets.FANTRAX_MINORS_SLOTS }}
-          GS_CAP: ${{ secrets.GS_CAP }}
+          GS_MAX: ${{ secrets.GS_MAX }}
+          GS_MIN: ${{ secrets.GS_MIN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}

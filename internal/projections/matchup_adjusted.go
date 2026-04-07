@@ -19,7 +19,7 @@ type OpposingPitcher struct {
 	Name   string
 	Team   string
 	Throws string  // "R" or "L"
-	FIP    float64 // from Steamer projection
+	FIP    float64 // from projection system
 }
 
 // MatchupAdjustedSource wraps a projection source and applies platoon split

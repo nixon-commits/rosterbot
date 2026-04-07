@@ -29,8 +29,8 @@ func runGSCheck(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if cfg.GSCap <= 0 {
-		return fmt.Errorf("GS_CAP env var required for gs-check command")
+	if cfg.GSMax <= 0 {
+		return fmt.Errorf("GS_MAX env var required for gs-check command")
 	}
 	if cfg.PushoverUserKey == "" || cfg.PushoverAPIToken == "" {
 		return fmt.Errorf("PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN env vars required for gs-check command")

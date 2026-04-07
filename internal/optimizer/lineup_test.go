@@ -326,17 +326,17 @@ func TestExpectedPts_Calculation(t *testing.T) {
 }
 
 func TestBlendedScoring_RecentPerformanceImpact(t *testing.T) {
-	// This test demonstrates how recent performance blends with Steamer projections
+	// This test demonstrates how recent performance blends with base projections
 	// to influence lineup decisions. The blending formula:
 	//
-	//   blended = steamerWeight * steamerPts/G + recentWeight * recentFP/G
+	//   blended = baseWeight * basePts/G + recentWeight * recentFP/G
 	//
 	// Weights are PA-based: recentWeight = approxPA / (approxPA + 250)
-	// where approxPA = gamesPlayed * 3.8. Steamer floor = 30%.
+	// where approxPA = gamesPlayed * 3.8. Base projection floor = 30%.
 	//
-	// Early season (~4 GP): ~94% Steamer / ~6% recent
-	// Mid-season (~66 GP): ~50% Steamer / ~50% recent
-	// Full season (150+ GP): 30% Steamer / 70% recent (floor)
+	// Early season (~4 GP): ~94% base / ~6% recent
+	// Mid-season (~66 GP): ~50% base / ~50% recent
+	// Full season (150+ GP): 30% base / 70% recent (floor)
 
 	scoring := fantrax.ScoringWeights{
 		"1B": 1.0, "2B": 2.0, "3B": 3.0, "HR": 4.0,
@@ -345,7 +345,7 @@ func TestBlendedScoring_RecentPerformanceImpact(t *testing.T) {
 		"HBP": 1.0, "XBH": 1.0, "TB": 0.5,
 	}
 
-	// Steamer projections: PlayerA is projected better than PlayerB.
+	// Base projections: PlayerA is projected better than PlayerB.
 	inner := &stubBlendedSource{
 		projData: map[string]*projections.Projection{
 			"Cold Star": {
@@ -367,39 +367,39 @@ func TestBlendedScoring_RecentPerformanceImpact(t *testing.T) {
 		ptsData: map[string]float64{}, // will be filled per scenario
 	}
 
-	// Compute Steamer-only expected pts for reference.
-	steamerCold := projections.ExpectedPtsFromProj(inner.projData["Cold Star"], scoring)
-	steamerHot := projections.ExpectedPtsFromProj(inner.projData["Hot Backup"], scoring)
-	steamerNoData := projections.ExpectedPtsFromProj(inner.projData["No Recent Data"], scoring)
+	// Compute Base-only expected pts for reference.
+	baseCold := projections.ExpectedPtsFromProj(inner.projData["Cold Star"], scoring)
+	baseHot := projections.ExpectedPtsFromProj(inner.projData["Hot Backup"], scoring)
+	baseNoData := projections.ExpectedPtsFromProj(inner.projData["No Recent Data"], scoring)
 
-	t.Logf("=== Steamer-Only Projections (no recent data) ===")
-	t.Logf("  Cold Star:      %.2f pts/G", steamerCold)
-	t.Logf("  Hot Backup:     %.2f pts/G", steamerHot)
-	t.Logf("  No Recent Data: %.2f pts/G", steamerNoData)
+	t.Logf("=== Base-Only Projections (no recent data) ===")
+	t.Logf("  Cold Star:      %.2f pts/G", baseCold)
+	t.Logf("  Hot Backup:     %.2f pts/G", baseHot)
+	t.Logf("  No Recent Data: %.2f pts/G", baseNoData)
 	t.Logf("")
 
 	// --- Scenario: early season (4 GP) ---
 	gp := 4
 	sw, rw := projections.HitterBlendWeightsForDisplay(gp)
-	t.Logf("=== Early Season (%d GP) — Weights: %.0f%% Steamer / %.0f%% Recent ===", gp, sw*100, rw*100)
+	t.Logf("=== Early Season (%d GP) — Weights: %.0f%% Base / %.0f%% Recent ===", gp, sw*100, rw*100)
 
-	// Cold Star: Steamer says 5+ pts/G but recent is 1.0 FP/G (terrible slump)
+	// Cold Star: Base says 5+ pts/G but recent is 1.0 FP/G (terrible slump)
 	coldRecent := 1.0
-	coldBlended := sw*steamerCold + rw*coldRecent
-	t.Logf("  Cold Star:  Steamer=%.2f, Recent=%.2f → Blended=%.2f (%.0f%% × %.2f + %.0f%% × %.2f)",
-		steamerCold, coldRecent, coldBlended, sw*100, steamerCold, rw*100, coldRecent)
+	coldBlended := sw*baseCold + rw*coldRecent
+	t.Logf("  Cold Star:  Base=%.2f, Recent=%.2f → Blended=%.2f (%.0f%% × %.2f + %.0f%% × %.2f)",
+		baseCold, coldRecent, coldBlended, sw*100, baseCold, rw*100, coldRecent)
 
-	// Hot Backup: Steamer says ~3.5 pts/G but recent is 8.0 FP/G (on fire)
+	// Hot Backup: Base says ~3.5 pts/G but recent is 8.0 FP/G (on fire)
 	hotRecent := 8.0
-	hotBlended := sw*steamerHot + rw*hotRecent
-	t.Logf("  Hot Backup: Steamer=%.2f, Recent=%.2f → Blended=%.2f (%.0f%% × %.2f + %.0f%% × %.2f)",
-		steamerHot, hotRecent, hotBlended, sw*100, steamerHot, rw*100, hotRecent)
+	hotBlended := sw*baseHot + rw*hotRecent
+	t.Logf("  Hot Backup: Base=%.2f, Recent=%.2f → Blended=%.2f (%.0f%% × %.2f + %.0f%% × %.2f)",
+		baseHot, hotRecent, hotBlended, sw*100, baseHot, rw*100, hotRecent)
 	t.Logf("")
 
-	// At 4 GP, Steamer dominates — Cold Star should still rank above Hot Backup
+	// At 4 GP, Base dominates — Cold Star should still rank above Hot Backup
 	// despite terrible recent stats.
 	if coldBlended <= hotBlended {
-		t.Logf("  ✓ Early season: Steamer dominates, Cold Star (%.2f) > Hot Backup (%.2f)", coldBlended, hotBlended)
+		t.Logf("  ✓ Early season: Base dominates, Cold Star (%.2f) > Hot Backup (%.2f)", coldBlended, hotBlended)
 	} else {
 		t.Logf("  NOTE: At %d GP, Hot Backup (%.2f) already overtook Cold Star (%.2f)", gp, hotBlended, coldBlended)
 	}
@@ -408,12 +408,12 @@ func TestBlendedScoring_RecentPerformanceImpact(t *testing.T) {
 	// --- Scenario: mid-season (66 GP, ~50/50) ---
 	gp = 66
 	sw, rw = projections.HitterBlendWeightsForDisplay(gp)
-	t.Logf("=== Mid-Season (%d GP) — Weights: %.0f%% Steamer / %.0f%% Recent ===", gp, sw*100, rw*100)
+	t.Logf("=== Mid-Season (%d GP) — Weights: %.0f%% Base / %.0f%% Recent ===", gp, sw*100, rw*100)
 
-	coldBlended = sw*steamerCold + rw*coldRecent
-	hotBlended = sw*steamerHot + rw*hotRecent
-	t.Logf("  Cold Star:  Steamer=%.2f, Recent=%.2f → Blended=%.2f", steamerCold, coldRecent, coldBlended)
-	t.Logf("  Hot Backup: Steamer=%.2f, Recent=%.2f → Blended=%.2f", steamerHot, hotRecent, hotBlended)
+	coldBlended = sw*baseCold + rw*coldRecent
+	hotBlended = sw*baseHot + rw*hotRecent
+	t.Logf("  Cold Star:  Base=%.2f, Recent=%.2f → Blended=%.2f", baseCold, coldRecent, coldBlended)
+	t.Logf("  Hot Backup: Base=%.2f, Recent=%.2f → Blended=%.2f", baseHot, hotRecent, hotBlended)
 
 	// At 50/50, the hot backup's 8.0 recent FP/G should push them ahead
 	if hotBlended > coldBlended {
@@ -424,12 +424,12 @@ func TestBlendedScoring_RecentPerformanceImpact(t *testing.T) {
 	// --- Scenario: full season (150 GP, 30/70 floor) ---
 	gp = 150
 	sw, rw = projections.HitterBlendWeightsForDisplay(gp)
-	t.Logf("=== Full Season (%d GP) — Weights: %.0f%% Steamer / %.0f%% Recent (floor) ===", gp, sw*100, rw*100)
+	t.Logf("=== Full Season (%d GP) — Weights: %.0f%% Base / %.0f%% Recent (floor) ===", gp, sw*100, rw*100)
 
-	coldBlended = sw*steamerCold + rw*coldRecent
-	hotBlended = sw*steamerHot + rw*hotRecent
-	t.Logf("  Cold Star:  Steamer=%.2f, Recent=%.2f → Blended=%.2f", steamerCold, coldRecent, coldBlended)
-	t.Logf("  Hot Backup: Steamer=%.2f, Recent=%.2f → Blended=%.2f", steamerHot, hotRecent, hotBlended)
+	coldBlended = sw*baseCold + rw*coldRecent
+	hotBlended = sw*baseHot + rw*hotRecent
+	t.Logf("  Cold Star:  Base=%.2f, Recent=%.2f → Blended=%.2f", baseCold, coldRecent, coldBlended)
+	t.Logf("  Hot Backup: Base=%.2f, Recent=%.2f → Blended=%.2f", baseHot, hotRecent, hotBlended)
 	t.Logf("")
 
 	// --- Verify via actual BlendedSource + OptimizeLineup ---
@@ -439,9 +439,9 @@ func TestBlendedScoring_RecentPerformanceImpact(t *testing.T) {
 	blendedSrc := &stubBlendedSource{
 		projData: inner.projData,
 		ptsData: map[string]float64{
-			"Cold Star":      midSW*steamerCold + midRW*coldRecent,
-			"Hot Backup":     midSW*steamerHot + midRW*hotRecent,
-			"No Recent Data": steamerNoData, // no recent data → 100% Steamer
+			"Cold Star":      midSW*baseCold + midRW*coldRecent,
+			"Hot Backup":     midSW*baseHot + midRW*hotRecent,
+			"No Recent Data": baseNoData, // no recent data → 100% Base
 		},
 	}
 
@@ -508,14 +508,14 @@ func TestBlendedScoring_RecentPerformanceImpact(t *testing.T) {
 		t.Logf("  ✓ Cold Star benched — recent slump (%.1f FP/G) dragged blended below Hot Backup", coldRecent)
 	}
 
-	// No Recent Data player should use 100% Steamer.
+	// No Recent Data player should use 100% Base.
 	for _, sp := range result.Scored {
 		if sp.Player.Name == "No Recent Data" {
-			diff := sp.ExpectedPts - steamerNoData
+			diff := sp.ExpectedPts - baseNoData
 			if diff < -0.01 || diff > 0.01 {
-				t.Errorf("No Recent Data should use 100%% Steamer (%.2f), got %.2f", steamerNoData, sp.ExpectedPts)
+				t.Errorf("No Recent Data should use 100%% Base (%.2f), got %.2f", baseNoData, sp.ExpectedPts)
 			} else {
-				t.Logf("  ✓ No Recent Data uses 100%% Steamer: %.2f pts/G", sp.ExpectedPts)
+				t.Logf("  ✓ No Recent Data uses 100%% Base: %.2f pts/G", sp.ExpectedPts)
 			}
 		}
 	}

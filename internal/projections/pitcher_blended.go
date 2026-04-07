@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	spStabilizationGP   = 15.0 // 50/50 at 15 starts
-	rpStabilizationGP   = 25.0 // 50/50 at 25 appearances
-	pitcherSteamerFloor = 0.35 // pitchers are more volatile, higher floor
+	spStabilizationGP = 15.0 // 50/50 at 15 starts
+	rpStabilizationGP = 25.0 // 50/50 at 25 appearances
+	pitcherBaseFloor  = 0.35 // pitchers are more volatile, higher floor
 )
 
 // PitcherPtsPerGameSource can provide a pre-computed pitcher points-per-game value.
@@ -50,23 +50,23 @@ func (b *PitcherBlendedSource) GetPitcherProjection(name, mlbTeam string) (*Pitc
 }
 
 // GetPitcherPtsPerGame returns blended FP/G with role-aware dynamic weights.
-// Falls back to 100% Steamer if no recent data or insufficient games.
+// Falls back to 100% base projection if no recent data or insufficient games.
 func (b *PitcherBlendedSource) GetPitcherPtsPerGame(name, mlbTeam string, scoring fantrax.ScoringWeights) (float64, bool) {
 	proj, ok := b.inner.GetPitcherProjection(name, mlbTeam)
 	if !ok || proj.G <= 0 {
 		return 0, false
 	}
 
-	steamerPts := PitcherExpectedPtsFromProj(proj, scoring)
+	basePts := PitcherExpectedPtsFromProj(proj, scoring)
 
 	playerID, idOK := b.nameToID[NormalizeName(name)]
 	if !idOK {
-		return steamerPts, true
+		return basePts, true
 	}
 
 	recent, statOK := b.recent[playerID]
 	if !statOK || recent.GamesPlayed < b.minGP {
-		return steamerPts, true
+		return basePts, true
 	}
 
 	recentPtsPerGame := recent.FPtsPerGame
@@ -75,24 +75,24 @@ func (b *PitcherBlendedSource) GetPitcherPtsPerGame(name, mlbTeam string, scorin
 	isSP := isSPEligible(b.playerPos[playerID])
 	sw, rw := pitcherBlendWeights(recent.GamesPlayed, isSP)
 
-	return sw*steamerPts + rw*recentPtsPerGame, true
+	return sw*basePts + rw*recentPtsPerGame, true
 }
 
-// pitcherBlendWeights computes dynamic Steamer/recent weights based on games played and role.
-func pitcherBlendWeights(gamesPlayed int, isSP bool) (steamer, season float64) {
+// pitcherBlendWeights computes dynamic base/recent weights based on games played and role.
+func pitcherBlendWeights(gamesPlayed int, isSP bool) (base, season float64) {
 	stabilization := rpStabilizationGP
 	if isSP {
 		stabilization = spStabilizationGP
 	}
 	gp := float64(gamesPlayed)
 	seasonWeight := gp / (gp + stabilization)
-	steamer = math.Max(1-seasonWeight, pitcherSteamerFloor)
-	season = 1 - steamer
+	base = math.Max(1-seasonWeight, pitcherBaseFloor)
+	season = 1 - base
 	return
 }
 
-// PitcherBlendWeightsForDisplay returns the Steamer/season weight percentages for display.
-func PitcherBlendWeightsForDisplay(gamesPlayed int, isSP bool) (steamerPct, seasonPct float64) {
+// PitcherBlendWeightsForDisplay returns the base/season weight percentages for display.
+func PitcherBlendWeightsForDisplay(gamesPlayed int, isSP bool) (basePct, seasonPct float64) {
 	return pitcherBlendWeights(gamesPlayed, isSP)
 }
 

@@ -9,7 +9,7 @@ import (
 const (
 	hitterStabilizationPA = 250.0 // 50/50 at ~66 GP (roughly mid-June)
 	hitterPAPerGame       = 3.8   // approximate PA per game played
-	hitterSteamerFloor    = 0.30  // Steamer never drops below 30%
+	hitterBaseFloor       = 0.30  // base projection never drops below 30%
 )
 
 // PtsPerGameSource can provide a pre-computed points-per-game value.
@@ -43,49 +43,49 @@ func (b *BlendedSource) GetProjection(name, mlbTeam string) (*Projection, bool) 
 }
 
 // GetPtsPerGame returns blended FP/G using PA-based dynamic weights.
-// Falls back to 100% Steamer if no recent data. Returns false if no Steamer projection.
+// Falls back to 100% base projection if no recent data.
 func (b *BlendedSource) GetPtsPerGame(name, mlbTeam string, scoring fantrax.ScoringWeights) (float64, bool) {
 	proj, ok := b.inner.GetProjection(name, mlbTeam)
 	if !ok || proj.G <= 0 {
 		return 0, false
 	}
 
-	steamerPts := ExpectedPtsFromProj(proj, scoring)
+	basePts := ExpectedPtsFromProj(proj, scoring)
 
 	playerID, idOK := b.nameToID[NormalizeName(name)]
 	if !idOK {
-		return steamerPts, true
+		return basePts, true
 	}
 
 	recent, statOK := b.recent[playerID]
 	if !statOK || recent.GamesPlayed < b.minGP {
-		return steamerPts, true
+		return basePts, true
 	}
 
 	recentPtsPerGame := recent.FPtsPerGame
 	sw, rw := hitterBlendWeights(recent.GamesPlayed)
-	return sw*steamerPts + rw*recentPtsPerGame, true
+	return sw*basePts + rw*recentPtsPerGame, true
 }
 
-// hitterBlendWeights computes dynamic Steamer/recent weights based on games played.
-func hitterBlendWeights(gamesPlayed int) (steamer, season float64) {
+// hitterBlendWeights computes dynamic base/recent weights based on games played.
+func hitterBlendWeights(gamesPlayed int) (base, season float64) {
 	approxPA := float64(gamesPlayed) * hitterPAPerGame
 	seasonWeight := approxPA / (approxPA + hitterStabilizationPA)
-	steamer = math.Max(1-seasonWeight, hitterSteamerFloor)
-	season = 1 - steamer
+	base = math.Max(1-seasonWeight, hitterBaseFloor)
+	season = 1 - base
 	return
 }
 
-// HitterBlendWeightsForDisplay returns the Steamer/season weight percentages for display.
-func HitterBlendWeightsForDisplay(gamesPlayed int) (steamerPct, seasonPct float64) {
+// HitterBlendWeightsForDisplay returns the base/season weight percentages for display.
+func HitterBlendWeightsForDisplay(gamesPlayed int) (basePct, seasonPct float64) {
 	return hitterBlendWeights(gamesPlayed)
 }
 
 // HitterBreakdown holds the individual components of a blended hitter score.
 type HitterBreakdown struct {
-	SteamerPts  float64
+	BasePts     float64
 	RecentFPG   float64
-	SteamerWt   float64
+	BaseWt      float64
 	RecentWt    float64
 	BlendedPts  float64
 	GamesPlayed int
@@ -93,18 +93,18 @@ type HitterBreakdown struct {
 }
 
 // GetHitterBreakdown returns the blending components for a player.
-// Returns nil if the player has no Steamer projection.
+// Returns nil if the player has no base projection.
 func (b *BlendedSource) GetHitterBreakdown(name, mlbTeam string, scoring fantrax.ScoringWeights) *HitterBreakdown {
 	proj, ok := b.inner.GetProjection(name, mlbTeam)
 	if !ok || proj.G <= 0 {
 		return nil
 	}
 
-	steamerPts := ExpectedPtsFromProj(proj, scoring)
+	basePts := ExpectedPtsFromProj(proj, scoring)
 	bd := &HitterBreakdown{
-		SteamerPts: steamerPts,
-		SteamerWt:  1.0,
-		BlendedPts: steamerPts,
+		BasePts:    basePts,
+		BaseWt:     1.0,
+		BlendedPts: basePts,
 	}
 
 	playerID, idOK := b.nameToID[NormalizeName(name)]
@@ -120,8 +120,8 @@ func (b *BlendedSource) GetHitterBreakdown(name, mlbTeam string, scoring fantrax
 	bd.HasRecent = true
 	bd.GamesPlayed = recent.GamesPlayed
 	bd.RecentFPG = recent.FPtsPerGame
-	bd.SteamerWt, bd.RecentWt = hitterBlendWeights(recent.GamesPlayed)
-	bd.BlendedPts = bd.SteamerWt*steamerPts + bd.RecentWt*bd.RecentFPG
+	bd.BaseWt, bd.RecentWt = hitterBlendWeights(recent.GamesPlayed)
+	bd.BlendedPts = bd.BaseWt*basePts + bd.RecentWt*bd.RecentFPG
 	return bd
 }
 

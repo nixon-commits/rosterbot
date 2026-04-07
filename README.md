@@ -88,7 +88,7 @@ Players whose team isn't playing, who are confirmed out of the real-life MLB sta
 
 ### Pitcher Optimization
 
-Pitchers are scored based on probable starter data. SPs confirmed as starters get full value. SPs not listed as probable starters get a 0.10x discount so RPs are preferred for limited P slots. When a weekly GS limit is set (`GS_CAP`), the GS budget gate allocates starts proportionally across the matchup period, keeping the highest-value starters.
+Pitchers are scored based on probable starter data. SPs confirmed as starters get full value. SPs not listed as probable starters get a 0.10x discount so RPs are preferred for limited P slots. When a weekly GS limit is set (`GS_MAX`), the GS budget gate allocates starts proportionally across the matchup period, keeping the highest-value starters.
 
 ### Projection Blending
 
@@ -108,13 +108,13 @@ Matchup adjustments (opposing pitcher FIP + platoon splits) are layered on top.
 
 | Env Var | Default | Description |
 |---|---|---|
-| `GS_CAP` | 0 (disabled) | Game-start cap — used by optimizer (weekly GS budget) and gs-check (violation detection) |
+| `GS_MAX` | 0 (disabled) | Max game starts per matchup week — used by optimizer (weekly GS budget) and gs-check (violation detection) |
+| `GS_MIN` | 0 (disabled) | Min game starts per matchup week — used by gs-check to flag teams below the floor |
 | `FANTRAX_COOKIES` | — | Raw `FX_RM` cookie value to skip browser login |
 | `PROSPECT_ROLLING_DAYS` | 14 | Days of MiLB stats for breakout detection |
 | `PROSPECT_MIN_GAMES` | 8 | Minimum games for prospect breakout eligibility |
 | `PROSPECT_RANK_CACHE_HOURS` | 168 | Hours to cache prospect rankings |
 | `PROSPECT_UPGRADE_RANK_THRESHOLD` | 20 | Prospect rank threshold for upgrade alerts |
-| `GS_CAP` | — | League-wide GS cap per scoring period (gs-check only) |
 | `PUSHOVER_USER_KEY` | — | Pushover user key for notifications |
 | `PUSHOVER_API_TOKEN` | — | Pushover API token for notifications |
 

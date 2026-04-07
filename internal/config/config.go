@@ -35,7 +35,8 @@ type Config struct {
 	Dates       []time.Time
 	ILSlots     int
 	MinorsSlots int
-	GSCap       int // max game starts per matchup week (0 = no limit); also used by gs-check
+	GSMax       int // max game starts per matchup week (0 = no limit); also used by gs-check
+	GSMin       int // min game starts per matchup week (0 = no minimum); used by gs-check
 	BlendMinGP  int // min games played before blending recent stats (default 2)
 
 	// Prospect report settings (all optional, with defaults).
@@ -62,7 +63,8 @@ func Load(dryRun bool, dates []time.Time) (*Config, error) {
 		Dates:       dates,
 		ILSlots:     envInt("FANTRAX_IL_SLOTS", 0),
 		MinorsSlots: envInt("FANTRAX_MINORS_SLOTS", 0),
-		GSCap:       envIntWithFallback("GS_CAP", "FANTRAX_GS", 0),
+		GSMax:       envIntWithFallback("GS_MAX", "GS_CAP", 0),
+		GSMin:       envInt("GS_MIN", 0),
 		BlendMinGP:  envInt("BLEND_MIN_GP", 2),
 
 		ProspectRollingDays:    envInt("PROSPECT_ROLLING_DAYS", 14),

@@ -106,7 +106,7 @@ type fgRow struct {
 	MLBAMID    int     `json:"xMLBAMID"`
 }
 
-// FanGraphsSource fetches Steamer projections from FanGraphs.
+// FanGraphsSource fetches projections from FanGraphs (Steamer, DepthCharts, etc.).
 type FanGraphsSource struct {
 	projections map[string]*Projection
 	mlbamIDs    map[string]int // NormalizeName(name) → MLBAM ID
@@ -189,7 +189,7 @@ func NewFanGraphsSourceCached(cacheDir string, ttl time.Duration) (*FanGraphsSou
 	return buildFanGraphsSource(rows), nil
 }
 
-// NewFanGraphsSourceFromCSV loads Steamer batting projections from a local CSV file
+// NewFanGraphsSourceFromCSV loads batting projections from a local CSV file
 // (exported from FanGraphs leaderboard).
 func NewFanGraphsSourceFromCSV(path string) (*FanGraphsSource, error) {
 	required := []string{"Name", "Team", "G", "PA", "H", "1B", "2B", "3B", "HR", "RBI", "R", "BB", "SB", "CS", "HBP", "SO", "GDP", "MLBAMID"}

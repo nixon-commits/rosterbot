@@ -13,7 +13,7 @@ type HitterPipelineDetail struct {
 	BlendedPtsPerGame float64
 	BlendDelta        float64
 	HasRecent         bool
-	SteamerWt         float64
+	BaseWt            float64
 	RecentFPG         float64
 	GamesPlayed       int
 

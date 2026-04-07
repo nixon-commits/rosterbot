@@ -11,22 +11,43 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/notify"
 )
 
-// Violation represents a team that exceeded the GS cap.
+// ViolationKind indicates whether a team exceeded the max or fell below the min.
+type ViolationKind int
+
+const (
+	ViolationMax ViolationKind = iota // exceeded GS_MAX
+	ViolationMin                      // below GS_MIN
+)
+
+// Violation represents a team that violated a GS limit.
 type Violation struct {
 	TeamName string
 	GSUsed   int
+	Kind     ViolationKind
 }
 
 // BuildReport creates the notification content for GS violations.
 // Returns a title and a short summary suitable for Pushover.
-func BuildReport(violations []Violation, periodLabel string, gsCap int) (title, summary string) {
+func BuildReport(violations []Violation, periodLabel string, gsMax, gsMin int) (title, summary string) {
 	title = fmt.Sprintf("GS Alert: %d violation(s) — %s", len(violations), periodLabel)
 
 	var teamParts []string
 	for _, v := range violations {
-		teamParts = append(teamParts, fmt.Sprintf("%s (%d GS, +%d)", v.TeamName, v.GSUsed, v.GSUsed-gsCap))
+		switch v.Kind {
+		case ViolationMax:
+			teamParts = append(teamParts, fmt.Sprintf("%s (%d GS, +%d over max)", v.TeamName, v.GSUsed, v.GSUsed-gsMax))
+		case ViolationMin:
+			teamParts = append(teamParts, fmt.Sprintf("%s (%d GS, %d under min)", v.TeamName, v.GSUsed, gsMin-v.GSUsed))
+		}
 	}
-	summary = fmt.Sprintf("%d GS violation(s) for %s (cap %d): %s", len(violations), periodLabel, gsCap, strings.Join(teamParts, ", "))
+	limParts := []string{}
+	if gsMax > 0 {
+		limParts = append(limParts, fmt.Sprintf("max %d", gsMax))
+	}
+	if gsMin > 0 {
+		limParts = append(limParts, fmt.Sprintf("min %d", gsMin))
+	}
+	summary = fmt.Sprintf("%d GS violation(s) for %s (%s): %s", len(violations), periodLabel, strings.Join(limParts, ", "), strings.Join(teamParts, ", "))
 
 	return
 }
@@ -71,7 +92,10 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config, force bool) error {
 
 	periodLabel := fmt.Sprintf("%s (%s – %s)", period.Caption, period.StartDate.Format("2006-01-02"), period.EndDate.Format("2006-01-02"))
 	fmt.Printf("Checking: %s\n", periodLabel)
-	fmt.Printf("GS cap: %d\n", cfg.GSCap)
+	fmt.Printf("GS max: %d\n", cfg.GSMax)
+	if cfg.GSMin > 0 {
+		fmt.Printf("GS min: %d\n", cfg.GSMin)
+	}
 
 	if len(teamMap) == 0 {
 		return fmt.Errorf("no teams found")
@@ -102,18 +126,27 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config, force bool) error {
 	// Find violations.
 	var violations []Violation
 	for _, r := range results {
-		if r.gs > cfg.GSCap {
-			violations = append(violations, Violation{TeamName: r.name, GSUsed: r.gs})
+		if r.gs > cfg.GSMax {
+			violations = append(violations, Violation{TeamName: r.name, GSUsed: r.gs, Kind: ViolationMax})
+		}
+		if cfg.GSMin > 0 && r.gs < cfg.GSMin {
+			violations = append(violations, Violation{TeamName: r.name, GSUsed: r.gs, Kind: ViolationMin})
 		}
 	}
 
 	// Print report.
 	sort.Slice(results, func(i, j int) bool { return results[i].gs > results[j].gs })
-	fmt.Printf("\n--- GS Report: %s (cap=%d) ---\n", periodLabel, cfg.GSCap)
+	fmt.Printf("\n--- GS Report: %s (max=%d", periodLabel, cfg.GSMax)
+	if cfg.GSMin > 0 {
+		fmt.Printf(", min=%d", cfg.GSMin)
+	}
+	fmt.Println(") ---")
 	for _, r := range results {
 		flag := ""
-		if r.gs > cfg.GSCap {
-			flag = " *** VIOLATION ***"
+		if r.gs > cfg.GSMax {
+			flag = " *** OVER MAX ***"
+		} else if cfg.GSMin > 0 && r.gs < cfg.GSMin {
+			flag = " *** UNDER MIN ***"
 		}
 		fmt.Printf("  %s: %d GS%s\n", r.name, r.gs, flag)
 	}
@@ -124,7 +157,7 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config, force bool) error {
 	}
 
 	fmt.Printf("\n%d violation(s) found.\n", len(violations))
-	_, shortSummary := BuildReport(violations, periodLabel, cfg.GSCap)
+	_, shortSummary := BuildReport(violations, periodLabel, cfg.GSMax, cfg.GSMin)
 
 	if cfg.DryRun {
 		fmt.Println("\n[DRY RUN] Would send Pushover notification:")

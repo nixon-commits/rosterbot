@@ -381,10 +381,10 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 	// --- GS Budget (weekly game-start limit awareness) ---
 	var gsBudget *optimizer.GSBudget
-	if cfg.GSCap > 0 {
+	if cfg.GSMax > 0 {
 		prog.Start("GS budget")
 	}
-	if cfg.GSCap > 0 && !seasonStart.IsZero() {
+	if cfg.GSMax > 0 && !seasonStart.IsZero() {
 		weekStart, weekEnd, err := ft.GetMatchupWeekBounds(today, seasonStart)
 		if err != nil {
 			prog.Logf("WARNING: could not determine matchup week (%v) — GS limit disabled", err)
@@ -392,7 +392,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			prog.Logf("WARNING: no matchup week found for today — GS limit disabled")
 		} else {
 			prog.Logf("GS limit: %d per week (%s to %s)",
-				cfg.GSCap,
+				cfg.GSMax,
 				weekStart.Format("2006-01-02"),
 				weekEnd.Format("2006-01-02"))
 
@@ -468,17 +468,17 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			}
 
 			gsBudget = &optimizer.GSBudget{
-				Limit:    cfg.GSCap,
+				Limit:    cfg.GSMax,
 				Used:     usedGS,
 				Today:    today,
 				WeekEnd:  weekEnd,
 				Forecast: forecast,
 			}
 			prog.Logf("GS budget: %d/%d used, %.1f projected future starts",
-				usedGS, cfg.GSCap, gsBudget.FutureDemand())
+				usedGS, cfg.GSMax, gsBudget.FutureDemand())
 		}
 	}
-	if cfg.GSCap > 0 {
+	if cfg.GSMax > 0 {
 		if gsBudget != nil {
 			prog.Done("GS budget", fmt.Sprintf("%d/%d used · %.1f projected", gsBudget.Used, gsBudget.Limit, gsBudget.FutureDemand()))
 		} else {
@@ -678,7 +678,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 					if bd, ok := hitterBreakdowns[sp.Player.ID]; ok {
 						pd.BlendedPtsPerGame = bd.BlendedPts
 						pd.HasRecent = bd.HasRecent
-						pd.SteamerWt = bd.SteamerWt
+						pd.BaseWt = bd.BaseWt
 						pd.RecentFPG = bd.RecentFPG
 						pd.GamesPlayed = bd.GamesPlayed
 					} else {
