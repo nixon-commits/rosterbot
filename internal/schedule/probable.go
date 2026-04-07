@@ -3,12 +3,10 @@ package schedule
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
-	"unicode"
 
+	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
-	"golang.org/x/text/unicode/norm"
 )
 
 var mlbProbablePitcherURL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&hydrate=probablePitcher,team&date=%s"
@@ -71,14 +69,7 @@ func (c *Client) ProbableStarters(date time.Time) (map[string]string, error) {
 	return starters, nil
 }
 
-// normalizePitcherName strips diacritics and lowercases for matching.
-// Mirrors projections.NormalizeName to avoid a cross-package import.
+// normalizePitcherName normalizes a pitcher name for matching.
 func normalizePitcherName(name string) string {
-	var b strings.Builder
-	for _, r := range norm.NFD.String(strings.TrimSpace(name)) {
-		if !unicode.Is(unicode.Mn, r) {
-			b.WriteRune(r)
-		}
-	}
-	return strings.ToLower(b.String())
+	return playername.Normalize(name)
 }

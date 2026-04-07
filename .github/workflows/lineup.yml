@@ -2,7 +2,7 @@ name: Optimize Lineup
 
 on:
   schedule:
-    - cron: '0 16-23 * * *'  # 8am–3pm PST (4pm–11pm UTC)
+    - cron: '0 14-23 * * *'  # 6am–3pm PST (2pm–11pm UTC)
     - cron: '0 0-3 * * *'    # 4pm–7pm PST (12am–3am UTC next day)
   workflow_dispatch:           # on-demand trigger from GitHub Actions tab
 

@@ -13,6 +13,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
+	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/pmurley/go-fantrax/models"
 	"golang.org/x/sync/errgroup"
@@ -53,18 +54,17 @@ func saveTxnCursor(date time.Time) error {
 }
 
 // ---------------------------------------------------------------------------
-// hkbProspectRanks
+// hkbRanks
 // ---------------------------------------------------------------------------
 
-// hkbProspectRanks builds a name → sequential rank map from HKB players,
-// filtering to prospect-eligible minor leaguers and assigning ranks 1, 2, 3...
-func hkbProspectRanks(players []hkb.Player) map[string]int {
+// hkbRanks builds a name → rank map from HKB players.
+// Includes all non-MLB players with a rank — Fantrax minors designation
+// is the source of truth for who is a prospect, HKB just enriches data.
+func hkbRanks(players []hkb.Player) map[string]int {
 	m := make(map[string]int)
-	rank := 0
 	for _, p := range players {
-		if p.Prospect && p.Level != "MLB" && p.AssetType == "PLAYER" {
-			rank++
-			m[projections.NormalizeName(p.Name)] = rank
+		if p.AssetType == "PLAYER" && p.Level != "MLB" && p.Rank > 0 {
+			m[projections.NormalizeName(p.Name)] = p.Rank
 		}
 	}
 	return m
@@ -136,7 +136,43 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 	for _, r := range fgRankings {
 		fgMap[projections.NormalizeName(r.Name)] = r.Rank
 	}
-	hkbMap := hkbProspectRanks(hkbPlayers)
+	hkbMap := hkbRanks(hkbPlayers)
+
+	// Resolve MLBAM IDs to bridge nickname/legal name mismatches.
+	// Collect all names from all sources, resolve via MLB API (cached),
+	// then build MLBAM-keyed maps for cross-source matching.
+	var allNames []string
+	for _, p := range minorsRoster {
+		allNames = append(allNames, p.Name)
+	}
+	for _, r := range fgRankings {
+		allNames = append(allNames, r.Name)
+	}
+	for _, p := range hkbPlayers {
+		if p.AssetType == "PLAYER" && p.Level != "MLB" {
+			allNames = append(allNames, p.Name)
+		}
+	}
+	resolved, resolveErr := playername.ResolveMLBAMIDs(allNames, ".cache")
+	if resolveErr != nil {
+		log.Printf("WARNING: MLBAM ID resolution failed: %v — using name-only matching", resolveErr)
+	}
+
+	// Build MLBAM-keyed ranking maps for ID-based matching.
+	fgByMLBAM := make(map[int]int)
+	hkbByMLBAM := make(map[int]int)
+	if resolved != nil {
+		for _, r := range fgRankings {
+			if id, ok := resolved.ByName[projections.NormalizeName(r.Name)]; ok {
+				fgByMLBAM[id] = r.Rank
+			}
+		}
+		for name, rank := range hkbMap {
+			if id, ok := resolved.ByName[name]; ok {
+				hkbByMLBAM[id] = rank
+			}
+		}
+	}
 
 	rankingsMap := fgMap
 
@@ -188,8 +224,7 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 	if len(fgRankings) > 0 {
 		var myRanked []RankedProspect
 		for _, p := range minorsRoster {
-			norm := projections.NormalizeName(p.Name)
-			if rank, ok := fgMap[norm]; ok && rank > 0 {
+			if rank, ok := lookupRank(p.Name, fgMap, fgByMLBAM, resolved); ok {
 				myRanked = append(myRanked, RankedProspect{Name: p.Name, MLBTeam: p.MLBTeam, Rank: rank})
 			}
 		}
@@ -214,16 +249,14 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 	if len(hkbMap) > 0 {
 		var myRanked []RankedProspect
 		for _, p := range minorsRoster {
-			norm := projections.NormalizeName(p.Name)
-			if rank, ok := hkbMap[norm]; ok && rank > 0 {
+			if rank, ok := lookupRank(p.Name, hkbMap, hkbByMLBAM, resolved); ok {
 				myRanked = append(myRanked, RankedProspect{Name: p.Name, MLBTeam: p.MLBTeam, Rank: rank})
 			}
 		}
 
 		var faRanked []RankedProspect
 		for _, p := range availablePlayers {
-			norm := projections.NormalizeName(p.Name)
-			if rank, ok := hkbMap[norm]; ok && rank > 0 {
+			if rank, ok := lookupRank(p.Name, hkbMap, hkbByMLBAM, resolved); ok {
 				faRanked = append(faRanked, RankedProspect{Name: p.Name, MLBTeam: p.MLBTeam, Rank: rank})
 			}
 		}
@@ -237,12 +270,11 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 	sourceNames := []string{"FanGraphs", "HKB"}
 	var rosterRanked []rosterRankEntry
 	for _, p := range minorsRoster {
-		norm := projections.NormalizeName(p.Name)
 		entry := rosterRankEntry{Name: p.Name, Team: p.MLBTeam}
-		if rank, ok := fgMap[norm]; ok && rank > 0 {
+		if rank, ok := lookupRank(p.Name, fgMap, fgByMLBAM, resolved); ok {
 			entry.Ranks = append(entry.Ranks, sourceRank{Source: "FanGraphs", Rank: rank})
 		}
-		if rank, ok := hkbMap[norm]; ok && rank > 0 {
+		if rank, ok := lookupRank(p.Name, hkbMap, hkbByMLBAM, resolved); ok {
 			entry.Ranks = append(entry.Ranks, sourceRank{Source: "HKB", Rank: rank})
 		}
 		rosterRanked = append(rosterRanked, entry)
@@ -265,6 +297,22 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 	}
 
 	return nil
+}
+
+// lookupRank tries name-based lookup first, then falls back to MLBAM ID matching.
+func lookupRank(name string, nameMap map[string]int, mlbamMap map[int]int, resolved *playername.ResolvedPlayers) (int, bool) {
+	norm := projections.NormalizeName(name)
+	if rank, ok := nameMap[norm]; ok && rank > 0 {
+		return rank, true
+	}
+	if resolved != nil {
+		if id, ok := resolved.ByName[norm]; ok {
+			if rank, ok := mlbamMap[id]; ok && rank > 0 {
+				return rank, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // ---------------------------------------------------------------------------
@@ -494,7 +542,42 @@ func ListAllProspects(ft *fantrax.Client, cfg config.Config, today time.Time) er
 	for _, r := range fgRankings {
 		fgMap[projections.NormalizeName(r.Name)] = r.Rank
 	}
-	hkbMap := hkbProspectRanks(hkbPlayers)
+	hkbMap := hkbRanks(hkbPlayers)
+
+	// Resolve MLBAM IDs for cross-source matching (uses cached data).
+	var allNames []string
+	for _, pp := range pool {
+		if pp.MinorsEligible {
+			allNames = append(allNames, pp.Name)
+		}
+	}
+	for _, r := range fgRankings {
+		allNames = append(allNames, r.Name)
+	}
+	for _, p := range hkbPlayers {
+		if p.AssetType == "PLAYER" && p.Level != "MLB" {
+			allNames = append(allNames, p.Name)
+		}
+	}
+	resolved, resolveErr := playername.ResolveMLBAMIDs(allNames, ".cache")
+	if resolveErr != nil {
+		log.Printf("WARNING: MLBAM ID resolution failed: %v — using name-only matching", resolveErr)
+	}
+
+	fgByMLBAM := make(map[int]int)
+	hkbByMLBAM := make(map[int]int)
+	if resolved != nil {
+		for _, r := range fgRankings {
+			if id, ok := resolved.ByName[projections.NormalizeName(r.Name)]; ok {
+				fgByMLBAM[id] = r.Rank
+			}
+		}
+		for name, rank := range hkbMap {
+			if id, ok := resolved.ByName[name]; ok {
+				hkbByMLBAM[id] = rank
+			}
+		}
+	}
 
 	sourceNames := []string{"FanGraphs", "HKB"}
 
@@ -517,9 +600,8 @@ func ListAllProspects(ft *fantrax.Client, cfg config.Config, today time.Time) er
 		if strings.HasPrefix(owner, "W") {
 			owner = green + "WAIVER    " + reset
 		}
-		norm := projections.NormalizeName(pp.Name)
-		fgRank := fgMap[norm]
-		hkbRank := hkbMap[norm]
+		fgRank, _ := lookupRank(pp.Name, fgMap, fgByMLBAM, resolved)
+		hkbRank, _ := lookupRank(pp.Name, hkbMap, hkbByMLBAM, resolved)
 		best := 9999
 		if fgRank > 0 && fgRank < best {
 			best = fgRank

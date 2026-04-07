@@ -7,10 +7,9 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
-	"golang.org/x/text/unicode/norm"
+	"github.com/nixon-commits/rosterbot/internal/playername"
 )
 
 var fangraphsBattingURL = "https://www.fangraphs.com/api/projections?type=fangraphsdc&stats=bat&pos=all&team=0&players=0&lg=all"
@@ -311,15 +310,7 @@ func (s *FanGraphsSource) MLBAMIDs() map[string]int {
 }
 
 func NormalizeName(name string) string {
-	// Strip diacritics (é→e, í→i, ñ→n) so accented FanGraphs names
-	// match plain-ASCII Fantrax names.
-	var b strings.Builder
-	for _, r := range norm.NFD.String(strings.TrimSpace(name)) {
-		if !unicode.Is(unicode.Mn, r) {
-			b.WriteRune(r)
-		}
-	}
-	return strings.ToLower(b.String())
+	return playername.Normalize(name)
 }
 
 // rosVariant maps base projection systems to their RoS equivalents.

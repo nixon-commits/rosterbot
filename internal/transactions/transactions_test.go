@@ -17,7 +17,7 @@ func TestNormalizeName(t *testing.T) {
 		{"Bobby Witt Jr.", "bobby witt"},
 		{"Vladimir Guerrero Jr.", "vladimir guerrero"},
 		{"Ken Griffey Sr.", "ken griffey"},
-		{"Ronald Acuña Jr.", "ronald acuña"},
+		{"Ronald Acuña Jr.", "ronald acuna"},
 		{"Mike Trout", "mike trout"},
 		{"  Juan Soto  ", "juan soto"},
 		{"Cal Ripken III", "cal ripken"},

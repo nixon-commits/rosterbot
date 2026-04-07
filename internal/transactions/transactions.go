@@ -11,6 +11,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/notify"
+	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/pmurley/go-fantrax/models"
 )
 
@@ -390,11 +391,7 @@ func newTradePlayer(name, position string, lookup map[string]hkb.Player) TradePl
 	return tp
 }
 
-// normalizeName lowercases and strips common suffixes for name matching.
+// normalizeName normalizes a player name for cross-source matching.
 func normalizeName(name string) string {
-	n := strings.ToLower(strings.TrimSpace(name))
-	for _, suffix := range []string{" jr.", " sr.", " iv", " iii", " ii"} {
-		n = strings.TrimSuffix(n, suffix)
-	}
-	return strings.TrimSpace(n)
+	return playername.Normalize(name)
 }
