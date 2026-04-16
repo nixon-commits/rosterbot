@@ -10,6 +10,23 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/roster"
 )
 
+// pitcherProjectedPts returns a pitcher's projected fantasy pts per game using
+// the blended source (if available) or the raw season projection. Returns 0
+// when no projection exists. Used by the GS budget forecast to rank starters
+// across the week by value.
+func pitcherProjectedPts(p fantrax.Player, src projections.PitcherSource, scoring fantrax.ScoringWeights) float64 {
+	if pps, ok := src.(projections.PitcherPtsPerGameSource); ok {
+		if v, ok := pps.GetPitcherPtsPerGame(p.Name, p.MLBTeam, scoring); ok {
+			return v
+		}
+	}
+	proj, ok := src.GetPitcherProjection(p.Name, p.MLBTeam)
+	if !ok || proj.G <= 0 {
+		return 0
+	}
+	return projections.PitcherExpectedPtsFromProj(proj, scoring)
+}
+
 // padRight pads s with spaces to the given display width.
 // Accounts for double-width characters (emoji, CJK) that occupy 2 terminal columns.
 func padRight(s string, width int) string {

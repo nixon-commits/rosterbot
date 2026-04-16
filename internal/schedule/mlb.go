@@ -15,6 +15,12 @@ var mlbLineupsURL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&hydrate=
 // Client fetches the MLB game schedule.
 type Client struct {
 	http http.Client
+	// CacheDir enables a per-date sticky probable-starters cache. The MLB
+	// statsapi can intermittently drop probablePitcher data during the pre-game
+	// window; cached entries for teams API missed are preserved across runs so
+	// a previously-confirmed probable isn't treated as unconfirmed due to a
+	// transient API gap. Leave empty to disable.
+	CacheDir string
 }
 
 func NewClient() *Client {

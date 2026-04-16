@@ -360,6 +360,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 	multiDate := len(cfg.Dates) > 1
 	schedClient := schedule.NewClient()
+	schedClient.CacheDir = cacheDir
 
 	// Get season start date for period calculation.
 	// If we already fetched the season range for --dates all, reuse seasonStart from above.
@@ -413,8 +414,9 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			}
 
 			// Build forecast for remaining days (today+1 through weekEnd).
-			// Cap SP counts at the number of active P slots since bench SPs
-			// don't accrue GS — only pitchers in active lineup slots do.
+			// For confirmed probables, collect each pitcher's projected pts so
+			// the gate can rank across the week by value, not just count. Cap
+			// at active P slots since bench SPs don't consume GS.
 			numPSlots := len(pitcherSlots)
 			var forecast []optimizer.DayForecast
 			for d := today.AddDate(0, 0, 1); !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
@@ -423,15 +425,19 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 				df := optimizer.DayForecast{Date: d}
 				if len(probs) > 0 {
-					// Confirmed probables available — count our roster SPs,
-					// capped at active P slots (bench SPs don't consume GS).
 					for normName, team := range probs {
-						if p, ours := spNames[normName]; ours && p.MLBTeam == team {
-							df.Confirmed++
+						p, ours := spNames[normName]
+						if !ours || p.MLBTeam != team {
+							continue
 						}
+						df.ConfirmedStarters = append(df.ConfirmedStarters, pitcherProjectedPts(p, pitcherProjSrc, pitcherScoring))
 					}
-					if df.Confirmed > numPSlots {
-						df.Confirmed = numPSlots
+					// Cap at active P slots, keeping the highest-value probables.
+					if len(df.ConfirmedStarters) > numPSlots {
+						sort.Slice(df.ConfirmedStarters, func(i, j int) bool {
+							return df.ConfirmedStarters[i] > df.ConfirmedStarters[j]
+						})
+						df.ConfirmedStarters = df.ConfirmedStarters[:numPSlots]
 					}
 				} else {
 					// No probables — estimate: roster SPs whose team plays / 5 (standard rotation),
