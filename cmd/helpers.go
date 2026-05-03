@@ -65,6 +65,16 @@ func colorDelta(delta float64) string {
 	return "\033[90m      -\033[0m"
 }
 
+// formatBlendMix renders the base-projection weight as a fixed-width 4-char
+// percentage cell (e.g. " 60%", "100%"). When no recent stats exist the cell
+// is rendered in dim grey to flag that no blending was actually applied.
+func formatBlendMix(baseWt float64, hasRecent bool) string {
+	if !hasRecent {
+		return "\033[90m100%\033[0m"
+	}
+	return fmt.Sprintf("%3.0f%%", baseWt*100)
+}
+
 // truncName truncates a name to maxLen runes.
 func truncName(name string, maxLen int) string {
 	runes := []rune(name)

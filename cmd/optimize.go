@@ -1047,10 +1047,18 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\n  %-26s %6.2f\n", "Combined Expected", hitterStartingPts+pitcherStartingPts)
 
 		// --- Hitter pipeline detail ---
+		// Both pipeline tables share the same column geometry so they line up:
+		//   indent(2) Player(24) Base(7) Mix(4) Blend(7) Mid1(7) Mid2(7) Final(7)
+		// with 2-space gaps. Total visible width = 2 + 24 + 2 + 7 + 2 + 4 + 2 + 7
+		// + 2 + 7 + 2 + 7 + 2 + 7 + 1(│) = 78.
+		// Hitters fill Mid1 with Platoon and Mid2 with Opp SP. Pitchers leave
+		// Mid1 blank and put Gate in Mid2 so the rightmost adjustment column
+		// aligns between tables.
+		const pipelineWidth = 78
+
 		if showPipeline && len(dr.hitterPipelines) > 0 {
 			fmt.Println()
 
-			// Sort by final pts descending.
 			pipelineSorted := make([]optimizer.ScoredPlayer, 0, len(dr.hitterPipelines))
 			for _, sp := range dr.hitterResult.Scored {
 				if _, ok := dr.hitterPipelines[sp.Player.ID]; ok {
@@ -1063,21 +1071,18 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				return pi.FinalPtsPerGame > pj.FinalPtsPerGame
 			})
 
-			// Header — 7-char columns with 2-space gaps.
-			// Header row = "    %-19s  %7s×5│" = 4+19 + 5*(2+7) + 1 = 69 visible chars.
-			// Title/footer lines must also be 69 visible chars (including ╮/╯).
 			titlePrefix := "  Hitter Pipeline "
-			dashes := 69 - len(titlePrefix) - 1 // -1 for ╮
-			fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", dashes))
-			fmt.Printf("    %-19s  %7s  %7s  %7s  %7s  %7s│\n",
-				"Player", "Base", "Blend", "Platoon", "Opp SP", "Final")
-			fmt.Printf("  %s╯\n", strings.Repeat("─", 69-2-1)) // -2 for indent, -1 for ╯
+			fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", pipelineWidth-len(titlePrefix)-1))
+			fmt.Printf("  %-24s  %7s  %4s  %7s  %7s  %7s  %7s│\n",
+				"Player", "Base", "Mix", "Blend", "Platoon", "Opp SP", "Final")
+			fmt.Printf("  %s╯\n", strings.Repeat("─", pipelineWidth-2-1))
 
 			for _, sp := range pipelineSorted {
 				pd := dr.hitterPipelines[sp.Player.ID]
-				fmt.Printf("    %-19s  %7.2f  %s  %s  %s  %7.2f\n",
-					truncName(sp.Player.Name, 19),
+				fmt.Printf("  %-24s  %7.2f  %s  %s  %s  %s  %7.2f\n",
+					truncName(sp.Player.Name, 24),
 					pd.BasePtsPerGame,
+					formatBlendMix(pd.BaseWt, pd.HasRecent),
 					colorDelta(pd.BlendDelta),
 					colorDelta(pd.PlatoonDelta),
 					colorDelta(pd.QualityDelta),
@@ -1090,7 +1095,6 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		if showPipeline && len(dr.pitcherPipelines) > 0 {
 			fmt.Println()
 
-			// Sort by final pts descending.
 			pitPipelineSorted := make([]optimizer.ScoredPitcher, 0, len(dr.pitcherPipelines))
 			for _, sp := range dr.pitcherResult.Scored {
 				if _, ok := dr.pitcherPipelines[sp.Player.ID]; ok {
@@ -1103,23 +1107,20 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				return pi.FinalPtsPerGame > pj.FinalPtsPerGame
 			})
 
-			// Header — columns: Player(19) + Role(4) + Base(7) + Blend(7) + Gate(7) + Final(7)
-			// "    %-19s  %4s  %7s  %7s  %7s  %7s│" = 4+19 + (2+4) + 4*(2+7) + 1 = 66 visible chars.
-			const pitWidth = 66
 			titlePrefix := "  Pitcher Pipeline "
-			dashes := pitWidth - len(titlePrefix) - 1
-			fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", dashes))
-			fmt.Printf("    %-19s  %4s  %7s  %7s  %7s  %7s│\n",
-				"Player", "Role", "Base", "Blend", "Gate", "Final")
-			fmt.Printf("  %s╯\n", strings.Repeat("─", pitWidth-2-1))
+			fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", pipelineWidth-len(titlePrefix)-1))
+			fmt.Printf("  %-24s  %7s  %4s  %7s  %7s  %7s  %7s│\n",
+				"Player", "Base", "Mix", "Blend", "", "Gate", "Final")
+			fmt.Printf("  %s╯\n", strings.Repeat("─", pipelineWidth-2-1))
 
 			for _, sp := range pitPipelineSorted {
 				pd := dr.pitcherPipelines[sp.Player.ID]
-				fmt.Printf("    %-19s  %4s  %7.2f  %s  %s  %7.2f\n",
-					truncName(sp.Player.Name, 19),
-					pd.Role,
+				fmt.Printf("  %-24s  %7.2f  %s  %s  %7s  %s  %7.2f\n",
+					truncName(sp.Player.Name, 24),
 					pd.BasePtsPerGame,
+					formatBlendMix(pd.BaseWt, pd.HasRecent),
 					colorDelta(pd.BlendDelta),
+					"",
 					colorDelta(pd.GateDelta),
 					pd.FinalPtsPerGame,
 				)
@@ -1167,10 +1168,10 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 		fmt.Printf("\n  Changes (%+.2f pts) %s\n", delta, strings.Repeat("─", 35))
 		for _, ps := range allActivate {
-			fmt.Printf("    ↑ %-22s → %-4s  %+6.2f\n", playerName[ps.PlayerID], slotName[ps.PosID], ptsMap[ps.PlayerID])
+			fmt.Printf("    ↑ %-24s → %-4s  %+6.2f\n", playerName[ps.PlayerID], slotName[ps.PosID], ptsMap[ps.PlayerID])
 		}
 		for _, id := range allBench {
-			fmt.Printf("    ↓ %-22s → BN    %+6.2f\n", playerName[id], -ptsMap[id])
+			fmt.Printf("    ↓ %-24s → BN    %+6.2f\n", playerName[id], -ptsMap[id])
 		}
 
 		if cfg.DryRun {
