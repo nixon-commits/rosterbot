@@ -1,30 +1,18 @@
 package playername
 
 import (
-	"encoding/json"
-	"fmt"
+	"context"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
+	mlb "github.com/pmurley/go-mlb"
+	"github.com/pmurley/go-mlb/models"
 )
 
-// MLBPerson holds the name variants and ID from the MLB Stats API.
-type MLBPerson struct {
-	ID        int    `json:"id"`
-	FullName  string `json:"fullName"`
-	FirstName string `json:"firstName"`
-	LastName  string `json:"lastName"`
-	UseName   string `json:"useName"`
-}
-
-// mlbSearchURL is a var so tests can override it.
-var mlbSearchURL = "https://statsapi.mlb.com/api/v1/people/search?names=%s&sportIds=11,12,13,14,16,1"
-
-// mlbPeopleURL is a var so tests can override it.
-var mlbPeopleURL = "https://statsapi.mlb.com/api/v1/people?personIds=%s&fields=people,id,fullName,firstName,lastName,useName,useLastName"
+// mlbBaseURL is the MLB Stats API host (without /api/ — go-mlb appends that).
+// Var for test override.
+var mlbBaseURL = "https://statsapi.mlb.com"
 
 // cacheTTL for resolved player IDs (7 days — names don't change often).
 const cacheTTL = 7 * 24 * time.Hour
@@ -61,6 +49,13 @@ func fetchAndResolve(names []string) (*ResolvedPlayers, error) {
 		ByID:   make(map[int]string),
 	}
 
+	client := mlb.NewClient(
+		mlb.WithBaseURL(mlbBaseURL),
+		mlb.WithHTTPClient(&http.Client{Timeout: 15 * time.Second}),
+		mlb.WithCache(nil),
+	)
+	ctx := context.Background()
+
 	// Deduplicate names for search.
 	seen := make(map[string]bool)
 	var searchNames []string
@@ -72,17 +67,20 @@ func fetchAndResolve(names []string) (*ResolvedPlayers, error) {
 		}
 	}
 
-	// Batch search: the MLB API supports comma-separated names in a single call.
-	// Batch into groups to avoid URL length limits.
+	// Batch search across MLB + affiliated minors + winter ball
+	// (sportIds 11/12/13/14 = AAA/AA/A+/A, 16 = winter, 1 = MLB).
 	const searchBatchSize = 25
-	var ids []int
 	idSet := make(map[int]bool)
+	var ids []int
 	for i := 0; i < len(searchNames); i += searchBatchSize {
 		end := i + searchBatchSize
 		if end > len(searchNames) {
 			end = len(searchNames)
 		}
-		people, err := searchMLBBatch(searchNames[i:end])
+		people, err := client.People.Search(ctx,
+			mlb.WithNames(searchNames[i:end]...),
+			mlb.WithQueryParam("sportIds", "11,12,13,14,16,1"),
+		)
 		if err != nil {
 			continue
 		}
@@ -94,14 +92,17 @@ func fetchAndResolve(names []string) (*ResolvedPlayers, error) {
 		}
 	}
 
-	// Bulk-fetch full person details (firstName, useName, lastName).
+	// Bulk-fetch full person details (firstName, useName, lastName) so we can
+	// index both legal and use-name variants.
 	const peopleBatchSize = 500
 	for i := 0; i < len(ids); i += peopleBatchSize {
 		end := i + peopleBatchSize
 		if end > len(ids) {
 			end = len(ids)
 		}
-		people, err := fetchPeople(ids[i:end])
+		people, err := client.People.List(ctx, ids[i:end],
+			mlb.WithFields("people", "id", "fullName", "firstName", "lastName", "useName", "useLastName"),
+		)
 		if err != nil {
 			continue
 		}
@@ -114,67 +115,34 @@ func fetchAndResolve(names []string) (*ResolvedPlayers, error) {
 }
 
 // indexPerson adds all name variants for a player to the resolved maps.
-func indexPerson(rp *ResolvedPlayers, p MLBPerson) {
+func indexPerson(rp *ResolvedPlayers, p models.Person) {
 	rp.ByID[p.ID] = p.FullName
 
 	fullNorm := Normalize(p.FullName)
 	if fullNorm != "" {
 		rp.ByName[fullNorm] = p.ID
 	}
-	if p.FirstName != "" && p.LastName != "" {
-		legalNorm := Normalize(p.FirstName + " " + p.LastName)
+	first := derefStr(p.FirstName)
+	last := derefStr(p.LastName)
+	use := derefStr(p.UseName)
+
+	if first != "" && last != "" {
+		legalNorm := Normalize(first + " " + last)
 		if legalNorm != fullNorm && legalNorm != "" {
 			rp.ByName[legalNorm] = p.ID
 		}
 	}
-	if p.UseName != "" && p.LastName != "" {
-		useNorm := Normalize(p.UseName + " " + p.LastName)
+	if use != "" && last != "" {
+		useNorm := Normalize(use + " " + last)
 		if useNorm != fullNorm && useNorm != "" {
 			rp.ByName[useNorm] = p.ID
 		}
 	}
 }
 
-// searchMLBBatch searches the MLB Stats API for multiple names in one call.
-func searchMLBBatch(names []string) ([]MLBPerson, error) {
-	escaped := make([]string, len(names))
-	for i, n := range names {
-		escaped[i] = url.QueryEscape(n)
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
 	}
-	u := fmt.Sprintf(mlbSearchURL, strings.Join(escaped, ","))
-	resp, err := http.Get(u)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		People []MLBPerson `json:"people"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	return result.People, nil
-}
-
-// fetchPeople bulk-fetches player details by MLBAM IDs.
-func fetchPeople(ids []int) ([]MLBPerson, error) {
-	parts := make([]string, len(ids))
-	for i, id := range ids {
-		parts[i] = fmt.Sprintf("%d", id)
-	}
-	u := fmt.Sprintf(mlbPeopleURL, strings.Join(parts, ","))
-	resp, err := http.Get(u)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		People []MLBPerson `json:"people"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	return result.People, nil
+	return *s
 }
