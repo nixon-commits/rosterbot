@@ -130,3 +130,42 @@ func TestMatchupWeekBounds_MultiWeekSameOpponent(t *testing.T) {
 			wantStart3.Format("2006-01-02"), wantEnd3.Format("2006-01-02"))
 	}
 }
+
+func TestMatchupWeekByNumber(t *testing.T) {
+	matchups := []auth_client.Matchup{
+		// Week 1: Mar 25–31 vs opp1
+		{ScoringPeriod: 1, Date: "Wed Mar 25, 2026",
+			AwayTeam: auth_client.MatchTeam{TeamID: "myteam"}, HomeTeam: auth_client.MatchTeam{TeamID: "opp1"}},
+		// Week 2: Apr 1–7 vs opp2
+		{ScoringPeriod: 2, Date: "Wed Apr 1, 2026",
+			AwayTeam: auth_client.MatchTeam{TeamID: "opp2"}, HomeTeam: auth_client.MatchTeam{TeamID: "myteam"}},
+		// Week 3: Apr 8–14 vs opp3 (last run, +6 days end)
+		{ScoringPeriod: 3, Date: "Wed Apr 8, 2026",
+			AwayTeam: auth_client.MatchTeam{TeamID: "myteam"}, HomeTeam: auth_client.MatchTeam{TeamID: "opp3"}},
+	}
+
+	tests := []struct {
+		n         int
+		wantStart string
+		wantEnd   string
+	}{
+		{1, "2026-03-25", "2026-03-31"},
+		{2, "2026-04-01", "2026-04-07"},
+		{3, "2026-04-08", "2026-04-14"},
+	}
+	for _, tt := range tests {
+		ws, we := MatchupWeekByNumber(matchups, "myteam", tt.n)
+		if ws.Format("2006-01-02") != tt.wantStart || we.Format("2006-01-02") != tt.wantEnd {
+			t.Errorf("week %d: got %s..%s, want %s..%s",
+				tt.n, ws.Format("2006-01-02"), we.Format("2006-01-02"), tt.wantStart, tt.wantEnd)
+		}
+	}
+
+	// Out-of-range cases return zero times.
+	if ws, we := MatchupWeekByNumber(matchups, "myteam", 0); !ws.IsZero() || !we.IsZero() {
+		t.Error("week 0 should be zero")
+	}
+	if ws, we := MatchupWeekByNumber(matchups, "myteam", 99); !ws.IsZero() || !we.IsZero() {
+		t.Error("week 99 should be zero (out of range)")
+	}
+}

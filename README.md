@@ -82,6 +82,12 @@ rosterbot backtest --dates 2026-04-13:2026-04-19
 # Archive today's projections so a future backtest can grade them exactly
 rosterbot optimize --dry-run --archive-projections
 
+# Render Sleeper-style HTML recap of the most recently completed matchup week
+rosterbot recap --out /tmp/recap.html
+
+# Recap a specific window
+rosterbot recap --dates 2026-04-20:2026-04-26 --out /tmp/recap.html
+
 # Print league scoring weights
 rosterbot scoring
 ```
@@ -132,7 +138,7 @@ Matchup adjustments (opposing pitcher FIP + platoon splits) are layered on top.
 
 ## Automation
 
-Three GitHub Actions workflows run on daily schedules:
+GitHub Actions workflows run on daily schedules:
 
 | Workflow | Schedule | Command |
 |---|---|---|
@@ -140,8 +146,11 @@ Three GitHub Actions workflows run on daily schedules:
 | `gs-check.yml` | 8am ET daily | `gs-check` |
 | `transactions.yml` | 10am ET daily | `transactions` |
 | `prospects.yml` | 7am ET daily | `prospects` |
+| `recap.yml` | 11am ET daily | `recap` (publishes to GitHub Pages, only commits when a new matchup week ends) |
 
 All workflows support `workflow_dispatch` for manual triggering. Required repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
+
+The recap workflow needs `permissions: contents: write` (already in the file) to push the rendered HTML back to `main`. To enable Pages: repo Settings → Pages → Source = "Deploy from a branch" → branch `main`, folder `/docs`. Recaps then live at `https://<owner>.github.io/<repo>/recaps/<season>/week-NN.html`.
 
 ## Development
 

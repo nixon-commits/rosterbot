@@ -1,0 +1,98 @@
+name: Weekly Recap
+
+on:
+  schedule:
+    - cron: '0 15 * * *'   # 11am ET — after lineup/gs-check have run
+  workflow_dispatch:
+
+permissions:
+  contents: write   # commit the rendered HTML back to main
+
+jobs:
+  weekly-recap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - uses: browser-actions/setup-chrome@v2
+
+      - name: Restore Fantrax snapshot cache
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: recap-${{ github.run_id }}
+          restore-keys: |
+            recap-
+            projections-
+
+      - name: Resolve target file path
+        id: path
+        run: |
+          json=$(go run . recap --json) || { echo "$json"; exit 1; }
+          season=$(echo "$json" | jq -r .season)
+          week=$(echo "$json" | jq -r .week_number)
+          padded=$(printf "%02d" "$week")
+          file="docs/recaps/${season}/week-${padded}.html"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          echo "season=$season" >> "$GITHUB_OUTPUT"
+          echo "week=$week" >> "$GITHUB_OUTPUT"
+          echo "Target: $file"
+        env:
+          FANTRAX_USERNAME: ${{ secrets.FANTRAX_USERNAME }}
+          FANTRAX_PASSWORD: ${{ secrets.FANTRAX_PASSWORD }}
+          FANTRAX_LEAGUE_ID: ${{ secrets.FANTRAX_LEAGUE_ID }}
+          FANTRAX_TEAM_ID: ${{ secrets.FANTRAX_TEAM_ID }}
+          FANTRAX_IL_SLOTS: ${{ secrets.FANTRAX_IL_SLOTS }}
+          FANTRAX_MINORS_SLOTS: ${{ secrets.FANTRAX_MINORS_SLOTS }}
+
+      - name: Render recap HTML
+        run: go run . recap --out "${{ steps.path.outputs.file }}"
+        env:
+          FANTRAX_USERNAME: ${{ secrets.FANTRAX_USERNAME }}
+          FANTRAX_PASSWORD: ${{ secrets.FANTRAX_PASSWORD }}
+          FANTRAX_LEAGUE_ID: ${{ secrets.FANTRAX_LEAGUE_ID }}
+          FANTRAX_TEAM_ID: ${{ secrets.FANTRAX_TEAM_ID }}
+          FANTRAX_IL_SLOTS: ${{ secrets.FANTRAX_IL_SLOTS }}
+          FANTRAX_MINORS_SLOTS: ${{ secrets.FANTRAX_MINORS_SLOTS }}
+
+      - name: Commit and push if changed
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/recaps
+          if git diff --staged --quiet; then
+            echo "No changes — recap already up to date."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "Recap: ${{ steps.path.outputs.season }} week ${{ steps.path.outputs.week }}"
+          git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Send Pushover notification
+        if: steps.commit.outputs.changed == 'true'
+        run: |
+          repo="${GITHUB_REPOSITORY}"
+          owner=$(echo "$repo" | cut -d/ -f1)
+          name=$(echo "$repo" | cut -d/ -f2)
+          url="https://${owner}.github.io/${name}/recaps/${{ steps.path.outputs.season }}/week-$(printf '%02d' ${{ steps.path.outputs.week }}).html"
+          curl -s -f \
+            --form-string "token=$PUSHOVER_APP_TOKEN" \
+            --form-string "user=$PUSHOVER_USER_KEY" \
+            --form-string "title=RosterBot: Week ${{ steps.path.outputs.week }} Recap" \
+            --form-string "message=Weekly recap is up — tap to view." \
+            --form-string "url=$url" \
+            --form-string "url_title=Open Recap" \
+            --form-string "priority=0" \
+            https://api.pushover.net/1/messages.json
+        env:
+          PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}

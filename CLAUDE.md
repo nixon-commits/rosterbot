@@ -22,6 +22,8 @@ go run . backtest                                    # backtest last completed m
 go run . backtest --dates 2026-04-13:2026-04-19      # backtest a specific window
 go run . backtest --skip-projections                 # lineup-only backtest (faster)
 go run . optimize --dry-run --archive-projections    # archive projections for future backtests
+go run . recap --out /tmp/recap.html                 # render weekly HTML recap (most recent completed week)
+go run . recap --dates 2026-04-20:2026-04-26 --out /tmp/recap.html  # specific window
 ```
 
 After making code changes, always run `go vet ./...` and `go mod tidy` to catch issues early. Note: `gofmt` and `go vet` run automatically via PostToolUse hooks on every Edit/Write.
@@ -78,6 +80,8 @@ Per-day FPts come from `fantrax.DailyFantasyPoints` (in `internal/fantrax/daily_
 
 The snapshot archive is opt-in (`--archive-projections` flag or `BACKTEST_ARCHIVE=1` env var) so normal `optimize` runs stay side-effect-free. Snapshots are rewritten if the same date is optimized twice — last run wins, which is fine since GHA runs once per day per date.
 
+**`internal/recap`** — Sleeper-style weekly recap. `recap.Run(ft, opts)` aggregates all 12 (or however many) teams in parallel via `errgroup`: for each team it pulls `DailyFantasyPoints` for the matchup week and runs `backtest.RunLineupAnalysis` to compute actual + hindsight-optimal totals, plus `GetTeamPitcherStarts` (a sibling to `GetTeamGS` in `internal/fantrax/pitcher_starts.go`) to enumerate every active-slot SP start with its FPts. H2H pairings come from `GetAllMatchupEntries` (a passthrough wrapper added on `*fantrax.Client`); team weekly scores are aggregated from daily FPts (deterministic, doesn't depend on parsing the upstream `MatchTeam.Total`). Award functions in `awards.go` are pure and unit-tested. The renderer (`render.go` + embedded `template.html`) emits a single self-contained HTML file. The `recap` CLI command writes the file deterministically (no timestamps in HTML) so daily reruns produce byte-identical output until a new matchup week completes — the GHA workflow relies on `git diff --quiet` to skip commits mid-week. **Known limitation**: Fantrax's roster `fpts` column is team-attributed, so bench players' deltas are always 0 — the "Benchwarmers of the Week" award is currently degenerate and the renderer hides the section when empty. Surfacing real bench points would require joining MLB game-log data (similar to `internal/prospects/performance.go`) and is left as a future enhancement.
+
 **`internal/notify`** — notification helpers. `SendPushover` sends push notifications via the Pushover API. Self-contained function taking explicit parameters (no config dependency).
 
 **`internal/roster`** — `CheckRoster` scans the full roster for slot mismatches (healthy players in IL, called-up players in Minors, injured/minor-leaguers in active slots). Suppresses alerts when IL/Minors slots are full. Separate from prospect report — this is about current roster hygiene.
@@ -128,3 +132,5 @@ When adding new commands, flags, env vars, or changing architecture, update `REA
 `.github/workflows/gs-check.yml` runs daily at 12pm UTC (8am ET) and on `workflow_dispatch` (with `force` and `dry_run` inputs). Checks league-wide GS violations at period end. Additional secrets: `GS_MAX`, `GS_MIN` (optional).
 
 `.github/workflows/transactions.yml` runs daily at 2pm UTC (10am ET) and on `workflow_dispatch` (with `dry_run` input). Checks recent league trades and sends Pushover notifications with HKB valuations.
+
+`.github/workflows/recap.yml` runs daily at 3pm UTC (11am ET) and on `workflow_dispatch`. Renders the most recently completed matchup week to `docs/recaps/<season>/week-NN.html`, commits the file to `main` only when it changed (mid-week reruns are no-ops because the HTML is deterministic), and sends a Pushover notification with the GitHub Pages URL. Needs `permissions: contents: write` to push. GitHub Pages should be configured to deploy from `main` / `/docs`.

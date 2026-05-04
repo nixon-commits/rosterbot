@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.WeekLabel}} Recap</title>
+<style>
+  :root {
+    --bg: #0b0f1a;
+    --bg-card: #131a2c;
+    --bg-card-2: #1a2238;
+    --border: #243049;
+    --text: #e6ecff;
+    --text-dim: #8b9bbd;
+    --accent: #f97316;
+    --accent-soft: #4a2a10;
+    --good: #4ade80;
+    --bad: #f87171;
+    --gold: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--text); margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; line-height: 1.4; -webkit-font-smoothing: antialiased; }
+  .container { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { text-align: center; margin-bottom: 32px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+  header .week { font-size: 14px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 4px; }
+  header h1 { font-size: 28px; margin: 0 0 4px; }
+  header .dates { color: var(--text-dim); font-size: 13px; }
+  section { margin-bottom: 36px; }
+  h2 { font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px; padding-left: 4px; font-weight: 600; }
+  .award-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .award { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .award .label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; }
+  .award .label .icon { color: var(--gold); font-size: 14px; }
+  .award .name { font-size: 15px; font-weight: 600; color: var(--text); }
+  .award .pts { font-size: 18px; font-weight: 700; color: var(--accent); margin-top: 2px; }
+  .award .sub { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+  .row { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; display: flex; align-items: center; gap: 12px; }
+  .row .rank { color: var(--text-dim); font-weight: 700; min-width: 22px; text-align: center; font-size: 13px; }
+  .row .body { flex: 1; min-width: 0; }
+  .row .name { font-weight: 600; font-size: 15px; }
+  .row .meta { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+  .row .stat { text-align: right; font-size: 14px; font-weight: 600; }
+  .row .stat .max { display: block; color: var(--text-dim); font-size: 11px; font-weight: 400; }
+  .perf-row { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+  .perf-row .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .perf-row .name { font-weight: 600; font-size: 15px; }
+  .perf-row .pct { font-weight: 700; color: var(--accent); font-size: 14px; }
+  .perf-row .sub { color: var(--text-dim); font-size: 12px; margin: 4px 0 8px; }
+  .bar { background: var(--bg-card-2); height: 8px; border-radius: 4px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+  .matchup { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; }
+  .matchup .team { display: flex; flex-direction: column; }
+  .matchup .team.away { text-align: right; }
+  .matchup .team .name { font-weight: 600; font-size: 14px; }
+  .matchup .team .pts { font-size: 16px; font-weight: 700; margin-top: 2px; }
+  .matchup .team.win .pts { color: var(--good); }
+  .matchup .team.lose .pts { color: var(--text-dim); }
+  .matchup .vs { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; }
+  .pitcher-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .pitcher-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .pitcher-card .label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px; }
+  .pitcher-card .name { font-weight: 600; font-size: 15px; }
+  .pitcher-card .pts { font-size: 22px; font-weight: 700; margin-top: 4px; }
+  .pitcher-card.best .pts { color: var(--good); }
+  .pitcher-card.worst .pts { color: var(--bad); }
+  .pitcher-card .sub { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  footer { color: var(--text-dim); font-size: 11px; text-align: center; margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border); }
+  @media (max-width: 480px) {
+    .award-grid, .pitcher-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="week">Weekly Recap</div>
+  <h1>{{.WeekLabel}}</h1>
+  <div class="dates">{{fmtDate .StartDate}} – {{fmtDate .EndDate}}</div>
+</header>
+
+{{- with .Awards}}
+<section>
+  <h2>Best & Worst Team</h2>
+  <div class="award-grid">
+    <div class="award">
+      <div class="label"><span>Best Team</span><span class="icon">★</span></div>
+      {{- if .MostEfficient}}
+        <div class="name">{{.MostEfficient.TeamName}}</div>
+        <div class="pts">{{pts .MostEfficient.ActualPts}}</div>
+        <div class="sub">{{pct .MostEfficient.Efficiency}} of optimal</div>
+      {{- else}}
+        <div class="sub">No data</div>
+      {{- end}}
+    </div>
+    <div class="award">
+      <div class="label"><span>Worst Team</span><span class="icon">×</span></div>
+      {{- if .LeastEfficient}}
+        <div class="name">{{.LeastEfficient.TeamName}}</div>
+        <div class="pts">{{pts .LeastEfficient.ActualPts}}</div>
+        <div class="sub">{{pct .LeastEfficient.Efficiency}} of optimal</div>
+      {{- else}}
+        <div class="sub">No data</div>
+      {{- end}}
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>League Awards</h2>
+  <div class="award-grid">
+    {{- if .BiggestBlowout}}
+    <div class="award">
+      <div class="label"><span>Biggest Blowout</span><span class="icon">⚡</span></div>
+      <div class="name">{{matchupWinnerName .BiggestBlowout}}</div>
+      <div class="pts">{{pts (matchupWinnerPts .BiggestBlowout)}}</div>
+      <div class="sub">vs {{matchupLoserName .BiggestBlowout}} {{pts (matchupLoserPts .BiggestBlowout)}}</div>
+    </div>
+    {{- end}}
+    {{- if .NarrowVictory}}
+    <div class="award">
+      <div class="label"><span>Narrow Victory</span><span class="icon">🎯</span></div>
+      <div class="name">{{matchupWinnerName .NarrowVictory}}</div>
+      <div class="pts">{{pts (matchupWinnerPts .NarrowVictory)}}</div>
+      <div class="sub">vs {{matchupLoserName .NarrowVictory}} {{pts (matchupLoserPts .NarrowVictory)}}</div>
+    </div>
+    {{- end}}
+    {{- if .HighestPtsInLoss}}
+    <div class="award">
+      <div class="label"><span>Highest Pts in Loss</span><span class="icon">😤</span></div>
+      <div class="name">{{.HighestPtsInLoss.TeamName}}</div>
+      <div class="pts">{{pts .HighestPtsInLoss.Pts}}</div>
+      <div class="sub">vs {{.HighestPtsInLoss.OppName}} {{pts .HighestPtsInLoss.OppPts}}</div>
+    </div>
+    {{- end}}
+    {{- if .LowestPtsInWin}}
+    <div class="award">
+      <div class="label"><span>Lowest Pts in Win</span><span class="icon">🍀</span></div>
+      <div class="name">{{.LowestPtsInWin.TeamName}}</div>
+      <div class="pts">{{pts .LowestPtsInWin.Pts}}</div>
+      <div class="sub">vs {{.LowestPtsInWin.OppName}} {{pts .LowestPtsInWin.OppPts}}</div>
+    </div>
+    {{- end}}
+  </div>
+</section>
+
+{{- if or .BestSingleStart .WorstSingleStart}}
+<section>
+  <h2>Pitching Highlights (Single GS)</h2>
+  <div class="pitcher-grid">
+    {{- if .BestSingleStart}}
+    <div class="pitcher-card best">
+      <div class="label">Best Start</div>
+      <div class="name">{{.BestSingleStart.Name}}</div>
+      <div class="pts">{{pts .BestSingleStart.FPts}}</div>
+      <div class="sub">{{.BestSingleStart.OwnerTeam}} · {{fmtDate .BestSingleStart.Date}}</div>
+    </div>
+    {{- end}}
+    {{- if .WorstSingleStart}}
+    <div class="pitcher-card worst">
+      <div class="label">Worst Start</div>
+      <div class="name">{{.WorstSingleStart.Name}}</div>
+      <div class="pts">{{pts .WorstSingleStart.FPts}}</div>
+      <div class="sub">{{.WorstSingleStart.OwnerTeam}} · {{fmtDate .WorstSingleStart.Date}}</div>
+    </div>
+    {{- end}}
+  </div>
+</section>
+{{- end}}
+
+{{- if .PlayersOfWeek}}
+<section>
+  <h2>Players of the Week</h2>
+  {{- range $i, $p := .PlayersOfWeek}}
+  <div class="row">
+    <div class="rank">{{add $i 1}}</div>
+    <div class="body">
+      <div class="name">{{$p.Name}}</div>
+      <div class="meta">{{$p.OwnerTeam}}{{if $p.MLBTeam}} · {{$p.MLBTeam}}{{end}} · {{fmtDate $p.Date}}</div>
+    </div>
+    <div class="stat">{{pts $p.FPts}}</div>
+  </div>
+  {{- end}}
+</section>
+{{- end}}
+
+{{- if .BenchwarmersOfWeek}}
+<section>
+  <h2>Benchwarmers of the Week</h2>
+  {{- range $i, $p := .BenchwarmersOfWeek}}
+  <div class="row">
+    <div class="rank">{{add $i 1}}</div>
+    <div class="body">
+      <div class="name">{{$p.Name}}</div>
+      <div class="meta">{{$p.OwnerTeam}}{{if $p.MLBTeam}} · {{$p.MLBTeam}}{{end}} · {{fmtDate $p.Date}}</div>
+    </div>
+    <div class="stat">{{pts $p.FPts}}</div>
+  </div>
+  {{- end}}
+</section>
+{{- end}}
+{{- end}}
+
+<section>
+  <h2>Team Performance</h2>
+  {{- range $i, $t := .Teams}}
+  <div class="perf-row">
+    <div class="top">
+      <div class="name">{{add $i 1}}. {{$t.TeamName}}</div>
+      <div class="pct">{{pct $t.Efficiency}}</div>
+    </div>
+    <div class="sub">{{pts $t.ActualPts}} of {{pts $t.OptimalPts}} max</div>
+    <div class="bar"><span style="width: {{barWidth $t.Efficiency}}%"></span></div>
+  </div>
+  {{- end}}
+</section>
+
+<section>
+  <h2>Matchup Results</h2>
+  {{- range .Matchups}}
+  <div class="matchup">
+    <div class="team away {{matchupSideClass . .AwayTeamID}}">
+      <div class="name">{{.AwayTeamName}}</div>
+      <div class="pts">{{pts .AwayPts}}</div>
+    </div>
+    <div class="vs">vs</div>
+    <div class="team home {{matchupSideClass . .HomeTeamID}}">
+      <div class="name">{{.HomeTeamName}}</div>
+      <div class="pts">{{pts .HomePts}}</div>
+    </div>
+  </div>
+  {{- end}}
+</section>
+
+<footer>
+  {{.WeekLabel}} · {{fmtDate .StartDate}}–{{fmtDate .EndDate}}
+</footer>
+
+</div>
+</body>
+</html>
