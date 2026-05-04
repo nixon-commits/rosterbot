@@ -271,6 +271,21 @@
   {{- end}}
 </section>
 
+{{- if .Season}}
+<section>
+  <h2>Season Awards · Through Week {{.Season.ThroughWeek}}</h2>
+  {{- range $i, $t := .Season.Teams}}
+  <div class="row">
+    <div class="rank">{{add $i 1}}</div>
+    <div class="body">
+      <div class="name">{{$t.TeamName}}</div>
+    </div>
+    <div class="stat">{{$t.Count}}</div>
+  </div>
+  {{- end}}
+</section>
+{{- end}}
+
 <footer>
   {{.WeekLabel}} · {{fmtDate .StartDate}}–{{fmtDate .EndDate}}
 </footer>

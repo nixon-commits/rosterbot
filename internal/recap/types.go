@@ -104,3 +104,17 @@ type WeekLink struct {
 	Filename   string `json:"filename"`
 	IsCurrent  bool   `json:"is_current,omitempty"`
 }
+
+// SeasonAwardLine is one team's cumulative weekly-award tally for the season.
+type SeasonAwardLine struct {
+	TeamID   string `json:"team_id"`
+	TeamName string `json:"team_name"`
+	Count    int    `json:"count"`
+}
+
+// SeasonAwards is the season-to-date leaderboard of weekly awards collected,
+// rendered at the bottom of each weekly recap page in site mode.
+type SeasonAwards struct {
+	ThroughWeek int               `json:"through_week"`
+	Teams       []SeasonAwardLine `json:"teams"` // sorted by Count desc, then TeamID asc
+}

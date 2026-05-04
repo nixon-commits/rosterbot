@@ -42,7 +42,7 @@ func TestRenderSiteWithNav(t *testing.T) {
 		{WeekNumber: 3, WeekLabel: "Week 3", Filename: "week-03.html"},
 	}
 	var buf bytes.Buffer
-	if err := RenderSite(&buf, sampleRecap(), nav); err != nil {
+	if err := RenderSite(&buf, sampleRecap(), nav, nil); err != nil {
 		t.Fatalf("RenderSite: %v", err)
 	}
 	got := buf.String()
@@ -64,7 +64,7 @@ func TestRenderSiteNilNavSameAsRender(t *testing.T) {
 	if err := Render(&a, sampleRecap()); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if err := RenderSite(&b, sampleRecap(), nil); err != nil {
+	if err := RenderSite(&b, sampleRecap(), nil, nil); err != nil {
 		t.Fatalf("RenderSite: %v", err)
 	}
 	if a.String() != b.String() {

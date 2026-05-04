@@ -27,29 +27,32 @@ var funcMap = template.FuncMap{
 	"matchupSideClass":  matchupSideClass,
 }
 
-// Render writes the recap HTML to w. No cross-week navigation is rendered.
+// Render writes the recap HTML to w. No cross-week navigation or season
+// leaderboard is rendered — single-week, standalone output.
 func Render(w io.Writer, r *Recap) error {
-	return renderTo(w, r, nil)
+	return renderTo(w, r, nil, nil)
 }
 
 // RenderSite is Render plus a nav dropdown linking to other matchup-week pages
-// in the same directory. Pass nav=nil for a standalone page.
-func RenderSite(w io.Writer, r *Recap, nav []WeekLink) error {
-	return renderTo(w, r, nav)
+// in the same directory and an optional season-to-date awards leaderboard.
+// Pass nav=nil and season=nil for a standalone page.
+func RenderSite(w io.Writer, r *Recap, nav []WeekLink, season *SeasonAwards) error {
+	return renderTo(w, r, nav, season)
 }
 
 // renderInput is the wrapper passed to the template — promotes Recap fields
-// while exposing Nav as a separate field for the dropdown.
+// while exposing Nav and Season as separate fields.
 type renderInput struct {
 	*Recap
-	Nav []WeekLink
+	Nav    []WeekLink
+	Season *SeasonAwards
 }
 
-func renderTo(w io.Writer, r *Recap, nav []WeekLink) error {
+func renderTo(w io.Writer, r *Recap, nav []WeekLink, season *SeasonAwards) error {
 	if r == nil {
 		return fmt.Errorf("nil recap")
 	}
-	return tmpl.Execute(w, renderInput{Recap: r, Nav: nav})
+	return tmpl.Execute(w, renderInput{Recap: r, Nav: nav, Season: season})
 }
 
 func fmtPts(f float64) string {

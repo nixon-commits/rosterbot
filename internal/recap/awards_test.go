@@ -228,3 +228,166 @@ func TestEfficiencyTieBreaker(t *testing.T) {
 		t.Fatalf("MostEfficient tiebreak: want alpha (lex first), got %+v", got)
 	}
 }
+
+// findCount returns the Count for teamID in a snapshot, or -1 if missing.
+func findCount(snap *SeasonAwards, teamID string) int {
+	for _, ln := range snap.Teams {
+		if ln.TeamID == teamID {
+			return ln.Count
+		}
+	}
+	return -1
+}
+
+func TestAggregateSeasonAwards_AttributesEachAwardOnce(t *testing.T) {
+	teams := []TeamWeek{
+		tw("a", "Alpha", 100, 110),
+		tw("b", "Bravo", 90, 100),
+		tw("c", "Charlie", 80, 100),
+	}
+	r := &Recap{
+		WeekNumber: 1,
+		Teams:      teams,
+		Awards: Awards{
+			MostEfficient:    &TeamWeek{TeamID: "a", TeamName: "Alpha"},
+			LeastEfficient:   &TeamWeek{TeamID: "c", TeamName: "Charlie"},
+			HighestScore:     &TeamWeek{TeamID: "a", TeamName: "Alpha"},
+			LowestScore:      &TeamWeek{TeamID: "c", TeamName: "Charlie"},
+			BiggestBlowout:   &MatchupResult{HomeTeamID: "a", AwayTeamID: "c", WinnerID: "a", LoserID: "c"},
+			NarrowVictory:    &MatchupResult{HomeTeamID: "b", AwayTeamID: "c", WinnerID: "b", LoserID: "c"},
+			HighestPtsInLoss: &MatchupTeamSide{TeamID: "c"},
+			LowestPtsInWin:   &MatchupTeamSide{TeamID: "b"},
+			BestSingleStart:  &PitcherStartLine{OwnerTeam: "Alpha"},
+			WorstSingleStart: &PitcherStartLine{OwnerTeam: "Charlie"},
+		},
+	}
+	got := AggregateSeasonAwards([]*Recap{r})
+	if len(got) != 1 {
+		t.Fatalf("want 1 snapshot, got %d", len(got))
+	}
+	snap := got[0]
+	if snap.ThroughWeek != 1 {
+		t.Errorf("ThroughWeek = %d, want 1", snap.ThroughWeek)
+	}
+	// Alpha: MostEff + HighestScore + Blowout winner + Best start = 4
+	// Bravo: NarrowVictory winner + LowestPtsInWin = 2
+	// Charlie: LeastEff + LowestScore + HighestPtsInLoss + Worst start = 4
+	if c := findCount(snap, "a"); c != 4 {
+		t.Errorf("Alpha count = %d, want 4", c)
+	}
+	if c := findCount(snap, "b"); c != 2 {
+		t.Errorf("Bravo count = %d, want 2", c)
+	}
+	if c := findCount(snap, "c"); c != 4 {
+		t.Errorf("Charlie count = %d, want 4", c)
+	}
+	// Sort: a and c tied at 4 → "a" first lexically; b last at 2.
+	if snap.Teams[0].TeamID != "a" || snap.Teams[1].TeamID != "c" || snap.Teams[2].TeamID != "b" {
+		t.Errorf("order = [%s,%s,%s], want [a,c,b]",
+			snap.Teams[0].TeamID, snap.Teams[1].TeamID, snap.Teams[2].TeamID)
+	}
+}
+
+func TestAggregateSeasonAwards_NilAwardsAreSkipped(t *testing.T) {
+	teams := []TeamWeek{tw("a", "Alpha", 100, 110), tw("b", "Bravo", 90, 100)}
+	r := &Recap{
+		WeekNumber: 1,
+		Teams:      teams,
+		Awards:     Awards{}, // all nil
+	}
+	got := AggregateSeasonAwards([]*Recap{r})
+	if len(got) != 1 {
+		t.Fatalf("want 1 snapshot")
+	}
+	for _, ln := range got[0].Teams {
+		if ln.Count != 0 {
+			t.Errorf("team %s count = %d, want 0 (no awards present)", ln.TeamID, ln.Count)
+		}
+	}
+	if len(got[0].Teams) != 2 {
+		t.Errorf("Teams len = %d, want 2 (every roster team listed even at zero)", len(got[0].Teams))
+	}
+}
+
+func TestAggregateSeasonAwards_PitcherStartUnmappableNameSkipped(t *testing.T) {
+	teams := []TeamWeek{tw("a", "Alpha", 100, 110)}
+	r := &Recap{
+		WeekNumber: 1,
+		Teams:      teams,
+		Awards: Awards{
+			BestSingleStart: &PitcherStartLine{OwnerTeam: "GhostFranchise"}, // not in Teams
+		},
+	}
+	got := AggregateSeasonAwards([]*Recap{r})
+	if c := findCount(got[0], "a"); c != 0 {
+		t.Errorf("Alpha count = %d, want 0 (orphan owner name should be silently dropped)", c)
+	}
+}
+
+func TestAggregateSeasonAwards_CumulativeAcrossWeeks(t *testing.T) {
+	teams := []TeamWeek{tw("a", "Alpha", 100, 110), tw("b", "Bravo", 90, 100)}
+	w1 := &Recap{
+		WeekNumber: 1,
+		Teams:      teams,
+		Awards:     Awards{HighestScore: &TeamWeek{TeamID: "a"}},
+	}
+	w2 := &Recap{
+		WeekNumber: 2,
+		Teams:      teams,
+		Awards:     Awards{HighestScore: &TeamWeek{TeamID: "a"}, MostEfficient: &TeamWeek{TeamID: "b"}},
+	}
+	w3 := &Recap{
+		WeekNumber: 3,
+		Teams:      teams,
+		Awards:     Awards{HighestScore: &TeamWeek{TeamID: "b"}},
+	}
+	got := AggregateSeasonAwards([]*Recap{w1, w2, w3})
+	if len(got) != 3 {
+		t.Fatalf("want 3 snapshots, got %d", len(got))
+	}
+	if got[0].ThroughWeek != 1 || got[1].ThroughWeek != 2 || got[2].ThroughWeek != 3 {
+		t.Errorf("ThroughWeek values = %d,%d,%d", got[0].ThroughWeek, got[1].ThroughWeek, got[2].ThroughWeek)
+	}
+	// After week 1: a=1, b=0
+	if c := findCount(got[0], "a"); c != 1 {
+		t.Errorf("week 1 Alpha count = %d, want 1", c)
+	}
+	// After week 2: a=2, b=1
+	if c := findCount(got[1], "a"); c != 2 {
+		t.Errorf("week 2 Alpha count = %d, want 2", c)
+	}
+	if c := findCount(got[1], "b"); c != 1 {
+		t.Errorf("week 2 Bravo count = %d, want 1", c)
+	}
+	// After week 3: a=2, b=2
+	if c := findCount(got[2], "a"); c != 2 {
+		t.Errorf("week 3 Alpha count = %d, want 2", c)
+	}
+	if c := findCount(got[2], "b"); c != 2 {
+		t.Errorf("week 3 Bravo count = %d, want 2", c)
+	}
+	// Tiebreak: alpha first by ID asc.
+	if got[2].Teams[0].TeamID != "a" {
+		t.Errorf("week 3 first team = %s, want a (lex tiebreak)", got[2].Teams[0].TeamID)
+	}
+}
+
+func TestAggregateSeasonAwards_NilRecapInSlice(t *testing.T) {
+	teams := []TeamWeek{tw("a", "Alpha", 100, 110)}
+	r := &Recap{WeekNumber: 1, Teams: teams, Awards: Awards{HighestScore: &TeamWeek{TeamID: "a"}}}
+	got := AggregateSeasonAwards([]*Recap{r, nil, r})
+	if len(got) != 3 {
+		t.Fatalf("want 3 entries, got %d", len(got))
+	}
+	if got[1] != nil {
+		t.Errorf("nil recap should produce nil snapshot, got %+v", got[1])
+	}
+	// Counts continue accumulating past the nil — Alpha now has 2.
+	if c := findCount(got[2], "a"); c != 2 {
+		t.Errorf("after nil-skip Alpha count = %d, want 2", c)
+	}
+}
+
+// Reference time used implicitly by the existing test helpers — keeps the
+// import of "time" consistent with the rest of the file.
+var _ = time.Now

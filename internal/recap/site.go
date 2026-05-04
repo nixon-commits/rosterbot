@@ -56,8 +56,11 @@ func RunSite(ft *fantrax.Client, sopts SiteOptions) error {
 		}
 	}
 
-	var latestRecap *Recap
-	var latestNum int
+	// Pass 1: build every week's recap. We can't render eagerly because each
+	// page wants the season-to-date leaderboard, which requires having seen all
+	// prior weeks first.
+	recaps := make([]*Recap, 0, len(completed))
+	weekNums := make([]int, 0, len(completed))
 	for _, w := range completed {
 		weekOpts := sopts.Recap
 		weekOpts.WeekStart = w.start
@@ -69,29 +72,40 @@ func RunSite(ft *fantrax.Client, sopts SiteOptions) error {
 			weekOpts.CacheTTL = 30 * 24 * time.Hour
 		}
 
-		fmt.Fprintf(os.Stderr, "  rendering week %d (%s..%s)\n",
+		fmt.Fprintf(os.Stderr, "  building week %d (%s..%s)\n",
 			w.n, w.start.Format("2006-01-02"), w.end.Format("2006-01-02"))
 
 		r, err := Run(ft, weekOpts)
 		if err != nil {
 			return fmt.Errorf("week %d: %w", w.n, err)
 		}
+		recaps = append(recaps, r)
+		weekNums = append(weekNums, w.n)
+	}
 
-		path := filepath.Join(sopts.OutDir, weekFilename(w.n))
-		if err := writeRender(path, r, navWithCurrent(nav, w.n)); err != nil {
+	// Pass 2: aggregate season awards cumulatively, one snapshot per week.
+	cumulative := AggregateSeasonAwards(recaps)
+
+	// Pass 3: render each week with its through-week season snapshot.
+	var latestRecap *Recap
+	var latestSeason *SeasonAwards
+	var latestNum int
+	for i, r := range recaps {
+		path := filepath.Join(sopts.OutDir, weekFilename(weekNums[i]))
+		if err := writeRender(path, r, navWithCurrent(nav, weekNums[i]), cumulative[i]); err != nil {
 			return err
 		}
-
-		if w.n > latestNum {
+		if weekNums[i] > latestNum {
 			latestRecap = r
-			latestNum = w.n
+			latestSeason = cumulative[i]
+			latestNum = weekNums[i]
 		}
 	}
 
-	// index.html = the latest week.
+	// index.html = the latest week with through-latest season totals.
 	if latestRecap != nil {
 		path := filepath.Join(sopts.OutDir, "index.html")
-		if err := writeRender(path, latestRecap, navWithCurrent(nav, latestNum)); err != nil {
+		if err := writeRender(path, latestRecap, navWithCurrent(nav, latestNum), latestSeason); err != nil {
 			return err
 		}
 	}
@@ -143,12 +157,12 @@ func weekFilename(n int) string {
 	return fmt.Sprintf("week-%02d.html", n)
 }
 
-func writeRender(path string, r *Recap, nav []WeekLink) error {
+func writeRender(path string, r *Recap, nav []WeekLink, season *SeasonAwards) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", path, err)
 	}
-	if err := RenderSite(f, r, nav); err != nil {
+	if err := RenderSite(f, r, nav, season); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("render %s: %w", path, err)
 	}

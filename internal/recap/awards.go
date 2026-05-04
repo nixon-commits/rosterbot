@@ -248,3 +248,105 @@ func pickStart(starts []PitcherStartLine, less func(a, b *PitcherStartLine) bool
 	out := *best
 	return &out
 }
+
+// AggregateSeasonAwards walks recaps in order and returns one cumulative
+// *SeasonAwards per recap, where snapshot i covers awards earned in weeks 0..i
+// inclusive. Each per-team award (single-team, matchup, matchup-side, and
+// pitcher-start) adds 1 to its team's tally. TopBatters / TopPitchers are
+// intentionally excluded — those are individual-player highlights and
+// counting them would inflate teams that simply roster many high-scorers.
+//
+// Pitcher-start awards arrive with an OwnerTeam *name* rather than ID, so the
+// aggregator builds a per-recap name→ID map from Recap.Teams to attribute
+// them. Names that don't resolve are silently skipped (defensive — a typo or
+// stale team rename shouldn't crash the build).
+//
+// Output Teams slice is sorted by Count descending, then TeamID ascending for
+// deterministic output. Every team that appears in any recap's Teams list is
+// included in every snapshot, even with Count=0, so the leaderboard table
+// always lists the full league.
+func AggregateSeasonAwards(recaps []*Recap) []*SeasonAwards {
+	out := make([]*SeasonAwards, 0, len(recaps))
+	counts := map[string]int{}
+	names := map[string]string{}
+
+	for _, r := range recaps {
+		if r == nil {
+			out = append(out, nil)
+			continue
+		}
+
+		// Refresh name map from this week's Teams (handles renames over time).
+		nameToID := map[string]string{}
+		for _, t := range r.Teams {
+			names[t.TeamID] = t.TeamName
+			nameToID[t.TeamName] = t.TeamID
+			if _, ok := counts[t.TeamID]; !ok {
+				counts[t.TeamID] = 0 // ensure team appears in snapshot even at zero
+			}
+		}
+
+		add := func(id string) {
+			if id == "" {
+				return
+			}
+			counts[id]++
+		}
+		a := r.Awards
+		if a.MostEfficient != nil {
+			add(a.MostEfficient.TeamID)
+		}
+		if a.LeastEfficient != nil {
+			add(a.LeastEfficient.TeamID)
+		}
+		if a.HighestScore != nil {
+			add(a.HighestScore.TeamID)
+		}
+		if a.LowestScore != nil {
+			add(a.LowestScore.TeamID)
+		}
+		if a.BiggestBlowout != nil {
+			add(a.BiggestBlowout.WinnerID)
+		}
+		if a.NarrowVictory != nil {
+			add(a.NarrowVictory.WinnerID)
+		}
+		if a.HighestPtsInLoss != nil {
+			add(a.HighestPtsInLoss.TeamID)
+		}
+		if a.LowestPtsInWin != nil {
+			add(a.LowestPtsInWin.TeamID)
+		}
+		if a.BestSingleStart != nil {
+			if id, ok := nameToID[a.BestSingleStart.OwnerTeam]; ok {
+				add(id)
+			}
+		}
+		if a.WorstSingleStart != nil {
+			if id, ok := nameToID[a.WorstSingleStart.OwnerTeam]; ok {
+				add(id)
+			}
+		}
+
+		// Snapshot.
+		teams := make([]SeasonAwardLine, 0, len(counts))
+		for id, c := range counts {
+			teams = append(teams, SeasonAwardLine{
+				TeamID:   id,
+				TeamName: names[id],
+				Count:    c,
+			})
+		}
+		sort.Slice(teams, func(i, j int) bool {
+			if teams[i].Count != teams[j].Count {
+				return teams[i].Count > teams[j].Count
+			}
+			return teams[i].TeamID < teams[j].TeamID
+		})
+		out = append(out, &SeasonAwards{
+			ThroughWeek: r.WeekNumber,
+			Teams:       teams,
+		})
+	}
+	return out
+}
