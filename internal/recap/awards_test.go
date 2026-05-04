@@ -150,23 +150,6 @@ func TestTopBattersAndPitchers(t *testing.T) {
 	}
 }
 
-func TestBenchwarmersOfWeek(t *testing.T) {
-	day1 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
-	day2 := time.Date(2026, 4, 22, 0, 0, 0, 0, time.UTC)
-	bench := []PlayerLine{
-		{PlayerID: "p5", Name: "Echo", FPts: 22, Date: day1, OwnerTeam: "A"},
-		{PlayerID: "p6", Name: "Foxtrot", FPts: 35, Date: day2, OwnerTeam: "B"},
-		{PlayerID: "p7", Name: "Golf", FPts: 18, Date: day2, OwnerTeam: "C"},
-	}
-	benchTop := BenchwarmersOfWeek(bench, 2)
-	if len(benchTop) != 2 {
-		t.Fatalf("BenchwarmersOfWeek: want 2, got %d", len(benchTop))
-	}
-	if benchTop[0].Name != "Foxtrot" || benchTop[1].Name != "Echo" {
-		t.Fatalf("BenchwarmersOfWeek order wrong: %+v", benchTop)
-	}
-}
-
 func TestTopPlayersHandlesShortInput(t *testing.T) {
 	short := []PlayerLine{{Name: "Solo", FPts: 10, OwnerTeam: "X"}}
 	if got := TopBatters(short, 5); len(got) != 1 || got[0].Name != "Solo" {
@@ -195,6 +178,42 @@ func TestBestWorstSingleStart(t *testing.T) {
 	}
 	if got := BestSingleStart(nil); got != nil {
 		t.Errorf("BestSingleStart(nil): want nil, got %+v", got)
+	}
+}
+
+func TestHighestLowestScore(t *testing.T) {
+	teams := []TeamWeek{
+		tw("1", "A", 200, 250),
+		tw("2", "B", 350, 400), // highest
+		tw("3", "C", 100, 200), // lowest
+		tw("4", "D", 150, 250),
+	}
+
+	if got := HighestScore(teams); got == nil || got.TeamID != "2" {
+		t.Fatalf("HighestScore: want team 2, got %+v", got)
+	}
+	if got := LowestScore(teams); got == nil || got.TeamID != "3" {
+		t.Fatalf("LowestScore: want team 3, got %+v", got)
+	}
+
+	if got := HighestScore(nil); got != nil {
+		t.Errorf("HighestScore(nil) should be nil, got %+v", got)
+	}
+	if got := LowestScore([]TeamWeek{}); got != nil {
+		t.Errorf("LowestScore(empty) should be nil, got %+v", got)
+	}
+}
+
+func TestHighestLowestScoreTieBreaker(t *testing.T) {
+	teams := []TeamWeek{
+		tw("zulu", "Zulu", 200, 250),
+		tw("alpha", "Alpha", 200, 250),
+	}
+	if got := HighestScore(teams); got == nil || got.TeamID != "alpha" {
+		t.Fatalf("HighestScore tiebreak: want alpha (lex first), got %+v", got)
+	}
+	if got := LowestScore(teams); got == nil || got.TeamID != "alpha" {
+		t.Fatalf("LowestScore tiebreak: want alpha (lex first), got %+v", got)
 	}
 }
 

@@ -45,7 +45,7 @@ type MatchupResult struct {
 }
 
 // PlayerLine is one player-day scoring entry, used for the top batter / top
-// pitcher leaderboards and the "Benchwarmers of the Week" award.
+// pitcher leaderboards.
 type PlayerLine struct {
 	PlayerID  string    `json:"player_id"`
 	Name      string    `json:"name"`
@@ -81,15 +81,16 @@ type MatchupTeamSide struct {
 // when the award has no qualifying entry (e.g., no losses → no "Highest Pts in
 // Loss"; no SP starts → no best/worst single start).
 type Awards struct {
-	MostEfficient      *TeamWeek         `json:"most_efficient,omitempty"`
-	LeastEfficient     *TeamWeek         `json:"least_efficient,omitempty"`
-	BiggestBlowout     *MatchupResult    `json:"biggest_blowout,omitempty"`
-	NarrowVictory      *MatchupResult    `json:"narrow_victory,omitempty"`
-	HighestPtsInLoss   *MatchupTeamSide  `json:"highest_pts_in_loss,omitempty"`
-	LowestPtsInWin     *MatchupTeamSide  `json:"lowest_pts_in_win,omitempty"`
-	BestSingleStart    *PitcherStartLine `json:"best_single_start,omitempty"`
-	WorstSingleStart   *PitcherStartLine `json:"worst_single_start,omitempty"`
-	TopBatters         []PlayerLine      `json:"top_batters,omitempty"`
-	TopPitchers        []PlayerLine      `json:"top_pitchers,omitempty"`
-	BenchwarmersOfWeek []PlayerLine      `json:"benchwarmers_of_week,omitempty"`
+	MostEfficient    *TeamWeek         `json:"most_efficient,omitempty"`
+	LeastEfficient   *TeamWeek         `json:"least_efficient,omitempty"`
+	HighestScore     *TeamWeek         `json:"highest_score,omitempty"`
+	LowestScore      *TeamWeek         `json:"lowest_score,omitempty"`
+	BiggestBlowout   *MatchupResult    `json:"biggest_blowout,omitempty"`
+	NarrowVictory    *MatchupResult    `json:"narrow_victory,omitempty"`
+	HighestPtsInLoss *MatchupTeamSide  `json:"highest_pts_in_loss,omitempty"`
+	LowestPtsInWin   *MatchupTeamSide  `json:"lowest_pts_in_win,omitempty"`
+	BestSingleStart  *PitcherStartLine `json:"best_single_start,omitempty"`
+	WorstSingleStart *PitcherStartLine `json:"worst_single_start,omitempty"`
+	TopBatters       []PlayerLine      `json:"top_batters,omitempty"`
+	TopPitchers      []PlayerLine      `json:"top_pitchers,omitempty"`
 }

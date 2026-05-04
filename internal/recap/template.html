@@ -119,6 +119,20 @@
 <section>
   <h2>League Awards</h2>
   <div class="award-grid">
+    {{- if .HighestScore}}
+    <div class="award">
+      <div class="label"><span>Highest Score</span><span class="icon">👑</span></div>
+      <div class="name">{{.HighestScore.TeamName}}</div>
+      <div class="pts">{{pts .HighestScore.ActualPts}}</div>
+    </div>
+    {{- end}}
+    {{- if .LowestScore}}
+    <div class="award">
+      <div class="label"><span>Lowest Score</span><span class="icon">💩</span></div>
+      <div class="name">{{.LowestScore.TeamName}}</div>
+      <div class="pts">{{pts .LowestScore.ActualPts}}</div>
+    </div>
+    {{- end}}
     {{- if .BiggestBlowout}}
     <div class="award">
       <div class="label"><span>Biggest Blowout</span><span class="icon">⚡</span></div>
@@ -180,10 +194,10 @@
 
 {{- if or .TopBatters .TopPitchers}}
 <section>
-  <h2>Top Performances</h2>
+  <h2>Top Single Day Performances</h2>
   <div class="leaders">
     <div class="col">
-      <h3>Top Batters</h3>
+      <h3>Batters</h3>
       {{- range $i, $p := .TopBatters}}
       <div class="leader-row">
         <div class="rank">{{add $i 1}}</div>
@@ -196,7 +210,7 @@
       {{- end}}
     </div>
     <div class="col">
-      <h3>Top Pitchers</h3>
+      <h3>Pitchers</h3>
       {{- range $i, $p := .TopPitchers}}
       <div class="leader-row">
         <div class="rank">{{add $i 1}}</div>
@@ -212,21 +226,6 @@
 </section>
 {{- end}}
 
-{{- if .BenchwarmersOfWeek}}
-<section>
-  <h2>Benchwarmers of the Week</h2>
-  {{- range $i, $p := .BenchwarmersOfWeek}}
-  <div class="row">
-    <div class="rank">{{add $i 1}}</div>
-    <div class="body">
-      <div class="name">{{$p.Name}}</div>
-      <div class="meta">{{$p.OwnerTeam}}{{if $p.MLBTeam}} · {{$p.MLBTeam}}{{end}} · {{fmtDate $p.Date}}</div>
-    </div>
-    <div class="stat">{{pts $p.FPts}}</div>
-  </div>
-  {{- end}}
-</section>
-{{- end}}
 {{- end}}
 
 <section>

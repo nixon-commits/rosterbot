@@ -20,7 +20,7 @@ type Options struct {
 	WeekLabel   string // optional; defaults to "Week N"
 	CacheDir    string
 	CacheTTL    time.Duration // 0 → use default; pass 30 days for past weeks (immutable)
-	TopPlayers  int           // top N for Players-of-Week / Benchwarmers (default 4)
+	TopPlayers  int           // top N for Players-of-Week (default 4)
 	Concurrency int           // parallel team fetches (default 4)
 }
 
@@ -102,12 +102,10 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 
 	teamWeeks := make([]TeamWeek, 0, len(results))
 	allActive := make([]PlayerLine, 0, 256)
-	allBench := make([]PlayerLine, 0, 128)
 	allStarts := make([]PitcherStartLine, 0, 64)
 	for _, td := range results {
 		teamWeeks = append(teamWeeks, td.team)
 		allActive = append(allActive, td.active...)
-		allBench = append(allBench, td.bench...)
 		allStarts = append(allStarts, td.starts...)
 	}
 
@@ -130,17 +128,18 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 	matchups := buildMatchups(weekPairs, teamScore, teamName)
 
 	awards := Awards{
-		MostEfficient:      MostEfficient(teamWeeks),
-		LeastEfficient:     LeastEfficient(teamWeeks),
-		BiggestBlowout:     BiggestBlowout(matchups),
-		NarrowVictory:      NarrowVictory(matchups),
-		HighestPtsInLoss:   HighestPtsInLoss(matchups),
-		LowestPtsInWin:     LowestPtsInWin(matchups),
-		BestSingleStart:    BestSingleStart(allStarts),
-		WorstSingleStart:   WorstSingleStart(allStarts),
-		TopBatters:         TopBatters(allActive, opts.TopPlayers),
-		TopPitchers:        TopPitchers(allActive, opts.TopPlayers),
-		BenchwarmersOfWeek: BenchwarmersOfWeek(allBench, opts.TopPlayers),
+		MostEfficient:    MostEfficient(teamWeeks),
+		LeastEfficient:   LeastEfficient(teamWeeks),
+		HighestScore:     HighestScore(teamWeeks),
+		LowestScore:      LowestScore(teamWeeks),
+		BiggestBlowout:   BiggestBlowout(matchups),
+		NarrowVictory:    NarrowVictory(matchups),
+		HighestPtsInLoss: HighestPtsInLoss(matchups),
+		LowestPtsInWin:   LowestPtsInWin(matchups),
+		BestSingleStart:  BestSingleStart(allStarts),
+		WorstSingleStart: WorstSingleStart(allStarts),
+		TopBatters:       TopBatters(allActive, opts.TopPlayers),
+		TopPitchers:      TopPitchers(allActive, opts.TopPlayers),
 	}
 
 	weekNum := opts.WeekNumber
@@ -176,7 +175,6 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 type teamData struct {
 	team   TeamWeek
 	active []PlayerLine
-	bench  []PlayerLine
 	starts []PitcherStartLine
 }
 
@@ -216,7 +214,7 @@ func collectTeam(
 		Efficiency: eff,
 	}
 
-	active, bench := extractPlayerLines(days, teamName)
+	active := extractActivePlayerLines(days, teamName)
 
 	starts, err := ft.GetTeamPitcherStarts(teamID, weekStart, weekEnd, seasonStart)
 	if err != nil {
@@ -235,27 +233,23 @@ func collectTeam(
 		})
 	}
 
-	return &teamData{team: tw, active: active, bench: bench, starts: startLines}, nil
+	return &teamData{team: tw, active: active, starts: startLines}, nil
 }
 
-// extractPlayerLines turns per-day per-player FPts into PlayerLine records,
-// split by active vs benched. Players with zero FPts and no game are skipped
-// to keep the highlight set tight.
-//
-// Note: the FPts read from Fantrax roster snapshots is team-attributed —
-// it only accumulates while a player is in an active lineup slot. Bench
-// players' deltas are therefore always 0, which makes the BenchwarmersOfWeek
-// award degenerate. Surfacing real "points left on the bench" would require
-// joining MLB game-log stats and scoring them with league weights, similar to
-// what internal/prospects/performance.go does. Left as a v2 enhancement —
-// the renderer hides the section when empty.
-func extractPlayerLines(days []fantrax.DayRoster, ownerTeam string) (active, bench []PlayerLine) {
+// extractActivePlayerLines turns per-day per-player FPts into PlayerLine
+// records for active-slot players. Players with zero FPts and no game are
+// skipped to keep the highlight set tight.
+func extractActivePlayerLines(days []fantrax.DayRoster, ownerTeam string) []PlayerLine {
+	var active []PlayerLine
 	for _, d := range days {
 		for _, p := range d.Players {
+			if !p.Active {
+				continue
+			}
 			if p.FPts == 0 && !p.HadGame {
 				continue
 			}
-			line := PlayerLine{
+			active = append(active, PlayerLine{
 				PlayerID:  p.PlayerID,
 				Name:      p.Name,
 				MLBTeam:   p.MLBTeam,
@@ -263,15 +257,10 @@ func extractPlayerLines(days []fantrax.DayRoster, ownerTeam string) (active, ben
 				Date:      d.Date,
 				OwnerTeam: ownerTeam,
 				IsPitcher: p.IsPitcher,
-			}
-			if p.Active {
-				active = append(active, line)
-			} else {
-				bench = append(bench, line)
-			}
+			})
 		}
 	}
-	return active, bench
+	return active
 }
 
 // pairsForWeek returns one (homeID, awayID) pair per matchup that touches the

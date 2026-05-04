@@ -25,6 +25,42 @@ func LeastEfficient(teams []TeamWeek) *TeamWeek {
 	})
 }
 
+// HighestScore returns the team with the most raw ActualPts. Tiebreaker on
+// TeamID for stability. Returns nil if teams is empty.
+func HighestScore(teams []TeamWeek) *TeamWeek {
+	return pickScore(teams, func(a, b *TeamWeek) bool {
+		if a.ActualPts != b.ActualPts {
+			return a.ActualPts > b.ActualPts
+		}
+		return a.TeamID < b.TeamID
+	})
+}
+
+// LowestScore returns the team with the fewest raw ActualPts.
+func LowestScore(teams []TeamWeek) *TeamWeek {
+	return pickScore(teams, func(a, b *TeamWeek) bool {
+		if a.ActualPts != b.ActualPts {
+			return a.ActualPts < b.ActualPts
+		}
+		return a.TeamID < b.TeamID
+	})
+}
+
+func pickScore(teams []TeamWeek, less func(a, b *TeamWeek) bool) *TeamWeek {
+	var best *TeamWeek
+	for i := range teams {
+		t := &teams[i]
+		if best == nil || less(t, best) {
+			best = t
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	out := *best
+	return &out
+}
+
 func pickEfficiency(teams []TeamWeek, less func(a, b *TeamWeek) bool) *TeamWeek {
 	var best *TeamWeek
 	for i := range teams {
@@ -141,11 +177,6 @@ func TopBatters(active []PlayerLine, n int) []PlayerLine {
 // TopPitchers returns the top n active pitcher player-day scoring lines.
 func TopPitchers(active []PlayerLine, n int) []PlayerLine {
 	return topPlayers(filterByPitcher(active, true), n)
-}
-
-// BenchwarmersOfWeek returns the top n benched player-day scoring lines.
-func BenchwarmersOfWeek(bench []PlayerLine, n int) []PlayerLine {
-	return topPlayers(bench, n)
 }
 
 func filterByPitcher(lines []PlayerLine, pitcher bool) []PlayerLine {
