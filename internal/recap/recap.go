@@ -2,6 +2,7 @@ package recap
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -220,7 +221,7 @@ func collectTeam(
 	if err != nil {
 		// Soft-fail: pitcher starts are nice-to-have. Log via stderr (caller
 		// orchestrates output); recap still returns.
-		fmt.Printf("WARNING: pitcher starts for %s: %v\n", teamName, err)
+		fmt.Fprintf(os.Stderr, "WARNING: pitcher starts for %s: %v\n", teamName, err)
 		starts = nil
 	}
 	startLines := make([]PitcherStartLine, 0, len(starts))
