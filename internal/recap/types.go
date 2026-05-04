@@ -94,3 +94,13 @@ type Awards struct {
 	TopBatters       []PlayerLine      `json:"top_batters,omitempty"`
 	TopPitchers      []PlayerLine      `json:"top_pitchers,omitempty"`
 }
+
+// WeekLink is one entry in the cross-week navigation dropdown rendered into
+// site mode. The dropdown navigates to Filename via window.location, so paths
+// must be relative to the current page (same directory).
+type WeekLink struct {
+	WeekNumber int    `json:"week_number"`
+	WeekLabel  string `json:"week_label"`
+	Filename   string `json:"filename"`
+	IsCurrent  bool   `json:"is_current,omitempty"`
+}
