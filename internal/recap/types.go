@@ -9,15 +9,17 @@ import "time"
 // Recap is the full data model for a single matchup-week recap. It's
 // JSON-serializable for debugging and feeds the HTML template.
 type Recap struct {
-	Season      int             `json:"season"`
-	WeekNumber  int             `json:"week_number"`
-	WeekLabel   string          `json:"week_label"`
-	StartDate   time.Time       `json:"start_date"`
-	EndDate     time.Time       `json:"end_date"`
-	GeneratedAt time.Time       `json:"generated_at"`
-	Teams       []TeamWeek      `json:"teams"`
-	Matchups    []MatchupResult `json:"matchups"`
-	Awards      Awards          `json:"awards"`
+	Season         int              `json:"season"`
+	WeekNumber     int              `json:"week_number"`
+	WeekLabel      string           `json:"week_label"`
+	StartDate      time.Time        `json:"start_date"`
+	EndDate        time.Time        `json:"end_date"`
+	GeneratedAt    time.Time        `json:"generated_at"`
+	Teams          []TeamWeek       `json:"teams"`
+	Matchups       []MatchupResult  `json:"matchups"`
+	Awards         Awards           `json:"awards"`
+	WPCurves       []MatchupWPCurve `json:"wp_curves,omitempty"`
+	RosterActivity *RosterActivity  `json:"roster_activity,omitempty"`
 }
 
 // TeamWeek is a single team's aggregated weekly performance.
@@ -96,6 +98,11 @@ type Awards struct {
 	WorstSingleStart *PitcherStartLine `json:"worst_single_start,omitempty"`
 	TopBatters       []PlayerLine      `json:"top_batters,omitempty"`
 	TopPitchers      []PlayerLine      `json:"top_pitchers,omitempty"`
+	HeartAttack      *MatchupResult    `json:"heart_attack,omitempty"`
+	Comeback         *MatchupTeamSide  `json:"comeback,omitempty"`
+	Whale            *TeamDay          `json:"whale,omitempty"`
+	Dud              *PlayerLine       `json:"dud,omitempty"`
+	GameOfWeek       *MatchupResult    `json:"game_of_week,omitempty"` // == HeartAttack target
 }
 
 // WeekLink is one entry in the cross-week navigation dropdown rendered into
@@ -132,4 +139,63 @@ type SeasonAwards struct {
 	ThroughWeek int                   `json:"through_week"`
 	Categories  []SeasonAwardCategory `json:"categories"`
 	Shellings   []PitcherStartLine    `json:"shellings,omitempty"`
+}
+
+// MatchupWPCurve is the per-matchup win-probability trace produced by Monte
+// Carlo simulation. Points has length 8: index 0 is the pre-week baseline
+// (both teams' WP starts at 0.5 in the absence of observed data); indices
+// 1..7 are the WP at end of each day in the matchup week.
+type MatchupWPCurve struct {
+	HomeTeamID  string    `json:"home_team_id"`
+	AwayTeamID  string    `json:"away_team_id"`
+	Points      []WPPoint `json:"points"`
+	LeadChanges int       `json:"lead_changes"`
+}
+
+// WPPoint is one snapshot in a matchup's WP curve.
+type WPPoint struct {
+	Date        time.Time `json:"date"`
+	HomeWP      float64   `json:"home_wp"`
+	HomeRunning float64   `json:"home_running"`
+	AwayRunning float64   `json:"away_running"`
+}
+
+// TeamDay is one team's total FPts on a single day. Used for the Whale
+// award (highest team-day across the league).
+type TeamDay struct {
+	TeamID   string    `json:"team_id"`
+	TeamName string    `json:"team_name"`
+	Date     time.Time `json:"date"`
+	Pts      float64   `json:"pts"`
+}
+
+// RosterActivity is the per-team transaction log rendered in the recap's
+// Roster Activity section. Teams with zero entries are omitted.
+type RosterActivity struct {
+	Teams []TeamActivity `json:"teams"`
+}
+
+// TeamActivity bundles one team's transactions over the matchup week.
+type TeamActivity struct {
+	TeamID   string          `json:"team_id"`
+	TeamName string          `json:"team_name"`
+	Entries  []ActivityEntry `json:"entries"`
+}
+
+// ActivityEntry is a single transaction. Kind selects which fields are
+// populated:
+//   - "claim": Player, ClaimType
+//   - "drop":  Player
+//   - "swap":  SwapIn (added), SwapOut (dropped)
+//   - "trade": OtherTeam, Received, Sent
+type ActivityEntry struct {
+	Date      time.Time `json:"date"`
+	Kind      string    `json:"kind"`
+	Player    string    `json:"player,omitempty"`
+	SwapIn    string    `json:"swap_in,omitempty"`
+	SwapOut   string    `json:"swap_out,omitempty"`
+	OtherTeam string    `json:"other_team,omitempty"`
+	Received  []string  `json:"received,omitempty"`
+	Sent      []string  `json:"sent,omitempty"`
+	ClaimType string    `json:"claim_type,omitempty"` // "FA" | "WW"
 }
