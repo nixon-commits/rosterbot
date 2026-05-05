@@ -115,6 +115,14 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 	// label just won't render.
 	annotateOpponents(allStarts)
 
+	// Build per-day per-team totals for the Whale award + WP simulation σ.
+	dayTotals := buildTeamDays(results, teamMap)
+
+	// Pivot per-team daily home/away actuals keyed by team for WP curves.
+	teamDailyByID := dailyByTeam(results)
+
+	sigma := LeagueDailySigma(dayTotals)
+
 	// Stable sort by efficiency descending so the rendered "Team Performance"
 	// table always reads top-to-bottom by efficiency.
 	sort.SliceStable(teamWeeks, func(i, j int) bool {
@@ -133,21 +141,6 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 	}
 	matchups := buildMatchups(weekPairs, teamScore, teamName)
 
-	awards := Awards{
-		MostEfficient:    MostEfficient(teamWeeks),
-		LeastEfficient:   LeastEfficient(teamWeeks),
-		HighestScore:     HighestScore(teamWeeks),
-		LowestScore:      LowestScore(teamWeeks),
-		BiggestBlowout:   BiggestBlowout(matchups),
-		NarrowVictory:    NarrowVictory(matchups),
-		HighestPtsInLoss: HighestPtsInLoss(matchups),
-		LowestPtsInWin:   LowestPtsInWin(matchups),
-		BestSingleStart:  BestSingleStart(allStarts),
-		WorstSingleStart: WorstSingleStart(allStarts),
-		TopBatters:       TopBatters(allActive, opts.TopPlayers),
-		TopPitchers:      TopPitchers(allActive, opts.TopPlayers),
-	}
-
 	weekNum := opts.WeekNumber
 	if weekNum == 0 {
 		// Look up the actual Fantrax-aligned week number by date. Falls back
@@ -164,16 +157,75 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 		weekLabel = fmt.Sprintf("Week %d", weekNum)
 	}
 
+	awards := Awards{
+		MostEfficient:    MostEfficient(teamWeeks),
+		LeastEfficient:   LeastEfficient(teamWeeks),
+		HighestScore:     HighestScore(teamWeeks),
+		LowestScore:      LowestScore(teamWeeks),
+		BiggestBlowout:   BiggestBlowout(matchups),
+		NarrowVictory:    NarrowVictory(matchups),
+		HighestPtsInLoss: HighestPtsInLoss(matchups),
+		LowestPtsInWin:   LowestPtsInWin(matchups),
+		BestSingleStart:  BestSingleStart(allStarts),
+		WorstSingleStart: WorstSingleStart(allStarts),
+		TopBatters:       TopBatters(allActive, opts.TopPlayers),
+		TopPitchers:      TopPitchers(allActive, opts.TopPlayers),
+		Whale:            Whale(dayTotals),
+		Dud:              Dud(allActive),
+	}
+
+	var curves []MatchupWPCurve
+	if sigma > 0 {
+		// Each team's expected daily FPts is its within-week average. This
+		// honors the spec's "season-to-date" intent at the simplest possible
+		// data cost (no extra fetches); the look-ahead bias is tolerable for
+		// a post-mortem narrative chart. See spec §"Future extensions" for
+		// season-wide upgrade.
+		for _, m := range matchups {
+			h := teamDailyByID[m.HomeTeamID]
+			a := teamDailyByID[m.AwayTeamID]
+			if len(h.Actuals) != 7 || len(a.Actuals) != 7 {
+				continue
+			}
+			hMean := mean(h.Actuals)
+			aMean := mean(a.Actuals)
+			curve := ComputeWPCurve(WPInputs{
+				HomeTeamID:    m.HomeTeamID,
+				AwayTeamID:    m.AwayTeamID,
+				HomeMeanDaily: hMean,
+				AwayMeanDaily: aMean,
+				Sigma:         sigma,
+				Dates:         h.Dates,
+				HomeActuals:   h.Actuals,
+				AwayActuals:   a.Actuals,
+				WeekNumber:    weekNum,
+			})
+			curves = append(curves, curve)
+		}
+	}
+	awards.HeartAttack = HeartAttack(curves, matchups)
+	awards.GameOfWeek = awards.HeartAttack
+	awards.Comeback = Comeback(curves, matchups)
+
+	var activity *RosterActivity
+	if txs, err := ft.GetWeekTransactions(opts.WeekStart, opts.WeekEnd); err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: roster activity: %v\n", err)
+	} else {
+		activity = BuildRosterActivity(txs, teamMap)
+	}
+
 	return &Recap{
-		Season:      opts.WeekStart.Year(),
-		WeekNumber:  weekNum,
-		WeekLabel:   weekLabel,
-		StartDate:   opts.WeekStart,
-		EndDate:     opts.WeekEnd,
-		GeneratedAt: time.Now().UTC(),
-		Teams:       teamWeeks,
-		Matchups:    matchups,
-		Awards:      awards,
+		Season:         opts.WeekStart.Year(),
+		WeekNumber:     weekNum,
+		WeekLabel:      weekLabel,
+		StartDate:      opts.WeekStart,
+		EndDate:        opts.WeekEnd,
+		GeneratedAt:    time.Now().UTC(),
+		Teams:          teamWeeks,
+		Matchups:       matchups,
+		Awards:         awards,
+		WPCurves:       curves,
+		RosterActivity: activity,
 	}, nil
 }
 
@@ -393,4 +445,97 @@ func matchupWeekNumber(seasonStart, weekStart time.Time) int {
 		return 1
 	}
 	return (days / 7) + 1
+}
+
+// teamDaily holds one team's per-day actuals for the matchup window.
+// Length 7, chronological.
+type teamDaily struct {
+	Dates   []time.Time
+	Actuals []float64
+}
+
+// dailyByTeam pivots the per-team teamData (which has actual FPts via the
+// existing backtest analysis) into a teamID → teamDaily map. The orchestrator
+// uses this to feed the WP simulation per matchup.
+func dailyByTeam(results map[string]*teamData) map[string]teamDaily {
+	out := make(map[string]teamDaily, len(results))
+	for teamID, td := range results {
+		// The active player lines carry per-day per-player FPts. Aggregate by
+		// date (active starters only — same definition the optimizer uses for
+		// the actual-points side of efficiency).
+		byDate := map[string]float64{}
+		for _, p := range td.active {
+			byDate[p.Date.Format("2006-01-02")] += p.FPts
+		}
+		// Materialize into chronological slices. We need the canonical week
+		// dates — pull them from the active list's distinct Dates.
+		dates := uniqueDates(td.active)
+		actuals := make([]float64, len(dates))
+		for i, d := range dates {
+			actuals[i] = byDate[d.Format("2006-01-02")]
+		}
+		out[teamID] = teamDaily{Dates: dates, Actuals: actuals}
+	}
+	return out
+}
+
+// uniqueDates returns the distinct Dates from a PlayerLine slice in
+// chronological order. Used to derive the canonical 7-day window.
+func uniqueDates(lines []PlayerLine) []time.Time {
+	seen := map[string]time.Time{}
+	for _, l := range lines {
+		key := l.Date.Format("2006-01-02")
+		if _, ok := seen[key]; !ok {
+			seen[key] = l.Date
+		}
+	}
+	out := make([]time.Time, 0, len(seen))
+	for _, t := range seen {
+		out = append(out, t)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Before(out[j]) })
+	return out
+}
+
+// buildTeamDays produces one TeamDay per (team, date) pair across all teams.
+// Used as input to the Whale award and to LeagueDailySigma for WP variance.
+func buildTeamDays(results map[string]*teamData, teamMap map[string]string) []TeamDay {
+	var out []TeamDay
+	for teamID, td := range results {
+		byDate := map[string]float64{}
+		dates := map[string]time.Time{}
+		for _, p := range td.active {
+			key := p.Date.Format("2006-01-02")
+			byDate[key] += p.FPts
+			dates[key] = p.Date
+		}
+		name := teamMap[teamID]
+		for key, pts := range byDate {
+			out = append(out, TeamDay{
+				TeamID:   teamID,
+				TeamName: name,
+				Date:     dates[key],
+				Pts:      pts,
+			})
+		}
+	}
+	// Stable order for determinism.
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].Date.Equal(out[j].Date) {
+			return out[i].Date.Before(out[j].Date)
+		}
+		return out[i].TeamID < out[j].TeamID
+	})
+	return out
+}
+
+func mean(xs []float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	var s float64
+	for _, x := range xs {
+		s += x
+	}
+	return s / float64(len(xs))
 }
