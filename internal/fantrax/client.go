@@ -103,6 +103,28 @@ func (c *Client) GetRecentTrades(since time.Time) ([]models.Transaction, error) 
 	return recent, nil
 }
 
+// GetWeekTransactions returns all executed transactions (claims, drops,
+// trades) whose ProcessedDate falls on a calendar date in
+// [windowStart, windowEnd] (inclusive). Date comparison is YYYY-MM-DD
+// lexical to dodge timezone equality pitfalls — same convention used by
+// pairsForWeek in the recap pipeline.
+func (c *Client) GetWeekTransactions(windowStart, windowEnd time.Time) ([]models.Transaction, error) {
+	all, err := c.auth.GetTransactionHistory("250")
+	if err != nil {
+		return nil, fmt.Errorf("fetch transactions: %w", err)
+	}
+	startYMD := windowStart.Format("2006-01-02")
+	endYMD := windowEnd.Format("2006-01-02")
+	var window []models.Transaction
+	for _, tx := range all {
+		ymd := tx.ProcessedDate.Format("2006-01-02")
+		if ymd >= startYMD && ymd <= endYMD {
+			window = append(window, tx)
+		}
+	}
+	return window, nil
+}
+
 // Player is a simplified view of a rostered hitter.
 type Player struct {
 	ID             string
