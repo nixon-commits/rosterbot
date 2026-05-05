@@ -31,6 +31,21 @@ var funcMap = template.FuncMap{
 	"fullChartPath":     fullChartPath,
 	"curveForMatchup":   curveForMatchup,
 	"renderActivity":    renderActivity,
+	"truncate":          truncateString,
+}
+
+// truncateString returns s if len(s) <= n, otherwise the first (n-1) runes
+// followed by an ellipsis. Used for fitting team names into the WP chart's
+// fixed-width axis labels.
+func truncateString(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n-1]) + "…"
 }
 
 // awardEmoji returns the visual icon shown next to a weekly award category in
