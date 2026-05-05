@@ -76,10 +76,6 @@ func awardEmoji(name string) string {
 		return "💓"
 	case AwardComeback:
 		return "↩️"
-	case AwardWhale:
-		return "🐳"
-	case AwardDud:
-		return "😴"
 	}
 	return ""
 }

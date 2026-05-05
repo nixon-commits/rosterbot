@@ -99,8 +99,6 @@ type Awards struct {
 	TopPitchers      []PlayerLine      `json:"top_pitchers,omitempty"`
 	HeartAttack      *MatchupResult    `json:"heart_attack,omitempty"`
 	Comeback         *MatchupTeamSide  `json:"comeback,omitempty"`
-	Whale            *TeamDay          `json:"whale,omitempty"`
-	Dud              *PlayerLine       `json:"dud,omitempty"`
 	GameOfWeek       *MatchupResult    `json:"game_of_week,omitempty"`
 }
 

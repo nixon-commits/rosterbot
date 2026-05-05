@@ -255,22 +255,6 @@
       <div class="sub">vs {{.LowestPtsInWin.OppName}} {{pts .LowestPtsInWin.OppPts}}</div>
     </div>
     {{- end}}
-    {{- if .Whale}}
-    <div class="award">
-      <div class="label"><span>Whale</span><span class="icon">🐳</span></div>
-      <div class="name">{{.Whale.TeamName}}</div>
-      <div class="pts">{{pts .Whale.Pts}}</div>
-      <div class="sub">{{fmtDate .Whale.Date}}</div>
-    </div>
-    {{- end}}
-    {{- if .Dud}}
-    <div class="award">
-      <div class="label"><span>Dud</span><span class="icon">😴</span></div>
-      <div class="name">{{.Dud.Name}}</div>
-      <div class="pts">{{pts .Dud.FPts}}</div>
-      <div class="sub">{{.Dud.OwnerTeam}} · {{fmtDate .Dud.Date}}</div>
-    </div>
-    {{- end}}
   </div>
 </section>
 

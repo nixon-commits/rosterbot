@@ -11,7 +11,7 @@ Fantasy baseball roster automation for Fantrax head-to-head points leagues. Opti
 - **GS violation detection** — Tallies game starts across all league teams and sends Pushover notifications when a team exceeds the cap.
 - **Roster hygiene** — Flags healthy players stuck in IL slots, called-up players still in Minors slots, and injured players occupying active slots.
 - **Backtesting** — Grades past lineup moves against the hindsight-optimal lineup and measures projection accuracy against actual fantasy points.
-- **Weekly recaps** — Sleeper-style HTML recaps with Game of the Week win-probability chart and awards including Heart Attack (most lead changes), Comeback (winner with mid-week WP < 0.30), Whale (biggest single-day team total), and Dud (lowest single-day active starter).
+- **Weekly recaps** — Sleeper-style HTML recaps with a Game of the Week win-probability chart, plus Heart Attack (most lead changes) and Comeback (winner with mid-week WP < 0.30) awards.
 
 ## Quick Start
 

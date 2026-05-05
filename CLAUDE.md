@@ -89,7 +89,7 @@ The snapshot archive is opt-in (`--archive-projections` flag or `BACKTEST_ARCHIV
 
 **Game of the Week** — featured at the top of the page when at least one matchup has any lead changes; otherwise hidden. Picked as `HeartAttack(curves, matchups)` — most lead changes wins, ties broken by smallest final margin then home `TeamID` asc. `Awards.GameOfWeek` and `Awards.HeartAttack` always reference the same matchup (single source of truth). The hero chart is rendered as a 380×140 SVG with mirrored 100/75/50/75/100% y-axis labels, half tints (green=home favored on top, red=away favored on bottom), team name labels in their respective halves, and dated x-axis ticks.
 
-**New awards** — `Whale` (biggest single-day team total), `Dud` (lowest single-day active starter, negatives eligible), `HeartAttack` (most lead changes), `Comeback` (winner with mid-week WP < 0.30). All four feed into `AggregateSeasonAwards` and the season cumulative leaderboard.
+**New awards** — `HeartAttack` (most lead changes) and `Comeback` (winner with mid-week WP < 0.30). Both feed into `AggregateSeasonAwards` and the season cumulative leaderboard.
 
 **`internal/notify`** — notification helpers. `SendPushover` sends push notifications via the Pushover API. Self-contained function taking explicit parameters (no config dependency).
 

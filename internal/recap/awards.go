@@ -252,47 +252,6 @@ func pickStart(starts []PitcherStartLine, less func(a, b *PitcherStartLine) bool
 	return &out
 }
 
-// Whale returns the highest single-day team total across the league × week.
-// Tiebreak: earliest date, then TeamID asc. Returns nil if days is empty.
-func Whale(days []TeamDay) *TeamDay {
-	var best *TeamDay
-	for i := range days {
-		td := &days[i]
-		switch {
-		case best == nil:
-		case td.Pts > best.Pts:
-		case td.Pts == best.Pts && td.Date.Before(best.Date):
-		case td.Pts == best.Pts && td.Date.Equal(best.Date) && td.TeamID < best.TeamID:
-		default:
-			continue
-		}
-		t := *td
-		best = &t
-	}
-	return best
-}
-
-// Dud returns the lowest single-day active-starter score across the league ×
-// week. Negatives eligible. Tiebreak: earliest date, then Name asc.
-// Returns nil if active is empty.
-func Dud(active []PlayerLine) *PlayerLine {
-	var best *PlayerLine
-	for i := range active {
-		l := &active[i]
-		switch {
-		case best == nil:
-		case l.FPts < best.FPts:
-		case l.FPts == best.FPts && l.Date.Before(best.Date):
-		case l.FPts == best.FPts && l.Date.Equal(best.Date) && l.Name < best.Name:
-		default:
-			continue
-		}
-		t := *l
-		best = &t
-	}
-	return best
-}
-
 // HeartAttack returns the matchup with the most lead changes in its WP
 // curve. Returns nil if no matchup has any lead changes (an "all-blowouts"
 // week — the recap will hide the Game of the Week section in that case).
@@ -405,8 +364,6 @@ const (
 	AwardWorstStart     = "Worst Start"
 	AwardHeartAttack    = "Heart Attack"
 	AwardComeback       = "Comeback"
-	AwardWhale          = "Whale"
-	AwardDud            = "Dud"
 )
 
 // SeasonShellingsLimit caps how many worst pitcher starts of the season are
@@ -428,8 +385,6 @@ var awardOrder = []string{
 	AwardWorstStart,
 	AwardHeartAttack,
 	AwardComeback,
-	AwardWhale,
-	AwardDud,
 }
 
 // AggregateSeasonAwards walks recaps in order and returns one cumulative
@@ -521,14 +476,6 @@ func AggregateSeasonAwards(recaps []*Recap) []*SeasonAwards {
 		}
 		if a.Comeback != nil {
 			add(AwardComeback, a.Comeback.TeamID)
-		}
-		if a.Whale != nil {
-			add(AwardWhale, a.Whale.TeamID)
-		}
-		if a.Dud != nil {
-			if id, ok := nameToID[a.Dud.OwnerTeam]; ok {
-				add(AwardDud, id)
-			}
 		}
 
 		// Build snapshot in fixed display order, skipping awards no team has

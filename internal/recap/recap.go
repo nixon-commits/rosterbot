@@ -115,7 +115,7 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 	// label just won't render.
 	annotateOpponents(allStarts)
 
-	// Build per-day per-team totals for the Whale award + WP simulation σ.
+	// Build per-day per-team totals for the WP simulation σ.
 	dayTotals := buildTeamDays(results, teamMap)
 
 	// Pivot per-team daily home/away actuals keyed by team for WP curves.
@@ -170,8 +170,6 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 		WorstSingleStart: WorstSingleStart(allStarts),
 		TopBatters:       TopBatters(allActive, opts.TopPlayers),
 		TopPitchers:      TopPitchers(allActive, opts.TopPlayers),
-		Whale:            Whale(dayTotals),
-		Dud:              Dud(allActive),
 	}
 
 	var curves []MatchupWPCurve
@@ -490,7 +488,7 @@ func uniqueDates(lines []PlayerLine) []time.Time {
 }
 
 // buildTeamDays produces one TeamDay per (team, date) pair across all teams.
-// Used as input to the Whale award and to LeagueDailySigma for WP variance.
+// Used as input to LeagueDailySigma for WP variance.
 func buildTeamDays(results map[string]*teamData, teamMap map[string]string) []TeamDay {
 	var out []TeamDay
 	for teamID, td := range results {
