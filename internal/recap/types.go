@@ -102,7 +102,7 @@ type Awards struct {
 	Comeback         *MatchupTeamSide  `json:"comeback,omitempty"`
 	Whale            *TeamDay          `json:"whale,omitempty"`
 	Dud              *PlayerLine       `json:"dud,omitempty"`
-	GameOfWeek       *MatchupResult    `json:"game_of_week,omitempty"` // == HeartAttack target
+	GameOfWeek       *MatchupResult    `json:"game_of_week,omitempty"`
 }
 
 // WeekLink is one entry in the cross-week navigation dropdown rendered into
@@ -152,12 +152,14 @@ type MatchupWPCurve struct {
 	LeadChanges int       `json:"lead_changes"`
 }
 
-// WPPoint is one snapshot in a matchup's WP curve.
+// WPPoint is one snapshot in a matchup's WP curve. HomeRunning and
+// AwayRunning are the cumulative actual FPts each team has scored through
+// this point in time.
 type WPPoint struct {
 	Date        time.Time `json:"date"`
-	HomeWP      float64   `json:"home_wp"`
-	HomeRunning float64   `json:"home_running"`
-	AwayRunning float64   `json:"away_running"`
+	HomeWP      float64   `json:"home_wp"`      // home win probability in [0, 1]
+	HomeRunning float64   `json:"home_running"` // home cumulative FPts through Date
+	AwayRunning float64   `json:"away_running"` // away cumulative FPts through Date
 }
 
 // TeamDay is one team's total FPts on a single day. Used for the Whale
@@ -182,7 +184,8 @@ type TeamActivity struct {
 	Entries  []ActivityEntry `json:"entries"`
 }
 
-// ActivityEntry is a single transaction. Kind selects which fields are
+// ActivityEntry is a single transaction. Kind must be one of "claim",
+// "drop", "swap", or "trade". The Kind value determines which fields are
 // populated:
 //   - "claim": Player, ClaimType
 //   - "drop":  Player
