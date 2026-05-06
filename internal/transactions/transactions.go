@@ -185,15 +185,16 @@ const (
 )
 
 // formatTrades produces a human-readable trade report with the given header.
+// The format is mobile/Pushover-friendly: short lines, no wide horizontal
+// rules, one player rendered as a 2-3 line block instead of a single
+// pipe-separated line that wraps awkwardly on phones.
 func formatTrades(header string, trades []Trade, color bool) string {
 	var b strings.Builder
 	b.WriteString(header + "\n")
-	b.WriteString(strings.Repeat("─", 50) + "\n")
 	for i, t := range trades {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		fmt.Fprintf(&b, "Trade: %s <-> %s\n", t.Sides[0].TeamName, t.Sides[1].TeamName)
+		b.WriteString("\n")
+		_ = i
+		fmt.Fprintf(&b, "%s ⇄ %s\n", t.Sides[0].TeamName, t.Sides[1].TeamName)
 		for si, side := range t.Sides {
 			other := t.Sides[1-si]
 			diff := side.Total - other.Total
@@ -209,9 +210,7 @@ func formatTrades(header string, trades []Trade, color bool) string {
 
 			fmt.Fprintf(&b, "  %s receives:\n", side.TeamName)
 			for _, p := range side.Players {
-				b.WriteString("    ")
-				formatPlayer(&b, p, color)
-				b.WriteString("\n")
+				formatPlayer(&b, p, "    ", color)
 			}
 			diffSign := "+"
 			absDiff := diff
@@ -233,31 +232,21 @@ func formatTrades(header string, trades []Trade, color bool) string {
 	return b.String()
 }
 
-// formatPlayer writes one inline player detail line.
-// Format: Name (Pos) #Rank | Value ▲+30d | Age N | .OPS or ERA/WHIP | [flags]
-func formatPlayer(b *strings.Builder, p TradePlayer, color bool) {
+// formatPlayer writes a multi-line player block prefixed by indent. Layout:
+//
+//	indent• Name (Pos), age N · flag1, flag2
+//	indent  #Rank · Value ▲+30d
+//	indent  X.XX ERA · X.XX WHIP   (or .OPS, omitted when no stats)
+//
+// Unranked players collapse to a single line: `indent• Name (Pos) — unranked`.
+func formatPlayer(b *strings.Builder, p TradePlayer, indent string, color bool) {
 	if !p.Ranked {
-		fmt.Fprintf(b, "%s (%s) unranked", p.Name, p.Position)
+		fmt.Fprintf(b, "%s• %s (%s) — unranked\n", indent, p.Name, p.Position)
 		return
 	}
 
-	fmt.Fprintf(b, "%s (%s) #%d", p.Name, p.Position, p.Rank)
-
-	b.WriteString(" | ")
-	b.WriteString(formatValue(p.Value))
-	b.WriteString(" ")
-	formatTrend(b, p.ValueChange30D, color)
-
-	fmt.Fprintf(b, " | Age %d", int(math.Floor(p.Age)))
-
-	if p.HasStats {
-		if p.IsPitcher {
-			fmt.Fprintf(b, " | %.2f ERA / %.2f WHIP", p.ERA, p.WHIP)
-		} else {
-			fmt.Fprintf(b, " | %s OPS", formatOPS(p.OPS))
-		}
-	}
-
+	// Line 1: name, position, age, optional flags
+	fmt.Fprintf(b, "%s• %s (%s), age %d", indent, p.Name, p.Position, int(math.Floor(p.Age)))
 	var flags []string
 	if p.Prospect {
 		flags = append(flags, "Prospect")
@@ -269,7 +258,23 @@ func formatPlayer(b *strings.Builder, p TradePlayer, color bool) {
 		flags = append(flags, p.Level)
 	}
 	if len(flags) > 0 {
-		fmt.Fprintf(b, " | %s", strings.Join(flags, ", "))
+		fmt.Fprintf(b, " · %s", strings.Join(flags, ", "))
+	}
+	b.WriteString("\n")
+
+	// Line 2: rank · value · 30d trend
+	child := indent + "  "
+	fmt.Fprintf(b, "%s#%d · %s ", child, p.Rank, formatValue(p.Value))
+	formatTrend(b, p.ValueChange30D, color)
+	b.WriteString("\n")
+
+	// Line 3 (only if stats present): performance line
+	if p.HasStats {
+		if p.IsPitcher {
+			fmt.Fprintf(b, "%s%.2f ERA · %.2f WHIP\n", child, p.ERA, p.WHIP)
+		} else {
+			fmt.Fprintf(b, "%s%s OPS\n", child, formatOPS(p.OPS))
+		}
 	}
 }
 

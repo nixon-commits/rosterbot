@@ -267,11 +267,10 @@ func TestFormatPlayer(t *testing.T) {
 			HasStats: true, OPS: 0.912,
 		}
 		var b strings.Builder
-		formatPlayer(&b, p, false)
+		formatPlayer(&b, p, "", false)
 		got := b.String()
-		assertContains(t, got, "Bobby Witt Jr. (SS) #1")
-		assertContains(t, got, "10,000 ▲+200")
-		assertContains(t, got, "Age 25")
+		assertContains(t, got, "• Bobby Witt Jr. (SS), age 25")
+		assertContains(t, got, "#1 · 10,000 ▲+200")
 		assertContains(t, got, ".912 OPS")
 	})
 
@@ -282,11 +281,11 @@ func TestFormatPlayer(t *testing.T) {
 			IsPitcher: true, HasStats: true, ERA: 3.45, WHIP: 1.12,
 		}
 		var b strings.Builder
-		formatPlayer(&b, p, false)
+		formatPlayer(&b, p, "", false)
 		got := b.String()
-		assertContains(t, got, "#120")
-		assertContains(t, got, "1,200 ▼-150")
-		assertContains(t, got, "3.45 ERA / 1.12 WHIP")
+		assertContains(t, got, "• Cade Cavalli (SP), age 26")
+		assertContains(t, got, "#120 · 1,200 ▼-150")
+		assertContains(t, got, "3.45 ERA · 1.12 WHIP")
 	})
 
 	t.Run("prospect with flags", func(t *testing.T) {
@@ -296,7 +295,7 @@ func TestFormatPlayer(t *testing.T) {
 			Prospect: true, FYPD: true, HasStats: true, OPS: 0.845,
 		}
 		var b strings.Builder
-		formatPlayer(&b, p, false)
+		formatPlayer(&b, p, "", false)
 		got := b.String()
 		assertContains(t, got, "Prospect")
 		assertContains(t, got, "FYPD")
@@ -306,10 +305,10 @@ func TestFormatPlayer(t *testing.T) {
 	t.Run("unranked player", func(t *testing.T) {
 		p := TradePlayer{Name: "Nobody", Position: "OF"}
 		var b strings.Builder
-		formatPlayer(&b, p, false)
+		formatPlayer(&b, p, "", false)
 		got := b.String()
-		if got != "Nobody (OF) unranked" {
-			t.Errorf("got %q, want %q", got, "Nobody (OF) unranked")
+		if got != "• Nobody (OF) — unranked\n" {
+			t.Errorf("got %q, want %q", got, "• Nobody (OF) — unranked\n")
 		}
 	})
 }
@@ -342,10 +341,11 @@ func TestFormatReport(t *testing.T) {
 		t.Fatal("expected non-empty report")
 	}
 	assertContains(t, report, "Recent Trades")
-	assertContains(t, report, "Team A <-> Team B")
-	assertContains(t, report, "Player X (SS) #10")
+	assertContains(t, report, "Team A ⇄ Team B")
+	assertContains(t, report, "• Player X (SS), age 24")
+	assertContains(t, report, "#10 ·")
 	assertContains(t, report, ".812 OPS")
-	assertContains(t, report, "Player Y (OF) unranked")
+	assertContains(t, report, "• Player Y (OF) — unranked")
 	assertContains(t, report, colorGreen)
 	assertContains(t, report, colorRed)
 	assertContains(t, report, "Total:")
@@ -398,9 +398,11 @@ func TestFormatPendingReport(t *testing.T) {
 	}
 	report := formatTrades("Pending Trades", trades, false)
 	assertContains(t, report, "Pending Trades")
-	assertContains(t, report, "Team A <-> Team B")
-	assertContains(t, report, "P1 (SP) #80")
-	assertContains(t, report, "P2 (3B) #40")
+	assertContains(t, report, "Team A ⇄ Team B")
+	assertContains(t, report, "P1 (SP), age 25")
+	assertContains(t, report, "#80 ·")
+	assertContains(t, report, "P2 (3B), age 23")
+	assertContains(t, report, "#40 ·")
 	assertContains(t, report, "Total:")
 }
 
