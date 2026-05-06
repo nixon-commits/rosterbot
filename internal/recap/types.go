@@ -9,16 +9,17 @@ import "time"
 // Recap is the full data model for a single matchup-week recap. It's
 // JSON-serializable for debugging and feeds the HTML template.
 type Recap struct {
-	Season      int              `json:"season"`
-	WeekNumber  int              `json:"week_number"`
-	WeekLabel   string           `json:"week_label"`
-	StartDate   time.Time        `json:"start_date"`
-	EndDate     time.Time        `json:"end_date"`
-	GeneratedAt time.Time        `json:"generated_at"`
-	Teams       []TeamWeek       `json:"teams"`
-	Matchups    []MatchupResult  `json:"matchups"`
-	Awards      Awards           `json:"awards"`
-	WPCurves    []MatchupWPCurve `json:"wp_curves,omitempty"`
+	Season      int               `json:"season"`
+	WeekNumber  int               `json:"week_number"`
+	WeekLabel   string            `json:"week_label"`
+	StartDate   time.Time         `json:"start_date"`
+	EndDate     time.Time         `json:"end_date"`
+	GeneratedAt time.Time         `json:"generated_at"`
+	Teams       []TeamWeek        `json:"teams"`
+	Matchups    []MatchupResult   `json:"matchups"`
+	Awards      Awards            `json:"awards"`
+	WPCurves    []MatchupWPCurve  `json:"wp_curves,omitempty"`
+	LogoURLs    map[string]string `json:"logo_urls,omitempty"`
 }
 
 // TeamWeek is a single team's aggregated weekly performance.

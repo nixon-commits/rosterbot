@@ -121,6 +121,19 @@
   .matchup .vs { display: flex; flex-direction: column; align-items: center; gap: 4px; }
   .matchup .spark { width: 60px; height: 24px; }
   .matchup .mu-badge { font-size: 14px; vertical-align: middle; }
+  .team-avatar { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; vertical-align: middle; background: var(--bg-card-2); flex-shrink: 0; }
+  .team-avatar-lg { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; vertical-align: middle; background: var(--bg-card-2); flex-shrink: 0; border: 1px solid var(--border); }
+  .game-of-week .gw-team { flex-direction: row; align-items: center; gap: 10px; }
+  .game-of-week .gw-team.away { flex-direction: row-reverse; }
+  .game-of-week .gw-team .meta { display: flex; flex-direction: column; }
+  .game-of-week .gw-team.away .meta { text-align: right; align-items: flex-end; }
+  .matchup .team .name { display: flex; align-items: center; gap: 6px; }
+  .matchup .team.away .name { justify-content: flex-end; }
+  .perf-row .top { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+  .perf-row .top .name { display: flex; align-items: center; gap: 8px; }
+  .season-cat .row .body .name { display: flex; align-items: center; gap: 8px; }
+  .game-of-week .wp-half-label { display: flex; align-items: center; gap: 6px; }
+  .game-of-week .wp-half-label .team-avatar { width: 18px; height: 18px; }
 </style>
 </head>
 <body>
@@ -158,12 +171,20 @@
     </div>
     <div class="gw-scores">
       <div class="gw-team home">
-        <span class="name">{{.GameOfWeek.HomeTeamName}}</span>
-        <span class="pts">{{pts .GameOfWeek.HomePts}}</span>
+        {{- $hLogo := teamLogo $.LogoURLs .GameOfWeek.HomeTeamID}}
+        {{- if $hLogo}}<img class="team-avatar-lg" src="{{$hLogo}}" alt=""/>{{end}}
+        <div class="meta">
+          <span class="name">{{.GameOfWeek.HomeTeamName}}</span>
+          <span class="pts">{{pts .GameOfWeek.HomePts}}</span>
+        </div>
       </div>
       <div class="gw-team away">
-        <span class="name">{{.GameOfWeek.AwayTeamName}}</span>
-        <span class="pts">{{pts .GameOfWeek.AwayPts}}</span>
+        {{- $aLogo := teamLogo $.LogoURLs .GameOfWeek.AwayTeamID}}
+        {{- if $aLogo}}<img class="team-avatar-lg" src="{{$aLogo}}" alt=""/>{{end}}
+        <div class="meta">
+          <span class="name">{{.GameOfWeek.AwayTeamName}}</span>
+          <span class="pts">{{pts .GameOfWeek.AwayPts}}</span>
+        </div>
       </div>
     </div>
     {{- if $curve.Points}}
@@ -176,8 +197,16 @@
         <span>100%</span>
       </div>
       <div class="wp-graph">
-        <span class="wp-half-label home">{{.GameOfWeek.HomeTeamName}}</span>
-        <span class="wp-half-label away">{{.GameOfWeek.AwayTeamName}}</span>
+        <span class="wp-half-label home">
+          {{- $hLogoWP := teamLogo $.LogoURLs .GameOfWeek.HomeTeamID}}
+          {{- if $hLogoWP}}<img class="team-avatar" src="{{$hLogoWP}}" alt=""/>{{end}}
+          <span>{{.GameOfWeek.HomeTeamName}}</span>
+        </span>
+        <span class="wp-half-label away">
+          {{- $aLogoWP := teamLogo $.LogoURLs .GameOfWeek.AwayTeamID}}
+          {{- if $aLogoWP}}<img class="team-avatar" src="{{$aLogoWP}}" alt=""/>{{end}}
+          <span>{{.GameOfWeek.AwayTeamName}}</span>
+        </span>
         <svg viewBox="0 0 320 120" preserveAspectRatio="none">
           <rect x="0" y="0" width="320" height="60" fill="rgba(74, 222, 128, 0.05)"/>
           <rect x="0" y="60" width="320" height="60" fill="rgba(248, 113, 113, 0.05)"/>
@@ -339,9 +368,14 @@
 <section>
   <h2>Team Performance</h2>
   {{- range $i, $t := .Teams}}
+  {{- $tLogo := teamLogo $.LogoURLs $t.TeamID}}
   <div class="perf-row">
     <div class="top">
-      <div class="name">{{add $i 1}}. {{$t.TeamName}}</div>
+      <div class="name">
+        <span>{{add $i 1}}.</span>
+        {{- if $tLogo}}<img class="team-avatar" src="{{$tLogo}}" alt=""/>{{end}}
+        <span>{{$t.TeamName}}</span>
+      </div>
       <div class="pct">{{pct $t.Efficiency}}</div>
     </div>
     <div class="sub">{{pts $t.ActualPts}} of {{pts $t.OptimalPts}} max</div>
@@ -356,9 +390,16 @@
   {{- $comeback := .Awards.Comeback}}
   {{- range .Matchups}}
   {{- $curve := curveForMatchup $.WPCurves .}}
+  {{- $awayLogo := teamLogo $.LogoURLs .AwayTeamID}}
+  {{- $homeLogo := teamLogo $.LogoURLs .HomeTeamID}}
   <div class="matchup">
     <div class="team away {{matchupSideClass . .AwayTeamID}}">
-      <div class="name">{{if eq .WinnerID .AwayTeamID}}🏆 {{end}}{{.AwayTeamName}}{{if and $comeback (eq $comeback.TeamID .AwayTeamID)}} <span class="mu-badge">↩️</span>{{end}}</div>
+      <div class="name">
+        {{- if eq .WinnerID .AwayTeamID}}<span>🏆</span>{{end}}
+        <span>{{.AwayTeamName}}</span>
+        {{- if $awayLogo}}<img class="team-avatar" src="{{$awayLogo}}" alt=""/>{{end}}
+        {{- if and $comeback (eq $comeback.TeamID .AwayTeamID)}}<span class="mu-badge">↩️</span>{{end}}
+      </div>
       <div class="pts">{{pts .AwayPts}}</div>
     </div>
     <div class="vs">
@@ -373,7 +414,12 @@
       {{- end}}
     </div>
     <div class="team home {{matchupSideClass . .HomeTeamID}}">
-      <div class="name">{{.HomeTeamName}}{{if eq .WinnerID .HomeTeamID}} 🏆{{end}}{{if and $comeback (eq $comeback.TeamID .HomeTeamID)}} <span class="mu-badge">↩️</span>{{end}}</div>
+      <div class="name">
+        {{- if $homeLogo}}<img class="team-avatar" src="{{$homeLogo}}" alt=""/>{{end}}
+        <span>{{.HomeTeamName}}</span>
+        {{- if eq .WinnerID .HomeTeamID}}<span>🏆</span>{{end}}
+        {{- if and $comeback (eq $comeback.TeamID .HomeTeamID)}}<span class="mu-badge">↩️</span>{{end}}
+      </div>
       <div class="pts">{{pts .HomePts}}</div>
     </div>
   </div>
@@ -387,10 +433,14 @@
   <div class="season-cat">
     <h3><span class="icon">{{awardEmoji .AwardName}}</span>{{.AwardName}}</h3>
     {{- range $i, $t := .Teams}}
+    {{- $sLogo := teamLogo $.LogoURLs $t.TeamID}}
     <div class="row">
       <div class="rank">{{add $i 1}}</div>
       <div class="body">
-        <div class="name">{{$t.TeamName}}</div>
+        <div class="name">
+          {{- if $sLogo}}<img class="team-avatar" src="{{$sLogo}}" alt=""/>{{end}}
+          <span>{{$t.TeamName}}</span>
+        </div>
       </div>
       <div class="stat">{{$t.Count}}</div>
     </div>

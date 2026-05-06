@@ -84,7 +84,7 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config, force bool) error {
 	fmt.Printf("Running GS check for date: %s\n", today.Format("2006-01-02"))
 
 	fmt.Println("Fetching scoring periods and teams...")
-	periods, teamMap, err := ft.GetScoringPeriodsAndTeams()
+	periods, teamMap, _, err := ft.GetScoringPeriodsAndTeams()
 	if err != nil {
 		return fmt.Errorf("fetch scoring periods: %w", err)
 	}

@@ -45,7 +45,7 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 		return nil, fmt.Errorf("season range: %w", err)
 	}
 
-	_, teamMap, err := ft.GetScoringPeriodsAndTeams()
+	_, teamMap, teamLogos, err := ft.GetScoringPeriodsAndTeams()
 	if err != nil {
 		return nil, fmt.Errorf("teams: %w", err)
 	}
@@ -224,6 +224,7 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 		Matchups:    matchups,
 		Awards:      awards,
 		WPCurves:    curves,
+		LogoURLs:    teamLogos,
 	}, nil
 }
 

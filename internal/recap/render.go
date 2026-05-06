@@ -31,6 +31,18 @@ var funcMap = template.FuncMap{
 	"fullChartPath":     fullChartPath,
 	"curveForMatchup":   curveForMatchup,
 	"truncate":          truncateString,
+	"teamLogo":          teamLogo,
+}
+
+// teamLogo returns the avatar URL for one team from the Recap.LogoURLs map.
+// Returns empty when the map is nil or the team has no logo set; the
+// template should `{{if}}`-guard the resulting <img> tag so layout stays
+// clean for older archived recaps without logo data.
+func teamLogo(logos map[string]string, id string) string {
+	if logos == nil {
+		return ""
+	}
+	return logos[id]
 }
 
 // truncateString returns s if len(s) <= n, otherwise the first (n-1) runes

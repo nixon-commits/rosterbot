@@ -52,7 +52,7 @@ func (c *Client) GetCurrentPeriod() (int, error) {
 // GetSeasonDateRange returns the first and last dates of the Fantrax season
 // by using the scoring periods endpoint which has actual start/end dates.
 func (c *Client) GetSeasonDateRange() (time.Time, time.Time, error) {
-	periods, _, err := c.GetScoringPeriodsAndTeams()
+	periods, _, _, err := c.GetScoringPeriodsAndTeams()
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("get scoring periods: %w", err)
 	}

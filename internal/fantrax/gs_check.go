@@ -29,9 +29,11 @@ var dateRangeRe = regexp.MustCompile(`\(.*?(\w+ \w+ \d+, \d{4})\s*-\s*(\w+ \w+ \
 // standingsURL is the Fantrax API endpoint for standings. Var for test overriding.
 var standingsURL = "https://www.fantrax.com/fxpa/req"
 
-// GetScoringPeriodsAndTeams fetches all scoring periods and the team ID→name map
-// from a single getStandings call with view=SCHEDULE.
-func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string, error) {
+// GetScoringPeriodsAndTeams fetches all scoring periods, the team ID→name
+// map, and the team ID→logoURL map from a single getStandings call with
+// view=SCHEDULE. The logos map may have empty values for teams that
+// haven't set a logo (rare); callers should treat empty as "no avatar".
+func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string, map[string]string, error) {
 	fullRequest := map[string]interface{}{
 		"msgs": []auth_client.FantraxMessage{
 			{
@@ -53,43 +55,45 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 
 	jsonStr, err := json.Marshal(fullRequest)
 	if err != nil {
-		return nil, nil, fmt.Errorf("marshal standings request: %w", err)
+		return nil, nil, nil, fmt.Errorf("marshal standings request: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", standingsURL+"?leagueId="+c.leagueID, bytes.NewBuffer(jsonStr))
 	if err != nil {
-		return nil, nil, fmt.Errorf("create standings request: %w", err)
+		return nil, nil, nil, fmt.Errorf("create standings request: %w", err)
 	}
 
 	resp, err := c.auth.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("send standings request: %w", err)
+		return nil, nil, nil, fmt.Errorf("send standings request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("standings API returned status %d", resp.StatusCode)
+		return nil, nil, nil, fmt.Errorf("standings API returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read standings response: %w", err)
+		return nil, nil, nil, fmt.Errorf("read standings response: %w", err)
 	}
 
 	var standingsResp auth_client.StandingsResponse
 	if err := json.Unmarshal(body, &standingsResp); err != nil {
-		return nil, nil, fmt.Errorf("unmarshal standings response: %w", err)
+		return nil, nil, nil, fmt.Errorf("unmarshal standings response: %w", err)
 	}
 
 	if len(standingsResp.Responses) == 0 {
-		return nil, nil, fmt.Errorf("no response data in standings")
+		return nil, nil, nil, fmt.Errorf("no response data in standings")
 	}
 
 	data := standingsResp.Responses[0].Data
 
 	teams := make(map[string]string, len(data.FantasyTeamInfo))
+	logos := make(map[string]string, len(data.FantasyTeamInfo))
 	for id, info := range data.FantasyTeamInfo {
 		teams[id] = info.Name
+		logos[id] = info.LogoURL512
 	}
 
 	var periods []ScoringPeriod
@@ -122,7 +126,7 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 		})
 	}
 
-	return periods, teams, nil
+	return periods, teams, logos, nil
 }
 
 // gsRosterRequest adds scoringCategoryType and statsType to the standard roster request.
