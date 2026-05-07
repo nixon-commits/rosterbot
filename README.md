@@ -8,6 +8,7 @@ Fantasy baseball roster automation for Fantrax head-to-head points leagues. Opti
 - **Real-life lineup awareness** — Checks MLB starting lineups so players sitting out (rest days, etc.) get benched in favor of active hitters.
 - **Prospect monitoring** — Scans MLB transactions, MiLB performance breakouts, and prospect rankings (MLB Pipeline / FanGraphs) to surface call-up alerts, hot streaks, and upgrade recommendations.
 - **Trade monitoring** — Fetches recent league trades, values each side using HKB player rankings, and sends a Pushover notification with the trade report.
+- **Statcast-driven waiver picks** — Cross-references league free agents against Baseball Savant data to surface buy-low candidates (xStats outpacing surface stats) and confirmed hot streaks (recent production backed by barrel/hard-hit quality). Ranks by Steamer-projected fantasy points per game.
 - **GS violation detection** — Tallies game starts across all league teams and sends Pushover notifications when a team exceeds the cap.
 - **Roster hygiene** — Flags healthy players stuck in IL slots, called-up players still in Minors slots, and injured players occupying active slots.
 - **Backtesting** — Grades past lineup moves against the hindsight-optimal lineup and measures projection accuracy against actual fantasy points.
@@ -70,6 +71,11 @@ rosterbot prospects --dry-run
 
 # Check recent trades with HKB valuations
 rosterbot transactions --dry-run
+
+# Identify Statcast-driven waiver wire pickups
+rosterbot waivers --dry-run
+rosterbot waivers --dry-run --top 25            # bigger list
+rosterbot waivers --dry-run --positions OF,SP   # filter to specific slots
 
 # Check GS violations
 rosterbot gs-check --dry-run --force
@@ -150,7 +156,8 @@ GitHub Actions workflows run on daily schedules:
 | `gs-check.yml` | 8am ET daily | `gs-check` |
 | `transactions.yml` | 10am ET daily | `transactions` |
 | `prospects.yml` | 7am ET daily | `prospects` |
-| `recap.yml` | 11am ET daily | `recap-site` (builds every completed week + index, deploys to GitHub Pages) |
+| `waivers.yml` | 9am ET daily | `waivers` (Statcast-driven free-agent picks) |
+| `recap.yml` | 7am ET Mondays | `recap-site` (builds every completed week + index, deploys to GitHub Pages) |
 
 All workflows support `workflow_dispatch` for manual triggering. Required repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
 
@@ -176,6 +183,7 @@ internal/
   optimizer/      pure-function lineup optimization (hitters + pitchers)
   schedule/       MLB Stats API (schedule, lineups, probable pitchers)
   prospects/      minor league prospect monitoring
+  waivers/        Statcast-driven MLB free-agent picks (buy-low + hot streaks)
   gscheck/        league-wide GS violation checker
   roster/         roster hygiene alerts
   notify/         Pushover push notifications
