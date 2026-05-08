@@ -25,6 +25,15 @@ jobs:
 
       - uses: browser-actions/setup-chrome@v2
 
+      - name: Restore HKB cache
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: transactions-${{ github.run_id }}
+          restore-keys: |
+            transactions-
+            projections-
+
       - name: Check recent trades
         run: |
           FLAGS=""
