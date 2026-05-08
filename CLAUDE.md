@@ -71,7 +71,7 @@ fangraphs proj  ──┘
 
 **`internal/prospects`** — monitors minor league prospects across MLB transactions, MiLB performance breakouts, and prospect ranking sources (MLB Pipeline primary, FanGraphs fallback). Produces a daily prospect report in the GHA job summary with call-up alerts, hot streak detection, free agent watch, and upgrade recommendations. Separate from roster alerts (which detect slot mismatches); this focuses on external data to find new players to pick up. Rankings are cached in `.cache/` (168h default TTL). Breakout detection uses level-adjusted thresholds (AAA/AA/A-ball). Transaction tracking uses a cursor to avoid duplicate alerts across runs.
 
-**`internal/gscheck`** — league-wide GS violation checker. `RunGSCheck` fetches all scoring periods and teams via `getStandings`, iterates every team to tally active-slot pitcher GS for a completed period, detects violations (GS > max or GS < min), and sends a Pushover notification. The `gs-check` CLI command validates that `GS_MAX`, `PUSHOVER_USER_KEY`, and `PUSHOVER_API_TOKEN` are set before running.
+**`internal/gscheck`** — league-wide GS violation checker. `RunGSCheck` fetches all scoring periods and teams via `getStandings`, iterates every team to tally active-slot pitcher GS for a completed period, detects violations (GS > max or GS < min), and sends a Pushover notification. The `gs-check` CLI command validates that `GS_MAX`, `PUSHOVER_GROUP_KEY`, and `PUSHOVER_API_TOKEN` are set before running.
 
 **`internal/transactions`** — trade monitor. `CheckTrades` fetches recent Fantrax league trades (last 24 hours) via `GetRecentTrades`, groups them by `TradeGroupID`, values each side using HKB player rankings, and sends a Pushover notification with the trade report. Uses normalized name matching (lowercase, stripped suffixes) to join Fantrax player names to HKB data. Requires `PUSHOVER_USER_KEY` and `PUSHOVER_API_TOKEN` for notifications (skips if not set).
 
@@ -140,11 +140,13 @@ When adding new commands, flags, env vars, or changing architecture, update `REA
 
 ## GHA
 
-`.github/workflows/lineup.yml` runs daily at 10am UTC (6am ET) and on `workflow_dispatch`. Requires six repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`. Optional: `GS_MAX` (game-start max), `GS_MIN` (game-start min). Chrome is installed via `browser-actions/setup-chrome@v2` before the Go run step.
+`.github/workflows/lineup.yml` runs hourly during the active window — `cron: '0 14-23 * * *'` (6am–3pm PT) and `'0 0-3 * * *'` (4pm–7pm PT) — plus `workflow_dispatch`. Requires six repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`. Optional: `GS_MAX` (game-start max), `GS_MIN` (game-start min). Chrome is installed via `browser-actions/setup-chrome@v2` before the Go run step. Uses `actions/cache@v4` with key prefix `projections-`.
+
+`.github/workflows/prospects.yml` runs daily at 11am UTC (7am ET) and on `workflow_dispatch`. Runs `prospects` to surface call-up alerts, hot streaks, and upgrade recommendations; pipes `[HIGH ...]` lines into a Pushover notification when present. Uses `actions/cache@v4` with key prefix `projections-`.
 
 `.github/workflows/gs-check.yml` runs daily at 12pm UTC (8am ET) and on `workflow_dispatch` (with `force` and `dry_run` inputs). Checks league-wide GS violations at period end. Additional secrets: `GS_MAX`, `GS_MIN` (optional).
 
-`.github/workflows/transactions.yml` runs daily at 2pm UTC (10am ET) and on `workflow_dispatch` (with `dry_run` input). Checks recent league trades and sends Pushover notifications with HKB valuations.
+`.github/workflows/transactions.yml` runs daily at 2pm UTC (10am ET) and on `workflow_dispatch` (with `dry_run` input). Checks recent league trades and sends Pushover notifications with HKB valuations. Uses `actions/cache@v4` with key prefix `transactions-` (falls back to `projections-`) so HKB rankings warm-start from neighboring runs.
 
 `.github/workflows/waivers.yml` runs daily at 1pm UTC (9am ET) and on `workflow_dispatch` (with `dry_run` and `top` inputs). Calls `waivers` to surface Statcast-driven free-agent pickups; sends Pushover when not in dry-run. Same secrets as `transactions.yml`. Uses `actions/cache@v4` with key prefix `waivers-` (falls back to `projections-`) so the Steamer JSON and Savant CSVs survive across runs.
 
