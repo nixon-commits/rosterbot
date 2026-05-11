@@ -146,6 +146,39 @@ Matchup adjustments (opposing pitcher FIP + platoon splits) are layered on top.
 | `PUSHOVER_API_TOKEN` | — | Pushover API token for notifications |
 | `BACKTEST_ARCHIVE` | — | Set to `1` to archive every `optimize` run's projections to `.backtest/snapshots/` for later grading (same as `--archive-projections`) |
 
+## Caching
+
+Network calls (Fantrax, MLB statsapi, FanGraphs, Baseball Savant, HKB,
+MLB Pipeline) are cached on disk under `.cache/` as JSON files. File
+names follow `<source>-<entity>-<scope>.json` — for example
+`fantrax-pitcher-gs-<teamID>-<period>.json` or
+`mlb-schedule-<YYYY-MM-DD>.json`. Three TTL tiers cover most data:
+
+- **30 days** for past-period data that's immutable once a scoring
+  period closes (per-period roster snapshots, recent stats, pitcher
+  game starts, MLB schedules for past dates, MLB player IDs).
+- **15 minutes** for "today, drifts during the day" data (current
+  roster, FA pool, current period, pending/recent trades). Long
+  enough to make hourly GHA reruns and local-dev iteration cheap;
+  short enough that intra-day waiver pickups show up promptly.
+- **7 days** for season-invariant config (slot counts, scoring
+  weights, season date range).
+
+Provider-specific caches use their own TTLs: FanGraphs Steamer (12 h),
+MLB handedness (7 d), Baseball Savant CSVs (12 h), HKB rankings (8 h),
+prospect rankings (`PROSPECT_RANK_CACHE_HOURS`, default 168 h),
+in-season MiLB game logs (1 h).
+
+`--no-cache` bypasses every layer for that command run, refetching
+fresh data from each upstream. Useful if you suspect stale data or
+want to validate that a cache key is being populated correctly.
+
+The cache is just a directory — `rm -rf .cache/` is a safe reset.
+The next run repopulates everything on demand. Don't delete
+`.fantrax-cache/` (that's the auth session cookie, not the data
+cache; deleting it triggers a chromedp browser login on the next
+run).
+
 ## Automation
 
 GitHub Actions workflows run on daily schedules:

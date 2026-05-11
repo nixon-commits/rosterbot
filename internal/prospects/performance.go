@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"golang.org/x/sync/errgroup"
@@ -20,43 +20,46 @@ import (
 var mlbPlayerSearchURL = "https://statsapi.mlb.com/api/v1/people/search?names=%s&sportIds=11,12,13,14,1"
 var mlbGameLogURL = "https://statsapi.mlb.com/api/v1/people/%d/stats?stats=gameLog&group=%s&season=%d&sportId=11,12,13,14"
 
-// Player ID cache file path.
-var playerIDCacheFile = ".cache/player-ids.json"
+// performanceCacheDir is the directory the prospects-performance caches
+// (player IDs, game logs) live in. Package-level var so tests can swap it.
+// The pre-existing `.cache/player-ids.json` ad-hoc bulk file from before
+// the cache.FileCache migration is orphaned; safe to delete.
+var performanceCacheDir = ".cache"
 
-// ---------------------------------------------------------------------------
-// Player ID cache
-// ---------------------------------------------------------------------------
+// playerIDTTL: MLB player IDs are immutable, so a 30d TTL is plenty.
+const playerIDTTL = 30 * 24 * time.Hour
 
-func loadPlayerIDCache() map[string]int {
-	cache := map[string]int{}
-	data, err := os.ReadFile(playerIDCacheFile)
-	if err != nil {
-		return cache
-	}
-	_ = json.Unmarshal(data, &cache)
-	return cache
-}
-
-func savePlayerIDCache(cache map[string]int) {
-	dir := filepath.Dir(playerIDCacheFile)
-	_ = os.MkdirAll(dir, 0o755)
-	data, err := json.MarshalIndent(cache, "", "  ")
-	if err != nil {
-		return
-	}
-	_ = os.WriteFile(playerIDCacheFile, data, 0o644)
-}
+// gameLogTTL: in-season game logs grow daily; an hour is a good compromise
+// between freshness and reuse across the prospects daily run + same-day
+// dev iteration.
+const gameLogTTL = time.Hour
 
 // ---------------------------------------------------------------------------
 // Resolve MLB player ID
 // ---------------------------------------------------------------------------
 
-func resolveMLBPlayerID(name, team string, cache map[string]int) (int, bool) {
-	key := projections.NormalizeName(name) + "|" + strings.ToLower(projections.NormalizeTeam(team))
-	if id, ok := cache[key]; ok {
-		return id, true
-	}
+func resolveMLBPlayerID(name, team string) (int, bool) {
+	fc := cache.New[int](performanceCacheDir, playerIDTTL)
+	normName := projections.NormalizeName(name)
+	normTeam := strings.ToLower(projections.NormalizeTeam(team))
+	key := cache.Key("mlb-player-id", normName, normTeam)
 
+	id, err := fc.Get(key, func() (int, error) {
+		got, ok := fetchMLBPlayerID(name, team, normName, normTeam)
+		if !ok {
+			// Don't cache misses — return a sentinel error so the cache
+			// layer skips the save and the next run retries the upstream.
+			return 0, fmt.Errorf("not found")
+		}
+		return got, nil
+	})
+	if err != nil || id == 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+func fetchMLBPlayerID(name, team, normName, normTeam string) (int, bool) {
 	url := fmt.Sprintf(mlbPlayerSearchURL, strings.ReplaceAll(name, " ", "%20"))
 	resp, err := http.Get(url)
 	if err != nil {
@@ -79,9 +82,6 @@ func resolveMLBPlayerID(name, team string, cache map[string]int) (int, bool) {
 		return 0, false
 	}
 
-	normName := projections.NormalizeName(name)
-	normTeam := strings.ToLower(projections.NormalizeTeam(team))
-
 	// First pass: exact name + team match.
 	// Second pass: name-only match for prospects whose currentTeam is missing
 	// from the API (common for players without MLB service time).
@@ -94,7 +94,6 @@ func resolveMLBPlayerID(name, team string, cache map[string]int) (int, bool) {
 		}
 		pTeam := strings.ToLower(projections.NormalizeTeam(p.CurrentTeam.Abbreviation))
 		if pTeam == normTeam {
-			cache[key] = p.ID
 			return p.ID, true
 		}
 		if pTeam == "" {
@@ -104,7 +103,6 @@ func resolveMLBPlayerID(name, team string, cache map[string]int) (int, bool) {
 	}
 	// Accept a name-only match when exactly one result had no team.
 	if nameOnlyCount == 1 && nameOnlyMatch != 0 {
-		cache[key] = nameOnlyMatch
 		return nameOnlyMatch, true
 	}
 
@@ -130,6 +128,14 @@ type gameLogEntry struct {
 }
 
 func fetchGameLogs(playerID int, group string, season int) ([]gameLogEntry, error) {
+	fc := cache.New[[]gameLogEntry](performanceCacheDir, gameLogTTL)
+	key := cache.Key("mlb-game-logs", strconv.Itoa(playerID), group, strconv.Itoa(season))
+	return fc.Get(key, func() ([]gameLogEntry, error) {
+		return fetchGameLogsUncached(playerID, group, season)
+	})
+}
+
+func fetchGameLogsUncached(playerID int, group string, season int) ([]gameLogEntry, error) {
 	url := fmt.Sprintf(mlbGameLogURL, playerID, group, season)
 	resp, err := http.Get(url)
 	if err != nil {
@@ -352,8 +358,9 @@ func computePitcherBreakout(logs []gameLogEntry, minGames int, level string) (ho
 // ---------------------------------------------------------------------------
 
 // FetchPerformanceAlerts checks MiLB game logs for breakout/cold streaks.
+// Player ID lookups and game log fetches are persisted under
+// performanceCacheDir via cache.FileCache (see playerIDTTL / gameLogTTL).
 func FetchPerformanceAlerts(prospects []fantrax.Player, rankings map[string]int, season, rollingDays, minGames int) ([]ProspectAlert, error) {
-	cache := loadPlayerIDCache()
 	var mu sync.Mutex
 	var alerts []ProspectAlert
 
@@ -366,9 +373,7 @@ func FetchPerformanceAlerts(prospects []fantrax.Player, rankings map[string]int,
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			mu.Lock()
-			id, found := resolveMLBPlayerID(p.Name, p.MLBTeam, cache)
-			mu.Unlock()
+			id, found := resolveMLBPlayerID(p.Name, p.MLBTeam)
 			if !found {
 				return nil
 			}
@@ -438,10 +443,6 @@ func FetchPerformanceAlerts(prospects []fantrax.Player, rankings map[string]int,
 	if err := g.Wait(); err != nil {
 		return alerts, err
 	}
-
-	mu.Lock()
-	savePlayerIDCache(cache)
-	mu.Unlock()
 
 	return alerts, nil
 }
