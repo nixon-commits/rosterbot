@@ -24,12 +24,14 @@ jobs:
       - name: Restore projection cache
         uses: actions/cache@v4
         with:
-          path: .cache
+          path: |
+            .cache
+            .backtest/snapshots
           key: projections-${{ github.run_id }}
           restore-keys: projections-
 
       - name: Optimize lineup
-        run: go run . optimize --matchup
+        run: go run . optimize --matchup --archive-projections
         env:
           FANTRAX_USERNAME: ${{ secrets.FANTRAX_USERNAME }}
           FANTRAX_PASSWORD: ${{ secrets.FANTRAX_PASSWORD }}
