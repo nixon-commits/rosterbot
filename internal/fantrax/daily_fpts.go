@@ -84,7 +84,7 @@ func (c *Client) DailyFantasyPoints(
 	if !dayBefore.Before(seasonStart) {
 		basePeriod := PeriodForDate(seasonStart, dayBefore)
 		if basePeriod >= 1 {
-			base, err := c.getPeriodSnapshotCached(snapCache, teamID, basePeriod)
+			base, _, err := c.getPeriodSnapshotCached(snapCache, teamID, basePeriod)
 			if err != nil {
 				return nil, fmt.Errorf("baseline snapshot period %d: %w", basePeriod, err)
 			}
@@ -96,7 +96,7 @@ func (c *Client) DailyFantasyPoints(
 	var days []DayRoster
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
 		period := PeriodForDate(seasonStart, d)
-		snap, err := c.getPeriodSnapshotCached(snapCache, teamID, period)
+		snap, hitNetwork, err := c.getPeriodSnapshotCached(snapCache, teamID, period)
 		if err != nil {
 			return nil, fmt.Errorf("snapshot %s (period %d): %w", d.Format("2006-01-02"), period, err)
 		}
@@ -114,8 +114,10 @@ func (c *Client) DailyFantasyPoints(
 		prevHitters = snap.Hitters
 		prevPitchers = snap.Pitchers
 
-		// Rate-limit Fantrax API (the cache absorbs repeat runs).
-		time.Sleep(200 * time.Millisecond)
+		// Rate-limit only on real upstream calls; cache hits don't need pacing.
+		if hitNetwork {
+			time.Sleep(200 * time.Millisecond)
+		}
 	}
 	return days, nil
 }
@@ -158,15 +160,19 @@ func diffYTD(cur, prevSame, prevOther map[string]playerYTD, isPitcher bool) []Da
 }
 
 // getPeriodSnapshotCached fetches a single period's YTD snapshot via the cache.
+// The returned bool reports whether the upstream API was actually hit —
+// callers use this to skip throttle sleeps on cache hits.
 func (c *Client) getPeriodSnapshotCached(
 	snapCache *cache.FileCache[periodSnapshot],
 	teamID string,
 	period int,
-) (periodSnapshot, error) {
+) (snap periodSnapshot, hitNetwork bool, err error) {
 	key := cache.Key("fantrax-roster-stats", teamID, strconv.Itoa(period))
-	return snapCache.Get(key, func() (periodSnapshot, error) {
+	snap, err = snapCache.Get(key, func() (periodSnapshot, error) {
+		hitNetwork = true
 		return c.fetchPeriodSnapshot(teamID, period)
 	})
+	return snap, hitNetwork, err
 }
 
 // fetchPeriodSnapshot pulls the raw team roster info for a period and extracts

@@ -3,6 +3,7 @@ package recap
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -22,7 +23,7 @@ type Options struct {
 	CacheDir    string
 	CacheTTL    time.Duration // 0 → use default; pass 30 days for past weeks (immutable)
 	TopPlayers  int           // top N for Players-of-Week (default 4)
-	Concurrency int           // parallel team fetches (default 4)
+	Concurrency int           // parallel team fetches; 0 → runtime.NumCPU()
 }
 
 // Run pulls the data for the matchup week, aggregates per-team performance,
@@ -37,7 +38,7 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 		opts.TopPlayers = 10
 	}
 	if opts.Concurrency <= 0 {
-		opts.Concurrency = 4
+		opts.Concurrency = runtime.NumCPU()
 	}
 
 	seasonStart, _, err := ft.GetSeasonDateRange()
@@ -603,7 +604,7 @@ func fetchSeasonMeans(ft *fantrax.Client, teamMap map[string]string, seasonStart
 		return nil
 	}
 	if concurrency <= 0 {
-		concurrency = 4
+		concurrency = runtime.NumCPU()
 	}
 	out := make(map[string]float64, len(teamMap))
 	var mu sync.Mutex
