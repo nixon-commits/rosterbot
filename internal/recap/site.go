@@ -121,8 +121,9 @@ type matchupWeek struct {
 }
 
 // completedMatchupWeeks enumerates weeks 1..N for the configured team and
-// returns only those whose end date is strictly before today (lexical YMD
-// comparison so timezone arithmetic doesn't bite us). Sorted ascending.
+// returns those that are over: either the end date is strictly before today,
+// or the end date is today AND Fantrax has marked the week as final
+// (which it does automatically after the last MLB game ends). Sorted ascending.
 func completedMatchupWeeks(ft *fantrax.Client, today time.Time) ([]matchupWeek, error) {
 	todayYMD := today.Format("2006-01-02")
 	var out []matchupWeek
@@ -134,8 +135,18 @@ func completedMatchupWeeks(ft *fantrax.Client, today time.Time) ([]matchupWeek, 
 		if ws.IsZero() {
 			break
 		}
-		if we.Format("2006-01-02") < todayYMD {
+		weYMD := we.Format("2006-01-02")
+		switch {
+		case weYMD < todayYMD:
 			out = append(out, matchupWeek{n: n, start: ws, end: we})
+		case weYMD == todayYMD:
+			final, err := ft.IsMatchupWeekFinal(n)
+			if err != nil {
+				return nil, fmt.Errorf("week %d final-check: %w", n, err)
+			}
+			if final {
+				out = append(out, matchupWeek{n: n, start: ws, end: we})
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].n < out[j].n })

@@ -169,3 +169,41 @@ func TestMatchupWeekByNumber(t *testing.T) {
 		t.Error("week 99 should be zero (out of range)")
 	}
 }
+
+func TestMatchupWeekIsFinal(t *testing.T) {
+	week1Start := time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC)
+	week1End := time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC)
+	week2Start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	week2End := time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC)
+	week3Start := time.Date(2026, 4, 8, 0, 0, 0, 0, time.UTC)
+	week3End := time.Date(2026, 4, 14, 0, 0, 0, 0, time.UTC)
+
+	matchups := []auth_client.Matchup{
+		// Week 1: completed format — Points populated for both teams.
+		{ScoringPeriod: 1, Date: "Wed Mar 25, 2026",
+			AwayTeam: auth_client.MatchTeam{TeamID: "myteam", Points: 412.5, Total: 412.5},
+			HomeTeam: auth_client.MatchTeam{TeamID: "opp1", Points: 380.1, Total: 380.1}},
+		// Week 2: in-progress / future format — only Total set (running totals or zero).
+		{ScoringPeriod: 2, Date: "Wed Apr 1, 2026",
+			AwayTeam: auth_client.MatchTeam{TeamID: "opp2", Total: 120.4},
+			HomeTeam: auth_client.MatchTeam{TeamID: "myteam", Total: 88.2}},
+		// Week 3: pure future format — no scores at all.
+		{ScoringPeriod: 3, Date: "Wed Apr 8, 2026",
+			AwayTeam: auth_client.MatchTeam{TeamID: "myteam"},
+			HomeTeam: auth_client.MatchTeam{TeamID: "opp3"}},
+	}
+
+	if !MatchupWeekIsFinal(matchups, "myteam", week1Start, week1End) {
+		t.Error("week 1 with Points populated should be final")
+	}
+	if MatchupWeekIsFinal(matchups, "myteam", week2Start, week2End) {
+		t.Error("week 2 with only Total (in-progress format) should NOT be final")
+	}
+	if MatchupWeekIsFinal(matchups, "myteam", week3Start, week3End) {
+		t.Error("week 3 with no scores should NOT be final")
+	}
+	// Team not in matchups returns false.
+	if MatchupWeekIsFinal(matchups, "ghost", week1Start, week1End) {
+		t.Error("non-participating team should not be flagged final")
+	}
+}

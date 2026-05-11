@@ -154,6 +154,54 @@ func (c *Client) GetMatchupWeekNumberForDate(date time.Time) (int, error) {
 	return MatchupWeekNumberForDate(result.Matchups, c.teamID, date), nil
 }
 
+// MatchupWeekIsFinal reports whether Fantrax has finalized the given matchup
+// week for teamID. The upstream parses each schedule row as either the
+// "completed" 8-cell format (Points/Adjustment/Total all set) or the
+// "future/in-progress" 4-cell format (only Total set). When Fantrax closes
+// the week — automatically, right after the last MLB game ends — the row
+// flips to the 8-cell format and Points becomes non-zero. Checking
+// Points > 0 on either side is therefore a reliable signal that the week
+// is officially over, even when the calendar end-date is still today.
+//
+// Returns false for any week with no matching row (e.g. weekN past
+// season end).
+func MatchupWeekIsFinal(matchups []auth_client.Matchup, teamID string, weekStart, weekEnd time.Time) bool {
+	startYMD := weekStart.Format("2006-01-02")
+	endYMD := weekEnd.Format("2006-01-02")
+	for _, m := range matchups {
+		if m.HomeTeam.TeamID != teamID && m.AwayTeam.TeamID != teamID {
+			continue
+		}
+		t, err := parseMatchupDate(m.Date)
+		if err != nil {
+			continue
+		}
+		ymd := t.Format("2006-01-02")
+		if ymd < startYMD || ymd > endYMD {
+			continue
+		}
+		if m.HomeTeam.Points > 0 || m.AwayTeam.Points > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// IsMatchupWeekFinal returns true when Fantrax has marked the n-th matchup
+// week as completed for the configured team. See MatchupWeekIsFinal for the
+// signal it relies on. Returns false if the week is not found in the season.
+func (c *Client) IsMatchupWeekFinal(n int) (bool, error) {
+	result, err := c.auth.GetAllMatchups()
+	if err != nil {
+		return false, err
+	}
+	ws, we := MatchupWeekByNumber(result.Matchups, c.teamID, n)
+	if ws.IsZero() {
+		return false, nil
+	}
+	return MatchupWeekIsFinal(result.Matchups, c.teamID, ws, we), nil
+}
+
 // MatchupEntry is a thin H2H pairing record extracted from the upstream
 // matchups API. Use GetAllMatchupEntries to fetch them in a form that doesn't
 // leak the auth_client type.
