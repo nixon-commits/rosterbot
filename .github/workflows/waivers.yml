@@ -27,8 +27,6 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - uses: browser-actions/setup-chrome@v2
-
       - name: Restore cache
         uses: actions/cache@v4
         with:
@@ -53,6 +51,7 @@ jobs:
         env:
           FANTRAX_USERNAME: ${{ secrets.FANTRAX_USERNAME }}
           FANTRAX_PASSWORD: ${{ secrets.FANTRAX_PASSWORD }}
+          FANTRAX_COOKIES: ${{ secrets.FANTRAX_COOKIES }}
           FANTRAX_LEAGUE_ID: ${{ secrets.FANTRAX_LEAGUE_ID }}
           FANTRAX_TEAM_ID: ${{ secrets.FANTRAX_TEAM_ID }}
           FANTRAX_IL_SLOTS: ${{ secrets.FANTRAX_IL_SLOTS }}
