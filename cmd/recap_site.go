@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/recap"
@@ -12,6 +13,7 @@ import (
 var (
 	recapSiteOut  string
 	recapSiteTopN int
+	recapSiteOpen bool
 )
 
 var recapSiteCmd = &cobra.Command{
@@ -27,6 +29,7 @@ actions/deploy-pages — no files are committed back to the repo.`,
 func init() {
 	recapSiteCmd.Flags().StringVar(&recapSiteOut, "out", "dist", "output directory for rendered HTML")
 	recapSiteCmd.Flags().IntVar(&recapSiteTopN, "top", 10, "number of players per leaderboard (Top Batters / Top Pitchers)")
+	recapSiteCmd.Flags().BoolVar(&recapSiteOpen, "open", false, "open the rendered index.html in the default browser after building")
 	rootCmd.AddCommand(recapSiteCmd)
 }
 
@@ -45,7 +48,7 @@ func runRecapSite(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Building recap site to %s (today=%s)...\n",
 		recapSiteOut, today.Format("2006-01-02"))
 
-	return recap.RunSite(ft, recap.SiteOptions{
+	if err := recap.RunSite(ft, recap.SiteOptions{
 		OutDir: recapSiteOut,
 		Today:  today,
 		Recap: recap.Options{
@@ -53,5 +56,15 @@ func runRecapSite(cmd *cobra.Command, args []string) error {
 			CacheTTL:   snapTTL,
 			TopPlayers: recapSiteTopN,
 		},
-	})
+	}); err != nil {
+		return err
+	}
+
+	if recapSiteOpen {
+		index := filepath.Join(recapSiteOut, "index.html")
+		if err := openInBrowser(index); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		}
+	}
+	return nil
 }

@@ -18,6 +18,7 @@ var (
 	recapOut   string
 	recapJSON  bool
 	recapTopN  int
+	recapOpen  bool
 )
 
 var recapCmd = &cobra.Command{
@@ -32,6 +33,7 @@ func init() {
 	recapCmd.Flags().StringVar(&recapOut, "out", "", "write HTML to this path (default: stdout)")
 	recapCmd.Flags().BoolVar(&recapJSON, "json", false, "emit machine-readable JSON instead of HTML")
 	recapCmd.Flags().IntVar(&recapTopN, "top", 10, "number of players per leaderboard (Top Batters / Top Pitchers)")
+	recapCmd.Flags().BoolVar(&recapOpen, "open", false, "open the rendered HTML in the default browser (requires --out)")
 	rootCmd.AddCommand(recapCmd)
 }
 
@@ -96,6 +98,14 @@ func runRecap(cmd *cobra.Command, args []string) error {
 	}
 	if recapOut != "" {
 		fmt.Fprintf(os.Stderr, "Wrote %s (%s)\n", recapOut, r.WeekLabel)
+	}
+	if recapOpen {
+		if recapOut == "" {
+			return fmt.Errorf("--open requires --out (no path to launch)")
+		}
+		if err := openInBrowser(recapOut); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		}
 	}
 	return nil
 }

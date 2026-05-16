@@ -26,7 +26,9 @@ go run . backtest --skip-projections                 # lineup-only backtest (fas
 go run . optimize --dry-run --archive-projections    # archive projections for future backtests
 go run . recap --out /tmp/recap.html                 # render weekly HTML recap (most recent completed week)
 go run . recap --dates 2026-04-20:2026-04-26 --out /tmp/recap.html  # specific window
+go run . recap --out /tmp/recap.html --open          # render and auto-open in default browser
 go run . recap-site --out dist                       # render every completed week into a static site dir
+go run . recap-site --out dist --open                # build site and auto-open dist/index.html
 make clean-cache        # rm -rf .cache/  (cold-pass baseline before make run-all)
 make run-all            # exercise every command in dry-run / read-only mode + print cache size
 ```
