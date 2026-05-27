@@ -28,6 +28,13 @@ type DayPlayerFP struct {
 	HadGame       bool     `json:"had_game"`
 	IsPitcher     bool     `json:"is_pitcher"`
 	Positions     []string `json:"positions,omitempty"`
+	// NeedsBackfill is set when diffYTD couldn't compute a reliable delta —
+	// either because the player first appeared on the team's snapshot mid-window
+	// (delta zeroed to avoid leaking pre-team YTD) or because they crossed
+	// between the hitter and pitcher tables (role-specific YTDs can't be
+	// subtracted). BackfillDailyFPts uses this flag to fix the FPts value
+	// from the MLB statsapi game log.
+	NeedsBackfill bool `json:"needs_backfill,omitempty"`
 }
 
 // DayRoster bundles every player's per-day FPts snapshot for a single date.
@@ -124,22 +131,36 @@ func (c *Client) DailyFantasyPoints(
 
 // diffYTD computes per-day FPts from current vs. prior YTD. The prevSame map is
 // the prior snapshot for the same kind (hitters or pitchers); prevOther is the
-// other kind, used so a two-way player who flips between maps day-to-day finds
-// their prior YTD instead of looking "new". For genuinely new players (waiver
-// pickup or roster addition), the first-appearance delta is zeroed — crediting
-// pre-team YTD as same-day production would inject phantom points.
+// other kind. When a player isn't in prevSame the code falls back to prevOther,
+// but a fallback hit means the player crossed between hitter/pitcher tables —
+// the prior YTD is for a different role and subtracting it produces a phantom
+// delta. In that case the delta is zeroed and NeedsBackfill is set so the
+// MLB-statsapi backfill step can compute the real same-day points.
+//
+// Genuinely new players (waiver pickup or roster addition) are also zeroed +
+// flagged: their pre-team YTD would otherwise leak in as same-day production.
 func diffYTD(cur, prevSame, prevOther map[string]playerYTD, isPitcher bool) []DayPlayerFP {
 	out := make([]DayPlayerFP, 0, len(cur))
 	for id, now := range cur {
 		pr, existed := prevSame[id]
+		crossedKinds := false
 		if !existed {
 			pr, existed = prevOther[id]
+			if existed {
+				crossedKinds = true
+			}
 		}
 		deltaFP := now.FPts - pr.FPts
 		deltaGP := now.GP - pr.GP
+		needsBackfill := false
 		if !existed {
 			deltaFP = 0
 			deltaGP = 0
+			needsBackfill = true
+		} else if crossedKinds {
+			deltaFP = 0
+			deltaGP = 0
+			needsBackfill = true
 		}
 		had := deltaFP != 0 || deltaGP > 0
 		out = append(out, DayPlayerFP{
@@ -154,6 +175,7 @@ func diffYTD(cur, prevSame, prevOther map[string]playerYTD, isPitcher bool) []Da
 			Active:        now.StatusID == "1",
 			HadGame:       had,
 			IsPitcher:     isPitcher,
+			NeedsBackfill: needsBackfill,
 		})
 	}
 	return out

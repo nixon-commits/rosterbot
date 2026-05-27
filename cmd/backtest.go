@@ -77,6 +77,9 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("daily fpts: %w", err)
 	}
+	if err := ft.BackfillDailyFPts(days); err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: MLB backfill: %v\n", err)
+	}
 
 	lineup := backtest.RunLineupAnalysis(days, hitterSlots, pitcherSlots)
 

@@ -99,7 +99,8 @@ func TestDiffYTD_DeltaExtraction(t *testing.T) {
 func TestDiffYTD_FirstAppearanceZeroed(t *testing.T) {
 	// Player appears mid-period with big pre-period YTD (e.g., waiver pickup).
 	// First-appearance delta is zeroed so pre-team production isn't credited as
-	// today's points.
+	// today's points, and NeedsBackfill is set so BackfillDailyFPts can compute
+	// the real same-day FPts from the MLB statsapi game log.
 	cur := map[string]playerYTD{
 		"h1": {PlayerID: "h1", Name: "Pickup", FPts: 120.0, GP: 40, StatusID: "1"},
 	}
@@ -114,13 +115,19 @@ func TestDiffYTD_FirstAppearanceZeroed(t *testing.T) {
 	if got[0].HadGame {
 		t.Errorf("HadGame should be false on day-of-acquisition (no signal)")
 	}
+	if !got[0].NeedsBackfill {
+		t.Errorf("NeedsBackfill should be true so backfill can compute real FPts")
+	}
 }
 
 func TestDiffYTD_TwoWayPlayerCrossesKinds(t *testing.T) {
 	// Ohtani-style: yesterday Fantrax classified him as a hitter; today as a
-	// pitcher. The diff for the pitchers map should still find his prior YTD
-	// in the hitters map (prevOther) instead of treating him as a brand-new
-	// player and zeroing the delta.
+	// pitcher. The hitter YTD and pitcher YTD are role-specific season totals
+	// that can't be meaningfully subtracted from each other — doing so produces
+	// a phantom delta. diffYTD detects the crossing (prevOther fallback fired)
+	// and zeroes the delta + flags NeedsBackfill so MLB statsapi can compute
+	// the real same-day points. End-to-end verification lives in the
+	// BackfillDailyFPts tests in mlb_backfill_test.go.
 	prevHitters := map[string]playerYTD{
 		"ohtani": {PlayerID: "ohtani", Name: "Ohtani", FPts: 250.0, GP: 30, StatusID: "1"},
 	}
@@ -132,11 +139,14 @@ func TestDiffYTD_TwoWayPlayerCrossesKinds(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want 1 row, got %d", len(got))
 	}
-	if got[0].FPts != 25.0 {
-		t.Errorf("cross-kind delta = %v, want 25.0 (275 - 250)", got[0].FPts)
+	if got[0].FPts != 0 {
+		t.Errorf("cross-kind delta = %v, want 0 (subtraction is meaningless across roles)", got[0].FPts)
 	}
-	if !got[0].HadGame {
-		t.Errorf("HadGame should be true (real delta)")
+	if got[0].HadGame {
+		t.Errorf("HadGame should be false pre-backfill (delta is zeroed)")
+	}
+	if !got[0].NeedsBackfill {
+		t.Errorf("NeedsBackfill should be true so backfill can compute real FPts")
 	}
 }
 

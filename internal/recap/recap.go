@@ -241,6 +241,9 @@ func collectTeam(
 	if err != nil {
 		return nil, fmt.Errorf("daily fpts: %w", err)
 	}
+	if err := ft.BackfillDailyFPts(days); err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: MLB backfill for %s: %v\n", teamName, err)
+	}
 
 	lineup := backtest.RunLineupAnalysis(days, hitterSlots, pitcherSlots)
 
