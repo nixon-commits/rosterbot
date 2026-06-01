@@ -52,7 +52,7 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 		"at":     0,
 		"av":     "0.0",
 		"tz":     "UTC",
-		"v":      "179.0.1",
+		"v":      "180.0.0",
 	}
 
 	jsonStr, err := json.Marshal(fullRequest)
@@ -302,7 +302,7 @@ func (c *Client) getPlayerGSSnapshotForPeriod(teamID string, period int) (map[st
 		"at":     0,
 		"av":     "0.0",
 		"tz":     "UTC",
-		"v":      "179.0.1",
+		"v":      "180.0.0",
 	}
 
 	jsonStr, err := json.Marshal(fullRequest)

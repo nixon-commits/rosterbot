@@ -219,7 +219,7 @@ func (c *Client) fetchPeriodSnapshot(teamID string, period int) (periodSnapshot,
 		"at":     0,
 		"av":     "0.0",
 		"tz":     "UTC",
-		"v":      "179.0.1",
+		"v":      "180.0.0",
 	}
 	jsonStr, err := json.Marshal(fullRequest)
 	if err != nil {
