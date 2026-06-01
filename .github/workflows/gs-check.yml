@@ -27,6 +27,15 @@ jobs:
           go-version: '1.26'
           cache: true
 
+      - name: Restore Fantrax session
+        uses: actions/cache@v5
+        with:
+          path: .fantrax-cache
+          key: fantrax-session-${{ github.run_id }}
+          restore-keys: fantrax-session-
+
+      - uses: browser-actions/setup-chrome@v2
+
       - name: Run GS check
         run: |
           FLAGS=""
@@ -42,7 +51,6 @@ jobs:
         env:
           FANTRAX_USERNAME: ${{ secrets.FANTRAX_USERNAME }}
           FANTRAX_PASSWORD: ${{ secrets.FANTRAX_PASSWORD }}
-          FANTRAX_COOKIES: ${{ secrets.FANTRAX_COOKIES }}
           FANTRAX_LEAGUE_ID: ${{ secrets.FANTRAX_LEAGUE_ID }}
           FANTRAX_TEAM_ID: ${{ secrets.FANTRAX_TEAM_ID }}
           FANTRAX_IL_SLOTS: ${{ secrets.FANTRAX_IL_SLOTS }}
