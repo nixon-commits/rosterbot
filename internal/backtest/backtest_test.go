@@ -3,6 +3,7 @@ package backtest
 import (
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -307,5 +308,181 @@ func TestBuildReport_TopBenchCumulative(t *testing.T) {
 	}
 	if r.TopBench[1].Name != "A" || r.TopBench[1].Pts != 15 {
 		t.Errorf("second = %+v, want A 15", r.TopBench[1])
+	}
+}
+
+func TestPositionBucket(t *testing.T) {
+	cases := []struct {
+		name      string
+		isPitcher bool
+		role      string
+		positions []string
+		want      string
+	}{
+		{"catcher", false, "", []string{"001"}, "C"},
+		{"catcher precedence over OF", false, "", []string{"001", "012"}, "C"},
+		{"shortstop is INF", false, "", []string{"005"}, "INF"},
+		{"INF slot id", false, "", []string{"008"}, "INF"},
+		{"infield precedence over OF", false, "", []string{"004", "012"}, "INF"},
+		{"outfield", false, "", []string{"012"}, "OF"},
+		{"ut only", false, "", []string{"014"}, "UT"},
+		{"no eligibility falls back to UT", false, "", nil, "UT"},
+		{"starter by role", true, "SP", nil, "SP"},
+		{"reliever by role", true, "RP", nil, "RP"},
+		{"pitcher empty role defaults to RP", true, "", nil, "RP"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := positionBucket(c.isPitcher, c.role, c.positions); got != c.want {
+				t.Errorf("positionBucket(%v, %q, %v) = %q, want %q", c.isPitcher, c.role, c.positions, got, c.want)
+			}
+		})
+	}
+}
+
+func TestTopSignedMisses_SelectsByMagnitudeOrdersBySign(t *testing.T) {
+	players := []PlayerProjection{
+		{PlayerID: "A", Diff: -16}, // big over-projection (ramp-up)
+		{PlayerID: "B", Diff: 15},  // big under-projection (breakout)
+		{PlayerID: "C", Diff: 3},   // small — excluded
+		{PlayerID: "D", Diff: -2},  // small — excluded
+		{PlayerID: "E", Diff: 12},
+	}
+	got := topSignedMisses(players, 3)
+	if len(got) != 3 {
+		t.Fatalf("want 3, got %d", len(got))
+	}
+	// Selected by |diff|: A(16), B(15), E(12). C and D are smaller, excluded.
+	// Displayed most over-projected (most negative diff) first so ramp-ups lead:
+	// A(-16), E(+12), B(+15).
+	want := []string{"A", "E", "B"}
+	for i, id := range want {
+		if got[i].PlayerID != id {
+			t.Errorf("position %d = %q, want %q (full: %+v)", i, got[i].PlayerID, id, got)
+		}
+	}
+}
+
+func TestSummarizeProjections_ByPosition(t *testing.T) {
+	proj := []ProjectionDayResult{
+		{
+			Players: []PlayerProjection{
+				{Bucket: "OF", Diff: 2, Source: "snapshot"},
+				{Bucket: "OF", Diff: -4, Source: "snapshot"},
+				{Bucket: "SP", Diff: 6, Source: "snapshot"},
+			},
+		},
+	}
+	s := summarizeProjections(proj)
+	if len(s.ByPosition) != 2 {
+		t.Fatalf("want 2 buckets, got %d (%+v)", len(s.ByPosition), s.ByPosition)
+	}
+	// Canonical order (C, INF, OF, UT, SP, RP) puts OF before SP.
+	if of := s.ByPosition[0]; of.Bucket != "OF" || of.N != 2 || math.Abs(of.MAE-3.0) > 1e-9 {
+		t.Errorf("OF bucket = %+v, want {Bucket:OF N:2 MAE:3.0}", of)
+	}
+	if sp := s.ByPosition[1]; sp.Bucket != "SP" || sp.N != 1 || math.Abs(sp.MAE-6.0) > 1e-9 {
+		t.Errorf("SP bucket = %+v, want {Bucket:SP N:1 MAE:6.0}", sp)
+	}
+}
+
+func TestRunProjectionAnalysis_SetsBucketFromSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	date := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)
+	s := Snapshot{
+		Date: "2026-04-15",
+		Hitters: []SnapshotPlayer{
+			{PlayerID: "of1", Name: "OF One", MLBTeam: "NYY", ProjPtsPerGame: 9, HasGame: true, Eligibility: []string{"012"}},
+		},
+		Pitchers: []SnapshotPlayer{
+			{PlayerID: "sp1", Name: "SP One", MLBTeam: "LAD", ProjPtsPerGame: 15, HasGame: true, IsPitcher: true, Role: "SP"},
+		},
+	}
+	if err := WriteSnapshot(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	days := []fantrax.DayRoster{{
+		Date: date,
+		Players: []fantrax.DayPlayerFP{
+			{PlayerID: "of1", Name: "OF One", MLBTeam: "NYY", FPts: 11, HadGame: true},
+			{PlayerID: "sp1", Name: "SP One", MLBTeam: "LAD", FPts: 5, HadGame: true, IsPitcher: true},
+		},
+	}}
+	results := RunProjectionAnalysis(days, dir)
+	got := map[string]string{}
+	for _, p := range results[0].Players {
+		got[p.PlayerID] = p.Bucket
+	}
+	if got["of1"] != "OF" {
+		t.Errorf("of1 bucket = %q, want OF", got["of1"])
+	}
+	if got["sp1"] != "SP" {
+		t.Errorf("sp1 bucket = %q, want SP", got["sp1"])
+	}
+}
+
+func TestWriteLoadSnapshot_RichFieldsRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	s := Snapshot{
+		Date: "2026-05-29",
+		Hitters: []SnapshotPlayer{
+			{PlayerID: "h1", Name: "Rich Hitter", MLBTeam: "NYY", ProjPtsPerGame: 8.5,
+				HasGame: true, WasStarted: true, Slot: "OF", Locked: true, Eligibility: []string{"012", "014"}},
+		},
+	}
+	if err := WriteSnapshot(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	loaded, ok := LoadSnapshot(dir, time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC))
+	if !ok {
+		t.Fatal("roundtrip missed")
+	}
+	h := loaded.Hitters[0]
+	if h.Slot != "OF" || !h.Locked || len(h.Eligibility) != 2 || h.Eligibility[0] != "012" {
+		t.Errorf("rich fields lost in roundtrip: %+v", h)
+	}
+}
+
+// TestProjectionReport_EndToEnd exercises the full grade→report path (minus the
+// Fantrax client): write a snapshot, grade it against actuals, build the report,
+// and confirm the rendered text includes the per-position MAE table and the
+// top-10 signed-miss section. Stands in for the credentialed integration check.
+func TestProjectionReport_EndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	date := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
+	s := Snapshot{
+		Date: "2026-05-29",
+		Hitters: []SnapshotPlayer{
+			{PlayerID: "of1", Name: "Steady OF", MLBTeam: "NYY", ProjPtsPerGame: 9, HasGame: true, Eligibility: []string{"012"}},
+		},
+		Pitchers: []SnapshotPlayer{
+			{PlayerID: "sp1", Name: "Rampup Arm", MLBTeam: "LAD", ProjPtsPerGame: 18, HasGame: true, IsPitcher: true, Role: "SP"},
+		},
+	}
+	if err := WriteSnapshot(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	days := []fantrax.DayRoster{{
+		Date: date,
+		Players: []fantrax.DayPlayerFP{
+			{PlayerID: "of1", Name: "Steady OF", MLBTeam: "NYY", FPts: 10, HadGame: true},
+			{PlayerID: "sp1", Name: "Rampup Arm", MLBTeam: "LAD", FPts: 2, HadGame: true, IsPitcher: true}, // big over-projection
+		},
+	}}
+	proj := RunProjectionAnalysis(days, dir)
+	report := BuildReport(date, date, nil, proj)
+	out := FormatReport(report)
+
+	for _, want := range []string{
+		"Projection accuracy",
+		"MAE by position:",
+		"OF",
+		"SP",
+		"Biggest projection misses (signed; over-projected first):",
+		"Rampup Arm",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report missing %q\n--- report ---\n%s", want, out)
+		}
 	}
 }

@@ -53,6 +53,7 @@ type PlayerProjection struct {
 	Diff      float64   `json:"diff"`   // actual - projected
 	Source    string    `json:"source"` // "snapshot" or "reconstructed"
 	IsPitcher bool      `json:"is_pitcher"`
+	Bucket    string    `json:"bucket,omitempty"` // position bucket: C/INF/OF/UT/SP/RP
 }
 
 // ProjectionDayResult aggregates projection grading for one date.
@@ -77,26 +78,41 @@ type Report struct {
 
 // ProjectionSummary rolls up projection grading across all days.
 type ProjectionSummary struct {
-	TotalPlayerDays   int     `json:"total_player_days"`
-	SnapshotDays      int     `json:"snapshot_player_days"`
-	ReconstructedDays int     `json:"reconstructed_player_days"`
-	MAE               float64 `json:"mae"`
-	Bias              float64 `json:"bias"`
-	RMSE              float64 `json:"rmse"`
+	TotalPlayerDays   int           `json:"total_player_days"`
+	SnapshotDays      int           `json:"snapshot_player_days"`
+	ReconstructedDays int           `json:"reconstructed_player_days"`
+	MAE               float64       `json:"mae"`
+	Bias              float64       `json:"bias"`
+	RMSE              float64       `json:"rmse"`
+	ByPosition        []PositionMAE `json:"by_position,omitempty"`
+}
+
+// PositionMAE is per-bucket projection accuracy (C/INF/OF/UT/SP/RP).
+type PositionMAE struct {
+	Bucket string  `json:"bucket"`
+	N      int     `json:"n"`
+	MAE    float64 `json:"mae"`
+	Bias   float64 `json:"bias"`
 }
 
 // SnapshotPlayer is one player's archived projection for a given date.
-// Written by the optimizer (--archive-projections), read here for exact grading.
+// Written by the optimizer for every rostered player, read here for exact
+// grading. The extra eligibility/slot/locked fields exist so future look-back
+// analysis can slice projection error by position, by whether we started the
+// player, and by whether their game was already locked when we snapshotted.
 type SnapshotPlayer struct {
-	PlayerID       string  `json:"player_id"`
-	Name           string  `json:"name"`
-	MLBTeam        string  `json:"mlb_team"`
-	ProjPtsPerGame float64 `json:"proj_pts_per_game"`
-	HasGame        bool    `json:"has_game"`
-	WasStarted     bool    `json:"was_started"`
-	IsPitcher      bool    `json:"is_pitcher"`
-	IsStarter      bool    `json:"is_starter,omitempty"`
-	Role           string  `json:"role,omitempty"`
+	PlayerID       string   `json:"player_id"`
+	Name           string   `json:"name"`
+	MLBTeam        string   `json:"mlb_team"`
+	ProjPtsPerGame float64  `json:"proj_pts_per_game"`
+	HasGame        bool     `json:"has_game"`
+	WasStarted     bool     `json:"was_started"`
+	IsPitcher      bool     `json:"is_pitcher"`
+	IsStarter      bool     `json:"is_starter,omitempty"`
+	Role           string   `json:"role,omitempty"`        // "SP" / "RP" for pitchers
+	Slot           string   `json:"slot,omitempty"`        // active slot occupied, e.g. "OF"; "" if benched
+	Locked         bool     `json:"locked,omitempty"`      // game in progress/final at snapshot time
+	Eligibility    []string `json:"eligibility,omitempty"` // position IDs the player is eligible for
 }
 
 // Snapshot is the serialized per-date snapshot file format.
@@ -488,6 +504,9 @@ func RunProjectionAnalysis(days []fantrax.DayRoster, snapshotDir string) []Proje
 				Diff:      p.FPts - archived.ProjPtsPerGame,
 				Source:    "snapshot",
 				IsPitcher: p.IsPitcher,
+				// Bucket from the snapshot's eligibility/role — the live-roster
+				// source is authoritative, unlike the historical actuals feed.
+				Bucket: positionBucket(archived.IsPitcher, archived.Role, archived.Eligibility),
 			})
 		}
 
@@ -520,6 +539,71 @@ func accuracyStats(players []PlayerProjection) (mae, bias, rmse float64) {
 	bias = biasSum / n
 	rmse = math.Sqrt(sqSum / n)
 	return
+}
+
+// bucketOrder is the canonical display order for per-position accuracy.
+var bucketOrder = []string{"C", "INF", "OF", "UT", "SP", "RP"}
+
+// positionBucket assigns a player to one of six accuracy buckets. Pitchers are
+// bucketed by role (SP/RP). Hitters are bucketed by eligibility with the
+// precedence C > INF > OF > UT, so the scarcest defensive role a player
+// qualifies for wins (a C/OF lands in C; a 3B/OF lands in INF). `positions`
+// holds Fantrax position-ID strings (001=C, 002/003/004/005/008=infield,
+// 012=OF, 014=UT). A hitter with no eligibility falls back to UT.
+func positionBucket(isPitcher bool, role string, positions []string) string {
+	if isPitcher {
+		if role == "SP" {
+			return "SP"
+		}
+		return "RP"
+	}
+	has := func(id string) bool {
+		for _, p := range positions {
+			if p == id {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("001"):
+		return "C"
+	case has("002"), has("003"), has("004"), has("005"), has("008"):
+		return "INF"
+	case has("012"):
+		return "OF"
+	default:
+		return "UT"
+	}
+}
+
+// topSignedMisses returns the n player-days with the largest absolute
+// projection error, ordered for display by signed diff ascending (most
+// over-projected first) so systematic ramp-up patterns — a pitcher we kept
+// projecting high who delivered low — cluster at the top. Ties break on
+// PlayerID for deterministic output.
+func topSignedMisses(players []PlayerProjection, n int) []PlayerProjection {
+	sorted := make([]PlayerProjection, len(players))
+	copy(sorted, players)
+	// Select the biggest misses by magnitude.
+	sort.Slice(sorted, func(i, j int) bool {
+		ai, aj := math.Abs(sorted[i].Diff), math.Abs(sorted[j].Diff)
+		if ai != aj {
+			return ai > aj
+		}
+		return sorted[i].PlayerID < sorted[j].PlayerID
+	})
+	if len(sorted) > n {
+		sorted = sorted[:n]
+	}
+	// Display order: most over-projected (most negative diff) first.
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Diff != sorted[j].Diff {
+			return sorted[i].Diff < sorted[j].Diff
+		}
+		return sorted[i].PlayerID < sorted[j].PlayerID
+	})
+	return sorted
 }
 
 // LoadSnapshot reads a snapshot JSON from snapshotDir for the given date.
@@ -619,7 +703,27 @@ func summarizeProjections(proj []ProjectionDayResult) *ProjectionSummary {
 		MAE:               mae,
 		Bias:              bias,
 		RMSE:              rmse,
+		ByPosition:        accuracyByPosition(all),
 	}
+}
+
+// accuracyByPosition groups player-days by bucket and returns per-bucket
+// accuracy in canonical order, skipping empty buckets.
+func accuracyByPosition(all []PlayerProjection) []PositionMAE {
+	byBucket := make(map[string][]PlayerProjection)
+	for _, p := range all {
+		byBucket[p.Bucket] = append(byBucket[p.Bucket], p)
+	}
+	var out []PositionMAE
+	for _, b := range bucketOrder {
+		ps := byBucket[b]
+		if len(ps) == 0 {
+			continue
+		}
+		mae, bias, _ := accuracyStats(ps)
+		out = append(out, PositionMAE{Bucket: b, N: len(ps), MAE: mae, Bias: bias})
+	}
+	return out
 }
 
 // FormatReport renders the report as human-readable text.
@@ -656,25 +760,30 @@ func FormatReport(r Report) string {
 		fmt.Fprintf(&b, "\nProjection accuracy (%d player-days, %d reconstructed / %d snapshot):\n",
 			s.TotalPlayerDays, s.ReconstructedDays, s.SnapshotDays)
 		fmt.Fprintf(&b, "  MAE:  %6.2f FP/game\n", s.MAE)
-		fmt.Fprintf(&b, "  Bias: %+6.2f FP/game (negative = under-projection)\n", s.Bias)
+		fmt.Fprintf(&b, "  Bias: %+6.2f FP/game (negative = over-projection)\n", s.Bias)
 		fmt.Fprintf(&b, "  RMSE: %6.2f FP/game\n", s.RMSE)
 
-		// Worst misses across all days.
+		// Per-position MAE.
+		if len(s.ByPosition) > 0 {
+			fmt.Fprintln(&b, "\nMAE by position:")
+			for _, pb := range s.ByPosition {
+				fmt.Fprintf(&b, "  %-4s n=%-5d MAE %6.2f  Bias %+6.2f\n", pb.Bucket, pb.N, pb.MAE, pb.Bias)
+			}
+		}
+
+		// Top-10 signed-error misses (most over-projected first), so
+		// ramp-up patterns surface.
 		var all []PlayerProjection
 		for _, d := range r.Projections {
 			all = append(all, d.Players...)
 		}
-		sort.Slice(all, func(i, j int) bool {
-			return math.Abs(all[i].Diff) > math.Abs(all[j].Diff)
-		})
-		if len(all) > 5 {
-			all = all[:5]
-		}
-		if len(all) > 0 {
-			fmt.Fprintln(&b, "\nWorst projection misses:")
-			for _, p := range all {
-				fmt.Fprintf(&b, "  %-24s %s  proj=%6.2f  actual=%6.2f  diff=%+6.2f\n",
+		misses := topSignedMisses(all, 10)
+		if len(misses) > 0 {
+			fmt.Fprintln(&b, "\nBiggest projection misses (signed; over-projected first):")
+			for _, p := range misses {
+				fmt.Fprintf(&b, "  %-24s %-4s %-6s  proj=%6.2f  actual=%6.2f  diff=%+6.2f\n",
 					truncate(p.Name, 22),
+					p.Bucket,
 					p.Date.Format("Jan 2"),
 					p.Projected, p.Actual, p.Diff)
 			}

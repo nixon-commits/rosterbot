@@ -31,6 +31,7 @@ var (
 	projectionSystem   string
 	showPipeline       bool
 	archiveProjections bool
+	snapshotFlag       bool
 
 	// projDisplayName maps projection system flag values to display-friendly names.
 	projDisplayName = map[string]string{
@@ -56,7 +57,8 @@ func init() {
 	optimizeCmd.Flags().BoolVar(&checkRoster, "check-roster", true, "check for roster slot mismatches (IL/minors)")
 	optimizeCmd.Flags().StringVar(&projectionSystem, "projections", "depthcharts", "projection system: steamer, depthcharts, thebatx, steamer-ros, depthcharts-ros, thebatx-ros")
 	optimizeCmd.Flags().BoolVar(&showPipeline, "pipeline", false, "show full hitter adjustment pipeline detail")
-	optimizeCmd.Flags().BoolVar(&archiveProjections, "archive-projections", false, "write per-date projection snapshot to .backtest/snapshots/ for future backtesting (also enabled by BACKTEST_ARCHIVE=1)")
+	optimizeCmd.Flags().BoolVar(&snapshotFlag, "snapshot", false, "force-write per-date projection snapshots to .backtest/snapshots/ even in --dry-run (non-dry-run runs always write)")
+	optimizeCmd.Flags().BoolVar(&archiveProjections, "archive-projections", false, "deprecated alias for --snapshot (snapshots are written by default on non-dry-run runs; also enabled by BACKTEST_ARCHIVE=1)")
 	rootCmd.AddCommand(optimizeCmd)
 }
 
@@ -834,10 +836,14 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 	prog.Done("Optimize", "done")
 	prog.Finish()
 
-	// --- Archive per-date projection snapshots (opt-in) ---
-	if archiveProjections || os.Getenv("BACKTEST_ARCHIVE") == "1" {
+	// --- Archive per-date projection snapshots ---
+	// Default-on for real (non-dry-run) optimize runs so the hourly cron
+	// accumulates backtest data automatically. In dry-run nothing is written
+	// unless explicitly requested via --snapshot (or the --archive-projections /
+	// BACKTEST_ARCHIVE aliases, kept for backward compatibility).
+	if !cfg.DryRun || snapshotFlag || archiveProjections || os.Getenv("BACKTEST_ARCHIVE") == "1" {
 		for _, dr := range results {
-			if err := writeProjectionSnapshot(dr, batLoadResult.System); err != nil {
+			if err := writeProjectionSnapshot(dr, batLoadResult.System, slotName); err != nil {
 				fmt.Printf("  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)
 			}
 		}
@@ -1235,19 +1241,23 @@ func sendOptimizeNotify(userKey, apiToken, message string) {
 // writeProjectionSnapshot archives the per-date projection values the optimizer
 // used so a future `rosterbot backtest` can grade projection accuracy exactly
 // (no reconstruction). One file per date at .backtest/snapshots/<YYYY-MM-DD>.json.
-func writeProjectionSnapshot(dr dateResult, projSystem string) error {
+func writeProjectionSnapshot(dr dateResult, projSystem string, slotName map[string]string) error {
+	return backtest.WriteSnapshot(".backtest/snapshots", buildSnapshot(dr, projSystem, slotName))
+}
+
+// buildSnapshot is the pure mapping from a day's optimizer results to the
+// serializable snapshot. Beyond the projected value it records the look-back
+// fields — slot occupied, locked, position eligibility, role, and whether we
+// started the player — so future analysis can slice projection error along any
+// of those dimensions. slotName maps a player's RosterPosition (slot pos ID) to
+// its display name; benched players (no active slot) get an empty Slot.
+func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string) backtest.Snapshot {
 	snap := backtest.Snapshot{
 		Date:             dr.date.Format("2006-01-02"),
 		ProjectionSystem: projSystem,
 		GeneratedAt:      time.Now().UTC(),
 	}
 
-	activeHitters := make(map[string]bool, len(dr.hitterResult.Scored))
-	for _, sp := range dr.hitterResult.Scored {
-		if sp.Player.Status == "Active" {
-			activeHitters[sp.Player.ID] = true
-		}
-	}
 	for _, sp := range dr.hitterResult.Scored {
 		snap.Hitters = append(snap.Hitters, backtest.SnapshotPlayer{
 			PlayerID:       sp.Player.ID,
@@ -1255,17 +1265,14 @@ func writeProjectionSnapshot(dr dateResult, projSystem string) error {
 			MLBTeam:        sp.Player.MLBTeam,
 			ProjPtsPerGame: sp.ExpectedPts,
 			HasGame:        sp.HasGame,
-			WasStarted:     activeHitters[sp.Player.ID],
+			WasStarted:     sp.Player.Status == "Active",
 			IsPitcher:      false,
+			Slot:           slotName[sp.Player.RosterPosition],
+			Locked:         sp.Player.Locked,
+			Eligibility:    sp.Player.Positions,
 		})
 	}
 
-	activePitchers := make(map[string]bool, len(dr.pitcherResult.Scored))
-	for _, sp := range dr.pitcherResult.Scored {
-		if sp.Player.Status == "Active" {
-			activePitchers[sp.Player.ID] = true
-		}
-	}
 	for _, sp := range dr.pitcherResult.Scored {
 		role := "RP"
 		if strings.Contains(sp.Player.PosShortNames, "SP") {
@@ -1277,12 +1284,15 @@ func writeProjectionSnapshot(dr dateResult, projSystem string) error {
 			MLBTeam:        sp.Player.MLBTeam,
 			ProjPtsPerGame: sp.ExpectedPts,
 			HasGame:        sp.HasGame,
-			WasStarted:     activePitchers[sp.Player.ID],
+			WasStarted:     sp.Player.Status == "Active",
 			IsStarter:      sp.IsStarter,
 			Role:           role,
 			IsPitcher:      true,
+			Slot:           slotName[sp.Player.RosterPosition],
+			Locked:         sp.Player.Locked,
+			Eligibility:    sp.Player.Positions,
 		})
 	}
 
-	return backtest.WriteSnapshot(".backtest/snapshots", snap)
+	return snap
 }
