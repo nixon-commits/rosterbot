@@ -13,6 +13,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
+	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/pmurley/go-fantrax/models"
@@ -290,6 +291,16 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 
 	if summaryPath := os.Getenv("GITHUB_STEP_SUMMARY"); summaryPath != "" {
 		writeGHASummary(report, summaryPath)
+	}
+
+	if userKey := os.Getenv("PUSHOVER_USER_KEY"); userKey != "" {
+		if apiToken := os.Getenv("PUSHOVER_API_TOKEN"); apiToken != "" {
+			if msg := formatProspectPushover(report); msg != "" {
+				if err := notify.SendPushover(userKey, apiToken, "RosterBot: Prospect Alerts", msg); err != nil {
+					log.Printf("WARNING: Pushover notification failed: %v", err)
+				}
+			}
+		}
 	}
 
 	if err := saveTxnCursor(today); err != nil {
@@ -660,6 +671,85 @@ func ListAllProspects(ft *fantrax.Client, cfg config.Config, today time.Time) er
 }
 
 // ---------------------------------------------------------------------------
+// formatProspectPushover — Pushover notification
+// ---------------------------------------------------------------------------
+
+func alertEmoji(kind AlertKind) string {
+	switch kind {
+	case CalledUp:
+		return "⬆️"
+	case Optioned:
+		return "⬇️"
+	case PerformanceHot:
+		return "🔥"
+	case PerformanceCold:
+		return "❄️"
+	case FreeAgentBuzz:
+		return "🎯"
+	default:
+		return "📌"
+	}
+}
+
+// formatProspectPushover builds an HTML Pushover body for high/medium alerts
+// and the top upgrade recommendation. Returns "" when there's nothing to send.
+// Two-line structure per item: emoji + bold name + team on line 1, detail on line 2.
+func formatProspectPushover(r Report) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "<b>Prospects · %s</b>", r.Date.Format("Jan 2"))
+
+	for _, a := range r.Alerts {
+		if a.Priority == "low" {
+			continue
+		}
+		name := shortProspectName(a.PlayerName)
+		team := a.MLBTeam
+		if team == "" {
+			team = "???"
+		}
+		block := fmt.Sprintf("\n\n%s <b>%s</b> (%s)\n%s",
+			alertEmoji(a.Kind), name, team, a.Detail)
+		if b.Len()+len(block) > 1000 {
+			break
+		}
+		b.WriteString(block)
+	}
+
+	// Top upgrade from each source (one per source).
+	for _, set := range r.Upgrades {
+		if len(set.Candidates) == 0 {
+			continue
+		}
+		u := set.Candidates[0]
+		line := fmt.Sprintf("\n\n📈 drop %s #%d → <b>%s</b> #%d (+%d) %s",
+			shortProspectName(u.Drop.Name), u.Drop.Rank,
+			shortProspectName(u.Add.Name), u.Add.Rank,
+			u.RankGap, set.Source)
+		if b.Len()+len(line) > 1000 {
+			break
+		}
+		b.WriteString(line)
+	}
+
+	// Nothing beyond the header means no actionable alerts.
+	if b.Len() <= len("<b>Prospects · Jun 1</b>") {
+		return ""
+	}
+	return b.String()
+}
+
+func shortProspectName(name string) string {
+	parts := strings.Fields(name)
+	if len(parts) < 2 {
+		return name
+	}
+	first := []rune(parts[0])
+	if len(first) == 0 {
+		return name
+	}
+	return string(first[:1]) + ". " + strings.Join(parts[1:], " ")
+}
+
 // writeGHASummary — GHA markdown output
 // ---------------------------------------------------------------------------
 
