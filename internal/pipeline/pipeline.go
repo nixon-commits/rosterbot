@@ -25,8 +25,8 @@ type HitterDetail struct {
 	ExpectedPts float64
 	HasGame     bool
 	Breakdown   *projections.HitterBreakdown // nil if no projection available
-	ParkFactor  float64                       // 1.0 if unavailable
-	MatchupMult float64                       // 1.0 if unavailable
+	ParkFactor  float64                      // 1.0 if unavailable
+	MatchupMult float64                      // 1.0 if unavailable
 }
 
 // PitcherDetail holds per-pitcher projection data for the web GUI.
@@ -244,15 +244,6 @@ func Run(input Input) (*Result, error) {
 
 	schedClient := schedule.NewClient()
 
-	// Park factors.
-	var parkFactors map[string]projections.ParkFactors
-	pf, err := schedClient.FetchParkFactorsWithFallback()
-	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("park factors unavailable: %v", err))
-	} else {
-		parkFactors = pf
-	}
-
 	// Season start for period calculation.
 	seasonStart, _, err := ft.GetSeasonDateRange()
 	if err != nil {
@@ -330,13 +321,8 @@ func Run(input Input) (*Result, error) {
 		}
 	}
 
-	// Build per-date projection source with park + matchup adjustments.
+	// Build per-date projection source with matchup adjustments.
 	dateHitterSrc := hitterProjSrc
-	var parkSrc *projections.ParkAdjustedSource
-	if venues != nil && parkFactors != nil {
-		parkSrc = projections.NewParkAdjustedSource(hitterProjSrc, parkFactors, venues)
-		dateHitterSrc = parkSrc
-	}
 
 	var matchupSrc *projections.MatchupAdjustedSource
 	if len(probableStarters) > 0 && leagueAvgFIP > 0 && venues != nil {
@@ -369,11 +355,6 @@ func Run(input Input) (*Result, error) {
 		// Get blend breakdown (always, not gated by a flag).
 		if blended, ok := hitterProjSrc.(*projections.BlendedSource); ok {
 			detail.Breakdown = blended.GetHitterBreakdown(sp.Player.Name, sp.Player.MLBTeam, hitterScoring)
-		}
-
-		// Get park factor.
-		if parkSrc != nil {
-			detail.ParkFactor = parkSrc.ParkFactor(sp.Player.MLBTeam)
 		}
 
 		// Get matchup multiplier.

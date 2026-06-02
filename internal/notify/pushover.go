@@ -18,8 +18,9 @@ func SendPushover(userKey, apiToken, title, message string) error {
 		"token":    {apiToken},
 		"user":     {userKey},
 		"message":  {message},
-		"priority": {"1"},
+		"priority": {"0"},
 		"title":    {title},
+		"html":     {"1"},
 	}
 
 	resp, err := http.PostForm("https://api.pushover.net/1/messages.json", data)

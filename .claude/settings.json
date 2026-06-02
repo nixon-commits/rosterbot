@@ -6,8 +6,13 @@
         "hooks": [
           {
             "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; case \"$f\" in *.go) gofmt -w \"$f\" ;; esac; } 2>/dev/null || true",
+            "statusMessage": "Formatting Go code..."
+          },
+          {
+            "type": "command",
             "command": "cd /Users/jnixon/fantrax && go vet ./... 2>&1",
-            "description": "Run go vet after file changes"
+            "statusMessage": "Running go vet..."
           }
         ]
       }
@@ -18,7 +23,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "case \"$CLAUDE_FILE_PATH\" in *.env|*.env.*|*/.fantrax-cache/*|*/.prospects-cache/*) echo 'BLOCKED: refusing to edit sensitive/cache file' >&2; exit 1;; *) exit 0;; esac",
+            "command": "case \"$CLAUDE_FILE_PATH\" in *.env|*.env.*|*/.fantrax-cache/*|*/.cache/*) echo 'BLOCKED: refusing to edit sensitive/cache file' >&2; exit 1;; *) exit 0;; esac",
             "description": "Block edits to credential and cache files"
           }
         ]

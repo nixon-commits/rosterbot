@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/cache"
 )
 
 var fangraphsPitchingURL = "https://www.fangraphs.com/api/projections?type=fangraphsdc&stats=pit&pos=all&team=0&players=0&lg=all"
@@ -31,9 +33,9 @@ type PitcherProjection struct {
 	HBP float64 // Hit batsmen (pitcher)
 	WP  float64 // Wild pitches
 	BK  float64 // Balks
-	CG     float64 // Complete games
-	SHO    float64 // Shutouts
-	PKO    float64 // Pickoffs
+	CG  float64 // Complete games
+	SHO float64 // Shutouts
+	PKO float64 // Pickoffs
 	FIP float64 // Fielding Independent Pitching
 }
 
@@ -69,14 +71,14 @@ type fgPitchRow struct {
 	MLBAMID    int     `json:"xMLBAMID"`
 }
 
-// FanGraphsPitcherSource fetches Steamer pitching projections from FanGraphs.
+// FanGraphsPitcherSource fetches pitching projections from FanGraphs (Steamer, DepthCharts, etc.).
 type FanGraphsPitcherSource struct {
 	projections map[string]*PitcherProjection
 	mlbamIDs    map[string]int // NormalizeName(name) → MLBAM ID
 }
 
-// NewFanGraphsPitcherSource fetches and parses the FanGraphs pitching projections JSON.
-func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
+// fetchPitchingRows fetches raw pitching projection rows from the FanGraphs API.
+func fetchPitchingRows() ([]fgPitchRow, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(fangraphsPitchingURL)
 	if err != nil {
@@ -92,7 +94,11 @@ func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
 		return nil, fmt.Errorf("fangraphs pitching json: %w", err)
 	}
+	return rows, nil
+}
 
+// buildFanGraphsPitcherSource constructs a FanGraphsPitcherSource from raw rows.
+func buildFanGraphsPitcherSource(rows []fgPitchRow) *FanGraphsPitcherSource {
 	src := &FanGraphsPitcherSource{
 		projections: make(map[string]*PitcherProjection, len(rows)),
 		mlbamIDs:    make(map[string]int, len(rows)),
@@ -117,10 +123,30 @@ func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
 			src.mlbamIDs[NormalizeName(name)] = row.MLBAMID
 		}
 	}
-	return src, nil
+	return src
 }
 
-// NewFanGraphsPitcherSourceFromCSV loads Steamer pitching projections from a local CSV file.
+// NewFanGraphsPitcherSource fetches and parses the FanGraphs pitching projections JSON.
+func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
+	rows, err := fetchPitchingRows()
+	if err != nil {
+		return nil, err
+	}
+	return buildFanGraphsPitcherSource(rows), nil
+}
+
+// NewFanGraphsPitcherSourceCached is like NewFanGraphsPitcherSource but uses a file cache.
+func NewFanGraphsPitcherSourceCached(cacheDir string, ttl time.Duration) (*FanGraphsPitcherSource, error) {
+	c := cache.New[[]fgPitchRow](cacheDir, ttl)
+	key := cache.Key("fangraphs", "pit", currentAPIType)
+	rows, err := c.Get(key, fetchPitchingRows)
+	if err != nil {
+		return nil, err
+	}
+	return buildFanGraphsPitcherSource(rows), nil
+}
+
+// NewFanGraphsPitcherSourceFromCSV loads pitching projections from a local CSV file.
 func NewFanGraphsPitcherSourceFromCSV(path string) (*FanGraphsPitcherSource, error) {
 	required := []string{"Name", "Team", "G", "GS", "IP", "SO", "BB", "H", "ER", "HR", "W", "L", "QS", "SV", "HLD", "HBP", "FIP", "MLBAMID"}
 	f, r, col, err := openCSV(path, required)
@@ -182,6 +208,9 @@ func NewFanGraphsPitcherSourceFromCSV(path string) (*FanGraphsPitcherSource, err
 	return src, nil
 }
 
+// Len returns the number of players in this source.
+func (s *FanGraphsPitcherSource) Len() int { return len(s.projections) }
+
 // PitcherInfo returns pitcher FIP and IP-weighted league average FIP.
 func (s *FanGraphsPitcherSource) PitcherInfo() (fip map[string]float64, leagueAvgFIP float64) {
 	fip = make(map[string]float64, len(s.projections))
@@ -230,4 +259,56 @@ func (s *FanGraphsPitcherSource) GetPitcherProjection(name, mlbTeam string) (*Pi
 		return match, true
 	}
 	return nil, false
+}
+
+// LoadPitcherProjections tries to load pitcher projections with RoS-first priority.
+// For base systems (e.g. "depthcharts"): RoS API → Preseason API → CSV.
+// For explicit RoS systems (e.g. "depthcharts-ros"): RoS API → CSV.
+func LoadPitcherProjections(system, cacheDir string, ttl time.Duration) (*FanGraphsPitcherSource, LoadResult, error) {
+	result := LoadResult{System: system}
+
+	// Build the list of systems to try via API.
+	systems := []string{}
+	if ros, ok := rosVariant[system]; ok {
+		systems = append(systems, ros, system)
+	} else {
+		systems = append(systems, system)
+	}
+
+	// Try each API system in order.
+	for i, sys := range systems {
+		if err := SetProjectionSystem(sys); err != nil {
+			continue
+		}
+		src, err := NewFanGraphsPitcherSourceCached(cacheDir, ttl)
+		if err != nil {
+			if i < len(systems)-1 {
+				continue
+			}
+			break
+		}
+		if src.Len() == 0 {
+			if i < len(systems)-1 {
+				result.FellBack = true
+				continue
+			}
+			break
+		}
+		result.System = sys
+		return src, result, nil
+	}
+
+	// Restore the original system for display/cache key consistency.
+	SetProjectionSystem(system)
+
+	// CSV fallback.
+	src, err := NewFanGraphsPitcherSourceFromCSV("fangraphs-leaderboard-projections_pitchers.csv")
+	if err != nil {
+		return nil, result, fmt.Errorf("all pitching projection sources unavailable: %w", err)
+	}
+	if src.Len() == 0 {
+		return nil, result, fmt.Errorf("CSV pitching projections file is empty")
+	}
+	result.FromCSV = true
+	return src, result, nil
 }

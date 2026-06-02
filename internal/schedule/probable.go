@@ -3,20 +3,62 @@ package schedule
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
+	"os"
+	"path/filepath"
 	"time"
-	"unicode"
 
+	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
-	"golang.org/x/text/unicode/norm"
 )
 
 var mlbProbablePitcherURL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&hydrate=probablePitcher,team&date=%s"
 
 // ProbableStarters returns a map of normalized pitcher name → team abbreviation
 // for all probable starters on the given date.
+//
+// When Client.CacheDir is set, the fresh API result is merged with any cached
+// entries for the same date. API entries win for teams they cover; cached
+// entries for teams the API didn't cover are preserved. This defends against
+// transient MLB statsapi gaps where probablePitcher temporarily goes null for
+// a game in the pre-game window.
+//
 // Returns an empty map (not an error) when no data is available.
 func (c *Client) ProbableStarters(date time.Time) (map[string]string, error) {
+	apiResult, err := c.fetchProbableStarters(date)
+	if err != nil {
+		if cached, ok := c.loadProbablesCache(date); ok && len(cached) > 0 {
+			return cached, nil
+		}
+		return nil, err
+	}
+
+	if c.CacheDir == "" {
+		return apiResult, nil
+	}
+
+	merged := make(map[string]string, len(apiResult))
+	apiTeams := make(map[string]bool, len(apiResult))
+	for name, team := range apiResult {
+		merged[name] = team
+		apiTeams[team] = true
+	}
+	if cached, ok := c.loadProbablesCache(date); ok {
+		for name, team := range cached {
+			if !apiTeams[team] {
+				merged[name] = team
+			}
+		}
+	}
+
+	if err := c.saveProbablesCache(date, merged); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to save probables cache for %s: %v\n",
+			date.Format("2006-01-02"), err)
+	}
+
+	return merged, nil
+}
+
+func (c *Client) fetchProbableStarters(date time.Time) (map[string]string, error) {
 	url := fmt.Sprintf(mlbProbablePitcherURL, date.Format("2006-01-02"))
 	resp, err := c.http.Get(url)
 	if err != nil {
@@ -71,14 +113,51 @@ func (c *Client) ProbableStarters(date time.Time) (map[string]string, error) {
 	return starters, nil
 }
 
-// normalizePitcherName strips diacritics and lowercases for matching.
-// Mirrors projections.NormalizeName to avoid a cross-package import.
-func normalizePitcherName(name string) string {
-	var b strings.Builder
-	for _, r := range norm.NFD.String(strings.TrimSpace(name)) {
-		if !unicode.Is(unicode.Mn, r) {
-			b.WriteRune(r)
-		}
+type probablesCacheFile struct {
+	Date      string            `json:"date"`
+	Probables map[string]string `json:"probables"`
+}
+
+func (c *Client) probablesCachePath(date time.Time) string {
+	return filepath.Join(c.CacheDir, "probables-"+date.Format("2006-01-02")+".json")
+}
+
+func (c *Client) loadProbablesCache(date time.Time) (map[string]string, bool) {
+	if c.CacheDir == "" {
+		return nil, false
 	}
-	return strings.ToLower(b.String())
+	raw, err := os.ReadFile(c.probablesCachePath(date))
+	if err != nil {
+		return nil, false
+	}
+	var f probablesCacheFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return nil, false
+	}
+	if len(f.Probables) == 0 {
+		return nil, false
+	}
+	return f.Probables, true
+}
+
+func (c *Client) saveProbablesCache(date time.Time, probables map[string]string) error {
+	if c.CacheDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(c.CacheDir, 0o755); err != nil {
+		return err
+	}
+	f := probablesCacheFile{
+		Date:      date.Format("2006-01-02"),
+		Probables: probables,
+	}
+	raw, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(c.probablesCachePath(date), raw, 0o644)
+}
+
+func normalizePitcherName(name string) string {
+	return playername.Normalize(name)
 }

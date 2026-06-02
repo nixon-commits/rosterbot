@@ -5,14 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 )
 
@@ -100,48 +98,6 @@ func isPitcherPosition(pos string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// 2. FantraxRankingSource (fallback)
-// ---------------------------------------------------------------------------
-
-// FantraxRankingSource ranks minors-eligible players from the Fantrax player pool
-// by %Rostered descending. Used as fallback when FanGraphs is unavailable.
-type FantraxRankingSource struct {
-	Client *fantrax.Client
-}
-
-func (s *FantraxRankingSource) GetTopProspects(season int) ([]RankedProspect, error) {
-	pool, err := s.Client.GetMinorsEligiblePool()
-	if err != nil {
-		return nil, fmt.Errorf("fantrax prospect pool: %w", err)
-	}
-
-	// Sort by Fantrax overall rank ascending (lower = better).
-	// When %Rostered is available (in-season), use it as primary sort.
-	sort.SliceStable(pool, func(i, j int) bool {
-		if pool[i].PercentRostered != pool[j].PercentRostered {
-			return pool[i].PercentRostered > pool[j].PercentRostered
-		}
-		return pool[i].FantraxRank < pool[j].FantraxRank
-	})
-
-	// Return all players with their %Rostered value for comparison.
-	result := make([]RankedProspect, 0, len(pool))
-	for i := 0; i < len(pool); i++ {
-		p := pool[i]
-		pos := p.PosShortNames
-		result = append(result, RankedProspect{
-			Name:        p.Name,
-			MLBTeam:     projections.NormalizeTeam(p.MLBTeam),
-			Position:    pos,
-			Rank:        i + 1,
-			PctRostered: p.PercentRostered,
-			IsPitcher:   isPitcherPosition(pos),
-		})
-	}
-	return result, nil
-}
-
-// ---------------------------------------------------------------------------
 // 3. ChainedRankingSource
 // ---------------------------------------------------------------------------
 
@@ -171,69 +127,17 @@ func (c *ChainedRankingSource) GetTopProspects(season int) ([]RankedProspect, er
 }
 
 // ---------------------------------------------------------------------------
-// 4. Cache helpers
+// 4. LoadRankings
 // ---------------------------------------------------------------------------
 
-var rankingsCacheFile = ".prospects-cache/rankings.json"
+var loadRankingsCacheDir = ".cache"
 
-type rankingsCache struct {
-	FetchedAt time.Time        `json:"fetched_at"`
-	Prospects []RankedProspect `json:"prospects"`
-}
-
-func loadRankingsCache(maxAge time.Duration) []RankedProspect {
-	data, err := os.ReadFile(rankingsCacheFile)
-	if err != nil {
-		return nil
-	}
-	var c rankingsCache
-	if err := json.Unmarshal(data, &c); err != nil {
-		return nil
-	}
-	if time.Since(c.FetchedAt) > maxAge {
-		return nil
-	}
-	return c.Prospects
-}
-
-func saveRankingsCache(prospects []RankedProspect) error {
-	dir := filepath.Dir(rankingsCacheFile)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	c := rankingsCache{
-		FetchedAt: time.Now(),
-		Prospects: prospects,
-	}
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(rankingsCacheFile, data, 0o644)
-}
-
-// ---------------------------------------------------------------------------
-// 5. LoadRankings
-// ---------------------------------------------------------------------------
-
-// LoadRankings returns prospect rankings, using a cache when fresh.
+// LoadRankings returns prospect rankings, using a file cache when fresh.
 func LoadRankings(source RankingSource, season int, cacheHours int) ([]RankedProspect, error) {
-	maxAge := time.Duration(cacheHours) * time.Hour
-	if cached := loadRankingsCache(maxAge); cached != nil {
-		return cached, nil
-	}
-
-	prospects, err := source.GetTopProspects(season)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := saveRankingsCache(prospects); err != nil {
-		// Non-fatal: log but don't fail
-		fmt.Fprintf(os.Stderr, "warning: failed to save rankings cache: %v\n", err)
-	}
-
-	return prospects, nil
+	c := cache.New[[]RankedProspect](loadRankingsCacheDir, time.Duration(cacheHours)*time.Hour)
+	return c.Get("rankings", func() ([]RankedProspect, error) {
+		return source.GetTopProspects(season)
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -323,49 +227,6 @@ func FindUpgrades(rostered, available []RankedProspect, currentYear string) []Up
 	// Sort by rank gap descending
 	sort.Slice(upgrades, func(i, j int) bool {
 		return upgrades[i].RankGap > upgrades[j].RankGap
-	})
-
-	return upgrades
-}
-
-// FindPctRosteredUpgrades compares rostered prospects against available FAs
-// using %Rostered as the metric. An FA is an upgrade when its %Rostered
-// exceeds the rostered player's by at least minGap percentage points.
-func FindPctRosteredUpgrades(rostered, available []RankedProspect, minGap float64) []UpgradeCandidate {
-	if len(rostered) == 0 || len(available) == 0 {
-		return nil
-	}
-
-	var upgrades []UpgradeCandidate
-
-	for _, drop := range rostered {
-		var bestFA *RankedProspect
-		var bestGap float64
-
-		for i := range available {
-			add := &available[i]
-			gap := add.PctRostered - drop.PctRostered
-			if gap < minGap {
-				continue
-			}
-			if bestFA == nil || add.PctRostered > bestFA.PctRostered {
-				cp := *add
-				bestFA = &cp
-				bestGap = gap
-			}
-		}
-
-		if bestFA != nil {
-			upgrades = append(upgrades, UpgradeCandidate{
-				Drop:   drop,
-				Add:    *bestFA,
-				PctGap: bestGap,
-			})
-		}
-	}
-
-	sort.Slice(upgrades, func(i, j int) bool {
-		return upgrades[i].PctGap > upgrades[j].PctGap
 	})
 
 	return upgrades

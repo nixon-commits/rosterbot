@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -9,6 +10,50 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/roster"
 )
+
+// zeroGainEps matches the optimizer's float-comparison epsilon. Combined
+// hitter+pitcher move sets whose net pts gain is within this tolerance are
+// dropped before staging — the optimizer can construct cosmetic swaps among
+// equally-valued bench players (e.g. two zero-projection players trading UT
+// slots), and Fantrax atomically rejects the whole payload if any one of
+// those players is per-player-locked, dropping any other valid moves with it.
+const zeroGainEps = 1e-9
+
+// combinedMovesDelta returns the net pts gain from a combined hitter+pitcher
+// move set. ptsMap maps player ID to effective pts (already discounted for
+// non-starting SPs by the caller).
+func combinedMovesDelta(activate []fantrax.PlayerSlot, bench []string, ptsMap map[string]float64) float64 {
+	var delta float64
+	for _, ps := range activate {
+		delta += ptsMap[ps.PlayerID]
+	}
+	for _, id := range bench {
+		delta -= ptsMap[id]
+	}
+	return delta
+}
+
+// isZeroGainDelta reports whether a combined-move delta is within zeroGainEps of zero.
+func isZeroGainDelta(delta float64) bool {
+	return math.Abs(delta) < zeroGainEps
+}
+
+// pitcherProjectedPts returns a pitcher's projected fantasy pts per game using
+// the blended source (if available) or the raw season projection. Returns 0
+// when no projection exists. Used by the GS budget forecast to rank starters
+// across the week by value.
+func pitcherProjectedPts(p fantrax.Player, src projections.PitcherSource, scoring fantrax.ScoringWeights) float64 {
+	if pps, ok := src.(projections.PitcherPtsPerGameSource); ok {
+		if v, ok := pps.GetPitcherPtsPerGame(p.Name, p.MLBTeam, scoring); ok {
+			return v
+		}
+	}
+	proj, ok := src.GetPitcherProjection(p.Name, p.MLBTeam)
+	if !ok || proj.G <= 0 {
+		return 0
+	}
+	return projections.PitcherExpectedPtsFromProj(proj, scoring)
+}
 
 // padRight pads s with spaces to the given display width.
 // Accounts for double-width characters (emoji, CJK) that occupy 2 terminal columns.
@@ -33,6 +78,29 @@ func displayWidth(s string) int {
 		}
 	}
 	return w
+}
+
+// colorDelta formats a pipeline delta with ANSI green (positive) or red (negative).
+// All branches use the same ANSI prefix/suffix lengths (\033[XXm … \033[0m) so
+// the total byte length is consistent and fmt.Printf %s columns stay aligned.
+func colorDelta(delta float64) string {
+	if delta > 0.005 {
+		return fmt.Sprintf("\033[32m%+7.2f\033[0m", delta)
+	}
+	if delta < -0.005 {
+		return fmt.Sprintf("\033[31m%7.2f\033[0m", delta)
+	}
+	return "\033[90m      -\033[0m"
+}
+
+// formatBlendMix renders the base-projection weight as a fixed-width 4-char
+// percentage cell (e.g. " 60%", "100%"). When no recent stats exist the cell
+// is rendered in dim grey to flag that no blending was actually applied.
+func formatBlendMix(baseWt float64, hasRecent bool) string {
+	if !hasRecent {
+		return "\033[90m100%\033[0m"
+	}
+	return fmt.Sprintf("%3.0f%%", baseWt*100)
 }
 
 // truncName truncates a name to maxLen runes.

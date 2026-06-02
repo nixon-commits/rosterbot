@@ -19,7 +19,7 @@ type OpposingPitcher struct {
 	Name   string
 	Team   string
 	Throws string  // "R" or "L"
-	FIP    float64 // from Steamer projection
+	FIP    float64 // from projection system
 }
 
 // MatchupAdjustedSource wraps a projection source and applies platoon split
@@ -50,6 +50,44 @@ func NewMatchupAdjustedSource(
 		hitterBats:       hitterBats,
 		leagueAvgFIP:     leagueAvgFIP,
 	}
+}
+
+// MatchupDetail holds the individual matchup multiplier components.
+type MatchupDetail struct {
+	PlatoonMult     float64 // 1.0 or unfavorablePlatoonMult
+	QualityMult     float64 // FIP/leagueAvgFIP, clamped
+	CombinedMult    float64 // clamped product
+	Favorable       *bool   // nil=unknown, true=favorable platoon, false=unfavorable
+	OpposingPitcher string
+	OpposingFIP     float64
+	LeagueAvgFIP    float64
+}
+
+// GetMatchupDetail returns the matchup adjustment components for a hitter.
+func (s *MatchupAdjustedSource) GetMatchupDetail(name, mlbTeam string) MatchupDetail {
+	d := MatchupDetail{PlatoonMult: 1.0, QualityMult: 1.0, CombinedMult: 1.0, LeagueAvgFIP: s.leagueAvgFIP}
+
+	opp, oppOK := s.opposingPitchers[mlbTeam]
+	if !oppOK {
+		return d
+	}
+	d.OpposingPitcher = opp.Name
+	d.OpposingFIP = opp.FIP
+
+	if bats, batsOK := s.hitterBats[NormalizeName(name)]; batsOK && opp.Throws != "" {
+		favorable := bats == "S" || bats != opp.Throws
+		d.Favorable = &favorable
+		if !favorable {
+			d.PlatoonMult = unfavorablePlatoonMult
+		}
+	}
+
+	if s.leagueAvgFIP > 0 && opp.FIP > 0 {
+		d.QualityMult = math.Max(qualityMultMin, math.Min(qualityMultMax, opp.FIP/s.leagueAvgFIP))
+	}
+
+	d.CombinedMult = math.Max(combinedMultMin, math.Min(combinedMultMax, d.PlatoonMult*d.QualityMult))
+	return d
 }
 
 // GetProjection delegates to the inner source (unadjusted).

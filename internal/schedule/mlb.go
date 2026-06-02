@@ -6,15 +6,29 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 )
 
 var mlbScheduleURL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&hydrate=team&date=%s"
 var mlbLineupsURL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&hydrate=lineups,team&date=%s"
 
+// pastScheduleTTL is the on-disk lifetime for cached schedule responses for
+// past dates. Past games are immutable, so a long TTL is safe.
+const pastScheduleTTL = 30 * 24 * time.Hour
+
 // Client fetches the MLB game schedule.
 type Client struct {
 	http http.Client
+	// CacheDir enables two file caches under the same directory:
+	//   - sticky per-date probable-starters cache (always on when set), so
+	//     a previously-confirmed probable isn't lost when the MLB statsapi
+	//     intermittently drops probablePitcher data during the pre-game window
+	//   - per-date schedule cache for PAST dates only, key
+	//     `mlb-schedule-<YYYY-MM-DD>` (immutable, 30-day TTL)
+	// Today and future dates are always fetched fresh.
+	// Leave empty to disable both.
+	CacheDir string
 }
 
 func NewClient() *Client {
@@ -45,6 +59,24 @@ type schedulePayload struct {
 }
 
 func (c *Client) fetchSchedule(date time.Time) (*schedulePayload, error) {
+	if c.CacheDir != "" && isPastDate(date) {
+		fc := cache.New[*schedulePayload](c.CacheDir, pastScheduleTTL)
+		key := cache.Key("mlb-schedule", date.Format("2006-01-02"))
+		return fc.Get(key, func() (*schedulePayload, error) {
+			return c.fetchScheduleUncached(date)
+		})
+	}
+	return c.fetchScheduleUncached(date)
+}
+
+// isPastDate reports whether date's UTC YMD is strictly before today's UTC
+// YMD. Past-date schedules are immutable and safe to cache aggressively;
+// today/future are not.
+func isPastDate(date time.Time) bool {
+	return date.UTC().Format("2006-01-02") < time.Now().UTC().Format("2006-01-02")
+}
+
+func (c *Client) fetchScheduleUncached(date time.Time) (*schedulePayload, error) {
 	url := fmt.Sprintf(mlbScheduleURL, date.Format("2006-01-02"))
 	resp, err := c.http.Get(url)
 	if err != nil {
@@ -78,6 +110,31 @@ func (c *Client) TeamsPlayingOn(date time.Time) (map[string]bool, error) {
 		}
 	}
 	return playing, nil
+}
+
+// OpponentsOn returns a map of MLB team abbreviation → opponent abbreviation
+// for every game on the given date. A team that plays a doubleheader will
+// only have its last opponent in the map (good enough for award-style "facing
+// X" labels; we don't model doubleheaders elsewhere either).
+func (c *Client) OpponentsOn(date time.Time) (map[string]string, error) {
+	payload, err := c.fetchSchedule(date)
+	if err != nil {
+		return nil, err
+	}
+	opp := make(map[string]string)
+	for _, d := range payload.Dates {
+		for _, g := range d.Games {
+			away := projections.NormalizeTeam(g.Teams.Away.Team.Abbreviation)
+			home := projections.NormalizeTeam(g.Teams.Home.Team.Abbreviation)
+			if away != "" {
+				opp[away] = home
+			}
+			if home != "" {
+				opp[home] = away
+			}
+		}
+	}
+	return opp, nil
 }
 
 // LockedTeams returns the set of teams whose game is currently in progress or final.

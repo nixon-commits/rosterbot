@@ -179,9 +179,9 @@ func (s *Server) handleProjections(w http.ResponseWriter, r *http.Request) {
 			FinalPts:    h.ExpectedPts,
 		}
 		if h.Breakdown != nil {
-			hj.SteamerPts = h.Breakdown.SteamerPts
+			hj.SteamerPts = h.Breakdown.BasePts
 			hj.RecentFPG = h.Breakdown.RecentFPG
-			hj.SteamerWt = h.Breakdown.SteamerWt
+			hj.SteamerWt = h.Breakdown.BaseWt
 			hj.RecentWt = h.Breakdown.RecentWt
 			hj.BlendedPts = h.Breakdown.BlendedPts
 			hj.GamesPlayed = h.Breakdown.GamesPlayed
@@ -243,7 +243,7 @@ func (s *Server) handleBlendCurve(w http.ResponseWriter, r *http.Request) {
 				resp.RosterPlayers = append(resp.RosterPlayers, rosterDot{
 					Name:      h.Player.Name,
 					GP:        h.Breakdown.GamesPlayed,
-					SteamerWt: h.Breakdown.SteamerWt,
+					SteamerWt: h.Breakdown.BaseWt,
 					RecentWt:  h.Breakdown.RecentWt,
 					Type:      "hitter",
 				})
@@ -424,7 +424,7 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 					FinalPts:  h.ExpectedPts,
 				}
 				if h.Breakdown != nil {
-					ch.SteamerPts = h.Breakdown.SteamerPts
+					ch.SteamerPts = h.Breakdown.BasePts
 					ch.BlendedPts = h.Breakdown.BlendedPts
 				}
 				entry.Hitters = append(entry.Hitters, ch)

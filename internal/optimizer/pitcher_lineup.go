@@ -114,6 +114,35 @@ func OptimizePitcherLineup(
 		assigned[ps.PlayerID] = true
 	}
 
+	// Fill remaining empty slots with currently-active non-playing pitchers.
+	// There's no benefit to benching a pitcher whose team doesn't play —
+	// leaving them in an unused slot avoids unnecessary roster churn.
+	filledSlots := make(map[string]int) // posID → count of assigned players
+	for _, ps := range toActivate {
+		filledSlots[ps.PosID]++
+	}
+	slotCap := make(map[string]int) // posID → total slot count
+	for _, s := range slots {
+		slotCap[s.PosID]++
+	}
+	for posID, cap := range slotCap {
+		slotCap[posID] = cap - filledSlots[posID]
+	}
+	// Keep active non-playing pitchers in their current slot if there's room.
+	for _, p := range roster {
+		if p.Status != "Active" || assigned[p.ID] || p.Locked {
+			continue
+		}
+		posID, ok := currentAssign[p.ID]
+		if !ok {
+			continue
+		}
+		if slotCap[posID] > 0 {
+			assigned[p.ID] = true
+			slotCap[posID]--
+		}
+	}
+
 	// Only emit changes. Never emit locked players.
 	var changedActivate []fantrax.PlayerSlot
 	for _, ps := range toActivate {
@@ -122,8 +151,8 @@ func OptimizePitcherLineup(
 		}
 	}
 
-	// Bench pitchers who are currently active but not in the optimal lineup.
-	// Never bench locked players.
+	// Bench pitchers who are currently active but not in the optimal lineup
+	// and couldn't be retained in an empty slot. Never bench locked players.
 	var toBench []string
 	for _, p := range roster {
 		if p.Status == "Active" && !assigned[p.ID] && !p.Locked {

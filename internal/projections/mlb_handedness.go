@@ -1,30 +1,19 @@
 package projections
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/cache"
+	mlb "github.com/pmurley/go-mlb"
 )
 
-var mlbPeopleURL = "https://statsapi.mlb.com/api/v1/people"
-
-type mlbPeopleResponse struct {
-	People []mlbPerson `json:"people"`
-}
-
-type mlbPerson struct {
-	ID       int         `json:"id"`
-	FullName string      `json:"fullName"`
-	BatSide  mlbHandSide `json:"batSide"`
-	PitchHand mlbHandSide `json:"pitchHand"`
-}
-
-type mlbHandSide struct {
-	Code string `json:"code"`
-}
+// mlbBaseURL is the MLB Stats API host (without /api/ — go-mlb appends that
+// itself). Exposed as a var for test override.
+var mlbBaseURL = "https://statsapi.mlb.com"
 
 // FetchMLBHandedness fetches bat side and pitch hand from the MLB Stats API
 // for all provided MLBAM IDs. Returns maps of NormalizeName(name) → "R"/"L"/"S".
@@ -37,7 +26,6 @@ func FetchMLBHandedness(mlbamIDs map[string]int) (bats map[string]string, throws
 		return
 	}
 
-	// Build reverse map: MLBAM ID → normalized name.
 	idToName := make(map[int]string, len(mlbamIDs))
 	ids := make([]int, 0, len(mlbamIDs))
 	for name, id := range mlbamIDs {
@@ -45,8 +33,14 @@ func FetchMLBHandedness(mlbamIDs map[string]int) (bats map[string]string, throws
 		ids = append(ids, id)
 	}
 
+	client := mlb.NewClient(
+		mlb.WithBaseURL(mlbBaseURL),
+		mlb.WithHTTPClient(&http.Client{Timeout: 15 * time.Second}),
+		mlb.WithCache(nil),
+	)
+	ctx := context.Background()
+
 	// Batch by 500 to stay within URL length limits.
-	client := &http.Client{Timeout: 15 * time.Second}
 	for i := 0; i < len(ids); i += 500 {
 		end := i + 500
 		if end > len(ids) {
@@ -54,43 +48,53 @@ func FetchMLBHandedness(mlbamIDs map[string]int) (bats map[string]string, throws
 		}
 		batch := ids[i:end]
 
-		idStrs := make([]string, len(batch))
-		for j, id := range batch {
-			idStrs[j] = strconv.Itoa(id)
+		people, perr := client.People.List(ctx, batch)
+		if perr != nil {
+			return bats, throws, fmt.Errorf("mlb people fetch: %w", perr)
 		}
 
-		url := mlbPeopleURL + "?personIds=" + strings.Join(idStrs, ",")
-		resp, err := client.Get(url)
-		if err != nil {
-			return bats, throws, fmt.Errorf("mlb people fetch: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return bats, throws, fmt.Errorf("mlb people: status %d", resp.StatusCode)
-		}
-
-		var result mlbPeopleResponse
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return bats, throws, fmt.Errorf("mlb people json: %w", err)
-		}
-
-		for _, p := range result.People {
+		for _, p := range people {
 			name, ok := idToName[p.ID]
 			if !ok {
 				continue
 			}
-			if b := strings.ToUpper(p.BatSide.Code); b == "R" || b == "L" || b == "S" {
-				if b == "B" {
-					b = "S"
+			if p.BatSide != nil {
+				if b := strings.ToUpper(p.BatSide.Code); b == "R" || b == "L" || b == "S" || b == "B" {
+					if b == "B" {
+						b = "S"
+					}
+					bats[name] = b
 				}
-				bats[name] = b
 			}
-			if t := strings.ToUpper(p.PitchHand.Code); t == "R" || t == "L" {
-				throws[name] = t
+			if p.PitchHand != nil {
+				if t := strings.ToUpper(p.PitchHand.Code); t == "R" || t == "L" {
+					throws[name] = t
+				}
 			}
 		}
 	}
 
 	return bats, throws, nil
+}
+
+// HandednessData holds cached bat-side and pitch-hand maps.
+type HandednessData struct {
+	Bats   map[string]string `json:"bats"`
+	Throws map[string]string `json:"throws"`
+}
+
+// FetchMLBHandednessCached is like FetchMLBHandedness but uses a file cache.
+// Uses a single stable cache key since handedness data is player-intrinsic and
+// doesn't vary by projection system.
+func FetchMLBHandednessCached(mlbamIDs map[string]int, cacheDir string, ttl time.Duration) (map[string]string, map[string]string, error) {
+	c := cache.New[HandednessData](cacheDir, ttl)
+	key := cache.Key("mlb-handedness")
+	data, err := c.Get(key, func() (HandednessData, error) {
+		bats, throws, err := FetchMLBHandedness(mlbamIDs)
+		return HandednessData{Bats: bats, Throws: throws}, err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return data.Bats, data.Throws, nil
 }

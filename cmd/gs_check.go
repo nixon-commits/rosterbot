@@ -23,18 +23,17 @@ func init() {
 }
 
 func runGSCheck(cmd *cobra.Command, args []string) error {
-	now := time.Now()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	today := todayET()
 	cfg, ft, err := initApp([]time.Time{today})
 	if err != nil {
 		return err
 	}
 
-	if cfg.GSCap <= 0 {
-		return fmt.Errorf("GS_CAP env var required for gs-check command")
+	if cfg.GSMax <= 0 {
+		return fmt.Errorf("GS_MAX env var required for gs-check command")
 	}
-	if cfg.PushoverUserKey == "" || cfg.PushoverAPIToken == "" {
-		return fmt.Errorf("PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN env vars required for gs-check command")
+	if cfg.PushoverGroupKey == "" || cfg.PushoverAPIToken == "" {
+		return fmt.Errorf("PUSHOVER_GROUP_KEY and PUSHOVER_API_TOKEN env vars required for gs-check command")
 	}
 
 	return gscheck.RunGSCheck(ft, *cfg, forceCheck)

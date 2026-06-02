@@ -18,25 +18,24 @@ jobs:
           go-version: '1.26'
           cache: true
 
+      - name: Restore projection cache
+        uses: actions/cache@v5
+        with:
+          path: .cache
+          key: projections-${{ github.run_id }}
+          restore-keys: projections-
+
+      - name: Restore Fantrax session
+        uses: actions/cache@v5
+        with:
+          path: .fantrax-cache
+          key: fantrax-session-${{ github.run_id }}
+          restore-keys: fantrax-session-
+
       - uses: browser-actions/setup-chrome@v2
 
       - name: Run prospect report
-        id: prospects
-        run: |
-          output=$(go run . prospects 2>&1) || true
-          echo "$output"
-
-          high_alerts=$(echo "$output" | grep '^\[HIGH' || true)
-          if [ -n "$high_alerts" ]; then
-            echo "has_alerts=true" >> "$GITHUB_OUTPUT"
-            {
-              echo 'alert_text<<EOF'
-              echo "$high_alerts"
-              echo 'EOF'
-            } >> "$GITHUB_OUTPUT"
-          else
-            echo "has_alerts=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: go run . prospects
         env:
           FANTRAX_USERNAME: ${{ secrets.FANTRAX_USERNAME }}
           FANTRAX_PASSWORD: ${{ secrets.FANTRAX_PASSWORD }}
@@ -44,17 +43,5 @@ jobs:
           FANTRAX_TEAM_ID: ${{ secrets.FANTRAX_TEAM_ID }}
           FANTRAX_IL_SLOTS: ${{ secrets.FANTRAX_IL_SLOTS }}
           FANTRAX_MINORS_SLOTS: ${{ secrets.FANTRAX_MINORS_SLOTS }}
-
-      - name: Send Pushover notification
-        if: steps.prospects.outputs.has_alerts == 'true'
-        run: |
-          curl -s -f \
-            --form-string "token=$PUSHOVER_APP_TOKEN" \
-            --form-string "user=$PUSHOVER_USER_KEY" \
-            --form-string "title=RosterBot: Prospect Alert" \
-            --form-string "message=${{ steps.prospects.outputs.alert_text }}" \
-            --form-string "priority=0" \
-            https://api.pushover.net/1/messages.json
-        env:
-          PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/pmurley/go-fantrax/models"
 )
 
@@ -45,14 +46,46 @@ func extractHitterStats(roster []models.RosterPlayer) map[string]RecentStat {
 }
 
 // GetCurrentPeriod returns the current Fantrax scoring period number.
+// Cached under fantrax-current-period-<leagueID>-<YYYY-MM-DD> with a 15m
+// TTL when SetCache has been called.
 func (c *Client) GetCurrentPeriod() (int, error) {
-	return c.auth.GetCurrentPeriod()
+	if c.cacheDir == "" {
+		return c.auth.GetCurrentPeriod()
+	}
+	fc := cache.New[int](c.cacheDir, c.todayTTL)
+	key := cache.Key("fantrax-current-period", c.leagueID, time.Now().UTC().Format("2006-01-02"))
+	return fc.Get(key, func() (int, error) {
+		return c.auth.GetCurrentPeriod()
+	})
+}
+
+// seasonDateRange describes the season's first and last dates.
+type seasonDateRange struct {
+	First time.Time `json:"first"`
+	Last  time.Time `json:"last"`
 }
 
 // GetSeasonDateRange returns the first and last dates of the Fantrax season
 // by using the scoring periods endpoint which has actual start/end dates.
+// Cached under fantrax-season-range-<leagueID> with a 7d TTL when SetCache
+// has been called — the season schedule is set at draft time and doesn't
+// shift mid-season.
 func (c *Client) GetSeasonDateRange() (time.Time, time.Time, error) {
-	periods, _, err := c.GetScoringPeriodsAndTeams()
+	if c.cacheDir == "" {
+		return c.fetchSeasonDateRange()
+	}
+	fc := cache.New[seasonDateRange](c.cacheDir, c.stableTTL)
+	key := cache.Key("fantrax-season-range", c.leagueID)
+	r, err := fc.Get(key, func() (seasonDateRange, error) {
+		first, last, err := c.fetchSeasonDateRange()
+		return seasonDateRange{First: first, Last: last}, err
+	})
+	return r.First, r.Last, err
+}
+
+// fetchSeasonDateRange is the uncached upstream fetch.
+func (c *Client) fetchSeasonDateRange() (time.Time, time.Time, error) {
+	periods, _, _, err := c.GetScoringPeriodsAndTeams()
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("get scoring periods: %w", err)
 	}
@@ -91,12 +124,26 @@ func PeriodForDate(seasonStart, date time.Time) int {
 // The Fantrax getTeamRosterInfo API returns YTD stats regardless of which period
 // is requested — the period parameter only controls the roster snapshot. We fetch
 // the latest completed period (currentPeriod-1) to get current YTD stats.
+//
+// Cached under fantrax-recent-stats-hitter-<teamID>-<period> with a TTL
+// determined by ttlForPeriod (30d for past, todayTTL otherwise).
 func (c *Client) GetRecentStats(currentPeriod, _ int) (map[string]RecentStat, error) {
 	period := currentPeriod - 1
 	if period < 1 {
 		return nil, fmt.Errorf("no completed periods (current=%d)", currentPeriod)
 	}
 
+	if c.cacheDir == "" {
+		return c.fetchRecentStats(period)
+	}
+	fc := cache.New[map[string]RecentStat](c.cacheDir, c.ttlForPeriod(period))
+	key := cache.Key("fantrax-recent-stats-hitter", c.teamID, strconv.Itoa(period))
+	return fc.Get(key, func() (map[string]RecentStat, error) {
+		return c.fetchRecentStats(period)
+	})
+}
+
+func (c *Client) fetchRecentStats(period int) (map[string]RecentStat, error) {
 	roster, err := c.auth.GetTeamRosterInfo(strconv.Itoa(period), c.teamID)
 	if err != nil {
 		return nil, fmt.Errorf("fetch roster for period %d: %w", period, err)

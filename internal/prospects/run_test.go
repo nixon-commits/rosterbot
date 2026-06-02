@@ -125,7 +125,7 @@ func TestFormatReport_Markdown(t *testing.T) {
 	if !strings.Contains(content, "| HIGH | FA BUZZ | Jasson Dominguez | NYY |") {
 		t.Error("missing Jasson Dominguez alert row")
 	}
-	if !strings.Contains(content, "| MEDIUM | HOT STREAK | Colton Cowser | BAL |") {
+	if !strings.Contains(content, "| MEDIUM | HOT | Colton Cowser | BAL |") {
 		t.Error("missing Colton Cowser alert row")
 	}
 
@@ -196,7 +196,7 @@ func TestPrintReport_NoAlerts(t *testing.T) {
 		Date: time.Date(2026, 3, 23, 0, 0, 0, 0, time.UTC),
 	}
 	// printReport writes to stdout — we just verify no panic
-	printReport(report)
+	printReport(report, nil, nil)
 }
 
 func TestPrintReport_WithAlerts(t *testing.T) {
@@ -220,7 +220,7 @@ func TestPrintReport_WithAlerts(t *testing.T) {
 		},
 	}
 	// printReport writes to stdout — we just verify no panic
-	printReport(report)
+	printReport(report, nil, nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -234,8 +234,8 @@ func TestAlertKindLabel(t *testing.T) {
 	}{
 		{CalledUp, "CALLED UP"},
 		{Optioned, "OPTIONED"},
-		{PerformanceHot, "HOT STREAK"},
-		{PerformanceCold, "COLD STREAK"},
+		{PerformanceHot, "HOT"},
+		{PerformanceCold, "COLD"},
 		{FreeAgentBuzz, "FA BUZZ"},
 		{UpgradeAvail, "UPGRADE"},
 		{AlertKind("unknown"), "unknown"},
@@ -267,12 +267,11 @@ func TestRunProspectReport_DegradedNoRankings(t *testing.T) {
 	report := Report{
 		Date:     time.Date(2026, 3, 23, 0, 0, 0, 0, time.UTC),
 		Alerts:   nil,
-		Rankings: nil,
 		Upgrades: nil,
 	}
 
 	// printReport should handle empty data gracefully
-	printReport(report)
+	printReport(report, nil, nil)
 
 	// writeGHASummary should handle empty data gracefully
 	summaryFile := filepath.Join(tmpDir, "summary.md")

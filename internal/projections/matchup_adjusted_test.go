@@ -257,27 +257,108 @@ func TestMatchupAdjusted_ZeroLeagueAvgFIP(t *testing.T) {
 	}
 }
 
-// TestMatchupAdjusted_FullChainComposability: stubSource → BlendedSource → ParkAdjustedSource → MatchupAdjustedSource.
-// LHH vs LHP, neutral FIP (4.00==4.00), unfavorable platoon → 0.93 reduction on park-adjusted value.
+// TestGetMatchupDetail_UnfavorablePlatoon: LHH vs LHP.
+func TestGetMatchupDetail_UnfavorablePlatoon(t *testing.T) {
+	inner := defaultStubPPS()
+	src := NewMatchupAdjustedSource(
+		inner,
+		map[string]OpposingPitcher{
+			"NYY": {Name: "Ace Pitcher", Team: "BOS", Throws: "L", FIP: 4.00},
+		},
+		map[string]string{"test player": "L"},
+		4.00,
+	)
+
+	d := src.GetMatchupDetail("Test Player", "NYY")
+	if d.PlatoonMult != 0.93 {
+		t.Errorf("expected platoon mult 0.93, got %.4f", d.PlatoonMult)
+	}
+	if d.Favorable == nil || *d.Favorable {
+		t.Error("expected unfavorable platoon")
+	}
+	if math.Abs(d.QualityMult-1.0) > 0.001 {
+		t.Errorf("expected quality mult 1.0 (neutral FIP), got %.4f", d.QualityMult)
+	}
+	if d.OpposingPitcher != "Ace Pitcher" {
+		t.Errorf("expected opposing pitcher 'Ace Pitcher', got %q", d.OpposingPitcher)
+	}
+	if math.Abs(d.CombinedMult-0.93) > 0.001 {
+		t.Errorf("expected combined mult 0.93, got %.4f", d.CombinedMult)
+	}
+}
+
+// TestGetMatchupDetail_FavorablePlatoon: RHH vs LHP.
+func TestGetMatchupDetail_FavorablePlatoon(t *testing.T) {
+	inner := defaultStubPPS()
+	src := NewMatchupAdjustedSource(
+		inner,
+		map[string]OpposingPitcher{
+			"NYY": {Name: "Pitcher", Team: "BOS", Throws: "L", FIP: 4.00},
+		},
+		map[string]string{"test player": "R"},
+		4.00,
+	)
+
+	d := src.GetMatchupDetail("Test Player", "NYY")
+	if math.Abs(d.PlatoonMult-1.0) > 0.001 {
+		t.Errorf("expected platoon mult 1.0, got %.4f", d.PlatoonMult)
+	}
+	if d.Favorable == nil || !*d.Favorable {
+		t.Error("expected favorable platoon")
+	}
+}
+
+// TestGetMatchupDetail_NoOpposingPitcher: returns neutral defaults.
+func TestGetMatchupDetail_NoOpposingPitcher(t *testing.T) {
+	inner := defaultStubPPS()
+	src := NewMatchupAdjustedSource(
+		inner,
+		map[string]OpposingPitcher{},
+		map[string]string{"test player": "L"},
+		4.00,
+	)
+
+	d := src.GetMatchupDetail("Test Player", "NYY")
+	if math.Abs(d.CombinedMult-1.0) > 0.001 {
+		t.Errorf("expected combined mult 1.0 (no opposing pitcher), got %.4f", d.CombinedMult)
+	}
+	if d.Favorable != nil {
+		t.Error("expected nil favorable when no opposing pitcher")
+	}
+}
+
+// TestGetMatchupDetail_AceQuality: FIP=2.80, avgFIP=4.00 → quality=0.85.
+func TestGetMatchupDetail_AceQuality(t *testing.T) {
+	inner := defaultStubPPS()
+	src := NewMatchupAdjustedSource(
+		inner,
+		map[string]OpposingPitcher{
+			"NYY": {Name: "Ace", Team: "BOS", Throws: "L", FIP: 2.80},
+		},
+		map[string]string{"test player": "R"},
+		4.00,
+	)
+
+	d := src.GetMatchupDetail("Test Player", "NYY")
+	if math.Abs(d.QualityMult-0.85) > 0.001 {
+		t.Errorf("expected quality mult 0.85 (clamped), got %.4f", d.QualityMult)
+	}
+}
+
+// TestMatchupAdjusted_FullChainComposability: stubSource → BlendedSource → MatchupAdjustedSource.
+// LHH vs LHP, neutral FIP (4.00==4.00), unfavorable platoon → 0.93 reduction on blended value.
 func TestMatchupAdjusted_FullChainComposability(t *testing.T) {
 	innerProj := &stubSource{proj: map[string]*Projection{
 		"test player": {G: 100, H: 100, Singles: 60, Doubles: 20, Triples: 5, HR: 15, RBI: 50, R: 40, BB: 30},
 	}}
 	scoring := fantrax.ScoringWeights{"HR": 4.0, "1B": 1.0, "R": 1.0, "RBI": 1.0}
 
-	// Blended: no recent stats → falls back to 100% Steamer.
+	// Blended: no recent stats → falls back to 100% projection.
 	blended := NewBlendedSource(innerProj, map[string]fantrax.RecentStat{}, scoring,
 		map[string]string{}, 2)
 
-	// Neutral park (all factors 1.0) to isolate matchup adjustment.
-	parkFactors := map[string]ParkFactors{
-		"NYY": {Team: "NYY", HR: 1.0, H: 1.0, R: 1.0, BB: 1.0, SO: 1.0, H1B: 1.0, H2B: 1.0, H3B: 1.0},
-	}
-	venues := map[string]string{"NYY": "NYY"}
-	parkAdj := NewParkAdjustedSource(blended, parkFactors, venues)
-
 	matchupAdj := NewMatchupAdjustedSource(
-		parkAdj,
+		blended,
 		map[string]OpposingPitcher{
 			"NYY": {Name: "LH Pitcher", Team: "BOS", Throws: "L", FIP: 4.00},
 		},
@@ -285,14 +366,14 @@ func TestMatchupAdjusted_FullChainComposability(t *testing.T) {
 		4.00,
 	)
 
-	parkPts, _ := parkAdj.GetPtsPerGame("Test Player", "NYY", scoring)
+	blendedPts, _ := blended.GetPtsPerGame("Test Player", "NYY", scoring)
 	matchupPts, ok := matchupAdj.GetPtsPerGame("Test Player", "NYY", scoring)
 	if !ok {
 		t.Fatal("expected true")
 	}
 
-	expected := parkPts * 0.93
+	expected := blendedPts * 0.93
 	if math.Abs(matchupPts-expected) > 0.001 {
-		t.Errorf("full chain: expected parkPts*0.93=%.4f, got %.4f (parkPts=%.4f)", expected, matchupPts, parkPts)
+		t.Errorf("full chain: expected blendedPts*0.93=%.4f, got %.4f (blendedPts=%.4f)", expected, matchupPts, blendedPts)
 	}
 }

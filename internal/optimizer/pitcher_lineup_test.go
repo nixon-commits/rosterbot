@@ -63,7 +63,7 @@ func TestOptimizePitcherLineup_RPPreferredOverNonStartingSP(t *testing.T) {
 	probables := map[string]string{"someone else": "NYY"} // Ace SP is not starting
 	src := &stubPitcherSource{data: map[string]*projections.PitcherProjection{
 		"ace sp": {G: 30, GS: 30, IP: 180, K: 200, W: 15}, // high value but not starting
-		"closer": {G: 60, IP: 65, K: 70, SV: 30},           // lower value but guaranteed to pitch
+		"closer": {G: 60, IP: 65, K: 70, SV: 30},          // lower value but guaranteed to pitch
 	}}
 	scoring := fantrax.ScoringWeights{"K": 1.0, "W": 5.0, "IP": 1.0, "SV": 5.0}
 	slots := makeSlots("P") // only 1 slot
@@ -131,8 +131,8 @@ func TestOptimizePitcherLineup_PSlotPicksBestAvailable(t *testing.T) {
 	playing := map[string]bool{"NYY": true, "BOS": true}
 	probables := map[string]string{"star sp": "NYY"}
 	src := &stubPitcherSource{data: map[string]*projections.PitcherProjection{
-		"star sp": {G: 30, GS: 30, IP: 180, K: 200, W: 15},   // high per-game value
-		"good rp": {G: 60, IP: 65, K: 70, SV: 0, HLD: 20},    // lower per-game, discounted by 0.55
+		"star sp": {G: 30, GS: 30, IP: 180, K: 200, W: 15}, // high per-game value
+		"good rp": {G: 60, IP: 65, K: 70, SV: 0, HLD: 20},  // lower per-game, discounted by 0.55
 	}}
 	scoring := fantrax.ScoringWeights{"K": 1.0, "W": 5.0, "IP": 1.0, "HLD": 3.0}
 	slots := makeSlots("P") // only 1 P slot

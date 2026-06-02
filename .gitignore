@@ -2,7 +2,11 @@
 rosterbot
 *.test
 .claude/settings.local.json
+.cache/
 .fantrax-cache/
-.prospects-cache/
+.backtest/
+.superpowers/
 fangraphs-leaderboard-projections*.csv
 verify_periods
+ideas
+.playwright-mcp/

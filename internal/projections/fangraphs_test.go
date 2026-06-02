@@ -124,6 +124,9 @@ func TestSetProjectionSystem_UpdatesURLs(t *testing.T) {
 		{"steamer", "type=steamer&stats=bat", "type=steamer&stats=pit", false},
 		{"depthcharts", "type=fangraphsdc&stats=bat", "type=fangraphsdc&stats=pit", false},
 		{"thebatx", "type=thebatx&stats=bat", "type=thebatx&stats=pit", false},
+		{"steamer-ros", "type=steamerr&stats=bat", "type=steamerr&stats=pit", false},
+		{"depthcharts-ros", "type=rfangraphsdc&stats=bat", "type=rfangraphsdc&stats=pit", false},
+		{"thebatx-ros", "type=rthebatx&stats=bat", "type=rthebatx&stats=pit", false},
 		{"bogus", "", "", true},
 	}
 
@@ -147,7 +150,6 @@ func TestSetProjectionSystem_UpdatesURLs(t *testing.T) {
 		}
 	}
 }
-
 
 func TestSetProjectionSystem_AffectsFetch(t *testing.T) {
 	// Verify that after SetProjectionSystem, NewFanGraphsSource hits the updated URL.
@@ -177,6 +179,113 @@ func TestSetProjectionSystem_AffectsFetch(t *testing.T) {
 	}
 	if receivedPath != "type=steamer&stats=bat" {
 		t.Errorf("expected query type=steamer&stats=bat, got %q", receivedPath)
+	}
+}
+
+// saveGlobals saves and returns a restore function for all projection globals.
+func saveGlobals(t *testing.T) func() {
+	t.Helper()
+	origBat := fangraphsBattingURL
+	origPit := fangraphsPitchingURL
+	origAPI := currentAPIType
+	origBase := fgBaseURL
+	return func() {
+		fangraphsBattingURL = origBat
+		fangraphsPitchingURL = origPit
+		currentAPIType = origAPI
+		fgBaseURL = origBase
+	}
+}
+
+func TestLoadBattingProjections_RoSAvailable(t *testing.T) {
+	defer saveGlobals(t)()
+
+	fixture := []map[string]interface{}{
+		{"PlayerName": "Aaron Judge", "Team": "NYY", "G": 100.0, "PA": 400.0, "H": 100.0,
+			"1B": 60.0, "2B": 20.0, "3B": 5.0, "HR": 15.0, "RBI": 50.0, "R": 60.0,
+			"BB": 40.0, "SB": 5.0, "CS": 2.0, "HBP": 3.0, "SO": 80.0, "GDP": 5.0},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(fixture)
+	}))
+	defer srv.Close()
+
+	// Point the base URL template at the test server.
+	fgBaseURL = srv.URL + "?type=%s&stats=%s"
+
+	src, result, err := LoadBattingProjections("depthcharts", t.TempDir(), 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.System != "depthcharts-ros" {
+		t.Errorf("expected system depthcharts-ros, got %s", result.System)
+	}
+	if result.FellBack {
+		t.Error("expected FellBack=false")
+	}
+	if result.FromCSV {
+		t.Error("expected FromCSV=false")
+	}
+	if src.Len() != 1 {
+		t.Errorf("expected 1 player, got %d", src.Len())
+	}
+}
+
+func TestLoadBattingProjections_RoSEmpty_FallsBack(t *testing.T) {
+	defer saveGlobals(t)()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.RawQuery
+		if strings.Contains(q, "rfangraphsdc") {
+			// RoS returns empty
+			json.NewEncoder(w).Encode([]map[string]interface{}{})
+		} else {
+			// Preseason returns data
+			json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"PlayerName": "Aaron Judge", "Team": "NYY", "G": 141.0, "PA": 633.0, "H": 143.0,
+					"1B": 77.0, "2B": 23.0, "3B": 1.0, "HR": 42.0, "RBI": 102.0, "R": 109.0,
+					"BB": 112.0, "SB": 9.0, "CS": 2.0, "HBP": 6.0, "SO": 156.0, "GDP": 8.0},
+			})
+		}
+	}))
+	defer srv.Close()
+
+	fgBaseURL = srv.URL + "?type=%s&stats=%s"
+
+	src, result, err := LoadBattingProjections("depthcharts", t.TempDir(), 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.FellBack {
+		t.Error("expected FellBack=true")
+	}
+	if result.System != "depthcharts" {
+		t.Errorf("expected system depthcharts, got %s", result.System)
+	}
+	if src.Len() != 1 {
+		t.Errorf("expected 1 player, got %d", src.Len())
+	}
+}
+
+func TestLoadBattingProjections_ExplicitRoS_NoPreseasonFallback(t *testing.T) {
+	defer saveGlobals(t)()
+
+	// Server always returns empty — simulating RoS unavailable.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]map[string]interface{}{})
+	}))
+	defer srv.Close()
+
+	fgBaseURL = srv.URL + "?type=%s&stats=%s"
+
+	// Explicit RoS — should NOT fall back to preseason, should error (no CSV either).
+	_, result, err := LoadBattingProjections("depthcharts-ros", t.TempDir(), 0)
+	if err == nil {
+		t.Fatal("expected error when RoS is empty and no CSV")
+	}
+	if result.FellBack {
+		t.Error("explicit RoS should not set FellBack=true")
 	}
 }
 

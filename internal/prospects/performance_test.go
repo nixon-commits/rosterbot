@@ -194,20 +194,10 @@ func TestComputeHitterBreakout_Cold(t *testing.T) {
 // resolveMLBPlayerID tests
 // ---------------------------------------------------------------------------
 
-func TestResolveMLBPlayerID_CacheLookup(t *testing.T) {
-	cache := map[string]int{
-		"jackson holliday|bal": 12345,
-	}
-	id, found := resolveMLBPlayerID("Jackson Holliday", "BAL", cache)
-	if !found {
-		t.Fatal("expected found=true from cache")
-	}
-	if id != 12345 {
-		t.Errorf("expected id=12345, got %d", id)
-	}
-}
-
 func TestResolveMLBPlayerID_SearchAPI(t *testing.T) {
+	// Hits the upstream once on cache miss, then cache hit on second call —
+	// the second call should not depend on the test server (we close it
+	// before the second call to prove that).
 	fixture := map[string]any{
 		"people": []map[string]any{
 			{
@@ -219,26 +209,31 @@ func TestResolveMLBPlayerID_SearchAPI(t *testing.T) {
 			},
 		},
 	}
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(fixture)
 	}))
-	defer srv.Close()
 
-	orig := mlbPlayerSearchURL
+	origURL := mlbPlayerSearchURL
 	mlbPlayerSearchURL = srv.URL + "?names=%s"
-	defer func() { mlbPlayerSearchURL = orig }()
+	origDir := performanceCacheDir
+	performanceCacheDir = t.TempDir()
+	defer func() {
+		mlbPlayerSearchURL = origURL
+		performanceCacheDir = origDir
+	}()
 
-	cache := map[string]int{}
-	id, found := resolveMLBPlayerID("Jackson Holliday", "BAL", cache)
+	id, found := resolveMLBPlayerID("Jackson Holliday", "BAL")
 	if !found {
 		t.Fatal("expected found=true from API")
 	}
 	if id != 808080 {
 		t.Errorf("expected id=808080, got %d", id)
 	}
-	// Verify it was cached
-	if cache["jackson holliday|bal"] != 808080 {
-		t.Error("expected ID to be cached")
+
+	// Second call after upstream is gone — must come from the file cache.
+	srv.Close()
+	id2, found2 := resolveMLBPlayerID("Jackson Holliday", "BAL")
+	if !found2 || id2 != 808080 {
+		t.Errorf("expected cached id=808080, got id=%d found=%v", id2, found2)
 	}
 }

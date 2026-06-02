@@ -1,7 +1,6 @@
 package projections
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,28 +8,33 @@ import (
 
 func TestFetchMLBHandedness(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(mlbPeopleResponse{
-			People: []mlbPerson{
-				{ID: 592450, FullName: "Aaron Judge", BatSide: mlbHandSide{Code: "R"}, PitchHand: mlbHandSide{Code: "R"}},
-				{ID: 665742, FullName: "Juan Soto", BatSide: mlbHandSide{Code: "L"}, PitchHand: mlbHandSide{Code: "L"}},
-				{ID: 645277, FullName: "Ozzie Albies", BatSide: mlbHandSide{Code: "S"}, PitchHand: mlbHandSide{Code: "R"}},
-				{ID: 543037, FullName: "Gerrit Cole", BatSide: mlbHandSide{Code: "R"}, PitchHand: mlbHandSide{Code: "R"}},
-				{ID: 579328, FullName: "Yusei Kikuchi", BatSide: mlbHandSide{Code: "L"}, PitchHand: mlbHandSide{Code: "L"}},
-			},
-		})
+		if r.URL.Path != "/api/v1/people" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"people": [
+				{"id": 592450, "fullName": "Aaron Judge", "batSide": {"code": "R"}, "pitchHand": {"code": "R"}},
+				{"id": 665742, "fullName": "Juan Soto", "batSide": {"code": "L"}, "pitchHand": {"code": "L"}},
+				{"id": 645277, "fullName": "Ozzie Albies", "batSide": {"code": "S"}, "pitchHand": {"code": "R"}},
+				{"id": 543037, "fullName": "Gerrit Cole", "batSide": {"code": "R"}, "pitchHand": {"code": "R"}},
+				{"id": 579328, "fullName": "Yusei Kikuchi", "batSide": {"code": "L"}, "pitchHand": {"code": "L"}}
+			]
+		}`))
 	}))
 	defer srv.Close()
 
-	old := mlbPeopleURL
-	mlbPeopleURL = srv.URL
-	defer func() { mlbPeopleURL = old }()
+	old := mlbBaseURL
+	mlbBaseURL = srv.URL
+	defer func() { mlbBaseURL = old }()
 
 	ids := map[string]int{
-		"aaron judge":    592450,
-		"juan soto":      665742,
-		"ozzie albies":   645277,
-		"gerrit cole":    543037,
-		"yusei kikuchi":  579328,
+		"aaron judge":   592450,
+		"juan soto":     665742,
+		"ozzie albies":  645277,
+		"gerrit cole":   543037,
+		"yusei kikuchi": 579328,
 	}
 
 	bats, throws, err := FetchMLBHandedness(ids)
@@ -65,5 +69,26 @@ func TestFetchMLBHandedness_Empty(t *testing.T) {
 	}
 	if len(bats) != 0 || len(throws) != 0 {
 		t.Errorf("expected empty maps, got %d bats, %d throws", len(bats), len(throws))
+	}
+}
+
+func TestFetchMLBHandedness_BatSideB(t *testing.T) {
+	// MLB API sometimes returns "B" for switch hitters; we normalize to "S".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"people":[{"id":1,"fullName":"Test","batSide":{"code":"B"}}]}`))
+	}))
+	defer srv.Close()
+
+	old := mlbBaseURL
+	mlbBaseURL = srv.URL
+	defer func() { mlbBaseURL = old }()
+
+	bats, _, err := FetchMLBHandedness(map[string]int{"test": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bats["test"] != "S" {
+		t.Errorf("got %q, want S", bats["test"])
 	}
 }
