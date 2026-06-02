@@ -241,7 +241,7 @@
   <h2>Most & Least Efficient</h2>
   <div class="award-grid">
     <div class="award">
-      <div class="label"><span>Most Efficient</span><span class="icon">★</span></div>
+      <div class="label"><span>Most Efficient</span><span class="icon">⭐</span></div>
       {{- if .MostEfficient}}
         <div class="name">{{.MostEfficient.TeamName}}</div>
         <div class="pts">{{pts .MostEfficient.ActualPts}}</div>
@@ -251,7 +251,7 @@
       {{- end}}
     </div>
     <div class="award">
-      <div class="label"><span>Least Efficient</span><span class="icon">×</span></div>
+      <div class="label"><span>Least Efficient</span><span class="icon">❌</span></div>
       {{- if .LeastEfficient}}
         <div class="name">{{.LeastEfficient.TeamName}}</div>
         <div class="pts">{{pts .LeastEfficient.ActualPts}}</div>
@@ -446,22 +446,22 @@
   {{- $hist := .Season.StandingsHistory}}
   {{- $numWeeks := len $hist}}
   {{- $numTeams := len (index $hist 0).Standings}}
-  {{- $padL := 8}}{{- $padR := 110}}{{- $padT := 24}}{{- $padB := 28}}
-  {{- $innerW := mul $numWeeks 52}}
-  {{- $innerH := mul $numTeams 22}}
+  {{- $padL := 22}}{{- $padR := 115}}{{- $padT := 28}}{{- $padB := 28}}
+  {{- $innerW := mul $numWeeks 56}}
+  {{- $innerH := mul $numTeams 24}}
   {{- $svgW := add $innerW (add $padL $padR)}}
   {{- $svgH := add $innerH (add $padT $padB)}}
   <div class="season-cat" style="overflow-x:auto">
     <h3><span class="icon">📈</span>Pole Position · Season Standings</h3>
     <svg viewBox="0 0 {{$svgW}} {{$svgH}}" width="100%" style="max-width:{{$svgW}}px;display:block;overflow:visible" xmlns="http://www.w3.org/2000/svg">
       {{- range $ri := rankRange $numTeams}}
-      {{- $y := add $padT (mul $ri 22)}}
+      {{- $y := add $padT (mul $ri 24)}}
       <line x1="{{$padL}}" y1="{{$y}}" x2="{{add $padL $innerW}}" y2="{{$y}}" stroke="#243049" stroke-width="1"/>
-      <text x="{{sub $padL 4}}" y="{{add $y 4}}" text-anchor="end" font-size="9" fill="#8b9bbd">{{add $ri 1}}</text>
+      <text x="{{sub $padL 5}}" y="{{add $y 4}}" text-anchor="end" font-size="10" fill="#8b9bbd">{{add $ri 1}}</text>
       {{- end}}
       {{- range $wi, $w := $hist}}
-      {{- $x := add $padL (mul $wi 52)}}
-      <text x="{{$x}}" y="{{sub $svgH 8}}" text-anchor="middle" font-size="9" fill="#8b9bbd">W{{$w.WeekNumber}}</text>
+      {{- $x := add $padL (mul $wi 56)}}
+      <text x="{{$x}}" y="{{sub $svgH 8}}" text-anchor="middle" font-size="10" fill="#8b9bbd">W{{$w.WeekNumber}}</text>
       {{- end}}
       {{- range $ti, $team := (index $hist (sub $numWeeks 1)).Standings}}
       {{- $color := bumpColor $ti}}
@@ -476,8 +476,8 @@
         stroke-linecap="round"/>
       {{- range $wi, $w := $hist}}
       {{- range $s := $w.Standings}}{{if eq $s.TeamID $team.TeamID}}
-      {{- $cx := add $padL (mul $wi 52)}}
-      {{- $cy := add $padT (mul (sub $s.Rank 1) 22)}}
+      {{- $cx := add $padL (mul $wi 56)}}
+      {{- $cy := add $padT (mul (sub $s.Rank 1) 24)}}
       {{- if eq $wi (sub $numWeeks 1)}}
       <text x="{{add $cx 8}}" y="{{add $cy 4}}" font-size="9.5" fill="{{$color}}" font-weight="{{if $isFirst}}700{{else}}400{{end}}">{{teamShort $team.TeamName}}</text>
       {{- if eq $s.Rank 1}}<text x="{{add $cx 8}}" y="{{add $cy 15}}" font-size="8" fill="#fbbf24">{{$s.Wins}}W–{{$s.Losses}}L</text>{{end}}
@@ -487,8 +487,8 @@
       {{- end}}
       {{- $lastWeek := index $hist (sub $numWeeks 1)}}
       {{- range $s := $lastWeek.Standings}}{{if eq $s.Rank 1}}
-      {{- $cx := add $padL (mul (sub $numWeeks 1) 52)}}
-      {{- $cy := add $padT (mul (sub $s.Rank 1) 22)}}
+      {{- $cx := add $padL (mul (sub $numWeeks 1) 56)}}
+      {{- $cy := add $padT (mul (sub $s.Rank 1) 24)}}
       <text x="{{$cx}}" y="{{sub $cy 6}}" text-anchor="middle" font-size="11">👑</text>
       {{- end}}{{- end}}
     </svg>

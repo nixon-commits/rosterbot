@@ -97,9 +97,9 @@ func truncateString(s string, n int) string {
 func awardEmoji(name string) string {
 	switch name {
 	case AwardMostEfficient:
-		return "★"
+		return "⭐"
 	case AwardLeastEfficient:
-		return "×"
+		return "❌"
 	case AwardHighestScore:
 		return "👑"
 	case AwardLowestScore:

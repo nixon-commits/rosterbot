@@ -42,8 +42,8 @@ func rankRange(n int) []int {
 // X coordinate for that week and cy is the Y coordinate for that team's rank.
 // stepX and padT must match the template's layout constants.
 func standingsPoints(hist []WeekStandings, teamID string, padL, padT int) string {
-	const stepX = 52
-	const stepY = 22
+	const stepX = 56
+	const stepY = 24
 	pts := make([]string, 0, len(hist))
 	for wi, w := range hist {
 		cx := padL + wi*stepX
