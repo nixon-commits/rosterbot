@@ -1,11 +1,7 @@
 package fantrax
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strconv"
 	"time"
 
@@ -200,50 +196,11 @@ func (c *Client) getPeriodSnapshotCached(
 // fetchPeriodSnapshot pulls the raw team roster info for a period and extracts
 // hitter + pitcher YTD values.
 func (c *Client) fetchPeriodSnapshot(teamID string, period int) (periodSnapshot, error) {
-	data := gsRosterRequest{
-		LeagueID:            c.leagueID,
-		Reload:              "1",
-		Period:              strconv.Itoa(period),
-		TeamID:              teamID,
-		View:                "STATS",
-		ScoringCategoryType: "1",
-		StatsType:           "1",
-	}
-	fullRequest := map[string]interface{}{
-		"msgs": []auth_client.FantraxMessage{
-			{Method: "getTeamRosterInfo", Data: data},
-		},
-		"uiv":    3,
-		"refUrl": fmt.Sprintf("https://www.fantrax.com/fantasy/league/%s/team/roster;reload=1;period=%d;teamId=%s", c.leagueID, period, teamID),
-		"dt":     0,
-		"at":     0,
-		"av":     "0.0",
-		"tz":     "UTC",
-		"v":      "180.0.0",
-	}
-	jsonStr, err := json.Marshal(fullRequest)
+	rosterResp, err := c.auth.GetTeamRosterInfoRaw(strconv.Itoa(period), teamID,
+		auth_client.WithScoringCategoryType("1"),
+		auth_client.WithStatsType("1"))
 	if err != nil {
-		return periodSnapshot{}, fmt.Errorf("marshal roster request: %w", err)
-	}
-	req, err := http.NewRequest("POST", standingsURL+"?leagueId="+c.leagueID, bytes.NewBuffer(jsonStr))
-	if err != nil {
-		return periodSnapshot{}, fmt.Errorf("create roster request: %w", err)
-	}
-	resp, err := c.auth.Do(req)
-	if err != nil {
-		return periodSnapshot{}, fmt.Errorf("send roster request: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return periodSnapshot{}, fmt.Errorf("roster API returned status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return periodSnapshot{}, fmt.Errorf("read roster response: %w", err)
-	}
-	var rosterResp models.TeamRosterResponse
-	if err := json.Unmarshal(body, &rosterResp); err != nil {
-		return periodSnapshot{}, fmt.Errorf("unmarshal roster response: %w", err)
+		return periodSnapshot{}, fmt.Errorf("get roster for period %d: %w", period, err)
 	}
 	if len(rosterResp.Responses) == 0 {
 		return periodSnapshot{}, fmt.Errorf("no response data in roster")

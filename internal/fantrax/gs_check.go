@@ -137,17 +137,6 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 	return periods, teams, logos, nil
 }
 
-// gsRosterRequest adds scoringCategoryType and statsType to the standard roster request.
-type gsRosterRequest struct {
-	LeagueID            string `json:"leagueId"`
-	Reload              string `json:"reload"`
-	Period              string `json:"period"`
-	TeamID              string `json:"teamId"`
-	View                string `json:"view"`
-	ScoringCategoryType string `json:"scoringCategoryType"`
-	StatsType           string `json:"statsType"`
-}
-
 // playerGSSnapshot holds a pitcher's YTD GS, YTD fantasy points, name, MLB
 // team abbreviation, and active-slot status. Field names are exported so
 // the struct can round-trip through JSON when it's cached on disk.
@@ -279,66 +268,15 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStar
 
 // getPlayerGSSnapshotForPeriod returns per-player YTD GS and active-slot status for a single daily period.
 func (c *Client) getPlayerGSSnapshotForPeriod(teamID string, period int) (map[string]playerGSSnapshot, error) {
-	data := gsRosterRequest{
-		LeagueID:            c.leagueID,
-		Reload:              "1",
-		Period:              strconv.Itoa(period),
-		TeamID:              teamID,
-		View:                "STATS",
-		ScoringCategoryType: "1",
-		StatsType:           "2",
-	}
-
-	fullRequest := map[string]interface{}{
-		"msgs": []auth_client.FantraxMessage{
-			{
-				Method: "getTeamRosterInfo",
-				Data:   data,
-			},
-		},
-		"uiv":    3,
-		"refUrl": fmt.Sprintf("https://www.fantrax.com/fantasy/league/%s/team/roster;reload=1;period=%d;teamId=%s", c.leagueID, period, teamID),
-		"dt":     0,
-		"at":     0,
-		"av":     "0.0",
-		"tz":     "UTC",
-		"v":      "180.0.0",
-	}
-
-	jsonStr, err := json.Marshal(fullRequest)
+	rosterResp, err := c.auth.GetTeamRosterInfoRaw(strconv.Itoa(period), teamID,
+		auth_client.WithScoringCategoryType("1"),
+		auth_client.WithStatsType("2"))
 	if err != nil {
-		return nil, fmt.Errorf("marshal roster request: %w", err)
+		return nil, fmt.Errorf("get roster for period %d: %w", period, err)
 	}
-
-	req, err := http.NewRequest("POST", standingsURL+"?leagueId="+c.leagueID, bytes.NewBuffer(jsonStr))
-	if err != nil {
-		return nil, fmt.Errorf("create roster request: %w", err)
-	}
-
-	resp, err := c.auth.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("send roster request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("roster API returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read roster response: %w", err)
-	}
-
-	var rosterResp models.TeamRosterResponse
-	if err := json.Unmarshal(body, &rosterResp); err != nil {
-		return nil, fmt.Errorf("unmarshal roster response: %w", err)
-	}
-
 	if len(rosterResp.Responses) == 0 {
 		return nil, fmt.Errorf("no response data in roster")
 	}
-
 	tables := rosterResp.Responses[0].Data.Tables
 	return playerGSFromTables(tables)
 }
