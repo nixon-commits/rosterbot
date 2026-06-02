@@ -25,8 +25,8 @@ github.com/orisano/pixelmatch v0.0.0-20220722002657-fb0b55479cde h1:x0TT0RDC7UhA
 github.com/orisano/pixelmatch v0.0.0-20220722002657-fb0b55479cde/go.mod h1:nZgzbfBr3hhjoZnS66nKrHmduYNpc34ny7RK4z5/HM0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/pmurley/go-fantrax v0.1.15-0.20260601235636-163a67d3837b h1:KGq8FiE39sBdq2c72+nGjhxbbbBWjdEJiTIBiWeIyGQ=
-github.com/pmurley/go-fantrax v0.1.15-0.20260601235636-163a67d3837b/go.mod h1:Pp07jXcboe1JbxToDLS07PTNsnPpYmeq73FsNUiv31g=
+github.com/pmurley/go-fantrax v0.1.15 h1:yUl3ab5/QmdgG9e/WKG5b9AMbqWDiKeSWYooHhNyiG4=
+github.com/pmurley/go-fantrax v0.1.15/go.mod h1:Pp07jXcboe1JbxToDLS07PTNsnPpYmeq73FsNUiv31g=
 github.com/pmurley/go-mlb v0.1.2 h1:NeUS6jQ+n3KSkdoAQaR/6dxaeLUxVqAeEPDcW/KSOxc=
 github.com/pmurley/go-mlb v0.1.2/go.mod h1:Tmg2JJVne8iV6Rby814y0yYezwfk8c3OrIH5/Bc2UzQ=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=

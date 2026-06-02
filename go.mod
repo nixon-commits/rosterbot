@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/joho/godotenv v1.5.1
-	github.com/pmurley/go-fantrax v0.1.15-0.20260601235636-163a67d3837b
+	github.com/pmurley/go-fantrax v0.1.15
 	github.com/pmurley/go-mlb v0.1.2
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sync v0.20.0
