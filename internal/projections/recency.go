@@ -9,6 +9,9 @@ import (
 
 // DayFP is one player-day of fantasy production.
 type DayFP struct {
+	// Date must be a UTC-midnight value (one per scoring day). WeightedRecent
+	// computes age via integer day-division, which is exact only when both Date
+	// and the eval date are midnight-aligned.
 	Date   time.Time
 	FP     float64
 	Played bool
