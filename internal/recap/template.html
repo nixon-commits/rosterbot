@@ -482,9 +482,9 @@
 </section>
 
 {{- if .Season}}
+{{- if .Season.StandingsHistory}}
 <section>
-  <h2>Season Awards · Through Week {{.Season.ThroughWeek}}</h2>
-  {{- if .Season.StandingsHistory}}
+  <h2>Pole Position · Season Standings</h2>
   {{- $hist := .Season.StandingsHistory}}
   {{- $numWeeks := len $hist}}
   {{- $numTeams := len (index $hist 0).Standings}}
@@ -493,8 +493,7 @@
   {{- $innerH := mul $numTeams 24}}
   {{- $svgW := add $innerW (add $padL $padR)}}
   {{- $svgH := add $innerH (add $padT $padB)}}
-  <div class="season-cat" style="overflow-x:auto">
-    <h3><span class="icon">📈</span>Pole Position · Season Standings</h3>
+  <div style="overflow-x:auto">
     <svg viewBox="0 0 {{$svgW}} {{$svgH}}" width="100%" style="display:block;overflow:visible" xmlns="http://www.w3.org/2000/svg">
       {{- range $ri := rankRange $numTeams}}
       {{- $y := add $padT (mul $ri 24)}}
@@ -535,7 +534,10 @@
       {{- end}}{{- end}}
     </svg>
   </div>
-  {{- end}}
+</section>
+{{- end}}
+<section>
+  <h2>Season Awards · Through Week {{.Season.ThroughWeek}}</h2>
   {{- range .Season.Categories}}
   <details class="season-cat">
     <summary>
