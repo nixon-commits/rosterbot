@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/schedule"
 )
 
 // SiteOptions configures a multi-week site build.
@@ -38,7 +39,9 @@ func RunSite(ft *fantrax.Client, sopts SiteOptions) error {
 		return fmt.Errorf("mkdir %s: %w", sopts.OutDir, err)
 	}
 
-	completed, err := completedMatchupWeeks(ft, sopts.Today)
+	sched := schedule.NewClient()
+	sched.CacheDir = sopts.Recap.CacheDir
+	completed, err := completedMatchupWeeks(ft, sched, sopts.Today)
 	if err != nil {
 		return err
 	}
@@ -126,15 +129,33 @@ type matchupWeek struct {
 	start, end time.Time
 }
 
+// dayCompletionChecker reports whether all MLB games on a date are over.
+// Satisfied by *schedule.Client; narrowed to an interface so the week-cutoff
+// logic is unit-testable without network.
+type dayCompletionChecker interface {
+	AllGamesFinalOn(date time.Time) (bool, error)
+}
+
+// matchupWeekProvider yields the [start, end] bounds of the n-th matchup week,
+// or zero times once n is past the season. Satisfied by *fantrax.Client;
+// narrowed to an interface so completedMatchupWeeks is testable without network.
+type matchupWeekProvider interface {
+	GetMatchupWeekByNumber(n int) (weekStart, weekEnd time.Time, err error)
+}
+
 // completedMatchupWeeks enumerates weeks 1..N for the configured team and
-// returns those that are over: either the end date is strictly before today,
-// or the end date is today AND Fantrax has marked the week as final
-// (which it does automatically after the last MLB game ends). Sorted ascending.
-func completedMatchupWeeks(ft *fantrax.Client, today time.Time) ([]matchupWeek, error) {
+// returns those that are over. A week is complete when its end date is
+// strictly before today, OR its end date is today AND every MLB game on that
+// final day has finished. The same-day case lets a Sunday-ending week render
+// the same evening once its games conclude — the Fantrax weekly "points" field
+// is a running in-week score and can't signal closure, but the MLB schedule
+// can. On a schedule lookup error the same-day week is conservatively excluded
+// (treated as still in progress). Sorted ascending.
+func completedMatchupWeeks(weeks matchupWeekProvider, sched dayCompletionChecker, today time.Time) ([]matchupWeek, error) {
 	todayYMD := today.Format("2006-01-02")
 	var out []matchupWeek
 	for n := 1; ; n++ {
-		ws, we, err := ft.GetMatchupWeekByNumber(n)
+		ws, we, err := weeks.GetMatchupWeekByNumber(n)
 		if err != nil {
 			return nil, fmt.Errorf("week %d bounds: %w", n, err)
 		}
@@ -146,11 +167,7 @@ func completedMatchupWeeks(ft *fantrax.Client, today time.Time) ([]matchupWeek, 
 		case weYMD < todayYMD:
 			out = append(out, matchupWeek{n: n, start: ws, end: we})
 		case weYMD == todayYMD:
-			final, err := ft.IsMatchupWeekFinal(n)
-			if err != nil {
-				return nil, fmt.Errorf("week %d final-check: %w", n, err)
-			}
-			if final {
+			if done, err := sched.AllGamesFinalOn(we); err == nil && done {
 				out = append(out, matchupWeek{n: n, start: ws, end: we})
 			}
 		}

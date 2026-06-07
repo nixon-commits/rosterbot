@@ -9,6 +9,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/recap"
+	"github.com/nixon-commits/rosterbot/internal/schedule"
 	"github.com/spf13/cobra"
 )
 
@@ -140,15 +141,15 @@ func resolveRecapRange(ft *fantrax.Client, today time.Time) (time.Time, time.Tim
 		return time.Time{}, time.Time{}, err
 	}
 
-	// First check today's week: Fantrax marks the matchup as final right
-	// after the last MLB game of the week ends, which can land on the same
-	// calendar day as the week's end. If that's happened, prefer it over
-	// stepping back to the prior week.
+	// First check today's week: a week whose end date is today is over once all
+	// of that day's MLB games are final (Sunday games finishing in the evening).
+	// The Fantrax weekly points field is a running in-week score and can't
+	// signal closure, so use the MLB schedule instead. If today's games aren't
+	// all final, fall through to the most recent fully-finished week.
 	if ws, we, err := ft.GetMatchupWeekBounds(today, seasonStart); err == nil && !ws.IsZero() && we.Format("2006-01-02") == today.Format("2006-01-02") {
-		if num, nerr := ft.GetMatchupWeekNumberForDate(today); nerr == nil && num > 0 {
-			if final, ferr := ft.IsMatchupWeekFinal(num); ferr == nil && final {
-				return ws, we, nil
-			}
+		sched := schedule.NewClient()
+		if done, derr := sched.AllGamesFinalOn(we); derr == nil && done {
+			return ws, we, nil
 		}
 	}
 

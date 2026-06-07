@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
@@ -53,6 +54,7 @@ type schedulePayload struct {
 			} `json:"teams"`
 			Status struct {
 				AbstractGameState string `json:"abstractGameState"` // "Preview", "Live", "Final"
+				DetailedState     string `json:"detailedState"`     // e.g. "Postponed", "Cancelled"
 			} `json:"status"`
 		} `json:"games"`
 	} `json:"dates"`
@@ -156,6 +158,37 @@ func (c *Client) LockedTeams(date time.Time) (map[string]bool, error) {
 		}
 	}
 	return locked, nil
+}
+
+// AllGamesFinalOn reports whether every MLB game on the given date has reached
+// a terminal state for that day — Final, or won't be played (Postponed /
+// Cancelled). Returns true when no games are scheduled (nothing to wait on).
+// Used to decide whether a matchup week ending today is actually over: the
+// Fantrax weekly "points" field is a running in-week score and can't tell us,
+// but the MLB schedule can.
+func (c *Client) AllGamesFinalOn(date time.Time) (bool, error) {
+	payload, err := c.fetchSchedule(date)
+	if err != nil {
+		return false, err
+	}
+	for _, d := range payload.Dates {
+		for _, g := range d.Games {
+			if !gameIsDone(g.Status.AbstractGameState, g.Status.DetailedState) {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+// gameIsDone reports whether a game's day is settled: it finished, or it won't
+// be played at all. A Live/Preview/Suspended game is not done (still pending
+// for the day), so it keeps the matchup week open.
+func gameIsDone(abstract, detailed string) bool {
+	if abstract == "Final" {
+		return true
+	}
+	return strings.HasPrefix(detailed, "Postponed") || strings.HasPrefix(detailed, "Cancelled")
 }
 
 // lineupsPayload is the decoded MLB schedule API response with lineup hydration.

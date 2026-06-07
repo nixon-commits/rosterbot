@@ -395,3 +395,61 @@ func TestBenchedPlayers_EmptyLineups(t *testing.T) {
 		t.Errorf("expected no benched players with empty lineups, got %v", benched)
 	}
 }
+
+func TestGameIsDone(t *testing.T) {
+	cases := []struct {
+		abstract, detailed string
+		want               bool
+	}{
+		{"Final", "Final", true},
+		{"Live", "In Progress", false},
+		{"Preview", "Scheduled", false},
+		{"Preview", "Postponed", true},
+		{"Preview", "Cancelled", true},
+		{"Live", "Suspended: Rain", false}, // resumes later → not done
+	}
+	for _, c := range cases {
+		if got := gameIsDone(c.abstract, c.detailed); got != c.want {
+			t.Errorf("gameIsDone(%q,%q)=%v want %v", c.abstract, c.detailed, got, c.want)
+		}
+	}
+}
+
+func TestAllGamesFinalOn(t *testing.T) {
+	serve := func(body string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(body))
+		}))
+	}
+
+	// All final → done.
+	srv := serve(`{"dates":[{"games":[
+		{"status":{"abstractGameState":"Final","detailedState":"Final"}},
+		{"status":{"abstractGameState":"Final","detailedState":"Final"}}
+	]}]}`)
+	mlbScheduleURL = srv.URL + "?date=%s"
+	if done, err := NewClient().AllGamesFinalOn(time.Now()); err != nil || !done {
+		t.Errorf("all-final: want true, got %v (err %v)", done, err)
+	}
+	srv.Close()
+
+	// One still live → not done.
+	srv = serve(`{"dates":[{"games":[
+		{"status":{"abstractGameState":"Final","detailedState":"Final"}},
+		{"status":{"abstractGameState":"Live","detailedState":"In Progress"}}
+	]}]}`)
+	mlbScheduleURL = srv.URL + "?date=%s"
+	if done, err := NewClient().AllGamesFinalOn(time.Now()); err != nil || done {
+		t.Errorf("one-live: want false, got %v (err %v)", done, err)
+	}
+	srv.Close()
+
+	// No games scheduled → vacuously done.
+	srv = serve(`{"dates":[]}`)
+	mlbScheduleURL = srv.URL + "?date=%s"
+	if done, err := NewClient().AllGamesFinalOn(time.Now()); err != nil || !done {
+		t.Errorf("no-games: want true, got %v (err %v)", done, err)
+	}
+	srv.Close()
+}
