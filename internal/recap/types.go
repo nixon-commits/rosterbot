@@ -49,14 +49,26 @@ type MatchupResult struct {
 // PlayerLine is one player-day scoring entry, used for the top batter / top
 // pitcher leaderboards.
 type PlayerLine struct {
-	PlayerID  string    `json:"player_id"`
-	Name      string    `json:"name"`
-	MLBTeam   string    `json:"mlb_team"`
-	Slot      string    `json:"slot,omitempty"`
-	FPts      float64   `json:"fpts"`
-	Date      time.Time `json:"date"`
-	OwnerTeam string    `json:"owner_team"`
-	IsPitcher bool      `json:"is_pitcher,omitempty"`
+	PlayerID    string    `json:"player_id"`
+	Name        string    `json:"name"`
+	MLBTeam     string    `json:"mlb_team"`
+	Slot        string    `json:"slot,omitempty"`
+	FPts        float64   `json:"fpts"`
+	Date        time.Time `json:"date"`
+	OwnerTeam   string    `json:"owner_team"`
+	OwnerTeamID string    `json:"owner_team_id,omitempty"`
+	IsPitcher   bool      `json:"is_pitcher,omitempty"`
+}
+
+// LeaderLine is one rostered player's season-to-date rate-stat standing, used
+// for the league wOBA / FIP leaderboards. Value carries the metric (wOBA for
+// hitters, FIP for pitchers); rank is implied by slice order.
+type LeaderLine struct {
+	Name        string  `json:"name"`
+	MLBTeam     string  `json:"mlb_team,omitempty"`
+	OwnerTeam   string  `json:"owner_team"`
+	OwnerTeamID string  `json:"owner_team_id,omitempty"`
+	Value       float64 `json:"value"`
 }
 
 // PitcherStartLine is one SP game-start record for the week, used for
@@ -98,6 +110,8 @@ type Awards struct {
 	WorstSingleStart *PitcherStartLine `json:"worst_single_start,omitempty"`
 	TopBatters       []PlayerLine      `json:"top_batters,omitempty"`
 	TopPitchers      []PlayerLine      `json:"top_pitchers,omitempty"`
+	WOBALeaders      []LeaderLine      `json:"woba_leaders,omitempty"`
+	FIPLeaders       []LeaderLine      `json:"fip_leaders,omitempty"`
 	Comeback         *MatchupTeamSide  `json:"comeback,omitempty"`
 	GameOfWeek       *MatchupResult    `json:"game_of_week,omitempty"`
 }

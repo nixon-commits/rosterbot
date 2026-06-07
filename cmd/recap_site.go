@@ -28,7 +28,7 @@ actions/deploy-pages — no files are committed back to the repo.`,
 
 func init() {
 	recapSiteCmd.Flags().StringVar(&recapSiteOut, "out", "dist", "output directory for rendered HTML")
-	recapSiteCmd.Flags().IntVar(&recapSiteTopN, "top", 10, "number of players per leaderboard (Top Batters / Top Pitchers)")
+	recapSiteCmd.Flags().IntVar(&recapSiteTopN, "top", 5, "number of players per leaderboard (Top Batters / Top Pitchers)")
 	recapSiteCmd.Flags().BoolVar(&recapSiteOpen, "open", false, "open the rendered index.html in the default browser after building")
 	rootCmd.AddCommand(recapSiteCmd)
 }

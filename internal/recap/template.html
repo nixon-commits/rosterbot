@@ -346,8 +346,10 @@
     <div class="col">
       <h3>Batters</h3>
       {{- range $i, $p := .TopBatters}}
+      {{- $oLogo := teamLogo $.LogoURLs $p.OwnerTeamID}}
       <div class="leader-row">
-        <div class="rank">{{add $i 1}}</div>
+        {{- if $oLogo}}<img class="team-avatar" src="{{$oLogo}}" alt="{{$p.OwnerTeam}}" title="{{$p.OwnerTeam}}"/>
+        {{- else}}<span class="team-avatar fallback" style="background:{{teamColor $p.OwnerTeamID}}" title="{{$p.OwnerTeam}}">{{teamInitial $p.OwnerTeam}}</span>{{end}}
         <div class="body">
           <div class="name">{{$p.Name}}</div>
           <div class="meta">{{$p.OwnerTeam}}{{if $p.MLBTeam}} · {{$p.MLBTeam}}{{end}} · {{fmtDate $p.Date}}</div>
@@ -359,13 +361,53 @@
     <div class="col">
       <h3>Pitchers</h3>
       {{- range $i, $p := .TopPitchers}}
+      {{- $oLogo := teamLogo $.LogoURLs $p.OwnerTeamID}}
       <div class="leader-row">
-        <div class="rank">{{add $i 1}}</div>
+        {{- if $oLogo}}<img class="team-avatar" src="{{$oLogo}}" alt="{{$p.OwnerTeam}}" title="{{$p.OwnerTeam}}"/>
+        {{- else}}<span class="team-avatar fallback" style="background:{{teamColor $p.OwnerTeamID}}" title="{{$p.OwnerTeam}}">{{teamInitial $p.OwnerTeam}}</span>{{end}}
         <div class="body">
           <div class="name">{{$p.Name}}</div>
           <div class="meta">{{$p.OwnerTeam}}{{if $p.MLBTeam}} · {{$p.MLBTeam}}{{end}} · {{fmtDate $p.Date}}</div>
         </div>
         <div class="stat">{{pts $p.FPts}}</div>
+      </div>
+      {{- end}}
+    </div>
+  </div>
+</section>
+{{- end}}
+
+{{- if or .WOBALeaders .FIPLeaders}}
+<section>
+  <h2>League Leaders</h2>
+  <div class="leaders">
+    <div class="col">
+      <h3>wOBA</h3>
+      {{- range .WOBALeaders}}
+      {{- $oLogo := teamLogo $.LogoURLs .OwnerTeamID}}
+      <div class="leader-row">
+        {{- if $oLogo}}<img class="team-avatar" src="{{$oLogo}}" alt="{{.OwnerTeam}}" title="{{.OwnerTeam}}"/>
+        {{- else}}<span class="team-avatar fallback" style="background:{{teamColor .OwnerTeamID}}" title="{{.OwnerTeam}}">{{teamInitial .OwnerTeam}}</span>{{end}}
+        <div class="body">
+          <div class="name">{{.Name}}</div>
+          <div class="meta">{{.OwnerTeam}}{{if .MLBTeam}} · {{.MLBTeam}}{{end}}</div>
+        </div>
+        <div class="stat">{{woba .Value}}</div>
+      </div>
+      {{- end}}
+    </div>
+    <div class="col">
+      <h3>FIP</h3>
+      {{- range .FIPLeaders}}
+      {{- $oLogo := teamLogo $.LogoURLs .OwnerTeamID}}
+      <div class="leader-row">
+        {{- if $oLogo}}<img class="team-avatar" src="{{$oLogo}}" alt="{{.OwnerTeam}}" title="{{.OwnerTeam}}"/>
+        {{- else}}<span class="team-avatar fallback" style="background:{{teamColor .OwnerTeamID}}" title="{{.OwnerTeam}}">{{teamInitial .OwnerTeam}}</span>{{end}}
+        <div class="body">
+          <div class="name">{{.Name}}</div>
+          <div class="meta">{{.OwnerTeam}}{{if .MLBTeam}} · {{.MLBTeam}}{{end}}</div>
+        </div>
+        <div class="stat">{{fip .Value}}</div>
       </div>
       {{- end}}
     </div>

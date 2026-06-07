@@ -41,6 +41,20 @@ var funcMap = template.FuncMap{
 	"bumpColor":         bumpColor,
 	"teamShort":         teamShort,
 	"standingsPoints":   standingsPoints,
+	"woba":              fmtWOBA,
+	"fip":               fmtFIP,
+}
+
+// fmtWOBA formats a wOBA value in baseball convention: three decimals with no
+// leading zero (e.g. 0.382 → ".382").
+func fmtWOBA(v float64) string {
+	s := fmt.Sprintf("%.3f", v)
+	return strings.TrimPrefix(s, "0")
+}
+
+// fmtFIP formats a FIP value to two decimals (e.g. 3.207 → "3.21").
+func fmtFIP(v float64) string {
+	return fmt.Sprintf("%.2f", v)
 }
 
 // teamLogo returns the avatar URL for one team from the Recap.LogoURLs map.

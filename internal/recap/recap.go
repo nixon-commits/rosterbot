@@ -35,7 +35,7 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 			opts.WeekEnd.Format("2006-01-02"), opts.WeekStart.Format("2006-01-02"))
 	}
 	if opts.TopPlayers <= 0 {
-		opts.TopPlayers = 10
+		opts.TopPlayers = 5
 	}
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = runtime.NumCPU()
@@ -168,6 +168,11 @@ func Run(ft *fantrax.Client, opts Options) (*Recap, error) {
 		TopPitchers:      TopPitchers(allActive, opts.TopPlayers),
 	}
 
+	// League-wide season-to-date rate-stat leaders across all rostered players.
+	// Soft-fails to nil internally; the section is omitted when empty.
+	awards.WOBALeaders, awards.FIPLeaders = buildLeaders(
+		ft, opts.WeekEnd.Year(), time.Now().UTC(), opts.CacheDir, opts.CacheTTL, opts.TopPlayers)
+
 	// Season-to-date team means feed the WP simulation so the curve isn't
 	// look-ahead biased by the very week we're plotting. Fall back to the
 	// within-week mean per-team when season data is unavailable (Week 1, or
@@ -266,7 +271,7 @@ func collectTeam(
 		Efficiency: eff,
 	}
 
-	active := extractActivePlayerLines(days, teamName)
+	active := extractActivePlayerLines(days, teamName, teamID)
 
 	starts, err := ft.GetTeamPitcherStarts(teamID, weekStart, weekEnd, seasonStart, cacheDir, cacheTTL)
 	if err != nil {
@@ -292,7 +297,7 @@ func collectTeam(
 // extractActivePlayerLines turns per-day per-player FPts into PlayerLine
 // records for active-slot players. Players with zero FPts and no game are
 // skipped to keep the highlight set tight.
-func extractActivePlayerLines(days []fantrax.DayRoster, ownerTeam string) []PlayerLine {
+func extractActivePlayerLines(days []fantrax.DayRoster, ownerTeam, ownerTeamID string) []PlayerLine {
 	var active []PlayerLine
 	for _, d := range days {
 		for _, p := range d.Players {
@@ -303,13 +308,14 @@ func extractActivePlayerLines(days []fantrax.DayRoster, ownerTeam string) []Play
 				continue
 			}
 			active = append(active, PlayerLine{
-				PlayerID:  p.PlayerID,
-				Name:      p.Name,
-				MLBTeam:   p.MLBTeam,
-				FPts:      p.FPts,
-				Date:      d.Date,
-				OwnerTeam: ownerTeam,
-				IsPitcher: p.IsPitcher,
+				PlayerID:    p.PlayerID,
+				Name:        p.Name,
+				MLBTeam:     p.MLBTeam,
+				FPts:        p.FPts,
+				Date:        d.Date,
+				OwnerTeam:   ownerTeam,
+				OwnerTeamID: ownerTeamID,
+				IsPitcher:   p.IsPitcher,
 			})
 		}
 	}
