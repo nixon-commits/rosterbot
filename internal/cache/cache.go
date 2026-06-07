@@ -19,6 +19,13 @@ type envelope[T any] struct {
 // Off by default; set to true via --verbose.
 var Verbose bool
 
+// Notify, if set, is called when GetWithStaleFallback serves a stale cached
+// value because the fresh fetch failed — i.e. the "fail through to cache"
+// degraded path. It lets callers surface the event (e.g. a Pushover push)
+// without coupling this leaf package to internal/notify or config. Nil by
+// default; cmd wires it up at startup when Pushover creds are present.
+var Notify func(title, message string)
+
 // FileCache provides TTL-based file caching for any JSON-serializable type.
 type FileCache[T any] struct {
 	dir string
@@ -80,7 +87,10 @@ func (c *FileCache[T]) GetWithStaleFallback(key string, fetch func() (T, error))
 
 	// Fresh fetch failed — serve any stale cached value.
 	if stale, ok := c.loadAny(path); ok {
-		fmt.Fprintf(os.Stderr, "warning: fetch failed (%v), serving stale cache for %s\n", err, key)
+		fmt.Fprintf(os.Stderr, "⚠️ stale cache: %s (%v)\n", key, err)
+		if Notify != nil {
+			Notify("⚠️ Stale cache", fmt.Sprintf("Serving stale %s", key))
+		}
 		return stale, nil
 	}
 

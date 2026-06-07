@@ -9,6 +9,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/spf13/cobra"
 )
 
@@ -73,6 +74,17 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 	}
 	if !noCache {
 		ft.SetCache(cacheDir)
+	}
+	// Surface stale-cache fallbacks (fresh fetch failed, serving cached copy)
+	// as a Pushover push when creds are present. Console logging happens
+	// unconditionally inside the cache package.
+	if cfg.PushoverUserKey != "" && cfg.PushoverAPIToken != "" {
+		userKey, apiToken := cfg.PushoverUserKey, cfg.PushoverAPIToken
+		cache.Notify = func(title, message string) {
+			if err := notify.SendPushover(userKey, apiToken, title, message); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: cache notify push failed: %v\n", err)
+			}
+		}
 	}
 	return cfg, ft, nil
 }
