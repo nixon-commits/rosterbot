@@ -39,7 +39,7 @@
   .award { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
   .award .label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; }
   .award .label .icon { color: var(--gold); font-size: 28px; line-height: 1; }
-  .award .name { font-size: 15px; font-weight: 600; color: var(--text); }
+  .award .name { font-size: 15px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; }
   .award .pts { font-size: 18px; font-weight: 700; color: var(--accent); margin-top: 2px; }
   .award .sub { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
   .row { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; display: flex; align-items: center; gap: 12px; }
@@ -76,7 +76,7 @@
   .leader-row .stat { font-size: 13px; font-weight: 700; color: var(--accent); }
   .pitcher-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
   .pitcher-card .label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px; }
-  .pitcher-card .name { font-weight: 600; font-size: 15px; }
+  .pitcher-card .name { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
   .pitcher-card .pts { font-size: 22px; font-weight: 700; margin-top: 4px; }
   .pitcher-card.best .pts { color: var(--good); }
   .pitcher-card.worst .pts { color: var(--bad); }
@@ -243,7 +243,7 @@
     <div class="award">
       <div class="label"><span>Most Efficient</span><span class="icon">⭐</span></div>
       {{- if .MostEfficient}}
-        <div class="name">{{.MostEfficient.TeamName}}</div>
+        <div class="name">{{teamBadge $.LogoURLs .MostEfficient.TeamID .MostEfficient.TeamName}}<span>{{.MostEfficient.TeamName}}</span></div>
         <div class="pts">{{pts .MostEfficient.ActualPts}}</div>
         <div class="sub">{{pct .MostEfficient.Efficiency}} of optimal</div>
       {{- else}}
@@ -253,7 +253,7 @@
     <div class="award">
       <div class="label"><span>Least Efficient</span><span class="icon">❌</span></div>
       {{- if .LeastEfficient}}
-        <div class="name">{{.LeastEfficient.TeamName}}</div>
+        <div class="name">{{teamBadge $.LogoURLs .LeastEfficient.TeamID .LeastEfficient.TeamName}}<span>{{.LeastEfficient.TeamName}}</span></div>
         <div class="pts">{{pts .LeastEfficient.ActualPts}}</div>
         <div class="sub">{{pct .LeastEfficient.Efficiency}} of optimal</div>
       {{- else}}
@@ -269,21 +269,21 @@
     {{- if .HighestScore}}
     <div class="award">
       <div class="label"><span>Highest Score</span><span class="icon">👑</span></div>
-      <div class="name">{{.HighestScore.TeamName}}</div>
+      <div class="name">{{teamBadge $.LogoURLs .HighestScore.TeamID .HighestScore.TeamName}}<span>{{.HighestScore.TeamName}}</span></div>
       <div class="pts">{{pts .HighestScore.ActualPts}}</div>
     </div>
     {{- end}}
     {{- if .LowestScore}}
     <div class="award">
       <div class="label"><span>Lowest Score</span><span class="icon">💩</span></div>
-      <div class="name">{{.LowestScore.TeamName}}</div>
+      <div class="name">{{teamBadge $.LogoURLs .LowestScore.TeamID .LowestScore.TeamName}}<span>{{.LowestScore.TeamName}}</span></div>
       <div class="pts">{{pts .LowestScore.ActualPts}}</div>
     </div>
     {{- end}}
     {{- if .BiggestBlowout}}
     <div class="award">
       <div class="label"><span>Biggest Blowout</span><span class="icon">⚡</span></div>
-      <div class="name">{{matchupWinnerName .BiggestBlowout}}</div>
+      <div class="name">{{teamBadge $.LogoURLs .BiggestBlowout.WinnerID (matchupWinnerName .BiggestBlowout)}}<span>{{matchupWinnerName .BiggestBlowout}}</span></div>
       <div class="pts">{{pts (matchupWinnerPts .BiggestBlowout)}}</div>
       <div class="sub">vs {{matchupLoserName .BiggestBlowout}} {{pts (matchupLoserPts .BiggestBlowout)}}</div>
     </div>
@@ -291,7 +291,7 @@
     {{- if .NarrowVictory}}
     <div class="award">
       <div class="label"><span>Narrow Victory</span><span class="icon">🎯</span></div>
-      <div class="name">{{matchupWinnerName .NarrowVictory}}</div>
+      <div class="name">{{teamBadge $.LogoURLs .NarrowVictory.WinnerID (matchupWinnerName .NarrowVictory)}}<span>{{matchupWinnerName .NarrowVictory}}</span></div>
       <div class="pts">{{pts (matchupWinnerPts .NarrowVictory)}}</div>
       <div class="sub">vs {{matchupLoserName .NarrowVictory}} {{pts (matchupLoserPts .NarrowVictory)}}</div>
     </div>
@@ -299,7 +299,7 @@
     {{- if .HighestPtsInLoss}}
     <div class="award">
       <div class="label"><span>Highest Pts in Loss</span><span class="icon">😭</span></div>
-      <div class="name">{{.HighestPtsInLoss.TeamName}}</div>
+      <div class="name">{{teamBadge $.LogoURLs .HighestPtsInLoss.TeamID .HighestPtsInLoss.TeamName}}<span>{{.HighestPtsInLoss.TeamName}}</span></div>
       <div class="pts">{{pts .HighestPtsInLoss.Pts}}</div>
       <div class="sub">vs {{.HighestPtsInLoss.OppName}} {{pts .HighestPtsInLoss.OppPts}}</div>
     </div>
@@ -307,7 +307,7 @@
     {{- if .LowestPtsInWin}}
     <div class="award">
       <div class="label"><span>Lowest Pts in Win</span><span class="icon">🍀</span></div>
-      <div class="name">{{.LowestPtsInWin.TeamName}}</div>
+      <div class="name">{{teamBadge $.LogoURLs .LowestPtsInWin.TeamID .LowestPtsInWin.TeamName}}<span>{{.LowestPtsInWin.TeamName}}</span></div>
       <div class="pts">{{pts .LowestPtsInWin.Pts}}</div>
       <div class="sub">vs {{.LowestPtsInWin.OppName}} {{pts .LowestPtsInWin.OppPts}}</div>
     </div>
@@ -322,7 +322,7 @@
     {{- if .BestSingleStart}}
     <div class="pitcher-card best">
       <div class="label"><span class="icon">🔥</span>Best Start</div>
-      <div class="name">{{.BestSingleStart.Name}}</div>
+      <div class="name">{{mlbBadge .BestSingleStart.MLBTeam}}<span>{{.BestSingleStart.Name}}</span></div>
       <div class="pts">{{pts .BestSingleStart.FPts}}</div>
       <div class="sub">{{.BestSingleStart.OwnerTeam}} · {{fmtDate .BestSingleStart.Date}}</div>
     </div>
@@ -330,7 +330,7 @@
     {{- if .WorstSingleStart}}
     <div class="pitcher-card worst">
       <div class="label"><span class="icon">💣</span>Worst Start</div>
-      <div class="name">{{.WorstSingleStart.Name}}</div>
+      <div class="name">{{mlbBadge .WorstSingleStart.MLBTeam}}<span>{{.WorstSingleStart.Name}}</span></div>
       <div class="pts">{{pts .WorstSingleStart.FPts}}</div>
       <div class="sub">{{.WorstSingleStart.OwnerTeam}} · {{fmtDate .WorstSingleStart.Date}}</div>
     </div>

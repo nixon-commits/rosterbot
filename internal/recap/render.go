@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 	"hash/fnv"
+	"html"
 	"html/template"
 	"io"
 	"math"
@@ -44,6 +45,35 @@ var funcMap = template.FuncMap{
 	"woba":              fmtWOBA,
 	"fip":               fmtFIP,
 	"mlbLogo":           mlbTeamLogo,
+	"teamBadge":         teamBadge,
+	"mlbBadge":          mlbBadge,
+}
+
+// teamBadge renders the circular fantasy-team avatar (logo when available,
+// initial-color chip otherwise) for use to the left of a team name. Returns
+// trusted markup: the logo URL comes from our own data and the name is HTML-
+// escaped, so it's safe to emit as template.HTML.
+func teamBadge(logos map[string]string, id, name string) template.HTML {
+	if url := teamLogo(logos, id); url != "" {
+		return template.HTML(fmt.Sprintf(`<img class="team-avatar" src="%s" alt=""/>`, html.EscapeString(url)))
+	}
+	return template.HTML(fmt.Sprintf(`<span class="team-avatar fallback" style="background:%s">%s</span>`,
+		html.EscapeString(teamColor(id)), html.EscapeString(teamInitial(name))))
+}
+
+// mlbBadge renders the circular MLB-club avatar for a club abbreviation (logo
+// when the abbreviation is known, abbreviation text chip otherwise). Used to
+// the left of a player name in the pitching-highlight cards.
+func mlbBadge(abbrev string) template.HTML {
+	if url := mlbTeamLogo(abbrev); url != "" {
+		return template.HTML(fmt.Sprintf(`<img class="team-avatar" src="%s" alt="%s" title="%s"/>`,
+			html.EscapeString(url), html.EscapeString(abbrev), html.EscapeString(abbrev)))
+	}
+	if abbrev == "" {
+		return ""
+	}
+	return template.HTML(fmt.Sprintf(`<span class="team-avatar fallback" style="background:%s" title="%s">%s</span>`,
+		html.EscapeString(teamColor(abbrev)), html.EscapeString(abbrev), html.EscapeString(abbrev)))
 }
 
 // mlbTeamAbbrevToID maps an MLB club abbreviation to its statsapi team ID.

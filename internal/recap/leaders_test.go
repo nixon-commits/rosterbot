@@ -141,6 +141,42 @@ func TestRenderLeadersSection(t *testing.T) {
 	}
 }
 
+func TestRenderAwardBadges(t *testing.T) {
+	r := sampleRecap()
+	r.LogoURLs = map[string]string{
+		"eff":  "https://logos.test/eff.png",
+		"high": "https://logos.test/high.png",
+		"win":  "https://logos.test/win.png",
+		"loss": "https://logos.test/loss.png",
+	}
+	r.Awards = Awards{
+		MostEfficient: &TeamWeek{TeamID: "eff", TeamName: "Eff Team", ActualPts: 200, Efficiency: 0.95},
+		HighestScore:  &TeamWeek{TeamID: "high", TeamName: "High Team", ActualPts: 300},
+		BiggestBlowout: &MatchupResult{
+			HomeTeamID: "win", HomeTeamName: "Win Team", HomePts: 250,
+			AwayTeamID: "x", AwayTeamName: "Lose Team", AwayPts: 100, WinnerID: "win",
+		},
+		HighestPtsInLoss: &MatchupTeamSide{TeamID: "loss", TeamName: "Loss Team", Pts: 240, OppName: "Z", OppPts: 245},
+		BestSingleStart:  &PitcherStartLine{Name: "Tarik Skubal", MLBTeam: "DET", FPts: 41, OwnerTeam: "jimmydyl"},
+	}
+	var buf bytes.Buffer
+	if err := Render(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	html := buf.String()
+	for _, want := range []string{
+		"https://logos.test/eff.png",                          // efficiency badge
+		"https://logos.test/high.png",                         // league award (highest score)
+		"https://logos.test/win.png",                          // league award (blowout winner)
+		"https://logos.test/loss.png",                         // league award (highest pts in loss)
+		"https://midfield.mlbstatic.com/v1/team/116/spots/96", // pitching highlight MLB logo (DET=116)
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("rendered HTML missing badge %q", want)
+		}
+	}
+}
+
 func TestMLBTeamLogo(t *testing.T) {
 	cases := map[string]string{
 		"SEA": "https://midfield.mlbstatic.com/v1/team/136/spots/96",
