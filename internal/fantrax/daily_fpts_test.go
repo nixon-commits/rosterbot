@@ -7,6 +7,31 @@ import (
 	"github.com/pmurley/go-fantrax/models"
 )
 
+func TestPeriodIsVolatile(t *testing.T) {
+	// cur = today's period. Recently-closed periods stay volatile because
+	// Fantrax's StatsType=1 roster YTD lags the live score by up to ~a day on
+	// the final day's games, so a snapshot cached during the lag window must
+	// not be pinned for the 30-day past-period TTL.
+	const cur = 100
+	cases := []struct {
+		period int
+		want   bool
+	}{
+		{cur + 1, true},                         // future
+		{cur, true},                             // current
+		{cur - 1, true},                         // closed yesterday — still settling
+		{cur - recentPeriodLookback, true},      // edge of the window
+		{cur - recentPeriodLookback - 1, false}, // safely immutable
+		{cur - 10, false},                       // long past
+	}
+	for _, c := range cases {
+		if got := periodIsVolatile(c.period, cur); got != c.want {
+			t.Errorf("periodIsVolatile(%d, %d) = %v, want %v (lookback=%d)",
+				c.period, cur, got, c.want, recentPeriodLookback)
+		}
+	}
+}
+
 func TestCappedTTL(t *testing.T) {
 	day := 24 * time.Hour
 	cases := []struct {

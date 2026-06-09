@@ -90,10 +90,18 @@ func (c *Client) DailyFantasyPoints(
 	// scope) rather than via c.ttlForPeriod, which fetches the season range on
 	// every call — calling it per period here added ~one network round-trip per
 	// period × team × week (a ~10x slowdown on a full site build).
+	//
+	// Volatile periods (current/future AND the last few closed periods) use the
+	// short TTL; only safely-immutable past periods get the caller's long TTL.
+	// The recently-closed window matters because Fantrax's StatsType=1 roster
+	// YTD lags the live score by up to ~a day on the final day's games — without
+	// it, a snapshot cached during the lag window (e.g. a Sunday-night build) is
+	// pinned stale for the full 30-day past-period TTL and every later rebuild
+	// (the weekly recap-site re-renders every week) reuses the stale value.
 	curPeriod := PeriodForDate(seasonStart, time.Now().UTC())
 	snapCacheFor := func(period int) *cache.FileCache[periodSnapshot] {
 		ttl := cacheTTL
-		if cacheTTL > 0 && period >= curPeriod {
+		if cacheTTL > 0 && periodIsVolatile(period, curPeriod) {
 			ttl = cappedTTL(cacheTTL, c.todayTTL)
 		}
 		return cache.New[periodSnapshot](cacheDir, ttl)
@@ -195,6 +203,19 @@ func diffYTD(cur, prevSame, prevOther map[string]playerYTD, isPitcher bool) []Da
 		})
 	}
 	return out
+}
+
+// recentPeriodLookback is how many just-closed periods stay on the short
+// (volatile) TTL. Fantrax's StatsType=1 roster YTD can keep settling for up to
+// ~a day after a period closes, so 3 days gives margin for that lag plus
+// timezone slop between the UTC "current period" math and the live data.
+const recentPeriodLookback = 3
+
+// periodIsVolatile reports whether a period's snapshot can still change and so
+// must not be pinned for the long immutable-past-period TTL. True for the
+// current/future periods and the last recentPeriodLookback closed periods.
+func periodIsVolatile(period, curPeriod int) bool {
+	return period >= curPeriod-recentPeriodLookback
 }
 
 // cappedTTL picks the cache TTL for one period's snapshot: the caller's TTL
