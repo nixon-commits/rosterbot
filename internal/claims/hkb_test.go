@@ -32,3 +32,14 @@ func TestLookupHKB_MatchesNormalizedName(t *testing.T) {
 		t.Errorf("unranked player should keep name/pos: %+v", miss)
 	}
 }
+
+func TestLookupHKB_UnrankedPitcherInferredFromPosition(t *testing.T) {
+	lookup := buildHKBLookup(nil)
+	sp := lookupHKB("Some Reliever", "RP", lookup)
+	if sp.Ranked {
+		t.Fatal("expected unranked")
+	}
+	if !sp.IsPitcher {
+		t.Error("unranked pitcher should be inferred as pitcher from position 'RP'")
+	}
+}
