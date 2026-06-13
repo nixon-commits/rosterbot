@@ -59,7 +59,7 @@ func resolveAddedIDs(moves []Move, cacheDir string) {
 
 // enrichProjections fills ProjectedFPG for added players from FanGraphs
 // depthcharts projections, scored with the league weights. Best-effort.
-func enrichProjections(moves []Move, weights fantrax.ScoringWeights, cacheDir string, ttl time.Duration) {
+func enrichProjections(moves []Move, hitterWeights, pitcherWeights fantrax.ScoringWeights, cacheDir string, ttl time.Duration) {
 	bat, _, err := projections.LoadBattingProjections("depthcharts", cacheDir, ttl)
 	if err != nil {
 		return
@@ -74,12 +74,12 @@ func enrichProjections(moves []Move, weights fantrax.ScoringWeights, cacheDir st
 					continue
 				}
 				if proj, ok := pit.GetPitcherProjection(p.Name, ""); ok {
-					p.ProjectedFPG = projections.PitcherExpectedPtsFromProj(proj, weights)
+					p.ProjectedFPG = projections.PitcherExpectedPtsFromProj(proj, pitcherWeights)
 				}
 				continue
 			}
 			if proj, ok := bat.GetProjection(p.Name, ""); ok {
-				p.ProjectedFPG = projections.ExpectedPtsFromProj(proj, weights)
+				p.ProjectedFPG = projections.ExpectedPtsFromProj(proj, hitterWeights)
 			}
 		}
 	}

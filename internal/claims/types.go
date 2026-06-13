@@ -3,6 +3,7 @@ package claims
 import (
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/waivers"
 	"github.com/pmurley/go-fantrax/models"
 )
@@ -70,4 +71,7 @@ type Options struct {
 	DropsMin         int       // notable-drops HKB threshold
 	PushoverUserKey  string
 	PushoverAPIToken string
+	LedgerDir        string       // defaults to ".waivers/claims"
+	CursorPath       string       // defaults to ".cache/last-claims.json"
+	HKBPlayers       []hkb.Player // optional injection for tests; when non-nil, skips the hkb.GetPlayers fetch
 }

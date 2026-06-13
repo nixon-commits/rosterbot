@@ -3,6 +3,7 @@ package claims
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -28,6 +29,9 @@ func loadCursor(path string) time.Time {
 
 // saveCursor writes the last-checked timestamp.
 func saveCursor(path string, date time.Time) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(cursor{LastChecked: date}, "", "  ")
 	if err != nil {
 		return err
