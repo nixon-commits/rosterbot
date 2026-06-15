@@ -14,6 +14,10 @@ const (
 	colorGreen = "\033[32m"
 	colorDim   = "\033[2m"
 	colorReset = "\033[0m"
+	// indentTeam/indentPlayer are the two nesting levels of the Pushover digest:
+	// the team line sits one nbsp under its date header, each player two more.
+	indentTeam   = nbsp
+	indentPlayer = nbsp + nbsp + nbsp
 	// nbsp is U+00A0 (non-breaking space). Used for indentation that survives
 	// Pushover's whitespace collapsing — regular leading spaces get stripped in
 	// push notifications, so visual structure flattens without it.
@@ -121,22 +125,20 @@ func moveHeadline(m Move) (sym, name string) {
 	return "+", "—"
 }
 
-// movePlayers renders both sides of a move for the digest: every added player
-// (+) followed by every dropped player (-), so a claim shows what came in AND
-// the corresponding drop on one line (e.g. "+Colt Keith -J.P. Crawford"). Bare
-// adds/drops degrade gracefully to one side; an empty move renders "—".
-func movePlayers(m Move) string {
-	parts := make([]string, 0, len(m.Added)+len(m.Dropped))
+// moveBlock renders one move as a stacked block for the digest: the team and
+// net value on their own line, then each added player (+) and dropped player (-)
+// on its own indented line beneath. Keeping the move on multiple short lines
+// avoids the awkward wrapping long "Team: +A -B" lines cause on a phone.
+func moveBlock(m Move) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s%s (%+d)\n", indentTeam, m.TeamName, m.NetValue())
 	for _, p := range m.Added {
-		parts = append(parts, "+"+p.Name)
+		fmt.Fprintf(&b, "%s+%s\n", indentPlayer, p.Name)
 	}
 	for _, p := range m.Dropped {
-		parts = append(parts, "-"+p.Name)
+		fmt.Fprintf(&b, "%s-%s\n", indentPlayer, p.Name)
 	}
-	if len(parts) == 0 {
-		return "—"
-	}
-	return strings.Join(parts, " ")
+	return b.String()
 }
 
 // notableDrops returns dropped players whose HKB value exceeds min, sorted desc.
@@ -163,10 +165,11 @@ func writeDropsWatch(b *strings.Builder, drops []SidePlayer) {
 	}
 }
 
-// FormatPushover renders a compact digest grouped by processed date (a date
-// header, then one line per move). Whole lines are appended until the next would
-// exceed Pushover's 1024-char limit — byte-slicing would split multibyte UTF-8
-// names, so we break on whole lines instead.
+// FormatPushover renders a compact digest grouped by processed date: a date
+// header, then one stacked block per move (team + net on a line, each added/
+// dropped player indented beneath). Whole move blocks are appended until the
+// next would exceed Pushover's 1024-char limit — byte-slicing would split
+// multibyte UTF-8 names, so we break on whole blocks instead.
 func FormatPushover(moves []Move) string {
 	groups, dates := groupByDate(moves)
 	var b strings.Builder
@@ -178,7 +181,7 @@ outer:
 		}
 		b.WriteString(header)
 		for _, m := range groups[d] {
-			line := fmt.Sprintf("%s%s: %s (%+d)\n", nbsp, m.TeamName, movePlayers(m), m.NetValue())
+			line := moveBlock(m)
 			if b.Len()+len(line) > 1024 {
 				break outer
 			}
