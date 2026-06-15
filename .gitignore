@@ -5,6 +5,7 @@ rosterbot
 .cache/
 .fantrax-cache/
 .backtest/
+.waivers/
 .superpowers/
 fangraphs-leaderboard-projections*.csv
 verify_periods

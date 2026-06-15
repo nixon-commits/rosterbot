@@ -59,13 +59,37 @@ func formatSidePlayer(p SidePlayer, added bool) string {
 		return fmt.Sprintf("%s (%s) — unranked", p.Name, p.Position)
 	}
 	s := fmt.Sprintf("%s (%s) · #%d · %s", p.Name, p.Position, p.Rank, formatValue(p.Value))
+	// 30-day trend (both added and dropped).
+	if p.Trend30D > 0 {
+		s += fmt.Sprintf(" ▲+%s", formatValue(p.Trend30D))
+	} else if p.Trend30D < 0 {
+		s += fmt.Sprintf(" ▼-%s", formatValue(-p.Trend30D))
+	}
 	if added && p.Signal != waivers.SignalNone {
 		s += " · " + p.Signal.String()
 	}
 	if added && p.ProjectedFPG > 0 {
 		s += fmt.Sprintf(" · %.1f FPG", p.ProjectedFPG)
 	}
+	// Key stat (both added and dropped).
+	if p.HasStats {
+		if p.IsPitcher {
+			s += fmt.Sprintf(" · %.2f ERA", p.ERA)
+		} else {
+			s += " · " + formatOPS(p.OPS) + " OPS"
+		}
+	}
 	return s
+}
+
+// formatOPS formats an OPS value like ".812" (no leading zero), matching the
+// convention used in internal/transactions.
+func formatOPS(ops float64) string {
+	str := fmt.Sprintf("%.3f", ops)
+	if strings.HasPrefix(str, "0") {
+		return str[1:] // ".812" instead of "0.812"
+	}
+	return str // "1.012" stays as-is
 }
 
 func writeLeaderboard(b *strings.Builder, moves []Move, color bool) {

@@ -81,7 +81,7 @@ rosterbot waivers --dry-run --positions OF,SP   # filter to specific slots
 # Daily recap of processed waiver/FA claims
 rosterbot claims --dry-run
 rosterbot claims --dry-run --no-signals         # skip Statcast signal enrichment
-rosterbot claims --dry-run --drops-min 5.0      # only flag drops above HKB threshold
+rosterbot claims --dry-run --drops-min 3000     # only flag drops above HKB value threshold
 rosterbot claims --dry-run --since 2026-06-01   # recap claims since a specific date
 
 # Check GS violations

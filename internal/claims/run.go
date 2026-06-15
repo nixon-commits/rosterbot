@@ -52,6 +52,18 @@ func Run(ft ClaimsClient, today time.Time, opts Options) error {
 		return fmt.Errorf("get recent transactions: %w", err)
 	}
 
+	// Fast no-op: no transactions at all since the cursor — skip HKB fetch entirely.
+	noop := func() error {
+		log.Println("No waiver claims processed since last run.")
+		if err := saveCursor(opts.CursorPath, today); err != nil {
+			log.Printf("WARNING: failed to save claims cursor: %v", err)
+		}
+		return nil
+	}
+	if len(txs) == 0 {
+		return noop()
+	}
+
 	players := opts.HKBPlayers
 	if players == nil {
 		players, err = hkb.GetPlayers(opts.CacheDir)
@@ -61,13 +73,10 @@ func Run(ft ClaimsClient, today time.Time, opts Options) error {
 	}
 	moves := BuildMoves(txs, buildHKBLookup(players))
 
-	// No-op: nothing processed since the cursor. Advance cursor and return.
+	// No-op: transactions existed but none were claim moves (e.g. only trades).
+	// Advance cursor and return.
 	if len(moves) == 0 {
-		log.Println("No waiver claims processed since last run.")
-		if err := saveCursor(opts.CursorPath, today); err != nil {
-			log.Printf("WARNING: failed to save claims cursor: %v", err)
-		}
-		return nil
+		return noop()
 	}
 
 	// Enrichment: MLBAM IDs, Statcast signals, projections (all best-effort).

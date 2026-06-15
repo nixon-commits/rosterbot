@@ -17,6 +17,49 @@ func sampleMoves() []Move {
 	}
 }
 
+func TestFormatSidePlayer_TrendAndStat(t *testing.T) {
+	t.Run("hitter with positive trend and OPS", func(t *testing.T) {
+		p := SidePlayer{
+			Name: "Joe Hitter", Position: "OF", Ranked: true, Value: 3500, Rank: 45,
+			Trend30D: 250,
+			HasStats: true, IsPitcher: false, OPS: 0.812,
+		}
+		got := formatSidePlayer(p, false)
+		if !strings.Contains(got, "▲+250") {
+			t.Errorf("want ▲+250 in %q", got)
+		}
+		if !strings.Contains(got, ".812 OPS") {
+			t.Errorf("want .812 OPS in %q", got)
+		}
+	})
+
+	t.Run("pitcher with negative trend and ERA", func(t *testing.T) {
+		p := SidePlayer{
+			Name: "Ace Pitcher", Position: "SP", Ranked: true, Value: 4000, Rank: 30,
+			Trend30D: -100,
+			HasStats: true, IsPitcher: true, ERA: 3.14,
+		}
+		got := formatSidePlayer(p, true)
+		if !strings.Contains(got, "▼-100") {
+			t.Errorf("want ▼-100 in %q", got)
+		}
+		if !strings.Contains(got, "3.14 ERA") {
+			t.Errorf("want 3.14 ERA in %q", got)
+		}
+	})
+
+	t.Run("no trend or stats emits clean line", func(t *testing.T) {
+		p := SidePlayer{Name: "Plain Player", Position: "RP", Ranked: true, Value: 1000, Rank: 200}
+		got := formatSidePlayer(p, false)
+		if strings.Contains(got, "▲") || strings.Contains(got, "▼") {
+			t.Errorf("unexpected trend symbol in %q", got)
+		}
+		if strings.Contains(got, "ERA") || strings.Contains(got, "OPS") {
+			t.Errorf("unexpected stat in %q", got)
+		}
+	})
+}
+
 func TestNotableDrops_FiltersByThreshold(t *testing.T) {
 	drops := notableDrops(sampleMoves(), 2000)
 	if len(drops) != 1 || drops[0].Name != "Good Drop" {
