@@ -109,6 +109,17 @@ func TestFormatPushover_DateHeaderAndBareDrop(t *testing.T) {
 	if strings.Index(msg, "Jun 9") > strings.Index(msg, "Jun 10") {
 		t.Errorf("date groups out of chronological order:\n%s", msg)
 	}
+	// A divider separates the two date groups, but the digest does not start with one.
+	if !strings.Contains(msg, dateDivider) {
+		t.Errorf("expected a date divider between groups, got:\n%s", msg)
+	}
+	if strings.HasPrefix(msg, dateDivider) {
+		t.Errorf("digest should not start with a divider, got:\n%s", msg)
+	}
+	// Divider sits above the second (Jun 10) group.
+	if strings.Index(msg, dateDivider) >= strings.Index(msg, "Jun 10") {
+		t.Errorf("divider should appear above the Jun 10 group, got:\n%s", msg)
+	}
 	// A claim is stacked: team + net on one line, add and drop on their own lines.
 	if !strings.Contains(msg, "Aces (+400)") {
 		t.Errorf("want team+net line 'Aces (+400)', got:\n%s", msg)

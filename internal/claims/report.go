@@ -170,16 +170,26 @@ func writeDropsWatch(b *strings.Builder, drops []SidePlayer) {
 // dropped player indented beneath). Whole move blocks are appended until the
 // next would exceed Pushover's 1024-char limit — byte-slicing would split
 // multibyte UTF-8 names, so we break on whole blocks instead.
+// dateDivider is a horizontal rule drawn above each date group (after the
+// first) to visually separate days. Box-drawing chars survive Pushover's
+// whitespace collapsing and read as a rule rather than a drop "-" line.
+const dateDivider = "──────────"
+
 func FormatPushover(moves []Move) string {
 	groups, dates := groupByDate(moves)
 	var b strings.Builder
+	first := true
 outer:
 	for _, d := range dates {
 		header := dateHeader(d) + "\n"
+		if !first {
+			header = dateDivider + "\n" + header
+		}
 		if b.Len()+len(header) > 1024 {
 			break
 		}
 		b.WriteString(header)
+		first = false
 		for _, m := range groups[d] {
 			line := moveBlock(m)
 			if b.Len()+len(line) > 1024 {
