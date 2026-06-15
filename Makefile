@@ -35,6 +35,7 @@ run-all:
 	@echo "=== gs-check --dry-run --force ===";           time go run . gs-check --dry-run --force;                       echo
 	@echo "=== transactions --dry-run ===";               time go run . transactions --dry-run;                           echo
 	@echo "=== waivers --dry-run ===";                    time go run . waivers --dry-run;                                echo
+	@echo "=== claims --dry-run ===";                    time go run . claims --dry-run --no-signals;                    echo
 	@echo "=== backtest ===";                             time go run . backtest;                                         echo
 	@echo "=== backtest --recency-experiment ===";        time go run . backtest --recency-experiment --dates 2026-05-01:2026-05-07 || true; echo
 	@echo "=== recap --out /tmp/recap.html ===";          time go run . recap --out /tmp/recap.html;                      echo

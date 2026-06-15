@@ -9,6 +9,7 @@ Fantasy baseball roster automation for Fantrax head-to-head points leagues. Opti
 - **Prospect monitoring** — Scans MLB transactions, MiLB performance breakouts, and prospect rankings (MLB Pipeline / FanGraphs) to surface call-up alerts, hot streaks, and upgrade recommendations.
 - **Trade monitoring** — Fetches recent league trades, values each side using HKB player rankings, and sends a Pushover notification with the trade report.
 - **Statcast-driven waiver picks** — Cross-references league free agents against Baseball Savant data to surface buy-low candidates (xStats outpacing surface stats) and confirmed hot streaks (recent production backed by barrel/hard-hit quality). Ranks by Steamer-projected fantasy points per game.
+- **Daily claims recap** — League-wide recap of processed waiver/FA claims with HKB value gained per move, a daily value leaderboard by team, notable-drops watch, and Statcast signal tie-in for picked-up players. Writes an audit ledger to `.waivers/claims/<date>.json` and uses a cursor to avoid duplicate alerts across runs.
 - **GS violation detection** — Tallies game starts across all league teams and sends Pushover notifications when a team exceeds the cap.
 - **Roster hygiene** — Flags healthy players stuck in IL slots, called-up players still in Minors slots, and injured players occupying active slots.
 - **Backtesting** — Grades past lineup moves against the hindsight-optimal lineup and measures projection accuracy against actual fantasy points.
@@ -76,6 +77,12 @@ rosterbot transactions --dry-run
 rosterbot waivers --dry-run
 rosterbot waivers --dry-run --top 25            # bigger list
 rosterbot waivers --dry-run --positions OF,SP   # filter to specific slots
+
+# Daily recap of processed waiver/FA claims
+rosterbot claims --dry-run
+rosterbot claims --dry-run --no-signals         # skip Statcast signal enrichment
+rosterbot claims --dry-run --drops-min 5.0      # only flag drops above HKB threshold
+rosterbot claims --dry-run --since 2026-06-01   # recap claims since a specific date
 
 # Check GS violations
 rosterbot gs-check --dry-run --force
@@ -193,6 +200,7 @@ GitHub Actions workflows run on daily schedules:
 | `transactions.yml` | 10am ET daily | `transactions` |
 | `prospects.yml` | 7am ET daily | `prospects` |
 | `waivers.yml` | 9am ET daily | `waivers` (Statcast-driven free-agent picks) |
+| `claims.yml` | 10am ET daily | `claims` (daily league-wide waiver/FA claims recap) |
 | `recap.yml` | 7am ET Mondays | `recap-site` (builds every completed week + index, deploys to GitHub Pages) |
 
 All workflows support `workflow_dispatch` for manual triggering. Required repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
@@ -241,6 +249,7 @@ internal/
   schedule/       MLB Stats API (schedule, lineups, probable pitchers)
   prospects/      minor league prospect monitoring
   waivers/        Statcast-driven MLB free-agent picks (buy-low + hot streaks)
+  claims/         daily league-wide waiver/FA claims recap with HKB valuation + audit ledger
   gscheck/        league-wide GS violation checker
   roster/         roster hygiene alerts
   notify/         Pushover push notifications
