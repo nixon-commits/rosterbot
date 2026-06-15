@@ -109,9 +109,18 @@ func TestFormatPushover_DateHeaderAndBareDrop(t *testing.T) {
 	if strings.Index(msg, "Jun 9") > strings.Index(msg, "Jun 10") {
 		t.Errorf("date groups out of chronological order:\n%s", msg)
 	}
-	// A claim shows both the added and the corresponding dropped player on one line.
-	if !strings.Contains(msg, "+New Guy -Old Guy") {
-		t.Errorf("claim should pair add and drop on one line, got:\n%s", msg)
+	// A claim is stacked: team + net on one line, add and drop on their own lines.
+	if !strings.Contains(msg, "Aces (+400)") {
+		t.Errorf("want team+net line 'Aces (+400)', got:\n%s", msg)
+	}
+	for _, want := range []string{"+New Guy", "-Old Guy"} {
+		if !strings.Contains(msg, want+"\n") {
+			t.Errorf("claim should list %q on its own line, got:\n%s", want, msg)
+		}
+	}
+	// Add and drop are NOT on one combined line anymore.
+	if strings.Contains(msg, "+New Guy -Old Guy") {
+		t.Errorf("add and drop should be on separate lines, got:\n%s", msg)
 	}
 	// Bare drop renders the dropped player, never "+—".
 	if !strings.Contains(msg, "-Cut Vet") {
