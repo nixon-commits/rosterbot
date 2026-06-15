@@ -6,6 +6,7 @@ package fantrax
 // period, leagueID, date) are appended via cache.Key at each call site.
 const (
 	keyAllTrades          = "fantrax-all-trades"
+	keyAllTransactions    = "fantrax-all-transactions"
 	keyPendingTrades      = "fantrax-pending-trades"
 	keyAvailableProspects = "fantrax-available-prospects"
 	keyCurrentPeriod      = "fantrax-current-period"
