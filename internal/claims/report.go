@@ -110,7 +110,7 @@ func writeLeaderboard(b *strings.Builder, moves []Move, color bool) {
 
 // moveHeadline returns the symbol and player name that best represent a move:
 // the added player when present, otherwise the dropped player (a bare drop), so
-// the digest and leaderboard never render a meaningless "+—".
+// the leaderboard never renders a meaningless "+—".
 func moveHeadline(m Move) (sym, name string) {
 	if len(m.Added) > 0 {
 		return "+", m.Added[0].Name
@@ -119,6 +119,24 @@ func moveHeadline(m Move) (sym, name string) {
 		return "-", m.Dropped[0].Name
 	}
 	return "+", "—"
+}
+
+// movePlayers renders both sides of a move for the digest: every added player
+// (+) followed by every dropped player (-), so a claim shows what came in AND
+// the corresponding drop on one line (e.g. "+Colt Keith -J.P. Crawford"). Bare
+// adds/drops degrade gracefully to one side; an empty move renders "—".
+func movePlayers(m Move) string {
+	parts := make([]string, 0, len(m.Added)+len(m.Dropped))
+	for _, p := range m.Added {
+		parts = append(parts, "+"+p.Name)
+	}
+	for _, p := range m.Dropped {
+		parts = append(parts, "-"+p.Name)
+	}
+	if len(parts) == 0 {
+		return "—"
+	}
+	return strings.Join(parts, " ")
 }
 
 // notableDrops returns dropped players whose HKB value exceeds min, sorted desc.
@@ -160,8 +178,7 @@ outer:
 		}
 		b.WriteString(header)
 		for _, m := range groups[d] {
-			sym, name := moveHeadline(m)
-			line := fmt.Sprintf("%s%s: %s%s (%+d)\n", nbsp, m.TeamName, sym, name, m.NetValue())
+			line := fmt.Sprintf("%s%s: %s (%+d)\n", nbsp, m.TeamName, movePlayers(m), m.NetValue())
 			if b.Len()+len(line) > 1024 {
 				break outer
 			}

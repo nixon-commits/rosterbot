@@ -92,8 +92,10 @@ func TestFormatPushover_DateHeaderAndBareDrop(t *testing.T) {
 	jun9 := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 	jun10 := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	moves := []Move{
+		// Claim with a paired drop — both must appear on one line, same date.
 		{TeamName: "Aces", ProcessedDate: jun10,
-			Added: []SidePlayer{{Name: "New Guy", Value: 500}}},
+			Added:   []SidePlayer{{Name: "New Guy", Value: 500}},
+			Dropped: []SidePlayer{{Name: "Old Guy", Value: 100}}},
 		// Bare drop (no add) — must render the dropped name, not "+—".
 		{TeamName: "Bandits", ProcessedDate: jun9,
 			Dropped: []SidePlayer{{Name: "Cut Vet", Value: 900}}},
@@ -106,6 +108,10 @@ func TestFormatPushover_DateHeaderAndBareDrop(t *testing.T) {
 	}
 	if strings.Index(msg, "Jun 9") > strings.Index(msg, "Jun 10") {
 		t.Errorf("date groups out of chronological order:\n%s", msg)
+	}
+	// A claim shows both the added and the corresponding dropped player on one line.
+	if !strings.Contains(msg, "+New Guy -Old Guy") {
+		t.Errorf("claim should pair add and drop on one line, got:\n%s", msg)
 	}
 	// Bare drop renders the dropped player, never "+—".
 	if !strings.Contains(msg, "-Cut Vet") {
