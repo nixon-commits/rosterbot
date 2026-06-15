@@ -3,15 +3,17 @@ package claims
 import (
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
 func sampleMoves() []Move {
+	jun9 := time.Date(2026, 6, 9, 18, 0, 0, 0, time.UTC)
 	return []Move{
-		{TeamName: "Aces", ClaimType: "WW", BidAmount: "12",
+		{TeamName: "Aces", ClaimType: "WW", BidAmount: "12", ProcessedDate: jun9,
 			Added:   []SidePlayer{{Name: "Added Guy", Position: "OF", Ranked: true, Value: 3000, Rank: 120}},
 			Dropped: []SidePlayer{{Name: "Dropped Guy", Position: "SP", Ranked: true, Value: 1000}}},
-		{TeamName: "Bandits", ClaimType: "FA",
+		{TeamName: "Bandits", ClaimType: "FA", ProcessedDate: jun9,
 			Added:   []SidePlayer{{Name: "Reach", Position: "1B", Ranked: true, Value: 200}},
 			Dropped: []SidePlayer{{Name: "Good Drop", Position: "OF", Ranked: true, Value: 2500}}},
 	}
@@ -83,6 +85,41 @@ func TestFormatPushover_Truncates(t *testing.T) {
 	msg := FormatPushover(sampleMoves())
 	if len(msg) > 1024 {
 		t.Errorf("pushover message exceeds 1024 chars: %d", len(msg))
+	}
+}
+
+func TestFormatPushover_DateHeaderAndBareDrop(t *testing.T) {
+	jun9 := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	jun10 := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	moves := []Move{
+		{TeamName: "Aces", ProcessedDate: jun10,
+			Added: []SidePlayer{{Name: "New Guy", Value: 500}}},
+		// Bare drop (no add) — must render the dropped name, not "+—".
+		{TeamName: "Bandits", ProcessedDate: jun9,
+			Dropped: []SidePlayer{{Name: "Cut Vet", Value: 900}}},
+	}
+	msg := FormatPushover(moves)
+
+	// Date headers present, chronological (Jun 9 group before Jun 10).
+	if !strings.Contains(msg, "Jun 9") || !strings.Contains(msg, "Jun 10") {
+		t.Errorf("missing date headers in:\n%s", msg)
+	}
+	if strings.Index(msg, "Jun 9") > strings.Index(msg, "Jun 10") {
+		t.Errorf("date groups out of chronological order:\n%s", msg)
+	}
+	// Bare drop renders the dropped player, never "+—".
+	if !strings.Contains(msg, "-Cut Vet") {
+		t.Errorf("bare drop should render dropped name with '-', got:\n%s", msg)
+	}
+	if strings.Contains(msg, "+—") {
+		t.Errorf("digest should not contain '+—':\n%s", msg)
+	}
+}
+
+func TestFormatReport_IncludesDate(t *testing.T) {
+	out := FormatReport(sampleMoves(), 2000, false)
+	if !strings.Contains(out, "Jun 9") {
+		t.Errorf("per-move header should include the processed date, got:\n%s", out)
 	}
 }
 

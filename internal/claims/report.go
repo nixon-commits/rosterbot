@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/waivers"
 )
@@ -43,6 +44,9 @@ func writeMove(b *strings.Builder, m Move, color bool) {
 		fmt.Fprintf(b, " ($%s)", m.BidAmount)
 	} else if m.Priority != "" {
 		fmt.Fprintf(b, " (priority %s)", m.Priority)
+	}
+	if !m.ProcessedDate.IsZero() {
+		fmt.Fprintf(b, " · %s", m.ProcessedDate.UTC().Format("Mon Jan 2"))
 	}
 	b.WriteString("\n")
 	for _, p := range m.Added {
@@ -99,12 +103,22 @@ func writeLeaderboard(b *strings.Builder, moves []Move, color bool) {
 	// moves arrive sorted by net value desc (BuildMoves guarantees this).
 	b.WriteString("\nValue Leaderboard\n")
 	for i, m := range moves {
-		added := "—"
-		if len(m.Added) > 0 {
-			added = m.Added[0].Name
-		}
-		fmt.Fprintf(b, "%s%d. %s (%s) %s\n", nbsp, i+1, added, m.TeamName, formatSignedValue(m.NetValue(), color))
+		sym, name := moveHeadline(m)
+		fmt.Fprintf(b, "%s%d. %s%s (%s) %s\n", nbsp, i+1, sym, name, m.TeamName, formatSignedValue(m.NetValue(), color))
 	}
+}
+
+// moveHeadline returns the symbol and player name that best represent a move:
+// the added player when present, otherwise the dropped player (a bare drop), so
+// the digest and leaderboard never render a meaningless "+—".
+func moveHeadline(m Move) (sym, name string) {
+	if len(m.Added) > 0 {
+		return "+", m.Added[0].Name
+	}
+	if len(m.Dropped) > 0 {
+		return "-", m.Dropped[0].Name
+	}
+	return "+", "—"
 }
 
 // notableDrops returns dropped players whose HKB value exceeds min, sorted desc.
@@ -131,23 +145,72 @@ func writeDropsWatch(b *strings.Builder, drops []SidePlayer) {
 	}
 }
 
-// FormatPushover renders a compact one-line-per-move digest, appending whole
-// lines until the next would exceed Pushover's 1024-char limit (byte-slicing
-// would split multibyte UTF-8 names, so we break on whole lines instead).
+// FormatPushover renders a compact digest grouped by processed date (a date
+// header, then one line per move). Whole lines are appended until the next would
+// exceed Pushover's 1024-char limit — byte-slicing would split multibyte UTF-8
+// names, so we break on whole lines instead.
 func FormatPushover(moves []Move) string {
+	groups, dates := groupByDate(moves)
 	var b strings.Builder
-	for _, m := range moves {
-		added := "—"
-		if len(m.Added) > 0 {
-			added = m.Added[0].Name
-		}
-		line := fmt.Sprintf("%s: +%s (%+d)\n", m.TeamName, added, m.NetValue())
-		if b.Len()+len(line) > 1024 {
+outer:
+	for _, d := range dates {
+		header := dateHeader(d) + "\n"
+		if b.Len()+len(header) > 1024 {
 			break
 		}
-		b.WriteString(line)
+		b.WriteString(header)
+		for _, m := range groups[d] {
+			sym, name := moveHeadline(m)
+			line := fmt.Sprintf("%s%s: %s%s (%+d)\n", nbsp, m.TeamName, sym, name, m.NetValue())
+			if b.Len()+len(line) > 1024 {
+				break outer
+			}
+			b.WriteString(line)
+		}
 	}
 	return b.String()
+}
+
+// groupByDate buckets moves by processed calendar date and returns the buckets
+// plus the date keys in chronological order. Within each bucket moves are sorted
+// by net value descending; moves with no processed date bucket under "Undated"
+// (sorted last).
+func groupByDate(moves []Move) (map[string][]Move, []string) {
+	groups := map[string][]Move{}
+	for _, m := range moves {
+		k := dateKey(m.ProcessedDate)
+		groups[k] = append(groups[k], m)
+	}
+	dates := make([]string, 0, len(groups))
+	for k := range groups {
+		dates = append(dates, k)
+		sort.SliceStable(groups[k], func(i, j int) bool {
+			return groups[k][i].NetValue() > groups[k][j].NetValue()
+		})
+	}
+	sort.Strings(dates) // "2006-01-02" keys sort chronologically; the undated sentinel sorts last
+	return groups, dates
+}
+
+// undatedKey sorts after any real "2006-01-02" date key.
+const undatedKey = "zzzz-undated"
+
+func dateKey(t time.Time) string {
+	if t.IsZero() {
+		return undatedKey
+	}
+	return t.UTC().Format("2006-01-02")
+}
+
+func dateHeader(key string) string {
+	if key == undatedKey {
+		return "Undated"
+	}
+	t, err := time.Parse("2006-01-02", key)
+	if err != nil {
+		return key
+	}
+	return t.Format("Mon Jan 2")
 }
 
 func formatSignedValue(v int, color bool) string {
