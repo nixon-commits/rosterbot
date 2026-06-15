@@ -125,22 +125,6 @@ func moveHeadline(m Move) (sym, name string) {
 	return "+", "—"
 }
 
-// moveBlock renders one move as a stacked block for the digest: the team and
-// net value on their own line, then each added player (+) and dropped player (-)
-// on its own indented line beneath. Keeping the move on multiple short lines
-// avoids the awkward wrapping long "Team: +A -B" lines cause on a phone.
-func moveBlock(m Move) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s%s (%+d)\n", indentTeam, m.TeamName, m.NetValue())
-	for _, p := range m.Added {
-		fmt.Fprintf(&b, "%s+%s\n", indentPlayer, p.Name)
-	}
-	for _, p := range m.Dropped {
-		fmt.Fprintf(&b, "%s-%s\n", indentPlayer, p.Name)
-	}
-	return b.String()
-}
-
 // notableDrops returns dropped players whose HKB value exceeds min, sorted desc.
 func notableDrops(moves []Move, min int) []SidePlayer {
 	var out []SidePlayer
@@ -190,13 +174,71 @@ outer:
 		}
 		b.WriteString(header)
 		first = false
-		for _, m := range groups[d] {
-			line := moveBlock(m)
+		for _, t := range aggregateByTeam(groups[d]) {
+			line := teamBlock(t)
 			if b.Len()+len(line) > 1024 {
 				break outer
 			}
 			b.WriteString(line)
 		}
+	}
+	return b.String()
+}
+
+// teamDay aggregates all of one team's moves on a single date.
+type teamDay struct {
+	team    string
+	added   []SidePlayer
+	dropped []SidePlayer
+}
+
+func (t teamDay) net() int {
+	var n int
+	for _, p := range t.added {
+		n += p.Value
+	}
+	for _, p := range t.dropped {
+		n -= p.Value
+	}
+	return n
+}
+
+// aggregateByTeam merges a date's moves so each team appears once, with all its
+// adds and drops combined and its net summed. Teams are ordered by net value
+// descending, ties broken by team name. Insertion order of players is preserved.
+func aggregateByTeam(moves []Move) []teamDay {
+	idx := map[string]int{}
+	out := make([]teamDay, 0, len(moves))
+	for _, m := range moves {
+		key := m.TeamID + "|" + m.TeamName
+		i, ok := idx[key]
+		if !ok {
+			i = len(out)
+			idx[key] = i
+			out = append(out, teamDay{team: m.TeamName})
+		}
+		out[i].added = append(out[i].added, m.Added...)
+		out[i].dropped = append(out[i].dropped, m.Dropped...)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].net() != out[j].net() {
+			return out[i].net() > out[j].net()
+		}
+		return out[i].team < out[j].team
+	})
+	return out
+}
+
+// teamBlock renders one team's aggregated day: team and net on a line, then each
+// added (+) and dropped (-) player on its own indented line beneath.
+func teamBlock(t teamDay) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s%s (%+d)\n", indentTeam, t.team, t.net())
+	for _, p := range t.added {
+		fmt.Fprintf(&b, "%s+%s\n", indentPlayer, p.Name)
+	}
+	for _, p := range t.dropped {
+		fmt.Fprintf(&b, "%s-%s\n", indentPlayer, p.Name)
 	}
 	return b.String()
 }

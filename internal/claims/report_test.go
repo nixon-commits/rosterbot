@@ -142,6 +142,32 @@ func TestFormatPushover_DateHeaderAndBareDrop(t *testing.T) {
 	}
 }
 
+func TestFormatPushover_AggregatesTeamWithinDate(t *testing.T) {
+	jun9 := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	moves := []Move{
+		{TeamName: "Voradakis", TeamID: "v", ProcessedDate: jun9,
+			Dropped: []SidePlayer{{Name: "Jason Alexander", Value: 10}}},
+		{TeamName: "Voradakis", TeamID: "v", ProcessedDate: jun9,
+			Dropped: []SidePlayer{{Name: "Steven Matz", Value: 33}}},
+		{TeamName: "Voradakis", TeamID: "v", ProcessedDate: jun9,
+			Dropped: []SidePlayer{{Name: "Bryan King", Value: 40}}},
+	}
+	msg := FormatPushover(moves)
+
+	// One combined Voradakis header with summed net (-10-33-40 = -83).
+	if n := strings.Count(msg, "Voradakis ("); n != 1 {
+		t.Errorf("want a single Voradakis header, got %d:\n%s", n, msg)
+	}
+	if !strings.Contains(msg, "Voradakis (-83)") {
+		t.Errorf("want combined net 'Voradakis (-83)', got:\n%s", msg)
+	}
+	for _, name := range []string{"-Jason Alexander", "-Steven Matz", "-Bryan King"} {
+		if !strings.Contains(msg, name) {
+			t.Errorf("want %q listed under the team, got:\n%s", name, msg)
+		}
+	}
+}
+
 func TestFormatReport_IncludesDate(t *testing.T) {
 	out := FormatReport(sampleMoves(), 2000, false)
 	if !strings.Contains(out, "Jun 9") {
