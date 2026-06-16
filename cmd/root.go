@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
+	"github.com/nixon-commits/rosterbot/internal/cachestore/s3store"
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/notify"
@@ -73,6 +75,16 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 		return nil, nil, fmt.Errorf("fantrax client: %w", err)
 	}
 	if !noCache {
+		// On Fargate, back the Cache with S3 directly (per-key) instead of
+		// local files, so no bulk .cache sync is needed. STATE_BUCKET is the
+		// task's state bucket; cache entries live under the cache/ prefix.
+		if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
+			st, err := s3store.New(context.Background(), bucket, "cache/")
+			if err != nil {
+				return nil, nil, fmt.Errorf("init s3 cache store: %w", err)
+			}
+			cache.SetDefaultStore(st)
+		}
 		ft.SetCache(cacheDir)
 	}
 	// Surface stale-cache fallbacks (fresh fetch failed, serving cached copy)
