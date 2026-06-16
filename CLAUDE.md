@@ -172,6 +172,17 @@ When adding new commands, flags, env vars, or changing architecture, update `REA
 
 ## GHA
 
+> **SUPERSEDED (2026-06-16).** The GitHub Actions workflows have been **retired** and deleted.
+> The scheduled jobs now run as **ECS Fargate tasks** launched by **EventBridge** schedules in
+> AWS account `476646938644` / `us-west-1`, defined in AWS CDK (Go) under `infra/`. Secrets live
+> in **SSM Parameter Store** (`/rosterbot/*`), state syncs to **S3** (`cache/`/`session/`/`claims/`
+> prefixes) via `entrypoint.sh`, and the recap site is served from **CloudFront**. See
+> **`docs/aws-deployment.md`** for operations, the EventBridge schedule mapping, image builds
+> (CodeBuild, gated `enableBuild`), the schedule gate (`schedulesEnabled`), and cutover/rollback.
+> The `claims` cursor is relocated to `.waivers/last-claims.json` via `CLAIMS_CURSOR_PATH` so it
+> rides the single-writer S3 `claims/` prefix. The section below is retained as historical
+> reference for how the jobs ran on GHA.
+
 **Auth in GHA** — all workflows install Chrome via `browser-actions/setup-chrome@v2` and restore/save `.fantrax-cache/` under the shared `fantrax-session-` cache key prefix. The first workflow that runs each day does a full chromedp browser login (15–20 s) and writes the session to the GHA cache; subsequent workflows restore the cached cookie and skip the browser. No `FANTRAX_COOKIES` secret is needed or used — the env var short-circuits the library's fallback chain and bypasses the browser login.
 
 `.github/workflows/lineup.yml` runs hourly during the active window — `cron: '0 14-23 * * *'` (6am–3pm PT) and `'0 0-3 * * *'` (4pm–7pm PT) — plus `workflow_dispatch`. Requires six repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`. Optional: `GS_MAX` (game-start max), `GS_MIN` (game-start min). Invokes `optimize --matchup --archive-projections` so each run also writes `.backtest/snapshots/<YYYY-MM-DD>.json`. Uses `actions/cache@v4` with key prefix `projections-` and a multi-path config (`.cache` + `.backtest/snapshots`), so snapshots persist across runs and accumulate one per day.
