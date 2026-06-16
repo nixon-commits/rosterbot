@@ -2,6 +2,8 @@ package main
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfront"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfrontorigins"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsec2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsecr"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsecs"
@@ -114,6 +116,18 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 
 	awscdk.NewCfnOutput(stack, jsii.String("ClusterName"), &awscdk.CfnOutputProps{Value: cluster.ClusterName()})
 	awscdk.NewCfnOutput(stack, jsii.String("TaskDefArn"), &awscdk.CfnOutputProps{Value: taskDef.TaskDefinitionArn()})
+
+	// --- Phase 5: CloudFront in front of the recap site bucket (HTTPS + CDN) ---
+	dist := awscloudfront.NewDistribution(stack, jsii.String("SiteCdn"), &awscloudfront.DistributionProps{
+		DefaultRootObject: jsii.String("index.html"),
+		DefaultBehavior: &awscloudfront.BehaviorOptions{
+			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(siteBucket, nil),
+			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
+		},
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("SiteUrl"), &awscdk.CfnOutputProps{
+		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dist.DistributionDomainName()}),
+	})
 
 	// --- Phase 4: schedules (1:1 port of the 8 GHA workflows) ---
 	// All crons are UTC (EventBridge rules are UTC-only). claims is offset +20m
