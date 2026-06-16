@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/claims"
@@ -43,6 +44,7 @@ func runClaims(cmd *cobra.Command, args []string) error {
 
 	opts := claims.Options{
 		CacheDir:         ".cache",
+		CursorPath:       resolveCursorPath(os.Getenv("CLAIMS_CURSOR_PATH")),
 		DryRun:           cfg.DryRun,
 		NoSignals:        claimsNoSignals,
 		Since:            since,
