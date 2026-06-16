@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestFSStore_RoundTripAndSuffix(t *testing.T) {
@@ -28,5 +29,26 @@ func TestFSStore_RoundTripAndSuffix(t *testing.T) {
 	}
 	if err := s.Remove("k"); err != nil {
 		t.Fatalf("remove missing should be nil: %v", err)
+	}
+}
+
+func TestSetDefaultStore_RoutesAllCaches(t *testing.T) {
+	mem := NewMemStore()
+	SetDefaultStore(mem)
+	t.Cleanup(func() { SetDefaultStore(nil) })
+
+	// dir is ignored when a default store is set.
+	c := New[string]("/nonexistent-dir", time.Hour)
+	if _, err := c.Get("k", func() (string, error) { return "v", nil }); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if _, found, _ := mem.Get("k"); !found {
+		t.Fatal("expected value written to the default MemStore, not the filesystem")
+	}
+
+	// Cache hit comes back from the store without calling fetch.
+	got, err := c.Get("k", func() (string, error) { return "SHOULD-NOT-RUN", nil })
+	if err != nil || got != "v" {
+		t.Fatalf("hit: got %q err %v", got, err)
 	}
 }

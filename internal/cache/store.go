@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // Store is the byte-level storage seam behind the Cache. FileCache[T] owns the
@@ -58,4 +59,35 @@ func storeForDir(dir string) Store {
 		return defaultStore
 	}
 	return fsStore{root: dir}
+}
+
+// MemStore is an in-memory Store for hermetic tests in this and other packages.
+type MemStore struct {
+	mu sync.Mutex
+	m  map[string][]byte
+}
+
+func NewMemStore() *MemStore { return &MemStore{m: map[string][]byte{}} }
+
+func (s *MemStore) Get(key string) ([]byte, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.m[key]
+	return b, ok, nil
+}
+
+func (s *MemStore) Put(key string, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]byte, len(data))
+	copy(cp, data)
+	s.m[key] = cp
+	return nil
+}
+
+func (s *MemStore) Remove(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, key)
+	return nil
 }
