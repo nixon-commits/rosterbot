@@ -1,0 +1,8 @@
+.cache
+.waivers
+.fantrax-cache
+.backtest
+dist
+rosterbot
+infra/cdk.out
+.git
