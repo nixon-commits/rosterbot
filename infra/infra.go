@@ -5,6 +5,8 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsec2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsecr"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsecs"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
@@ -112,6 +114,48 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 
 	awscdk.NewCfnOutput(stack, jsii.String("ClusterName"), &awscdk.CfnOutputProps{Value: cluster.ClusterName()})
 	awscdk.NewCfnOutput(stack, jsii.String("TaskDefArn"), &awscdk.CfnOutputProps{Value: taskDef.TaskDefinitionArn()})
+
+	// --- Phase 4: schedules (1:1 port of the 8 GHA workflows) ---
+	// All crons are UTC (EventBridge rules are UTC-only). claims is offset +20m
+	// from transactions so their shared cache/ write-back doesn't race.
+	//
+	// Rules are DISABLED by default so AWS doesn't double-fire alongside the
+	// still-live GitHub Actions. At cutover (Phase 6) deploy with
+	// `-c schedulesEnabled=true` the same moment the GHA workflows are retired.
+	schedulesEnabled := false
+	if v, ok := stack.Node().TryGetContext(jsii.String("schedulesEnabled")).(string); ok && v == "true" {
+		schedulesEnabled = true
+	}
+	type job struct {
+		id, cron string
+		cmd      *[]*string
+	}
+	jobs := []job{
+		{"Lineup", "cron(0 14-23,0-3 * * ? *)", jsii.Strings("optimize", "--matchup", "--archive-projections")},
+		{"Prospects", "cron(0 11 * * ? *)", jsii.Strings("prospects")},
+		{"GsCheck", "cron(0 12 * * ? *)", jsii.Strings("gs-check")},
+		{"Waivers", "cron(0 13 * * ? *)", jsii.Strings("waivers")},
+		{"Transactions", "cron(0 14 * * ? *)", jsii.Strings("transactions")},
+		{"Claims", "cron(20 14 * * ? *)", jsii.Strings("claims")},
+		{"Recap", "cron(0 11 ? * MON *)", jsii.Strings("recap-site", "--out", "dist")},
+		{"Backtest", "cron(0 12 ? * MON *)", jsii.Strings("backtest")},
+	}
+	for _, j := range jobs {
+		r := awsevents.NewRule(stack, jsii.String(j.id+"Rule"), &awsevents.RuleProps{
+			Schedule: awsevents.Schedule_Expression(jsii.String(j.cron)),
+			Enabled:  jsii.Bool(schedulesEnabled),
+		})
+		r.AddTarget(awseventstargets.NewEcsTask(&awseventstargets.EcsTaskProps{
+			Cluster:         cluster,
+			TaskDefinition:  taskDef,
+			AssignPublicIp:  jsii.Bool(true),
+			SubnetSelection: &awsec2.SubnetSelection{SubnetType: awsec2.SubnetType_PUBLIC},
+			ContainerOverrides: &[]*awseventstargets.ContainerOverride{{
+				ContainerName: jsii.String("bot"),
+				Command:       j.cmd,
+			}},
+		}))
+	}
 
 	return stack
 }
