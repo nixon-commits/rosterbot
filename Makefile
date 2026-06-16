@@ -20,6 +20,8 @@ dry-run:
 # upstream APIs. Pair with `run-all` to compare cold vs warm timings:
 #   make clean-cache && make run-all   # cold pass, all cache misses
 #   make run-all                       # warm pass, mostly cache hits
+# Clears only the LOCAL filesystem cache. On AWS the cache lives in S3 (cache/
+# prefix) — clear it with: aws s3 rm s3://<state-bucket>/cache/ --recursive
 clean-cache:
 	rm -rf .cache/
 
