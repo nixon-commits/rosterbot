@@ -13,6 +13,10 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
   `schedulesEnabled` CDK context flag; **disabled by default** so AWS doesn't double-fire
   while the GHA workflows still exist.
 - **S3 state bucket** (`infrastack-statebucket…`) — prefixes `cache/`, `session/`, `claims/`.
+  The `cache/` prefix is written **per-key, live by the bot** via `cache.Store` (the s3 adapter,
+  selected when `STATE_BUCKET` is set) — not bulk-synced by the entrypoint. `session/` (chromedp
+  cookie) and `claims/` (ledger+cursor) are still bulk-synced by `entrypoint.sh`. Clear the cache
+  with `aws s3 rm s3://<state-bucket>/cache/ --recursive`.
 - **S3 site bucket** + **CloudFront** (`https://d3g6t1hhf4o9r6.cloudfront.net`) — recap site.
 - **SSM Parameter Store** (`/rosterbot/*`, SecureString) — all secrets, injected as task env.
 - **CodeBuild** — builds + pushes the image to ECR on push to `main`. Gated by `enableBuild`.

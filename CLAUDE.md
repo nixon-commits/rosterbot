@@ -55,7 +55,7 @@ mlb schedule    ──┼──► optimizer ──► apply lineup (or dry-run 
 fangraphs proj  ──┘
 ```
 
-**`internal/cache`** — generic TTL file cache using Go generics (`FileCache[T]`). Stores JSON in `.cache/` (flat — no subdirs) with a `fetched_at` timestamp envelope. `Get(key, fetchFunc)` returns cached data if fresh, otherwise calls `fetchFunc`, saves, and returns. All I/O errors are non-fatal. TTL of 0 bypasses cache (`--no-cache` flag).
+**`internal/cache`** — generic TTL cache using Go generics (`FileCache[T]`). Stores JSON with a `fetched_at` timestamp envelope behind a byte-level **`Store`** seam. `Get(key, fetchFunc)` returns cached data if fresh, otherwise calls `fetchFunc`, saves, and returns. All I/O errors are non-fatal. TTL of 0 bypasses cache (`--no-cache` flag). Storage is pluggable: `fsStore` (default; `<dir>/<key>.json` flat under `.cache/`) and `MemStore` (tests) live in the zero-dep leaf; the S3 adapter `s3store` (`internal/cachestore/s3store`, aws-sdk-go-v2) lives in its own package so the AWS SDK stays out of the leaf. `cache.SetDefaultStore(store)` swaps storage process-wide for every `FileCache` without touching the ~30 `New[T](dir, ttl)` call sites (mirrors the `Verbose`/`Notify` package globals). On AWS, `cmd` calls `SetDefaultStore(s3store…)` keyed under the `cache/` prefix when `STATE_BUCKET` is set, so the bot reads/writes the cache per-key live to S3 and `entrypoint.sh` no longer syncs `cache/`. See `docs/adr/0001-s3-not-db-for-cache.md`.
 
 **Caching at a glance**: three TTL tiers map to three mutability classes.
 
