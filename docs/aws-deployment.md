@@ -107,8 +107,9 @@ hand-run on Fargate and verified (compare their Pushover output to the GHA twins
 4. **Update docs** — point `README.md` / `CLAUDE.md` GHA sections at this runbook.
 5. Confirm the first scheduled AWS run of each job fires and notifies as expected.
 
-> Keep `cdk deploy` (no `-c` flags) as the safe default while iterating — it leaves schedules
-> disabled and CodeBuild absent. Only the cutover command turns things live.
+> Post-cutover, schedules are **ENABLED by default** — a plain `cdk deploy` keeps the 8 jobs
+> running. To pause everything, deploy with `-c schedulesEnabled=false` (explicit kill switch).
+> CodeBuild stays absent unless `-c enableBuild=true`.
 
 ## Cost control while idle
 

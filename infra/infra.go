@@ -162,12 +162,12 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// All crons are UTC (EventBridge rules are UTC-only). claims is offset +20m
 	// from transactions so their shared cache/ write-back doesn't race.
 	//
-	// Rules are DISABLED by default so AWS doesn't double-fire alongside the
-	// still-live GitHub Actions. At cutover (Phase 6) deploy with
-	// `-c schedulesEnabled=true` the same moment the GHA workflows are retired.
-	schedulesEnabled := false
-	if v, ok := stack.Node().TryGetContext(jsii.String("schedulesEnabled")).(string); ok && v == "true" {
-		schedulesEnabled = true
+	// Post-cutover (2026-06-16) the schedules are the live driver, so they are
+	// ENABLED by default — a routine `cdk deploy` keeps them running. Pass
+	// `-c schedulesEnabled=false` as an explicit kill switch to pause all jobs.
+	schedulesEnabled := true
+	if v, ok := stack.Node().TryGetContext(jsii.String("schedulesEnabled")).(string); ok && v == "false" {
+		schedulesEnabled = false
 	}
 	type job struct {
 		id, cron string
