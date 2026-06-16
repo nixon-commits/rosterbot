@@ -35,3 +35,13 @@ _Avoid_: roster spot, lineup position.
 **Eligibility Bucket**:
 A reporting grouping a hitter falls into by eligibility precedence C > INF > OF > UT (the scarcest defensive role wins); pitchers bucket by role (SP/RP). Used by the backtest's per-position accuracy table.
 _Avoid_: position group, category.
+
+### Storage
+
+**Cache**:
+Ephemeral, TTL-evicted, regenerable upstream data behind `cache.FileCache[T]` — FanGraphs projections, Fantrax rosters, MLB schedules, Savant CSVs. Safe to wipe anytime; a miss just re-fetches. Distinct from durable history (see _Analysis Store_, not yet built).
+_Avoid_: store (the bytes layer is the Store), datastore, persistence.
+
+**Store**:
+The storage seam behind the Cache: a byte get/put/remove-by-key interface. `FileCache[T]` keeps the deep behaviour (TTL, envelope, stale-fallback, Notify) and delegates raw bytes to a Store adapter — `fsStore` (local `.cache/`), `s3Store` (S3 `cache/` prefix, in its own package so the AWS SDK stays out of the leaf), `memStore` (tests). Selected by `cmd` from config; `fantrax.Client` holds the interface, not an adapter.
+_Avoid_: backend, driver, provider, repository.
