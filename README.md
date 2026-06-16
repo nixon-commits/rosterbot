@@ -191,7 +191,12 @@ needs to do a full browser login.
 
 ## Automation
 
-GitHub Actions workflows run on daily schedules:
+> **Now runs on AWS.** As of 2026-06-16 the scheduled jobs run as **ECS Fargate tasks**
+> launched by **EventBridge** schedules (account `476646938644`, `us-west-1`), not GitHub
+> Actions. Infra is AWS CDK (Go) under `infra/`; operations, schedules, and the cutover/
+> rollback procedure live in **[`docs/aws-deployment.md`](docs/aws-deployment.md)**. The
+> recap site is served from CloudFront. The table below documents the original schedule
+> cadence, now mirrored 1:1 by the EventBridge rules.
 
 | Workflow | Schedule | Command |
 |---|---|---|
