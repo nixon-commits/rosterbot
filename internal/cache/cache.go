@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -28,45 +27,37 @@ var Notify func(title, message string)
 
 // FileCache provides TTL-based file caching for any JSON-serializable type.
 type FileCache[T any] struct {
-	dir string
-	ttl time.Duration
+	store Store
+	ttl   time.Duration
 }
 
 // New creates a FileCache that stores entries under dir with the given TTL.
 // A TTL of 0 means the cache is always bypassed (useful for --no-cache).
 func New[T any](dir string, ttl time.Duration) *FileCache[T] {
-	return &FileCache[T]{dir: dir, ttl: ttl}
+	return &FileCache[T]{store: storeForDir(dir), ttl: ttl}
 }
 
 // Get returns cached data if fresh, otherwise calls fetch, caches the result, and returns it.
 // Cache I/O errors are non-fatal: they log to stderr and fall through to fetch.
 func (c *FileCache[T]) Get(key string, fetch func() (T, error)) (T, error) {
-	path := c.path(key)
-
-	// Try loading from cache (skip if TTL is 0).
 	if c.ttl > 0 {
-		if data, ok := c.load(path); ok {
+		if data, ok := c.load(key); ok {
 			if Verbose {
 				fmt.Fprintf(os.Stderr, "cache hit: %s\n", key)
 			}
 			return data, nil
 		}
 		if Verbose {
-			fmt.Fprintf(os.Stderr, "cache miss: %s (path=%s)\n", key, path)
+			fmt.Fprintf(os.Stderr, "cache miss: %s\n", key)
 		}
 	}
-
-	// Cache miss or expired — fetch fresh data.
 	data, err := fetch()
 	if err != nil {
 		return data, err
 	}
-
-	// Save to cache (non-fatal on failure).
-	if err := c.save(path, data); err != nil {
+	if err := c.save(key, data); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to save cache %s: %v\n", key, err)
 	}
-
 	return data, nil
 }
 
@@ -75,18 +66,16 @@ func (c *FileCache[T]) Get(key string, fetch func() (T, error)) (T, error) {
 // exists, so a transient upstream outage never causes a hard error.
 // Only errors if the fetch fails AND there is no cached file at all.
 func (c *FileCache[T]) GetWithStaleFallback(key string, fetch func() (T, error)) (T, error) {
-	path := c.path(key)
-
 	data, err := fetch()
 	if err == nil {
-		if saveErr := c.save(path, data); saveErr != nil {
+		if saveErr := c.save(key, data); saveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to save cache %s: %v\n", key, saveErr)
 		}
 		return data, nil
 	}
 
 	// Fresh fetch failed — serve any stale cached value.
-	if stale, ok := c.loadAny(path); ok {
+	if stale, ok := c.loadAny(key); ok {
 		fmt.Fprintf(os.Stderr, "⚠️ stale cache: %s (%v)\n", key, err)
 		if Notify != nil {
 			Notify("⚠️ Stale cache", fmt.Sprintf("Serving stale %s", key))
@@ -97,11 +86,11 @@ func (c *FileCache[T]) GetWithStaleFallback(key string, fetch func() (T, error))
 	return data, err
 }
 
-// loadAny reads a cached file ignoring TTL expiry.
-func (c *FileCache[T]) loadAny(path string) (T, bool) {
+// loadAny reads a cached entry ignoring TTL expiry.
+func (c *FileCache[T]) loadAny(key string) (T, bool) {
 	var zero T
-	raw, err := os.ReadFile(path)
-	if err != nil {
+	raw, found, err := c.store.Get(key)
+	if err != nil || !found {
 		return zero, false
 	}
 	var env envelope[T]
@@ -113,11 +102,7 @@ func (c *FileCache[T]) loadAny(path string) (T, bool) {
 
 // Invalidate removes a single cached entry.
 func (c *FileCache[T]) Invalidate(key string) error {
-	err := os.Remove(c.path(key))
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
+	return c.store.Remove(key)
 }
 
 // InvalidateAll removes the entire cache directory.
@@ -134,45 +119,28 @@ func Key(parts ...string) string {
 	return strings.Join(parts, "-")
 }
 
-func (c *FileCache[T]) path(key string) string {
-	return filepath.Join(c.dir, key+".json")
-}
-
-func (c *FileCache[T]) load(path string) (T, bool) {
+func (c *FileCache[T]) load(key string) (T, bool) {
 	var zero T
-
-	data, err := os.ReadFile(path)
-	if err != nil {
+	raw, found, err := c.store.Get(key)
+	if err != nil || !found {
 		return zero, false
 	}
-
 	var env envelope[T]
-	if err := json.Unmarshal(data, &env); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: corrupt cache file %s: %v\n", path, err)
+	if err := json.Unmarshal(raw, &env); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: corrupt cache entry %s: %v\n", key, err)
 		return zero, false
 	}
-
 	if time.Since(env.FetchedAt) > c.ttl {
 		return zero, false
 	}
-
 	return env.Data, true
 }
 
-func (c *FileCache[T]) save(path string, data T) error {
-	if err := os.MkdirAll(c.dir, 0o755); err != nil {
-		return err
-	}
-
-	env := envelope[T]{
-		FetchedAt: time.Now(),
-		Data:      data,
-	}
-
+func (c *FileCache[T]) save(key string, data T) error {
+	env := envelope[T]{FetchedAt: time.Now(), Data: data}
 	b, err := json.MarshalIndent(env, "", "  ")
 	if err != nil {
 		return err
 	}
-
-	return os.WriteFile(path, b, 0o644)
+	return c.store.Put(key, b)
 }
