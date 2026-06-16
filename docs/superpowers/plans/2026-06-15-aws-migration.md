@@ -10,6 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-15-aws-migration-design.md`
 **AWS account:** `476646938644` (do NOT hardcode in committed files; pass via env/CDK context).
+**Region:** `us-west-1` (N. California). Bootstrap with `cdk bootstrap aws://476646938644/us-west-1`. Note: CloudFront is global and we use its default `*.cloudfront.net` domain, so no us-east-1 ACM cert is needed.
 
 **Phasing:** Six phases, each independently verifiable. Phase 0 is local (no AWS). Phases 1–5 each end in a working `cdk deploy` + verification. Phase 6 is cutover. Keep GHA workflows running until Phase 6.
 
@@ -352,7 +353,7 @@ Expected: `CREATE_COMPLETE`; outputs print `RepoUri`, `StateBucketName`, `SiteBu
 version: 0.2
 env:
   variables:
-    AWS_DEFAULT_REGION: us-east-1
+    AWS_DEFAULT_REGION: us-west-1
 phases:
   pre_build:
     commands:
@@ -491,14 +492,14 @@ container := taskDef.AddContainer(jsii.String("bot"), &awsecs.ContainerDefinitio
 _ = container
 ```
 
-> `Vpc_FromLookup` requires the account/region be set on the stack env (not env-agnostic). Set `Env` in the `App`/stack props to account `476646938644`, region `us-east-1`.
+> `Vpc_FromLookup` requires the account/region be set on the stack env (not env-agnostic). Set `Env` in the `App`/stack props to account `476646938644`, region `us-west-1`.
 
 - [ ] **Step 2: Set stack env**
 
 In the stack props (where the stack is instantiated in `infra.go`'s `main`), set:
 
 ```go
-Env: &awscdk.Environment{Account: jsii.String("476646938644"), Region: jsii.String("us-east-1")},
+Env: &awscdk.Environment{Account: jsii.String("476646938644"), Region: jsii.String("us-west-1")},
 ```
 
 - [ ] **Step 3: Synth + deploy**
