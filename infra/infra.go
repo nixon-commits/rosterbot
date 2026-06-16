@@ -4,6 +4,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfront"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfrontorigins"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awscodebuild"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsec2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsecr"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsecs"
@@ -128,6 +129,34 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	awscdk.NewCfnOutput(stack, jsii.String("SiteUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dist.DistributionDomainName()}),
 	})
+
+	// --- Phase 2: CodeBuild (build + push image to ECR on push to main) ---
+	// Gated: only instantiated with `-c enableBuild=true`, because the GitHub
+	// webhook source requires a one-time source credential (GitHub OAuth/PAT) to
+	// exist in the account first. Until then the stack deploys without it.
+	if v, ok := stack.Node().TryGetContext(jsii.String("enableBuild")).(string); ok && v == "true" {
+		project := awscodebuild.NewProject(stack, jsii.String("Build"), &awscodebuild.ProjectProps{
+			Source: awscodebuild.Source_GitHub(&awscodebuild.GitHubSourceProps{
+				Owner:   jsii.String("nixon-commits"),
+				Repo:    jsii.String("rosterbot"),
+				Webhook: jsii.Bool(true),
+				WebhookFilters: &[]awscodebuild.FilterGroup{
+					awscodebuild.FilterGroup_InEventOf(awscodebuild.EventAction_PUSH).
+						AndBranchIs(jsii.String("main")),
+				},
+			}),
+			Environment: &awscodebuild.BuildEnvironment{
+				// ARM build host so the image matches the Graviton task definition.
+				BuildImage: awscodebuild.LinuxArmBuildImage_AMAZON_LINUX_2_STANDARD_3_0(),
+				Privileged: jsii.Bool(true), // docker build
+			},
+			EnvironmentVariables: &map[string]*awscodebuild.BuildEnvironmentVariable{
+				"ECR_URI": {Value: repo.RepositoryUri()},
+			},
+		})
+		repo.GrantPullPush(project)
+		awscdk.NewCfnOutput(stack, jsii.String("BuildProject"), &awscdk.CfnOutputProps{Value: project.ProjectName()})
+	}
 
 	// --- Phase 4: schedules (1:1 port of the 8 GHA workflows) ---
 	// All crons are UTC (EventBridge rules are UTC-only). claims is offset +20m

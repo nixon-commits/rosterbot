@@ -1,0 +1,16 @@
+version: 0.2
+# Built by AWS CodeBuild on push to main; pushes the image to ECR.
+# ECR_URI is injected by the CodeBuild project (CDK). The build host is ARM64
+# so the image matches the Fargate ARM64 (Graviton) task definition.
+phases:
+  pre_build:
+    commands:
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_URI"
+      - TAG="$(echo "$CODEBUILD_RESOLVED_SOURCE_VERSION" | cut -c1-12)"
+  build:
+    commands:
+      - docker build -t "$ECR_URI:latest" -t "$ECR_URI:$TAG" .
+  post_build:
+    commands:
+      - docker push "$ECR_URI:latest"
+      - docker push "$ECR_URI:$TAG"
