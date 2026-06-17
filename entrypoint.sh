@@ -29,8 +29,13 @@ sync_up() {
 # timestamp when metadata is unavailable (e.g. local runs).
 run_id() {
   if [ -n "${ECS_CONTAINER_METADATA_URI_V4:-}" ]; then
-    arn=$(curl -s "$ECS_CONTAINER_METADATA_URI_V4/task" 2>/dev/null \
-      | sed -n 's/.*"TaskARN":"\([^"]*\)".*/\1/p')
+    meta=""
+    if command -v curl >/dev/null 2>&1; then
+      meta=$(curl -s "$ECS_CONTAINER_METADATA_URI_V4/task" 2>/dev/null)
+    elif command -v python3 >/dev/null 2>&1; then
+      meta=$(python3 -c "import urllib.request,os,sys; sys.stdout.write(urllib.request.urlopen(os.environ['ECS_CONTAINER_METADATA_URI_V4']+'/task').read().decode())" 2>/dev/null)
+    fi
+    arn=$(printf '%s' "$meta" | sed -n 's/.*"TaskARN":"\([^"]*\)".*/\1/p')
     if [ -n "$arn" ]; then
       echo "${arn##*/}"
       return

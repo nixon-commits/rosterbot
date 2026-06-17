@@ -9,7 +9,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/rosterbot .
 # --- runtime stage ---
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      chromium ca-certificates awscli tini \
+      chromium ca-certificates awscli tini curl \
  && rm -rf /var/lib/apt/lists/*
 ENV CHROME_BIN=/usr/bin/chromium
 WORKDIR /app
