@@ -12,7 +12,9 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
 - **EventBridge rules** (×8) — 1:1 port of the old GitHub Actions crons (UTC). Gated by the
   `schedulesEnabled` CDK context flag; **disabled by default** so AWS doesn't double-fire
   while the GHA workflows still exist.
-- **S3 state bucket** (`infrastack-statebucket…`) — prefixes `cache/`, `session/`, `claims/`.
+- **S3 state bucket** (`infrastack-statebucket…`) — prefixes `cache/`, `session/`, `claims/`, `backtest/` (projection snapshots, synced by the entrypoint), `analysis/grades/` (Graded Snapshots, NDJSON, written by `grade`), `athena-results/`.
+- **Analysis Store** — Athena workgroup `rosterbot`, Glue table `rosterbot_analysis.grades` (partition projection on `dt`, no crawler). Query model accuracy with SQL, e.g. `SELECT bucket, avg(abs(diff)) mae FROM rosterbot_analysis.grades WHERE dt >= '2026-06-01' GROUP BY bucket;`.
+- **Retention** — the state bucket has versioning **enabled**, so `cache/` overwrites are retained as noncurrent versions (cache history). `backtest/` and `analysis/` are append-only and never expired. Nothing in the stack deletes analysis data; a cost-control lifecycle rule to expire old noncurrent `cache/` versions can be added later if needed.
   The `cache/` prefix is written **per-key, live by the bot** via `cache.Store` (the s3 adapter,
   selected when `STATE_BUCKET` is set) — not bulk-synced by the entrypoint. `session/` (chromedp
   cookie) and `claims/` (ledger+cursor) are still bulk-synced by `entrypoint.sh`. Clear the cache

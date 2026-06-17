@@ -207,6 +207,18 @@ needs to do a full browser login.
 | `waivers.yml` | 9am ET daily | `waivers` (Statcast-driven free-agent picks) |
 | `claims.yml` | 10am ET daily | `claims` (daily league-wide waiver/FA claims recap) |
 | `recap.yml` | 7am ET Mondays | `recap-site` (builds every completed week + index, deploys to GitHub Pages) |
+| `grade` (daily 13:30 UTC) | daily | `grade` (writes Graded Snapshots to the Analysis Store for model auditing) |
+
+### Model auditing (Analysis Store)
+
+The daily `grade` job materializes projected-vs-actual rows to S3 as NDJSON, queryable in Athena (workgroup `rosterbot`, table `rosterbot_analysis.grades`). Example — projection accuracy by position since June:
+
+```sql
+SELECT bucket, count(*) n, avg(abs(diff)) mae, avg(diff) bias
+FROM rosterbot_analysis.grades
+WHERE dt >= '2026-06-01'
+GROUP BY bucket ORDER BY mae DESC;
+```
 
 All workflows support `workflow_dispatch` for manual triggering. Required repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
 

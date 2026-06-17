@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsathena"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfront"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfrontorigins"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscodebuild"
@@ -10,6 +11,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsecs"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsglue"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
@@ -158,6 +160,59 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		awscdk.NewCfnOutput(stack, jsii.String("BuildProject"), &awscdk.CfnOutputProps{Value: project.ProjectName()})
 	}
 
+	// --- Analysis Store: Glue table over analysis/grades + Athena workgroup ---
+	glueDB := awsglue.NewCfnDatabase(stack, jsii.String("AnalysisDB"), &awsglue.CfnDatabaseProps{
+		CatalogId:     stack.Account(),
+		DatabaseInput: &awsglue.CfnDatabase_DatabaseInputProperty{Name: jsii.String("rosterbot_analysis")},
+	})
+
+	gradesLoc := awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("s3://"), stateBucket.BucketName(), jsii.String("/analysis/grades/")})
+	col := func(name, typ string) interface{} {
+		return &awsglue.CfnTable_ColumnProperty{Name: jsii.String(name), Type: jsii.String(typ)}
+	}
+	gradesTable := awsglue.NewCfnTable(stack, jsii.String("GradesTable"), &awsglue.CfnTableProps{
+		CatalogId:    stack.Account(),
+		DatabaseName: jsii.String("rosterbot_analysis"),
+		TableInput: &awsglue.CfnTable_TableInputProperty{
+			Name:          jsii.String("grades"),
+			TableType:     jsii.String("EXTERNAL_TABLE"),
+			PartitionKeys: &[]interface{}{col("dt", "string")},
+			Parameters: &map[string]*string{
+				"classification":              jsii.String("json"),
+				"projection.enabled":          jsii.String("true"),
+				"projection.dt.type":          jsii.String("date"),
+				"projection.dt.format":        jsii.String("yyyy-MM-dd"),
+				"projection.dt.range":         jsii.String("2026-01-01,NOW"),
+				"projection.dt.interval":      jsii.String("1"),
+				"projection.dt.interval.unit": jsii.String("DAYS"),
+				"storage.location.template":   awscdk.Fn_Join(jsii.String(""), &[]*string{gradesLoc, jsii.String("dt=${dt}/")}),
+			},
+			StorageDescriptor: &awsglue.CfnTable_StorageDescriptorProperty{
+				Location:     gradesLoc,
+				InputFormat:  jsii.String("org.apache.hadoop.mapred.TextInputFormat"),
+				OutputFormat: jsii.String("org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"),
+				SerdeInfo: &awsglue.CfnTable_SerdeInfoProperty{
+					SerializationLibrary: jsii.String("org.openx.data.jsonserde.JsonSerDe"),
+				},
+				Columns: &[]interface{}{
+					col("player_id", "string"), col("name", "string"), col("mlb_team", "string"),
+					col("projected", "double"), col("actual", "double"), col("diff", "double"),
+					col("bucket", "string"), col("is_pitcher", "boolean"), col("source", "string"),
+				},
+			},
+		},
+	})
+	gradesTable.AddDependency(glueDB)
+
+	awsathena.NewCfnWorkGroup(stack, jsii.String("AnalysisWG"), &awsathena.CfnWorkGroupProps{
+		Name: jsii.String("rosterbot"),
+		WorkGroupConfiguration: &awsathena.CfnWorkGroup_WorkGroupConfigurationProperty{
+			ResultConfiguration: &awsathena.CfnWorkGroup_ResultConfigurationProperty{
+				OutputLocation: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("s3://"), stateBucket.BucketName(), jsii.String("/athena-results/")}),
+			},
+		},
+	})
+
 	// --- Phase 4: schedules (1:1 port of the 8 GHA workflows) ---
 	// All crons are UTC (EventBridge rules are UTC-only). claims is offset +20m
 	// from transactions so their shared cache/ write-back doesn't race.
@@ -182,6 +237,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		{"Claims", "cron(20 14 * * ? *)", jsii.Strings("claims")},
 		{"Recap", "cron(0 11 ? * MON *)", jsii.Strings("recap-site", "--out", "dist")},
 		{"Backtest", "cron(0 12 ? * MON *)", jsii.Strings("backtest")},
+		{"Grade", "cron(30 13 * * ? *)", jsii.Strings("grade")},
 	}
 	for _, j := range jobs {
 		r := awsevents.NewRule(stack, jsii.String(j.id+"Rule"), &awsevents.RuleProps{
