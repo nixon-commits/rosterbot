@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -9,7 +10,10 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/backtest"
+	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 	"github.com/nixon-commits/rosterbot/internal/progress"
@@ -32,6 +36,7 @@ var (
 	showPipeline       bool
 	archiveProjections bool
 	snapshotFlag       bool
+	publishLineupFlag  bool
 
 	// projDisplayName maps projection system flag values to display-friendly names.
 	projDisplayName = map[string]string{
@@ -59,6 +64,7 @@ func init() {
 	optimizeCmd.Flags().BoolVar(&showPipeline, "pipeline", false, "show full hitter adjustment pipeline detail")
 	optimizeCmd.Flags().BoolVar(&snapshotFlag, "snapshot", false, "force-write per-date projection snapshots to .backtest/snapshots/ even in --dry-run (non-dry-run runs always write)")
 	optimizeCmd.Flags().BoolVar(&archiveProjections, "archive-projections", false, "deprecated alias for --snapshot (snapshots are written by default on non-dry-run runs; also enabled by BACKTEST_ARCHIVE=1)")
+	optimizeCmd.Flags().BoolVar(&publishLineupFlag, "publish-lineup", false, "write today's read-only API lineup JSON (.lineup/ locally, or s3://$STATE_BUCKET/lineup/) even in --dry-run; non-dry-run runs always publish")
 	rootCmd.AddCommand(optimizeCmd)
 }
 
@@ -855,6 +861,22 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// --- Publish today's lineup for the read-only HTTP API ---
+	// The iOS thin client reads this precomputed JSON; the hourly non-dry-run
+	// run keeps it fresh. Dry-run only publishes when --publish-lineup is set
+	// (for local curl testing without mutating the real roster).
+	if !cfg.DryRun || publishLineupFlag {
+		for _, dr := range results {
+			if !dr.isToday {
+				continue
+			}
+			if err := publishLineup(dr, cfg, hitterSlots, pitcherSlots); err != nil {
+				fmt.Printf("  ⚠ lineup publish failed: %v\n", err)
+			}
+			break
+		}
+	}
+
 	// --- Sequential print + apply ---
 	for _, dr := range results {
 		for _, w := range dr.warnings {
@@ -1243,6 +1265,44 @@ func sendOptimizeNotify(userKey, apiToken, message string) {
 	if err := notify.SendPushover(userKey, apiToken, "Fantrax Lineup", message); err != nil {
 		log.Printf("WARNING: pushover notification failed: %v", err)
 	}
+}
+
+// publishLineup serializes today's optimized lineup into the read-only API's
+// wire shape and writes it to object storage — S3 (lineup/ prefix) when running
+// on Fargate (STATE_BUCKET set), otherwise the local .lineup/ dir. It publishes
+// under both "today" (the alias the endpoint serves) and the date string.
+func publishLineup(dr dateResult, cfg *config.Config, hitterSlots, pitcherSlots []fantrax.Slot) error {
+	resp := lineupapi.Build(lineupapi.Inputs{
+		Date:         dr.date.Format("2006-01-02"),
+		LeagueID:     cfg.LeagueID,
+		TeamID:       cfg.TeamID,
+		HitterSlots:  hitterSlots,
+		PitcherSlots: pitcherSlots,
+		Hitters:      dr.hitterResult.Scored,
+		Pitchers:     dr.pitcherResult.Scored,
+		BenchedToday: dr.benchedToday,
+		DataWarnings: dr.warnings,
+	})
+	data, err := lineupapi.Marshal(resp)
+	if err != nil {
+		return err
+	}
+
+	var pub lineupapi.Publisher
+	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
+		p, err := s3lineup.New(context.Background(), bucket, "lineup/")
+		if err != nil {
+			return err
+		}
+		pub = p
+	} else {
+		pub = lineupapi.NewFileStore(".lineup")
+	}
+
+	if err := pub.Publish(lineupapi.TodayKey, data); err != nil {
+		return err
+	}
+	return pub.Publish(dr.date.Format("2006-01-02"), data)
 }
 
 // writeProjectionSnapshot archives the per-date projection values the optimizer

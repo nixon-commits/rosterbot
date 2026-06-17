@@ -13,9 +13,11 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsglue"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsssm"
+	"github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2"
 	"github.com/aws/constructs-go/constructs/v10"
 	"github.com/aws/jsii-runtime-go"
 )
@@ -131,6 +133,63 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	awscdk.NewCfnOutput(stack, jsii.String("SiteUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dist.DistributionDomainName()}),
 	})
+
+	// --- Lineup + control API: Go Lambda behind a Function URL ---
+	// Serves GET /v1/lineup/today from the precomputed JSON the hourly optimize
+	// run publishes (lineup/ prefix), GET /v1/runs from the run ledger (runs/
+	// prefix written by entrypoint.sh), and POST /v1/jobs/{name} which launches
+	// the existing Fargate task. No Chrome/Fantrax on the request path.
+	//
+	// A dedicated egress-only SG for tasks the API launches (RunTask requires a
+	// concrete SG; tasks only need outbound to pull the image + hit upstreams).
+	taskSg := awsec2.NewSecurityGroup(stack, jsii.String("TaskSg"), &awsec2.SecurityGroupProps{
+		Vpc:              vpc,
+		AllowAllOutbound: jsii.Bool(true),
+		Description:      jsii.String("rosterbot tasks launched by the API"),
+	})
+	publicSubnets := vpc.SelectSubnets(&awsec2.SubnetSelection{SubnetType: awsec2.SubnetType_PUBLIC})
+
+	apiFn := awscdklambdagoalpha.NewGoFunction(stack, jsii.String("LineupApi"), &awscdklambdagoalpha.GoFunctionProps{
+		Entry:        jsii.String("../lambda"),
+		Architecture: awslambda.Architecture_ARM_64(),
+		Timeout:      awscdk.Duration_Seconds(jsii.Number(10)),
+		Environment: &map[string]*string{
+			"STATE_BUCKET":    stateBucket.BucketName(),
+			"API_TOKEN_PARAM": jsii.String("/rosterbot/ROSTERBOT_API_TOKEN"),
+			"CLUSTER":         cluster.ClusterArn(),
+			"TASK_DEF":        taskDef.TaskDefinitionArn(),
+			"SUBNETS":         awscdk.Fn_Join(jsii.String(","), publicSubnets.SubnetIds),
+			"SECURITY_GROUPS": taskSg.SecurityGroupId(),
+			"CONTAINER_NAME":  jsii.String("bot"),
+		},
+	})
+	// Least privilege: read lineup/ + runs/ objects and the one token param.
+	stateBucket.GrantRead(apiFn, jsii.String("lineup/*"))
+	stateBucket.GrantRead(apiFn, jsii.String("runs/*"))
+	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions:   jsii.Strings("ssm:GetParameter"),
+		Resources: jsii.Strings("arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/ROSTERBOT_API_TOKEN"),
+	}))
+	// Launch the existing task definition on demand (POST /v1/jobs/{name}).
+	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions:   jsii.Strings("ecs:RunTask"),
+		Resources: jsii.Strings(*taskDef.TaskDefinitionArn()),
+	}))
+	// RunTask passes the task's roles to ECS — the API role must be allowed to.
+	passRoles := []*string{taskDef.TaskRole().RoleArn()}
+	if taskDef.ExecutionRole() != nil {
+		passRoles = append(passRoles, taskDef.ExecutionRole().RoleArn())
+	}
+	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions:   jsii.Strings("iam:PassRole"),
+		Resources: &passRoles,
+	}))
+	// AuthType NONE: the function enforces the Bearer token itself (IAM signing
+	// is impractical for a thin iOS client).
+	apiURL := apiFn.AddFunctionUrl(&awslambda.FunctionUrlOptions{
+		AuthType: awslambda.FunctionUrlAuthType_NONE,
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("LineupApiUrl"), &awscdk.CfnOutputProps{Value: apiURL.Url()})
 
 	// --- Phase 2: CodeBuild (build + push image to ECR on push to main) ---
 	// Gated: only instantiated with `-c enableBuild=true`, because the GitHub

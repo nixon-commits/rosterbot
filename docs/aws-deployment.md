@@ -12,7 +12,9 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
 - **EventBridge rules** (×8) — 1:1 port of the old GitHub Actions crons (UTC). Gated by the
   `schedulesEnabled` CDK context flag; **disabled by default** so AWS doesn't double-fire
   while the GHA workflows still exist.
-- **S3 state bucket** (`infrastack-statebucket…`) — prefixes `cache/`, `session/`, `claims/`, `backtest/` (projection snapshots, synced by the entrypoint), `analysis/grades/` (Graded Snapshots, NDJSON, written by `grade`), `athena-results/`.
+- **S3 state bucket** (`infrastack-statebucket…`) — prefixes `cache/`, `session/`, `claims/`, `backtest/` (projection snapshots, synced by the entrypoint), `analysis/grades/` (Graded Snapshots, NDJSON, written by `grade`), `lineup/` (read-only API JSON, published per-key by the hourly `optimize` run), `athena-results/`.
+- **Lineup + control API** — a Go Lambda (`LineupApi`) behind a **Function URL** (output `LineupApiUrl`). Routes: `GET /v1/lineup/today` (from `lineup/today.json`), `GET /v1/runs` + `GET /v1/runs/{id}` (the run ledger under `runs/`), and `POST /v1/jobs/{name}` (launches the existing Fargate task via `ecs:RunTask`, command overridden, `RUN_TRIGGER=manual`). Auth is a Bearer token in SSM (`/rosterbot/ROSTERBOT_API_TOKEN`), enforced in the function (Function URL auth type `NONE`). IAM is least-privilege: read `lineup/*`+`runs/*`, `ssm:GetParameter` on the token, `ecs:RunTask` on the task def, `iam:PassRole` on the task/execution roles. Tasks it launches use a dedicated egress-only SG (`TaskSg`) in the default VPC's public subnets. See the README "Lineup HTTP API" section for the contract.
+- **Run ledger** — `entrypoint.sh` writes one JSON object per run to `runs/<invTs>-<taskId>.json` (start = `RUNNING`, end = `SUCCESS`/`FAILED` with exit code + a log tail on failure) via the internal `rosterbot run-ledger` command. The inverted-timestamp key prefix sorts newest-first, so `GET /v1/runs` is a single `MaxKeys` list. Covers scheduled and API-triggered runs alike (`RUN_TRIGGER` distinguishes `schedule` vs `manual`).
 - **Analysis Store** — Athena workgroup `rosterbot`, Glue table `rosterbot_analysis.grades` (partition projection on `dt`, no crawler). Query model accuracy with SQL, e.g. `SELECT bucket, avg(abs(diff)) mae FROM rosterbot_analysis.grades WHERE dt >= '2026-06-01' GROUP BY bucket;`.
 - **Retention** — the state bucket has versioning **enabled**, so `cache/` overwrites are retained as noncurrent versions (cache history). `backtest/` and `analysis/` are append-only and never expired. Nothing in the stack deletes analysis data; a cost-control lifecycle rule to expire old noncurrent `cache/` versions can be added later if needed.
   The `cache/` prefix is written **per-key, live by the bot** via `cache.Store` (the s3 adapter,
@@ -44,6 +46,22 @@ aws ecs run-task --region us-west-1 \
 ```
 
 Tail logs: `aws logs tail <LogGroupName> --region us-west-1 --follow`
+
+## Deploy the lineup API (one-time prep)
+
+The lineup Lambda lives in its own module (`lambda/`) and is built by a CDK
+GoFunction, which is in the `awscdklambdagoalpha` package. Both need a one-time
+fetch before the first `cdk deploy`:
+
+```bash
+cd lambda && go mod tidy                                   # resolve aws-lambda-go + sdk
+cd ../infra && go get github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2@latest && go mod tidy
+aws ssm put-parameter --name /rosterbot/ROSTERBOT_API_TOKEN --type SecureString --value '<token>' --overwrite
+cdk deploy --require-approval never                        # grab LineupApiUrl from the outputs
+```
+
+GoFunction bundles the Lambda with local Go (cross-compiles to ARM64), so Docker
+isn't required on the synth host as long as Go is installed.
 
 ## Update a secret
 

@@ -1,0 +1,293 @@
+package lineupapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/optimizer"
+	"github.com/nixon-commits/rosterbot/internal/projections"
+)
+
+// fakeStore is an in-memory ObjectStore for handler tests.
+type fakeStore struct {
+	data map[string][]byte
+	err  error
+}
+
+func (f fakeStore) Get(_ context.Context, key string) ([]byte, bool, error) {
+	if f.err != nil {
+		return nil, false, f.err
+	}
+	d, ok := f.data[key]
+	return d, ok, nil
+}
+
+// fakeInputs is the synthetic "optimizer output" the contract is asserted
+// against: two active hitters (one benched in the real MLB lineup), one active
+// SP, and one reserve hitter on the bench.
+func fakeInputs() Inputs {
+	return Inputs{
+		Date:     "2026-06-17",
+		LeagueID: "LG1",
+		TeamID:   "TM1",
+		HitterSlots: []fantrax.Slot{
+			{PosID: "001", PosName: "C"},
+			{PosID: "002", PosName: "1B"},
+		},
+		PitcherSlots: []fantrax.Slot{
+			{PosID: "015", PosName: "SP"},
+		},
+		Hitters: []optimizer.ScoredPlayer{
+			{Player: fantrax.Player{ID: "h1", Name: "Adley Rutschman", MLBTeam: "BAL", Positions: []string{"001"}, RosterPosition: "001", Status: "Active"}, ExpectedPts: 3.4, HasGame: true},
+			{Player: fantrax.Player{ID: "h2", Name: "Vlad Guerrero", MLBTeam: "TOR", Positions: []string{"002"}, RosterPosition: "002", Status: "Active"}, ExpectedPts: 5.25, HasGame: false},
+			{Player: fantrax.Player{ID: "h3", Name: "Bench Guy", MLBTeam: "NYY", Positions: []string{"012"}, Status: "Reserve"}, ExpectedPts: 2.0, HasGame: true},
+		},
+		Pitchers: []optimizer.ScoredPitcher{
+			{Player: fantrax.Player{ID: "p1", Name: "Corbin Burnes", MLBTeam: "ARI", Positions: []string{"015"}, PosShortNames: "SP", RosterPosition: "015", Status: "Active"}, ExpectedPts: 12.1, HasGame: true, IsStarter: true},
+		},
+		BenchedToday: map[string]bool{projections.NormalizeName("Vlad Guerrero"): true},
+	}
+}
+
+// wantJSON is the exact wire contract the iOS client is pinned to.
+const wantJSON = `{
+  "date": "2026-06-17",
+  "league_id": "LG1",
+  "team_id": "TM1",
+  "slots": [
+    {
+      "slot": "C",
+      "player": {
+        "id": "h1",
+        "name": "Adley Rutschman",
+        "team": "BAL",
+        "pos": [
+          "C"
+        ],
+        "proj": 3.4,
+        "status": "OK"
+      }
+    },
+    {
+      "slot": "1B",
+      "player": {
+        "id": "h2",
+        "name": "Vlad Guerrero",
+        "team": "TOR",
+        "pos": [
+          "1B"
+        ],
+        "proj": 5.25,
+        "status": "BENCHED"
+      }
+    },
+    {
+      "slot": "SP",
+      "player": {
+        "id": "p1",
+        "name": "Corbin Burnes",
+        "team": "ARI",
+        "pos": [
+          "SP"
+        ],
+        "proj": 12.1,
+        "status": "OK"
+      }
+    },
+    {
+      "slot": "BN",
+      "player": {
+        "id": "h3",
+        "name": "Bench Guy",
+        "team": "NYY",
+        "pos": [
+          "OF"
+        ],
+        "proj": 2,
+        "status": "OK"
+      }
+    }
+  ],
+  "projected_points": 15.5,
+  "warnings": [
+    "Vlad Guerrero benched in real lineup"
+  ]
+}`
+
+func TestBuildContract(t *testing.T) {
+	got, err := Marshal(Build(fakeInputs()))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(got) != wantJSON {
+		t.Fatalf("contract mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, wantJSON)
+	}
+}
+
+func TestHandlerServesPublishedBytes(t *testing.T) {
+	body, _ := Marshal(Build(fakeInputs()))
+	h := Handler(Config{Token: "secret-token", Lineups: fakeStore{data: map[string][]byte{TodayKey: body}}})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/lineup/today", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("content-type = %q, want application/json", ct)
+	}
+	if rec.Body.String() != wantJSON {
+		t.Fatalf("body mismatch:\n--- got ---\n%s\n--- want ---\n%s", rec.Body.String(), wantJSON)
+	}
+}
+
+func TestHandlerAuth(t *testing.T) {
+	h := Handler(Config{Token: "secret-token", Lineups: fakeStore{data: map[string][]byte{TodayKey: []byte("{}")}}})
+
+	cases := []struct {
+		name, header string
+		want         int
+	}{
+		{"missing", "", http.StatusUnauthorized},
+		{"wrong", "Bearer nope", http.StatusUnauthorized},
+		{"malformed", "secret-token", http.StatusUnauthorized},
+		{"valid", "Bearer secret-token", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v1/lineup/today", nil)
+			if tc.header != "" {
+				req.Header.Set("Authorization", tc.header)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestHandlerNotFoundWhenNoLineup(t *testing.T) {
+	h := Handler(Config{Token: "t", Lineups: fakeStore{data: map[string][]byte{}}})
+	req := httptest.NewRequest(http.MethodGet, "/v1/lineup/today", nil)
+	req.Header.Set("Authorization", "Bearer t")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// --- runs + jobs routes ---
+
+type fakeRuns struct {
+	runs   []Run
+	detail *RunDetail
+}
+
+func (f fakeRuns) List(_ context.Context, limit int) ([]Run, error) {
+	if len(f.runs) > limit {
+		return f.runs[:limit], nil
+	}
+	return f.runs, nil
+}
+
+func (f fakeRuns) Get(_ context.Context, id string) (*RunDetail, bool, error) {
+	if f.detail != nil && f.detail.ID == id {
+		return f.detail, true, nil
+	}
+	return nil, false, nil
+}
+
+type fakeJobs struct {
+	lastCommand []string
+	id          string
+	err         error
+}
+
+func (f *fakeJobs) Run(_ context.Context, command []string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	f.lastCommand = command
+	return f.id, nil
+}
+
+func do(h http.Handler, method, path string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("Authorization", "Bearer t")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestRunsList(t *testing.T) {
+	ec := 0
+	h := Handler(Config{Token: "t", Runs: fakeRuns{runs: []Run{
+		{ID: "a", Command: "optimize --matchup", Status: "SUCCESS", ExitCode: &ec, StartedAt: "2026-06-17T19:00:00Z", EndedAt: "2026-06-17T19:00:30Z", Trigger: "schedule"},
+	}}})
+	rec := do(h, http.MethodGet, "/v1/runs")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var got RunsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Runs) != 1 || got.Runs[0].ID != "a" || got.Runs[0].Status != "SUCCESS" {
+		t.Fatalf("unexpected runs: %+v", got.Runs)
+	}
+}
+
+func TestRunDetailNotFound(t *testing.T) {
+	h := Handler(Config{Token: "t", Runs: fakeRuns{}})
+	if rec := do(h, http.MethodGet, "/v1/runs/missing"); rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestJobTriggerMapsCommand(t *testing.T) {
+	jobs := &fakeJobs{id: "task-123"}
+	h := Handler(Config{Token: "t", Jobs: jobs})
+
+	rec := do(h, http.MethodPost, "/v1/jobs/optimize")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	var got JobResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ID != "task-123" || got.Command != "optimize --matchup" || got.Status != "RUNNING" {
+		t.Fatalf("unexpected job response: %+v", got)
+	}
+	if strings.Join(jobs.lastCommand, " ") != "optimize --matchup" {
+		t.Fatalf("runner got command %v", jobs.lastCommand)
+	}
+}
+
+func TestJobTriggerUnknown(t *testing.T) {
+	h := Handler(Config{Token: "t", Jobs: &fakeJobs{}})
+	if rec := do(h, http.MethodPost, "/v1/jobs/nonsense"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestRunsNotImplementedWhenNil(t *testing.T) {
+	h := Handler(Config{Token: "t"}) // no Runs/Jobs wired (local serve)
+	if rec := do(h, http.MethodGet, "/v1/runs"); rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501", rec.Code)
+	}
+	if rec := do(h, http.MethodPost, "/v1/jobs/optimize"); rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501", rec.Code)
+	}
+}

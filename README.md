@@ -110,9 +110,75 @@ rosterbot recap-site --out dist
 
 # Print league scoring weights
 rosterbot scoring
+
+# Serve the read-only lineup HTTP API locally (for the iOS thin client)
+rosterbot serve
 ```
 
 Remove `--dry-run` to apply changes.
+
+### Lineup HTTP API (read-only)
+
+`GET /v1/lineup/today` returns today's optimized lineup as JSON for the iOS thin
+client. It's **precompute-then-serve**: the hourly `optimize` run publishes the
+JSON to object storage (S3 `lineup/` prefix on AWS, `.lineup/` locally), and the
+endpoint just authenticates and returns those bytes — it never re-runs the
+optimizer or logs into Fantrax, so it's fast and cheap.
+
+Requests must carry `Authorization: Bearer <ROSTERBOT_API_TOKEN>`.
+
+```jsonc
+{
+  "date": "2026-06-17",
+  "league_id": "...", "team_id": "...",
+  "slots": [
+    { "slot": "C",  "player": { "id": "...", "name": "...", "team": "NYY",
+                                "pos": ["C"], "proj": 3.4, "status": "OK" } },
+    { "slot": "BN", "player": null }       // empty/open slots are null
+  ],
+  "projected_points": 41.7,
+  "warnings": ["Vlad Guerrero benched in real lineup"]
+}
+```
+
+`player.status` is one of `OK`, `LOCKED` (game in progress/final), or `BENCHED`
+(out of the real MLB starting lineup).
+
+**Run it locally and curl it before deploying:**
+
+```bash
+# 1. Publish today's lineup JSON without touching your real roster.
+#    (--publish-lineup makes dry-run write .lineup/; non-dry-run always publishes.)
+go run . optimize --dry-run --publish-lineup
+
+# 2. Start the server (needs a token; any string works locally).
+ROSTERBOT_API_TOKEN=test go run . serve   # listens on :8080, reads .lineup/
+
+# 3. In another shell:
+curl -H "Authorization: Bearer test" localhost:8080/v1/lineup/today   # 200 + JSON
+curl localhost:8080/v1/lineup/today                                   # 401
+```
+
+On AWS it's deployed as a Go Lambda behind a Function URL (see
+[`docs/aws-deployment.md`](docs/aws-deployment.md)); the URL is a stack output
+(`LineupApiUrl`) and the token lives in SSM at `/rosterbot/ROSTERBOT_API_TOKEN`.
+
+#### Control endpoints (AWS only)
+
+The same Lambda also exposes a run ledger and on-demand job triggering (these
+return `501` from local `serve`, which has no ECS):
+
+| Method & path | Purpose |
+|---|---|
+| `GET /v1/runs` | Recent job runs (scheduled + manual), newest first: `{id, command, status, exit_code, started_at, ended_at, trigger}`. `status` ∈ `RUNNING`/`SUCCESS`/`FAILED`. |
+| `GET /v1/runs/{id}` | One run plus `log_tail` (captured output, populated on failures). |
+| `POST /v1/jobs/{name}` | Launch a job as a Fargate task (async). Returns `202 {id, command, status:"RUNNING"}`; poll `/v1/runs` for completion. Allowlist: `optimize, waivers, prospects, claims, gs-check, transactions, recap-site, backtest, grade`. |
+
+The run ledger is written by `entrypoint.sh` (one S3 object per run under the
+`runs/` prefix, via the internal `run-ledger` command) so it covers both
+scheduled and API-triggered runs. **Triggered jobs run for real** — `POST
+/v1/jobs/optimize` applies your lineup and sends Pushover; gate it behind a
+confirmation in any client.
 
 ## How the Optimizer Works
 
