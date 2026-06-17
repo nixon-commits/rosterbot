@@ -275,6 +275,61 @@ func TestJobTriggerMapsCommand(t *testing.T) {
 	}
 }
 
+func TestBuildJobArgs(t *testing.T) {
+	cases := []struct {
+		name   string
+		params map[string]string
+		want   string
+		errs   bool
+	}{
+		{"optimize", nil, "optimize --matchup", false},
+		{"optimize", map[string]string{"period": "all"}, "optimize --dates all", false},
+		{"optimize", map[string]string{"period": "custom", "dates": "2026-04-01:2026-04-07"}, "optimize --dates 2026-04-01:2026-04-07", false},
+		{"optimize", map[string]string{"period": "custom", "dates": "garbage"}, "", true},
+		{"optimize", map[string]string{"projections": "steamer", "dry_run": "true"}, "optimize --matchup --projections steamer --dry-run", false},
+		{"optimize", map[string]string{"projections": "evil"}, "", true},
+		{"waivers", map[string]string{"top": "25", "positions": "OF,SP"}, "waivers --top 25 --positions OF,SP", false},
+		{"waivers", map[string]string{"top": "999"}, "", true},
+		{"waivers", map[string]string{"positions": "--apply"}, "", true}, // flag-injection blocked
+		{"backtest", map[string]string{"recency_experiment": "true"}, "backtest --recency-experiment", false},
+	}
+	for _, tc := range cases {
+		args, ok, err := BuildJobArgs(tc.name, tc.params)
+		if !ok {
+			t.Errorf("%s %v: unknown job", tc.name, tc.params)
+			continue
+		}
+		if tc.errs {
+			if err == nil {
+				t.Errorf("%s %v: expected validation error, got %v", tc.name, tc.params, args)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s %v: unexpected error %v", tc.name, tc.params, err)
+			continue
+		}
+		if got := strings.Join(args, " "); got != tc.want {
+			t.Errorf("%s %v = %q, want %q", tc.name, tc.params, got, tc.want)
+		}
+	}
+}
+
+func TestJobsSchemaEndpoint(t *testing.T) {
+	h := Handler(Config{Token: "t"}) // schema is static, no Jobs runner needed
+	rec := do(h, http.MethodGet, "/v1/jobs")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var got JobsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Jobs) != 9 {
+		t.Fatalf("want 9 jobs, got %d", len(got.Jobs))
+	}
+}
+
 func TestJobTriggerUnknown(t *testing.T) {
 	h := Handler(Config{Token: "t", Jobs: &fakeJobs{}})
 	if rec := do(h, http.MethodPost, "/v1/jobs/nonsense"); rec.Code != http.StatusBadRequest {

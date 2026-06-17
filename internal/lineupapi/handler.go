@@ -47,6 +47,7 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/runs", cfg.handleRuns)
 	mux.HandleFunc("GET /v1/runs/{id}", cfg.handleRunDetail)
 	mux.HandleFunc("GET /v1/notifications", cfg.handleNotifications)
+	mux.HandleFunc("GET /v1/jobs", cfg.handleJobs)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -139,19 +140,37 @@ func (cfg Config) handleNotifications(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, NotificationsResponse{Notifications: notifs})
 }
 
+// handleJobs returns the job schema (GET /v1/jobs) so the app can render forms.
+// Static — available even when Jobs (the runner) isn't wired.
+func (cfg Config) handleJobs(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, JobsResponse{Jobs: JobSpecList()})
+}
+
 func (cfg Config) handleJob(w http.ResponseWriter, r *http.Request) {
 	if cfg.Jobs == nil {
 		writeErr(w, http.StatusNotImplemented, "job runner not configured")
 		return
 	}
 	name := r.PathValue("name")
-	args, ok := JobCommand(name)
+
+	// Optional JSON body { "params": { ... } }. An empty/absent body means
+	// "use defaults"; a malformed body just yields no params (defaults too).
+	var body struct {
+		Params map[string]string `json:"params"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	args, ok, err := BuildJobArgs(name, body.Params)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "unknown job: "+name+" (valid: "+strings.Join(JobNames(), ", ")+")")
 		return
 	}
-	id, err := cfg.Jobs.Run(r.Context(), args)
 	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id, runErr := cfg.Jobs.Run(r.Context(), args)
+	if runErr != nil {
 		writeErr(w, http.StatusBadGateway, "could not start job")
 		return
 	}
