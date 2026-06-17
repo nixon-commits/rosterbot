@@ -251,10 +251,16 @@ func BuildJobArgs(name string, params map[string]string) (args []string, ok bool
 	return a, true, err
 }
 
-// JobSpecList returns the job schemas, sorted, for GET /v1/jobs.
+// JobSpecList returns the job schemas, sorted, for GET /v1/jobs. Params is
+// normalized to a non-nil slice so every job marshals "params" as [] (never
+// null), giving the client one consistent shape regardless of whether a job
+// declares any params.
 func JobSpecList() []JobSpec {
 	out := make([]JobSpec, 0, len(jobSpecs))
 	for _, s := range jobSpecs {
+		if s.Params == nil {
+			s.Params = []Param{}
+		}
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
