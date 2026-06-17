@@ -45,3 +45,11 @@ _Avoid_: store (the bytes layer is the Store), datastore, persistence.
 **Store**:
 The storage seam behind the Cache: a byte get/put/remove-by-key interface. `FileCache[T]` keeps the deep behaviour (TTL, envelope, stale-fallback, Notify) and delegates raw bytes to a Store adapter — `fsStore` (local `.cache/`), `s3Store` (S3 `cache/` prefix, in its own package so the AWS SDK stays out of the leaf), `memStore` (tests). Selected by `cmd` from config; `fantrax.Client` holds the interface, not an adapter.
 _Avoid_: backend, driver, provider, repository.
+
+**Analysis Store**:
+Durable, append-only, date-partitioned history of model performance in S3, queried by Athena (SQL) — the opposite lifecycle to the Cache (never TTL-evicted). Holds Graded Snapshots as NDJSON under `analysis/grades/dt=YYYY-MM-DD/`. Written by the daily `grade` command; read by ad-hoc SQL for model auditing (accuracy trends by position/role/week). Athena table is CDK-managed with partition projection on `dt` (no crawler).
+_Avoid_: warehouse, archive, history DB, datalake.
+
+**Graded Snapshot**:
+The materialized fact behind the Analysis Store: one row per (date, player) pairing the projected Expected Points with the actual Single-Game FPts and their signed error, plus dimensions — Eligibility Bucket, role, was-started. Computed by reusing `internal/backtest`'s projection grading. The grain model-audit queries aggregate.
+_Avoid_: grade row, result, scorecard.
