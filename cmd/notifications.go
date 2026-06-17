@@ -28,9 +28,11 @@ func installNotificationRecorder() {
 	}
 
 	notify.Recorder = func(title, message string) {
+		kind := lineupapi.KindFromTitle(title)
 		n := lineupapi.Notification{
 			ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
-			Kind:      lineupapi.KindFromTitle(title),
+			Kind:      kind,
+			Status:    lineupapi.ClassifyStatus(kind, title, message),
 			Title:     title,
 			Message:   message,
 			CreatedAt: time.Now().UTC().Format(time.RFC3339),

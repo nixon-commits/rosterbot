@@ -22,12 +22,29 @@ type Change struct {
 // is the app's replacement for Pushover as the primary surface.
 type Notification struct {
 	ID        string   `json:"id"`
-	Kind      string   `json:"kind"` // lineup|waivers|claims|transactions|prospects|gs-check|alert
+	Kind      string   `json:"kind"`   // lineup|waivers|claims|transactions|prospects|gs-check|alert
+	Status    string   `json:"status"` // success|failure|info — for the app's severity color
 	Title     string   `json:"title"`
 	Message   string   `json:"message"`
 	CreatedAt string   `json:"created_at"` // RFC3339 UTC
 	RunID     string   `json:"run_id,omitempty"`
 	Changes   []Change `json:"changes,omitempty"`
+}
+
+// ClassifyStatus derives a severity for an event from its kind and text:
+// failure when the text signals an error/warning, success for completed actions
+// (lineup/waivers/claims/transactions), info for purely informational reports.
+func ClassifyStatus(kind, title, message string) string {
+	l := strings.ToLower(title + " " + message)
+	if strings.Contains(l, "fail") || strings.Contains(l, "error") || strings.Contains(message, "⚠") {
+		return "failure"
+	}
+	switch kind {
+	case "lineup", "waivers", "claims", "transactions":
+		return "success"
+	default:
+		return "info"
+	}
 }
 
 // NotificationsResponse is the GET /v1/notifications body.

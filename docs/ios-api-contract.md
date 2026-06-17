@@ -89,14 +89,17 @@ app's replacement for Pushover as the primary surface.
 
 ```json
 { "notifications": [
-  { "id": "...", "kind": "lineup", "title": "Fantrax Lineup",
+  { "id": "...", "kind": "lineup", "status": "success", "title": "Fantrax Lineup",
     "message": "2 hitter changes (+3.20 pts)\n  ↑ Aaron Judge → OF\n  ↓ Ian Happ → BN",
     "created_at": "2026-06-17T21:00:41Z", "run_id": "57ad2025..." }
 ] }
 ```
 
 - `kind` ∈ `lineup | waivers | claims | transactions | prospects | gs-check |
-  alert` (badge/icon per kind).
+  alert` (badge/icon per kind — which function).
+- `status` ∈ `success | failure | info` (severity color — green/red/neutral).
+  Note `kind` is the category and `status` is the severity; they are different
+  axes. The body text field is **`message`** (not `body`).
 - `message` is the human text (the lineup `message` already lists the ↑/↓ moves
   — render it as the "changes" detail).
 - `run_id` (optional) deep-links to that run's detail.
