@@ -166,6 +166,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// Least privilege: read lineup/ + runs/ objects and the one token param.
 	stateBucket.GrantRead(apiFn, jsii.String("lineup/*"))
 	stateBucket.GrantRead(apiFn, jsii.String("runs/*"))
+	stateBucket.GrantRead(apiFn, jsii.String("notifications/*"))
 	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Actions:   jsii.Strings("ssm:GetParameter"),
 		Resources: jsii.Strings("arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/ROSTERBOT_API_TOKEN"),

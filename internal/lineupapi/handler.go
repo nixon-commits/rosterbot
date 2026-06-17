@@ -23,13 +23,15 @@ type ObjectStore interface {
 	Get(ctx context.Context, key string) ([]byte, bool, error)
 }
 
-// Config wires the handler's dependencies. Lineups is required; Runs and Jobs
-// are optional (nil -> those routes return 501, e.g. local `serve`).
+// Config wires the handler's dependencies. Lineups is required; Runs, Jobs, and
+// Notifications are optional (nil -> those routes return 501, e.g. local `serve`
+// has no ECS so Jobs is nil).
 type Config struct {
-	Token   string
-	Lineups ObjectStore
-	Runs    RunStore
-	Jobs    JobRunner
+	Token         string
+	Lineups       ObjectStore
+	Runs          RunStore
+	Jobs          JobRunner
+	Notifications NotificationStore
 }
 
 // Handler builds the full read/trigger API router. Every route requires the
@@ -44,6 +46,7 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/lineup/today", cfg.handleLineup)
 	mux.HandleFunc("GET /v1/runs", cfg.handleRuns)
 	mux.HandleFunc("GET /v1/runs/{id}", cfg.handleRunDetail)
+	mux.HandleFunc("GET /v1/notifications", cfg.handleNotifications)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +115,28 @@ func (cfg Config) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+func (cfg Config) handleNotifications(w http.ResponseWriter, r *http.Request) {
+	if cfg.Notifications == nil {
+		writeErr(w, http.StatusNotImplemented, "activity feed not configured")
+		return
+	}
+	limit := defaultRunsLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	notifs, err := cfg.Notifications.List(r.Context(), limit)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "activity feed unavailable")
+		return
+	}
+	if notifs == nil {
+		notifs = []Notification{}
+	}
+	writeJSON(w, http.StatusOK, NotificationsResponse{Notifications: notifs})
 }
 
 func (cfg Config) handleJob(w http.ResponseWriter, r *http.Request) {

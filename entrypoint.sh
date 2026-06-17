@@ -57,7 +57,9 @@ CMD="$*"
 
 # Run the bot, mirroring output to both the container logs (CloudWatch) and a
 # file for the ledger's log_tail. The braces+echo capture the bot's real exit
-# code through the pipe (POSIX sh has no PIPESTATUS).
+# code through the pipe (POSIX sh has no PIPESTATUS). RUN_ID lets the bot tag
+# activity-feed events with the run that produced them.
+export RUN_ID="$ID"
 { ./rosterbot "$@" 2>&1; echo $? >/tmp/rosterbot.rc; } | tee /tmp/rosterbot.log
 rc=$(cat /tmp/rosterbot.rc 2>/dev/null || echo 1)
 

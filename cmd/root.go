@@ -98,5 +98,8 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 			}
 		}
 	}
+	// Mirror every Pushover send into the durable activity feed (dual-send), so
+	// the app can read what currently goes only to Pushover.
+	installNotificationRecorder()
 	return cfg, ft, nil
 }

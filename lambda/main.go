@@ -43,6 +43,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("init s3 runs store: %v", err)
 	}
+	notifs, err := s3lineup.NewNotifications(ctx, bucket, "notifications/")
+	if err != nil {
+		log.Fatalf("init s3 notifications store: %v", err)
+	}
 
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -59,10 +63,11 @@ func main() {
 	}
 
 	handler := lineupapi.Handler(lineupapi.Config{
-		Token:   token,
-		Lineups: lineups,
-		Runs:    runs,
-		Jobs:    jobs,
+		Token:         token,
+		Lineups:       lineups,
+		Runs:          runs,
+		Jobs:          jobs,
+		Notifications: notifs,
 	})
 	lambda.Start(adapt(handler))
 }

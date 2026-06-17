@@ -282,6 +282,48 @@ func TestJobTriggerUnknown(t *testing.T) {
 	}
 }
 
+type fakeNotifs struct{ notifs []Notification }
+
+func (f fakeNotifs) List(_ context.Context, limit int) ([]Notification, error) {
+	if len(f.notifs) > limit {
+		return f.notifs[:limit], nil
+	}
+	return f.notifs, nil
+}
+
+func TestNotificationsList(t *testing.T) {
+	h := Handler(Config{Token: "t", Notifications: fakeNotifs{notifs: []Notification{
+		{ID: "1", Kind: "lineup", Title: "Lineup applied", Message: "2 changes", CreatedAt: "2026-06-17T21:00:41Z", RunID: "abc"},
+	}}})
+	rec := do(h, http.MethodGet, "/v1/notifications")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var got NotificationsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Notifications) != 1 || got.Notifications[0].Kind != "lineup" {
+		t.Fatalf("unexpected notifications: %+v", got.Notifications)
+	}
+}
+
+func TestKindFromTitle(t *testing.T) {
+	cases := map[string]string{
+		"Fantrax Lineup":             "lineup",
+		"Waiver Claims":              "claims",
+		"Trade Alert":                "transactions",
+		"RosterBot: Prospect Alerts": "prospects",
+		"Fantrax GS Alert":           "gs-check",
+		"Something else":             "alert",
+	}
+	for title, want := range cases {
+		if got := KindFromTitle(title); got != want {
+			t.Errorf("KindFromTitle(%q) = %q, want %q", title, got, want)
+		}
+	}
+}
+
 func TestRunsNotImplementedWhenNil(t *testing.T) {
 	h := Handler(Config{Token: "t"}) // no Runs/Jobs wired (local serve)
 	if rec := do(h, http.MethodGet, "/v1/runs"); rec.Code != http.StatusNotImplemented {

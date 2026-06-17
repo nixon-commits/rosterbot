@@ -43,9 +43,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("ROSTERBOT_API_TOKEN is not set — the server needs a bearer token to authenticate requests")
 	}
 	h := lineupapi.Handler(lineupapi.Config{
-		Token:   token,
-		Lineups: lineupapi.NewFileStore(serveDir),
-		Runs:    lineupapi.NewFileRunStore(serveDir + "/runs"),
+		Token:         token,
+		Lineups:       lineupapi.NewFileStore(serveDir),
+		Runs:          lineupapi.NewFileRunStore(serveDir + "/runs"),
+		Notifications: lineupapi.NewFileNotificationStore(serveDir + "/notifications"),
 		// Jobs is nil locally: triggering real ECS tasks only makes sense on AWS.
 		// POST /v1/jobs/* returns 501 from `serve`.
 	})
