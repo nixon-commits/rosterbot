@@ -9,14 +9,16 @@ set -u
 # session cookie and the claims ledger/cursor need bulk sync.
 sync_down() {
   [ -n "${STATE_BUCKET:-}" ] || return 0
-  aws s3 sync "s3://$STATE_BUCKET/session/" ./.fantrax-cache/ --quiet || true
-  aws s3 sync "s3://$STATE_BUCKET/claims/"  ./.waivers/       --quiet || true
+  aws s3 sync "s3://$STATE_BUCKET/session/"  ./.fantrax-cache/ --quiet || true
+  aws s3 sync "s3://$STATE_BUCKET/claims/"   ./.waivers/       --quiet || true
+  aws s3 sync "s3://$STATE_BUCKET/backtest/" ./.backtest/      --quiet || true
 }
 
 sync_up() {
   [ -n "${STATE_BUCKET:-}" ] || return 0
-  aws s3 sync ./.fantrax-cache/ "s3://$STATE_BUCKET/session/" --quiet || true
-  aws s3 sync ./.waivers/       "s3://$STATE_BUCKET/claims/"  --quiet || true
+  aws s3 sync ./.fantrax-cache/ "s3://$STATE_BUCKET/session/"  --quiet || true
+  aws s3 sync ./.waivers/       "s3://$STATE_BUCKET/claims/"   --quiet || true
+  aws s3 sync ./.backtest/      "s3://$STATE_BUCKET/backtest/" --quiet || true
   # Publish the recap site when present (recap-site writes ./dist).
   [ -d ./dist ] && [ -n "${SITE_BUCKET:-}" ] && aws s3 sync ./dist/ "s3://$SITE_BUCKET/" --delete --quiet || true
 }
