@@ -32,6 +32,7 @@ type Config struct {
 	Runs          RunStore
 	Jobs          JobRunner
 	Notifications NotificationStore
+	Output        OutputStore
 }
 
 // Handler builds the full read/trigger API router. Every route requires the
@@ -46,6 +47,7 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/lineup/today", cfg.handleLineup)
 	mux.HandleFunc("GET /v1/runs", cfg.handleRuns)
 	mux.HandleFunc("GET /v1/runs/{id}", cfg.handleRunDetail)
+	mux.HandleFunc("GET /v1/runs/{id}/output", cfg.handleRunOutput)
 	mux.HandleFunc("GET /v1/notifications", cfg.handleNotifications)
 	mux.HandleFunc("GET /v1/jobs", cfg.handleJobs)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
@@ -116,6 +118,26 @@ func (cfg Config) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+func (cfg Config) handleRunOutput(w http.ResponseWriter, r *http.Request) {
+	if cfg.Output == nil {
+		writeErr(w, http.StatusNotImplemented, "run output not configured")
+		return
+	}
+	id := r.PathValue("id")
+	data, ok, err := cfg.Output.GetOutput(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "run output unavailable")
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no output for run")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (cfg Config) handleNotifications(w http.ResponseWriter, r *http.Request) {
