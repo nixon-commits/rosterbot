@@ -8,6 +8,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 )
 
@@ -160,6 +161,8 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config) error {
 			violations = append(violations, Violation{TeamName: r.name, GSUsed: r.gs, Kind: ViolationMin})
 		}
 	}
+
+	lineupapi.RecordOutput("gs-check", toWireResult(violations, periodLabel, cfg.GSMax, cfg.GSMin))
 
 	// Print report.
 	sort.Slice(results, func(i, j int) bool { return results[i].gs > results[j].gs })
