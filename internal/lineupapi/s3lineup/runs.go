@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"sort"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -98,9 +99,16 @@ func (s *RunsStore) recent(ctx context.Context, limit int) ([]lineupapi.RunDetai
 	}
 	keys := make([]string, 0, len(out.Contents))
 	for _, o := range out.Contents {
-		if o.Key != nil {
-			keys = append(keys, *o.Key)
+		if o.Key == nil {
+			continue
 		}
+		// Ledger records are <prefix><invts>-<id>.json (flat). Skip per-run
+		// sub-objects like <prefix><id>/output.json so they don't decode as
+		// phantom zero-value runs.
+		if strings.Contains(strings.TrimPrefix(*o.Key, s.prefix), "/") {
+			continue
+		}
+		keys = append(keys, *o.Key)
 	}
 	sort.Strings(keys) // defensive: ensure newest-first ordering
 
