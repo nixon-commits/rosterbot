@@ -47,6 +47,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("init s3 notifications store: %v", err)
 	}
+	output, err := s3lineup.NewOutput(ctx, bucket, "runs/")
+	if err != nil {
+		log.Fatalf("init s3 output store: %v", err)
+	}
 
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -68,6 +72,7 @@ func main() {
 		Runs:          runs,
 		Jobs:          jobs,
 		Notifications: notifs,
+		Output:        output,
 	})
 	lambda.Start(adapt(handler))
 }

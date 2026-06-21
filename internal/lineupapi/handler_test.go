@@ -337,6 +337,66 @@ func TestJobTriggerUnknown(t *testing.T) {
 	}
 }
 
+// fakeOutput is an in-memory OutputStore for handler tests.
+type fakeOutput struct {
+	data map[string][]byte
+	err  error
+}
+
+func (f fakeOutput) GetOutput(_ context.Context, runID string) ([]byte, bool, error) {
+	if f.err != nil {
+		return nil, false, f.err
+	}
+	d, ok := f.data[runID]
+	return d, ok, nil
+}
+
+func TestRunOutputRoundTripPerJob(t *testing.T) {
+	samples := map[string][]byte{}
+	add := func(id, jobType string, data any) {
+		b, err := MarshalOutput(jobType, data)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", jobType, err)
+		}
+		samples[id] = b
+	}
+	add("r-prospects", "prospects", ProspectsResult{Alerts: []ProspectAlertOut{{Name: "A", Team: "BAL", Kind: "called-up", Priority: "high", Detail: "promoted"}}})
+	add("r-waivers", "waivers", WaiversResult{Picks: []WaiverPickOut{{Name: "B", Team: "NYY", Pos: "OF", Signal: "HOT", ProjectedFPG: 4.1, Rank: 1}}, Total: 1})
+	add("r-claims", "claims", ClaimsResult{Claims: []ClaimOut{{Team: "T", ClaimType: "FA", Added: "C", NetValue: 3}}})
+	add("r-transactions", "transactions", TransactionsResult{Trades: []TradeOut{{Teams: []string{"a", "b"}, ProcessedAt: "2026-06-20T00:00:00Z"}}})
+	add("r-gs-check", "gs-check", GSCheckResult{Violations: []GSViolationOut{{Team: "X", Kind: "over", Used: 6, Limit: 5, OverBy: 1}}})
+	add("r-backtest", "backtest", BacktestResult{Start: "2026-06-08", End: "2026-06-14", Days: []BacktestDayOut{{Date: "2026-06-08", Actual: 40, Optimal: 42, Gap: -2}}})
+	add("r-grade", "grade", GradeResult{Dates: []string{"2026-06-19"}, RowsWritten: 12})
+
+	h := Handler(Config{Token: "t", Output: fakeOutput{data: samples}})
+	for id, want := range samples {
+		rec := do(h, http.MethodGet, "/v1/runs/"+id+"/output")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200", id, rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+			t.Fatalf("%s: content-type = %q", id, ct)
+		}
+		if rec.Body.String() != string(want) {
+			t.Fatalf("%s: body mismatch", id)
+		}
+	}
+}
+
+func TestRunOutputNotFound(t *testing.T) {
+	h := Handler(Config{Token: "t", Output: fakeOutput{data: map[string][]byte{}}})
+	if rec := do(h, http.MethodGet, "/v1/runs/missing/output"); rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestRunOutputNotImplementedWhenNil(t *testing.T) {
+	h := Handler(Config{Token: "t"}) // no Output store wired
+	if rec := do(h, http.MethodGet, "/v1/runs/x/output"); rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501", rec.Code)
+	}
+}
+
 type fakeNotifs struct{ notifs []Notification }
 
 func (f fakeNotifs) List(_ context.Context, limit int) ([]Notification, error) {

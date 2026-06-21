@@ -8,6 +8,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/waivers"
 )
@@ -97,6 +98,8 @@ func Run(ft ClaimsClient, today time.Time, opts Options) error {
 			log.Printf("WARNING: projection scoring skipped: %v / %v", herr, perr)
 		}
 	}
+
+	lineupapi.RecordOutput("claims", toWireResult(BuildLedger(today, moves)))
 
 	// Output: stdout (color) always; GHA summary (no color) when configured.
 	fmt.Println(FormatReport(moves, opts.DropsMin, true))

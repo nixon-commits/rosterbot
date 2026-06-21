@@ -9,6 +9,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/analysis"
 	"github.com/nixon-commits/rosterbot/internal/analysis/s3grades"
 	"github.com/nixon-commits/rosterbot/internal/backtest"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/spf13/cobra"
 )
 
@@ -82,6 +83,12 @@ func runGrade(cmd *cobra.Command, args []string) error {
 			})
 		}
 	}
+
+	counts := map[string]int{}
+	for dt, rows := range byDate {
+		counts[dt] = len(rows)
+	}
+	lineupapi.RecordOutput("grade", gradeToWireResult(counts))
 
 	if cfg.DryRun {
 		for dt, rows := range byDate {

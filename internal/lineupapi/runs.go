@@ -71,6 +71,7 @@ func (s *FileRunStore) records() ([]RunDetail, error) {
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
+		// Only ledger records (run-*.json); other files in dir are ignored.
 		if !e.IsDir() && strings.HasPrefix(e.Name(), "run-") && strings.HasSuffix(e.Name(), ".json") {
 			names = append(names, e.Name())
 		}

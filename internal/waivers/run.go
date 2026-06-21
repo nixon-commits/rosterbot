@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/pmurley/go-fantrax/auth_client"
@@ -170,6 +171,8 @@ func Run(ft FantraxClient, today time.Time, opts Options) error {
 	} else {
 		report.Top = candidates
 	}
+
+	lineupapi.RecordOutput("waivers", toWireResult(report))
 
 	printReport(report)
 

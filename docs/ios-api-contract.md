@@ -80,6 +80,83 @@ One run plus its captured output tail.
 - `id` is the ECS task id — the same id `POST /v1/jobs` returns, so you can poll
   this endpoint for a run you just triggered. (Right after a POST it may `404`
   for a few seconds until the task starts; treat that as still `RUNNING`.)
+- For a typed result (not raw logs), see `GET /v1/runs/{id}/output`.
+
+### `GET /v1/runs/{id}/output`
+
+Structured, typed result for a completed job — the data behind a per-job result
+view. `404` for runs that produced no output (older runs, `optimize`, jobs that
+finished before this existed). Distinct from `log_tail` (raw stdout), which stays
+on `GET /v1/runs/{id}` for diagnostics.
+
+```json
+{ "type": "waivers", "data": { /* job-specific object, see below */ } }
+```
+
+- `type` exactly matches the job `name` from `GET /v1/jobs`.
+- `data` is a job-specific object (snake_case). Decode generically, then switch on
+  `type`. `optimize` and `recap-site` never produce output.
+
+**`prospects`**
+```json
+{ "alerts": [ { "name": "Jackson Holliday", "team": "BAL", "pos": "SS",
+    "kind": "called-up", "priority": "high", "detail": "promoted to MLB", "rank": 1 } ],
+  "upgrades": [ { "source": "FanGraphs", "drop": "Old Guy", "drop_rank": 80,
+    "add": "New Guy", "add_rank": 12, "rank_gap": 68, "near_term": true } ] }
+```
+`kind` ∈ `called-up | optioned | performance-hot | performance-cold |
+free-agent-buzz | upgrade-available`; `priority` ∈ `high | medium | low`. Split
+`alerts` into call-up vs breakout views by `kind`.
+
+**`waivers`**
+```json
+{ "picks": [ { "name": "...", "team": "BAL", "pos": "OF", "is_pitcher": false,
+    "signal": "HOT", "projected_pts_per_game": 4.2, "drop_name": "...", "gap": 1.1,
+    "xwoba": 0.40, "woba": 0.36, "barrel_pct": 14, "hard_hit_pct": 48, "rank": 1 } ],
+  "total": 12 }
+```
+`signal` ∈ `BUY-LOW | HOT | BOTH` (omitted if none). Pitcher rows carry `era`/`xera`
+instead of the hitter stat fields. `rank` is 1-based. `total` is the count that
+passed filters before the top-N cut.
+
+**`claims`**
+```json
+{ "claims": [ { "team": "...", "claim_type": "FA", "added": "New SS",
+    "added_pos": "SS", "dropped": "Old SS", "net_value": 3, "signal": "HOT" } ] }
+```
+`claim_type` ∈ `FA | WW`. `net_value` = added HKB value − dropped HKB value. One
+row per added player.
+
+**`transactions`**
+```json
+{ "trades": [ { "teams": ["A","B"], "processed_at": "2026-06-20T12:00:00Z",
+    "players": [ { "name": "...", "from_team": "A", "pos": "OF", "valuation": 30 } ] } ] }
+```
+`from_team` is the side the player came from; `valuation` is HKB value.
+
+**`gs-check`**
+```json
+{ "period": "Week 11", "violations": [ { "team": "...", "kind": "over",
+    "used": 7, "limit": 5, "over_by": 2 } ] }
+```
+`kind` ∈ `over | under`. `over_by` present for `over` only.
+
+**`backtest`**
+```json
+{ "start": "2026-06-08", "end": "2026-06-14",
+  "days": [ { "date": "2026-06-08", "actual": 40.0, "optimal": 42.0, "gap": -2.0 } ],
+  "accuracy": { "mae": 1.4, "bias": 0.3, "rmse": 2.1, "n": 240,
+    "by_position": [ { "bucket": "OF", "n": 50, "mae": 1.1, "bias": 0.2 } ] } }
+```
+`gap` = actual − optimal (negative = points left on the bench). `accuracy` omitted
+when projection grading didn't run (`--skip-projections`). `bucket` ∈
+`C | INF | OF | UT | SP | RP`.
+
+**`grade`**
+```json
+{ "dates": ["2026-06-19"], "rows_written": 12 }
+```
+Graded-snapshot rows written to the Analysis Store, by date.
 
 ### `GET /v1/notifications`
 
@@ -167,3 +244,5 @@ POST /v1/jobs/optimize
 3. **Errors** — same data filtered to `FAILED`.
 4. **Actions** — buttons per job → `POST /v1/jobs/{name}`, then poll + toast.
    Confirm dialog before `optimize`.
+5. **Run result** — after a run succeeds, `GET /v1/runs/{id}/output`; switch on
+   `type` to render the per-job view (`404` → fall back to `log_tail`).

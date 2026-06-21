@@ -10,6 +10,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/pmurley/go-fantrax/models"
@@ -89,6 +90,9 @@ func CheckTrades(ft TradeClient, cacheDir string, pushoverUserKey, pushoverAPITo
 		executedGrouped = groupTrades(txs, lookup)
 		fmt.Println(formatTrades("Recent Trades", executedGrouped, true))
 	}
+
+	allTrades := append(append([]Trade{}, pendingGrouped...), executedGrouped...)
+	lineupapi.RecordOutput("transactions", toWireResult(allTrades))
 
 	if dryRun {
 		return nil
