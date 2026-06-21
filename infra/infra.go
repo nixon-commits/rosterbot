@@ -150,7 +150,11 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	publicSubnets := vpc.SelectSubnets(&awsec2.SubnetSelection{SubnetType: awsec2.SubnetType_PUBLIC})
 
 	apiFn := awscdklambdagoalpha.NewGoFunction(stack, jsii.String("LineupApi"), &awscdklambdagoalpha.GoFunctionProps{
-		Entry:        jsii.String("../lambda"),
+		Entry: jsii.String("../lambda"),
+		// Pin to provided.al2023: provided.al2 (the GoFunction default) loses
+		// support 2026-07-31. The Go binary is statically linked, so the AL
+		// version under it is immaterial — this is a base-OS swap only.
+		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
 		Architecture: awslambda.Architecture_ARM_64(),
 		Timeout:      awscdk.Duration_Seconds(jsii.Number(10)),
 		Environment: &map[string]*string{
