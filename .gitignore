@@ -6,6 +6,7 @@ rosterbot
 .fantrax-cache/
 .backtest/
 .waivers/
+.lineup/
 .superpowers/
 fangraphs-leaderboard-projections*.csv
 verify_periods
@@ -13,5 +14,6 @@ ideas
 .playwright-mcp/
 
 # CDK build artifacts
+infra/infra
 infra/cdk.out/
 infra/cdk.context.json.bak
