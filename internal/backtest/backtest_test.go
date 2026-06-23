@@ -329,6 +329,40 @@ func TestRunProjectionAnalysis_SameDaySnapshotGraded(t *testing.T) {
 	}
 }
 
+func TestRunProjectionAnalysis_EveningETRefreshGraded(t *testing.T) {
+	dir := t.TempDir()
+	date := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)
+	// The lineup schedule's final daily run fires at 03:00 UTC — which is
+	// 23:00 ET, still the SAME Eastern-time day it projects. This is the
+	// canonical last on-the-day refresh and must be graded, not flagged
+	// stale. (A UTC comparison would see 2026-04-16 != 2026-04-15 and wrongly
+	// exclude it, which silently zeroed out grading for every completed day.)
+	s := Snapshot{
+		Date:             "2026-04-15",
+		ProjectionSystem: "depthcharts",
+		GeneratedAt:      time.Date(2026, 4, 16, 2, 0, 0, 0, time.UTC), // 2026-04-15 22:00 ET
+		Hitters: []SnapshotPlayer{
+			{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", ProjPtsPerGame: 10.0, HasGame: true},
+		},
+	}
+	if err := WriteSnapshot(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	days := []fantrax.DayRoster{
+		{
+			Date:    date,
+			Players: []fantrax.DayPlayerFP{{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", FPts: 14.0, HadGame: true}},
+		},
+	}
+	results := RunProjectionAnalysis(days, dir)
+	if results[0].Source != "snapshot" {
+		t.Errorf("source = %q, want snapshot (evening-ET refresh must grade)", results[0].Source)
+	}
+	if len(results[0].Players) != 1 {
+		t.Errorf("want 1 graded player, got %d", len(results[0].Players))
+	}
+}
+
 func TestFormatReport_WarnsOnExcludedDays(t *testing.T) {
 	r := Report{
 		Start: time.Date(2026, 5, 25, 0, 0, 0, 0, time.UTC),

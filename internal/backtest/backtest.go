@@ -447,14 +447,14 @@ func RunProjectionAnalysis(days []fantrax.DayRoster, snapshotDir string) []Proje
 		// day in the week, so a day's snapshot can be a forecast generated
 		// several days earlier. The final hourly run on the day itself rewrites
 		// it with the real pre-lock projection — unless every run that day
-		// failed (e.g. a GHA outage). When GeneratedAt lands on a different
-		// calendar day than the date it projects, the snapshot is a stale
-		// forecast; grading it would inflate apparent projection error, so we
-		// flag it and exclude it from the rollup (mirroring "missing").
-		// A zero GeneratedAt (pre-dating this field) can't be judged, so we
-		// grade it as before.
+		// failed (e.g. a scheduler outage). When GeneratedAt lands on a
+		// different Eastern-time calendar day than the date it projects, the
+		// snapshot is a stale forecast; grading it would inflate apparent
+		// projection error, so we flag it and exclude it from the rollup
+		// (mirroring "missing"). A zero GeneratedAt (pre-dating this field)
+		// can't be judged, so we grade it as before.
 		if !snap.GeneratedAt.IsZero() &&
-			!sameUTCDate(snap.GeneratedAt, day.Date) {
+			!sameETDate(snap.GeneratedAt, day.Date) {
 			results = append(results, ProjectionDayResult{
 				Date:   day.Date,
 				Source: "stale",
@@ -570,12 +570,27 @@ func topSignedMisses(players []PlayerProjection, n int) []PlayerProjection {
 	return sorted
 }
 
-// sameUTCDate reports whether a timestamp falls on the same calendar day as a
-// date, both compared in UTC. The optimizer runs in UTC (GHA) and snapshot
-// dates are midnight-UTC, so UTC is the right basis for "was this generated on
-// the day it projects?".
-func sameUTCDate(t, date time.Time) bool {
-	ty, tm, td := t.UTC().Date()
+// easternLoc is the bot's operational time zone. Snapshot dates are derived
+// from todayET() (America/New_York) and stored as midnight-UTC of that ET day,
+// so "was this generated on the day it projects?" must be asked in Eastern
+// time, not UTC. The lineup schedule's final daily run fires at 03:00 UTC
+// (23:00 ET — still the same ET day), so a UTC comparison crosses midnight and
+// falsely flags every day's last on-the-day refresh as stale. Falls back to
+// UTC if the zone database is unavailable.
+var easternLoc = func() *time.Location {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}()
+
+// sameETDate reports whether timestamp t (a real UTC instant, e.g. a snapshot's
+// GeneratedAt) falls on the same Eastern-time calendar day as date (the ET-day
+// label the snapshot projects, stored at midnight UTC — so its UTC Y/M/D is
+// already the ET calendar day and must not be re-converted).
+func sameETDate(t, date time.Time) bool {
+	ty, tm, td := t.In(easternLoc).Date()
 	dy, dm, dd := date.UTC().Date()
 	return ty == dy && tm == dm && td == dd
 }
