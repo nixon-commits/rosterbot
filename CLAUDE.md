@@ -15,8 +15,7 @@ go run . optimize --dry-run --dates 2026-03-26:2026-03-28  # test a date range
 go run . optimize --dry-run --dates all  # test full season from today
 go run . optimize --dry-run --matchup    # test remaining days in current matchup period
 go run . prospects --dry-run  # run prospect report locally
-go run . gs-check --dry-run --force  # check GS violations for most recent period
-go run . gs-check --dry-run          # check GS violations (only if yesterday ended a period)
+go run . gs-check --dry-run          # check league-wide GS violations for the most recently completed period
 go run . transactions --dry-run      # check recent trades with HKB valuations
 go run . waivers --dry-run           # Statcast-driven free-agent picks (top 15 by default)
 go run . waivers --dry-run --top 25 --positions OF,SP   # bigger list, position filter

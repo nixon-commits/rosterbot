@@ -84,8 +84,8 @@ rosterbot claims --dry-run --no-signals         # skip Statcast signal enrichmen
 rosterbot claims --dry-run --drops-min 3000     # only flag drops above HKB value threshold
 rosterbot claims --dry-run --since 2026-06-01   # recap claims since a specific date
 
-# Check GS violations
-rosterbot gs-check --dry-run --force
+# Check GS violations (most recently completed period)
+rosterbot gs-check --dry-run
 
 # Backtest last completed matchup week (lineup + projection accuracy)
 rosterbot backtest
