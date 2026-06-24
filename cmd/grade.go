@@ -13,7 +13,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var gradeDates string
+var (
+	gradeDates  string
+	gradeWindow int
+)
 
 var gradeCmd = &cobra.Command{
 	Use:   "grade",
@@ -22,7 +25,8 @@ var gradeCmd = &cobra.Command{
 }
 
 func init() {
-	gradeCmd.Flags().StringVar(&gradeDates, "dates", "", "date or range to grade (default: yesterday)")
+	gradeCmd.Flags().StringVar(&gradeDates, "dates", "", "explicit date or range to grade (overrides --window)")
+	gradeCmd.Flags().IntVar(&gradeWindow, "window", 3, "(re)grade this many trailing days ending yesterday; re-grades are idempotent per date, so a night that failed self-heals on the next run")
 	rootCmd.AddCommand(gradeCmd)
 }
 
@@ -33,7 +37,14 @@ func runGrade(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	start, end := today.AddDate(0, 0, -1), today.AddDate(0, 0, -1)
+	// Default: a trailing window ending yesterday. Grading is idempotent per
+	// date (each dt partition is overwritten), and missing/stale days are
+	// skipped, so re-grading recent days every night lets a failed run
+	// self-heal on the next one without manual --dates backfill.
+	if gradeWindow < 1 {
+		gradeWindow = 1
+	}
+	start, end := today.AddDate(0, 0, -gradeWindow), today.AddDate(0, 0, -1)
 	if gradeDates != "" {
 		ds, err := parseDates(gradeDates, today)
 		if err != nil {
