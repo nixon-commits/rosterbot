@@ -92,6 +92,26 @@ func cacheTTL(d time.Duration) time.Duration {
 	return d
 }
 
+// resolveDatePeriod returns the scoring period to optimize+apply for a date.
+//
+// For today we trust Fantrax's authoritative current period — the same period
+// the roster was read under (GetPitcherRoster -> GetCurrentPeriodTeamRosterInfo).
+// Fantrax can insert extra daily scoring periods mid-season (doubleheaders /
+// postponed-game makeups), which makes naive season-start day arithmetic drift
+// one behind. If the apply used the date-math period instead, it would write to
+// the wrong period and silently no-op on today's real lineup (the roster read,
+// the apply, and the cache invalidation must all agree on one period number).
+//
+// When the current-period lookup is unavailable (periodErr) or unusable (<= 0),
+// and for any non-today date (where Fantrax's "current" pointer doesn't apply),
+// fall back to PeriodForDate — the best available signal.
+func resolveDatePeriod(isToday bool, currentPeriod int, periodErr error, seasonStart, date time.Time) int {
+	if isToday && periodErr == nil && currentPeriod > 0 {
+		return currentPeriod
+	}
+	return fantrax.PeriodForDate(seasonStart, date)
+}
+
 func runOptimize(cmd *cobra.Command, args []string) error {
 	if err := projections.SetProjectionSystem(projectionSystem); err != nil {
 		return err
@@ -555,7 +575,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		i, date := i, date
 		g.Go(func() error {
 			isToday := date.Equal(today)
-			period := fantrax.PeriodForDate(seasonStart, date)
+			period := resolveDatePeriod(isToday, currentPeriod, periodErr, seasonStart, date)
 
 			var warnings []string
 
