@@ -172,13 +172,23 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStar
 		yesterday = sp.EndDate
 	}
 
+	// Resolve dates → daily periods anchored on Fantrax's authoritative current
+	// period (immune to mid-season inserted daily periods like doubleheaders),
+	// falling back to season-start day math if the lookup fails. Both callers
+	// (the optimizer GS budget and gs-check) operate on the current or
+	// just-completed week, so the anchor is exact for the dates walked here.
+	periodFor := func(date time.Time) int { return PeriodForDate(seasonStart, date) }
+	if cur, err := c.GetCurrentPeriod(); err == nil && cur > 0 {
+		periodFor = func(date time.Time) int { return AnchorPeriodForDate(today, cur, date) }
+	}
+
 	// Get baseline YTD GS and FPts per player as of the day before the period started.
 	// For the first period of the season, baseline is zero (no prior data).
 	dayBeforePeriod := sp.StartDate.AddDate(0, 0, -1)
 	prevGS := map[string]int{}
 	prevFPts := map[string]float64{}
 	if !dayBeforePeriod.Before(seasonStart) {
-		baselinePeriod := PeriodForDate(seasonStart, dayBeforePeriod)
+		baselinePeriod := periodFor(dayBeforePeriod)
 		info, err := c.getPlayerGSSnapshotForPeriod(teamID, baselinePeriod)
 		if err != nil {
 			return 0, nil, fmt.Errorf("get baseline GS: %w", err)
@@ -208,7 +218,7 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStar
 	totalGS := 0
 	var overageStarts []PitcherStart
 	for d := sp.StartDate; !d.After(yesterday); d = d.AddDate(0, 0, 1) {
-		period := PeriodForDate(seasonStart, d)
+		period := periodFor(d)
 		info, err := c.getPlayerGSSnapshotForPeriod(teamID, period)
 		if err != nil {
 			return 0, nil, fmt.Errorf("get GS for %s: %w", d.Format("2006-01-02"), err)

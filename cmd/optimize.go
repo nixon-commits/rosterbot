@@ -94,20 +94,22 @@ func cacheTTL(d time.Duration) time.Duration {
 
 // resolveDatePeriod returns the scoring period to optimize+apply for a date.
 //
-// For today we trust Fantrax's authoritative current period — the same period
-// the roster was read under (GetPitcherRoster -> GetCurrentPeriodTeamRosterInfo).
-// Fantrax can insert extra daily scoring periods mid-season (doubleheaders /
-// postponed-game makeups), which makes naive season-start day arithmetic drift
-// one behind. If the apply used the date-math period instead, it would write to
-// the wrong period and silently no-op on today's real lineup (the roster read,
-// the apply, and the cache invalidation must all agree on one period number).
+// We anchor on Fantrax's authoritative current period — the same period the
+// roster was read under (GetPitcherRoster -> GetCurrentPeriodTeamRosterInfo) —
+// for today AND the near-future --matchup window. Fantrax can insert extra
+// daily scoring periods mid-season (doubleheaders / postponed-game makeups),
+// which makes naive season-start day arithmetic drift one behind. If the apply
+// used the date-math period instead, it would write to the wrong period and
+// silently no-op on the real lineup (the roster read, the apply, and the cache
+// invalidation must all agree on one period number). AnchorPeriodForDate(today,
+// currentPeriod, date) returns currentPeriod for today and currentPeriod+N for
+// N days out — exact within the insertion-free near-today window.
 //
-// When the current-period lookup is unavailable (periodErr) or unusable (<= 0),
-// and for any non-today date (where Fantrax's "current" pointer doesn't apply),
-// fall back to PeriodForDate — the best available signal.
-func resolveDatePeriod(isToday bool, currentPeriod int, periodErr error, seasonStart, date time.Time) int {
-	if isToday && periodErr == nil && currentPeriod > 0 {
-		return currentPeriod
+// When the current-period lookup is unavailable (periodErr) or unusable (<= 0)
+// fall back to PeriodForDate (season-start day math) — the best available signal.
+func resolveDatePeriod(currentPeriod int, periodErr error, seasonStart, today, date time.Time) int {
+	if periodErr == nil && currentPeriod > 0 {
+		return fantrax.AnchorPeriodForDate(today, currentPeriod, date)
 	}
 	return fantrax.PeriodForDate(seasonStart, date)
 }
@@ -575,7 +577,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		i, date := i, date
 		g.Go(func() error {
 			isToday := date.Equal(today)
-			period := resolveDatePeriod(isToday, currentPeriod, periodErr, seasonStart, date)
+			period := resolveDatePeriod(currentPeriod, periodErr, seasonStart, today, date)
 
 			var warnings []string
 
