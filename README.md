@@ -14,6 +14,7 @@ Fantasy baseball roster automation for Fantrax head-to-head points leagues. Opti
 - **Roster hygiene** — Flags healthy players stuck in IL slots, called-up players still in Minors slots, and injured players occupying active slots.
 - **Backtesting** — Grades past lineup moves against the hindsight-optimal lineup and measures projection accuracy against actual fantasy points.
 - **Weekly recaps** — Sleeper-style HTML recaps with a Game of the Week win-probability chart, plus Heart Attack (most lead changes) and Comeback (winner with mid-week WP < 0.30) awards. Includes Top Single Day Performances (top 5 batters/pitchers, badged with the owning team's logo) and a League Leaders board ranking all rostered players by season-to-date wOBA (hitters) and FIP (pitchers).
+- **Projection-accuracy dashboard** — Daily-updating self-contained HTML dashboard reading from the Analysis Store grades; shows scorecard + 30-day trend, per-position MAE breakdown, calibration chart, and worst-miss table, with auto-generated insights. Live URL is the CDK `ReportUrl` output.
 
 ## Quick Start
 
@@ -107,6 +108,10 @@ rosterbot recap --dates 2026-04-20:2026-04-26 --out /tmp/recap.html
 
 # Build a multi-week static site (one HTML per completed week + index.html)
 rosterbot recap-site --out dist
+
+# Render projection-accuracy dashboard from the grades store (reads S3 when STATE_BUCKET is set, else .analysis/); renders to <out>/index.html (--out defaults to report)
+rosterbot projection-site --out report
+rosterbot projection-site --out report --open   # render and auto-open in default browser
 
 # Print league scoring weights
 rosterbot scoring
@@ -274,6 +279,7 @@ needs to do a full browser login.
 | `claims.yml` | 10am ET daily | `claims` (daily league-wide waiver/FA claims recap) |
 | `recap.yml` | 7am ET Mondays | `recap-site` (builds every completed week + index, deploys to GitHub Pages) |
 | `grade` (daily 13:30 UTC) | daily | `grade` (writes Graded Snapshots to the Analysis Store for model auditing) |
+| `ProjectionSite` (daily 15:00 UTC) | daily | `projection-site` (renders projection-accuracy dashboard to `REPORT_BUCKET` / CloudFront `ReportCdn`) |
 
 ### Model auditing (Analysis Store)
 
@@ -337,4 +343,6 @@ internal/
   roster/         roster hygiene alerts
   notify/         Pushover push notifications
   backtest/       grade past lineup moves + projection accuracy
+  analysis/       Analysis Store: GradeRow, Writer/Reader, NDJSON helpers
+  report/         pure aggregation of grades → Model + HTML dashboard render
 ```
