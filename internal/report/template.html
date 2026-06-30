@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Projection Accuracy</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" integrity="sha384-vsrfeLOOY6KuIYKDlmVH5UiBmgIdB1oEf7p01YgWHuqmOHfZr374+odEv96n9tNC" crossorigin="anonymous"></script>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --ink:#e6e8eb; --muted:#9aa0a8; --accent:#4f9dff; --warn:#ffb454; --good:#5fd38d; --bad:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  header { padding:20px 24px; border-bottom:1px solid #23262e; }
+  h1 { margin:0 0 4px; font-size:20px; }
+  .sub { color:var(--muted); font-size:13px; }
+  main { max-width:1100px; margin:0 auto; padding:20px 24px 60px; }
+  .controls { display:flex; gap:24px; flex-wrap:wrap; margin:16px 0 24px; }
+  .grp { display:flex; gap:6px; align-items:center; }
+  .grp .lbl { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; margin-right:4px; }
+  button.seg { background:var(--card); color:var(--ink); border:1px solid #2a2e37; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:13px; }
+  button.seg.active { background:var(--accent); border-color:var(--accent); color:#06101f; font-weight:600; }
+  .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+  .card { background:var(--card); border:1px solid #23262e; border-radius:10px; padding:14px 16px; }
+  .card .k { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  .card .v { font-size:26px; font-weight:700; margin-top:4px; }
+  .card .d { font-size:12px; margin-top:2px; }
+  .d.good { color:var(--good); } .d.bad { color:var(--bad); } .d.flat { color:var(--muted); }
+  section.panel { background:var(--card); border:1px solid #23262e; border-radius:10px; padding:16px; margin-top:20px; }
+  section.panel h2 { margin:0 0 12px; font-size:15px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #23262e; }
+  th { color:var(--muted); font-weight:600; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .over { color:var(--bad); } .under { color:var(--good); }
+  ul.insights { list-style:none; margin:0; padding:0; }
+  ul.insights li { padding:8px 12px; border-radius:8px; margin-bottom:8px; background:#1d2129; border-left:3px solid var(--accent); }
+  ul.insights li.warn { border-left-color:var(--warn); }
+  .empty { color:var(--muted); padding:24px; text-align:center; }
+  .chartwrap { position:relative; height:280px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Projection Accuracy</h1>
+  <div class="sub" id="meta"></div>
+</header>
+<main>
+  <div class="controls">
+    <div class="grp"><span class="lbl">Window</span><div id="winseg"></div></div>
+    <div class="grp"><span class="lbl">Players</span><div id="roleseg"></div></div>
+  </div>
+
+  <div id="scorecard" class="cards"></div>
+
+  <section class="panel"><h2>Rolling accuracy (7-day) over the season</h2><div class="chartwrap"><canvas id="trendChart"></canvas></div></section>
+  <section class="panel"><h2>Accuracy by position</h2><div class="chartwrap"><canvas id="posChart"></canvas></div></section>
+  <section class="panel" id="calib"><h2>Calibration — projected vs actual</h2><div class="chartwrap"><canvas id="calibChart"></canvas></div></section>
+  <section class="panel" id="insights"><h2>Insights</h2><ul class="insights" id="insightList"></ul></section>
+  <section class="panel" id="misses"><h2>Worst misses</h2><div id="missTable"></div></section>
+</main>
+
+<script>
+const MODEL = {{.Data}};
+
+let state = { window: 7, role: "all" };
+let charts = {};
+
+const fmt = (x, d=1) => (x===0?0:x).toFixed(d);
+const winLabel = w => w<=0 ? "Season" : w+"d";
+
+function seg(containerId, items, key) {
+  const c = document.getElementById(containerId);
+  c.innerHTML = "";
+  items.forEach(it => {
+    const b = document.createElement("button");
+    b.className = "seg" + (state[key]==it.val ? " active" : "");
+    b.textContent = it.label;
+    b.onclick = () => { state[key] = it.val; render(); };
+    c.appendChild(b);
+  });
+}
+
+function deltaCell(cur, prior, lowerBetter=true) {
+  if (!prior || prior===0) return '<div class="d flat">—</div>';
+  const diff = cur - prior;
+  const improved = lowerBetter ? diff < 0 : diff > 0;
+  const cls = Math.abs(diff) < 1e-9 ? "flat" : (improved ? "good" : "bad");
+  const sign = diff > 0 ? "+" : "";
+  return '<div class="d '+cls+'">'+sign+fmt(diff,2)+' vs prior</div>';
+}
+
+function renderScorecard(v) {
+  const s = v.scorecard, c = s.cur, p = s.prior;
+  const el = document.getElementById("scorecard");
+  if (!c || c.n===0) { el.innerHTML = '<div class="empty" style="grid-column:1/-1">No graded data in this window yet.</div>'; return; }
+  el.innerHTML = `
+    <div class="card"><div class="k">MAE</div><div class="v">${fmt(c.mae)}</div>${deltaCell(c.mae,p.mae,true)}</div>
+    <div class="card"><div class="k">Bias</div><div class="v">${fmt(c.bias)}</div>${deltaCell(Math.abs(c.bias),Math.abs(p.bias),true)}</div>
+    <div class="card"><div class="k">RMSE</div><div class="v">${fmt(c.rmse)}</div>${deltaCell(c.rmse,p.rmse,true)}</div>
+    <div class="card"><div class="k">Sample (player-days)</div><div class="v">${c.n.toLocaleString()}</div><div class="d flat">prior ${p.n.toLocaleString()}</div></div>`;
+}
+
+function destroy(id){ if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+function renderTrend() {
+  const tp = MODEL.trends[state.role] || [];
+  destroy("trendChart");
+  charts.trendChart = new Chart(document.getElementById("trendChart"), {
+    type: "line",
+    data: { labels: tp.map(p=>p.date), datasets: [
+      { label:"MAE", data: tp.map(p=>p.mae), borderColor:"#4f9dff", backgroundColor:"#4f9dff", pointRadius:0, tension:.25 },
+      { label:"Bias", data: tp.map(p=>p.bias), borderColor:"#ffb454", backgroundColor:"#ffb454", pointRadius:0, tension:.25 },
+    ]},
+    options: { maintainAspectRatio:false, scales:{ x:{ ticks:{ color:"#9aa0a8", maxTicksLimit:10 } }, y:{ ticks:{ color:"#9aa0a8" } } }, plugins:{ legend:{ labels:{ color:"#e6e8eb" } } } }
+  });
+}
+
+function renderPos(v) {
+  destroy("posChart");
+  charts.posChart = new Chart(document.getElementById("posChart"), {
+    type: "bar",
+    data: { labels: v.byPos.map(p=>p.bucket), datasets: [
+      { label:"MAE", data: v.byPos.map(p=>p.mae), backgroundColor:"#4f9dff" },
+      { label:"Bias", data: v.byPos.map(p=>p.bias), backgroundColor:"#ffb454" },
+    ]},
+    options: { maintainAspectRatio:false, scales:{ x:{ ticks:{ color:"#9aa0a8" } }, y:{ ticks:{ color:"#9aa0a8" } } }, plugins:{ legend:{ labels:{ color:"#e6e8eb" } } } }
+  });
+}
+
+function renderCalib(v) {
+  destroy("calibChart");
+  const pts = v.calib.map(p=>({x:p.proj, y:p.actual}));
+  let max = 1;
+  pts.forEach(p=>{ max = Math.max(max, p.x, p.y); });
+  charts.calibChart = new Chart(document.getElementById("calibChart"), {
+    type: "scatter",
+    data: { datasets: [
+      { label:"bins", data: pts, backgroundColor:"#5fd38d", pointRadius:5 },
+      { label:"perfect (y=x)", type:"line", data:[{x:0,y:0},{x:max,y:max}], borderColor:"#9aa0a8", borderDash:[5,5], pointRadius:0 },
+    ]},
+    options: { maintainAspectRatio:false, scales:{ x:{ title:{display:true,text:"projected",color:"#9aa0a8"}, ticks:{ color:"#9aa0a8" } }, y:{ title:{display:true,text:"actual",color:"#9aa0a8"}, ticks:{ color:"#9aa0a8" } } }, plugins:{ legend:{ labels:{ color:"#e6e8eb" } } } }
+  });
+}
+
+function renderInsights(v) {
+  const ul = document.getElementById("insightList");
+  if (!v.insights || v.insights.length===0) { ul.innerHTML = '<li class="flat">No notable signals in this window.</li>'; return; }
+  ul.innerHTML = v.insights.map(i => '<li class="'+(i.severity==="warn"?"warn":"")+'">'+escapeHtml(i.text)+'</li>').join("");
+}
+
+function renderMisses(v) {
+  const el = document.getElementById("missTable");
+  if (!v.misses || v.misses.length===0) { el.innerHTML = '<div class="empty">No data.</div>'; return; }
+  const rows = v.misses.map(m => {
+    const cls = m.diff < 0 ? "over" : "under";
+    return '<tr><td>'+escapeHtml(m.name)+'</td><td>'+escapeHtml(m.bucket)+'</td><td>'+m.date+'</td>'+
+      '<td class="num">'+fmt(m.projected)+'</td><td class="num">'+fmt(m.actual)+'</td>'+
+      '<td class="num '+cls+'">'+(m.diff>0?"+":"")+fmt(m.diff)+'</td></tr>';
+  }).join("");
+  el.innerHTML = '<table><thead><tr><th>Player</th><th>Pos</th><th>Date</th><th class="num">Proj</th><th class="num">Actual</th><th class="num">Diff</th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function render() {
+  seg("winseg", MODEL.windows.map(w=>({val:w,label:winLabel(w)})), "window");
+  seg("roleseg", MODEL.roles.map(r=>({val:r,label:r[0].toUpperCase()+r.slice(1)})), "role");
+  const v = MODEL.views[state.window+"|"+state.role];
+  renderScorecard(v);
+  renderTrend();
+  renderPos(v);
+  renderCalib(v);
+  renderInsights(v);
+  renderMisses(v);
+}
+
+document.getElementById("meta").textContent =
+  "Latest graded: " + MODEL.latestDate + " · season since " + MODEL.seasonStart + " · generated " + MODEL.generatedAt;
+render();
+</script>
+</body>
+</html>
