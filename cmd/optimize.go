@@ -43,9 +43,11 @@ var (
 		"steamer":         "Steamer",
 		"depthcharts":     "DepthCharts",
 		"thebatx":         "TheBatX",
+		"atc":             "ATC",
 		"steamer-ros":     "Steamer RoS",
 		"depthcharts-ros": "DepthCharts RoS",
 		"thebatx-ros":     "TheBatX RoS",
+		"atc-ros":         "ATC RoS",
 	}
 )
 
@@ -60,7 +62,7 @@ func init() {
 	optimizeCmd.Flags().IntVar(&daysAhead, "days", 0, "optimize for the next N days starting from today")
 	optimizeCmd.Flags().BoolVar(&matchupPeriod, "matchup", false, "optimize for all remaining days in the current matchup period")
 	optimizeCmd.Flags().BoolVar(&checkRoster, "check-roster", true, "check for roster slot mismatches (IL/minors)")
-	optimizeCmd.Flags().StringVar(&projectionSystem, "projections", "depthcharts", "projection system: steamer, depthcharts, thebatx, steamer-ros, depthcharts-ros, thebatx-ros")
+	optimizeCmd.Flags().StringVar(&projectionSystem, "projections", "depthcharts", "projection system: steamer, depthcharts, thebatx, atc, steamer-ros, depthcharts-ros, thebatx-ros, atc-ros")
 	optimizeCmd.Flags().BoolVar(&showPipeline, "pipeline", false, "show full hitter adjustment pipeline detail")
 	optimizeCmd.Flags().BoolVar(&snapshotFlag, "snapshot", false, "force-write per-date projection snapshots to .backtest/snapshots/ even in --dry-run (non-dry-run runs always write)")
 	optimizeCmd.Flags().BoolVar(&archiveProjections, "archive-projections", false, "deprecated alias for --snapshot (snapshots are written by default on non-dry-run runs; also enabled by BACKTEST_ARCHIVE=1)")

@@ -198,7 +198,7 @@ hardcoding. Static; available without auth-to-runner.
         "pattern": "^\\d{4}-\\d{2}-\\d{2}(:\\d{4}-\\d{2}-\\d{2})?$",
         "help": "Used when Period = custom" },
       { "name": "projections", "label": "Projection system", "type": "enum",
-        "options": ["steamer","depthcharts","thebatx","steamer-ros","depthcharts-ros","thebatx-ros"] },
+        "options": ["steamer","depthcharts","thebatx","atc","steamer-ros","depthcharts-ros","thebatx-ros","atc-ros"] },
       { "name": "dry_run", "label": "Dry run (preview only)", "type": "bool" }
     ] }
 ] }

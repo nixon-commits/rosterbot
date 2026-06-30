@@ -27,9 +27,11 @@ const (
 	ProjectionSteamer        = "steamer"
 	ProjectionDepthCharts    = "depthcharts"
 	ProjectionBatX           = "thebatx"
+	ProjectionATC            = "atc"
 	ProjectionSteamerRoS     = "steamer-ros"
 	ProjectionDepthChartsRoS = "depthcharts-ros"
 	ProjectionBatXRoS        = "thebatx-ros"
+	ProjectionATCRoS         = "atc-ros"
 )
 
 // fgProjectionType maps our flag names to FanGraphs API type parameter values.
@@ -37,20 +39,22 @@ var fgProjectionType = map[string]string{
 	ProjectionSteamer:        "steamer",
 	ProjectionDepthCharts:    "fangraphsdc",
 	ProjectionBatX:           "thebatx",
+	ProjectionATC:            "atc",
 	ProjectionSteamerRoS:     "steamerr",
 	ProjectionDepthChartsRoS: "rfangraphsdc",
 	ProjectionBatXRoS:        "rthebatx",
+	ProjectionATCRoS:         "ratc",
 }
 
 // fgBaseURL is the FanGraphs API base URL template. Tests can override this.
 var fgBaseURL = "https://www.fangraphs.com/api/projections?type=%s&stats=%s&pos=all&team=0&players=0&lg=all"
 
 // SetProjectionSystem updates the FanGraphs API URLs to use the given projection system.
-// Valid values: "steamer", "depthcharts", "thebatx". Returns an error for unknown systems.
+// Valid values: "steamer", "depthcharts", "thebatx", "atc" (and their -ros variants). Returns an error for unknown systems.
 func SetProjectionSystem(system string) error {
 	apiType, ok := fgProjectionType[system]
 	if !ok {
-		return fmt.Errorf("unknown projection system %q (valid: steamer, depthcharts, thebatx, steamer-ros, depthcharts-ros, thebatx-ros)", system)
+		return fmt.Errorf("unknown projection system %q (valid: steamer, depthcharts, thebatx, atc, steamer-ros, depthcharts-ros, thebatx-ros, atc-ros)", system)
 	}
 	currentAPIType = apiType
 	fangraphsBattingURL = fmt.Sprintf(fgBaseURL, apiType, "bat")
@@ -322,6 +326,7 @@ var rosVariant = map[string]string{
 	ProjectionSteamer:     ProjectionSteamerRoS,
 	ProjectionDepthCharts: ProjectionDepthChartsRoS,
 	ProjectionBatX:        ProjectionBatXRoS,
+	ProjectionATC:         ProjectionATCRoS,
 }
 
 // LoadResult describes what projection source was loaded and whether fallback occurred.

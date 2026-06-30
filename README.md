@@ -61,8 +61,9 @@ rosterbot optimize --dry-run --matchup
 # Show full hitter adjustment pipeline (base → blend → park → platoon → opp SP → final)
 rosterbot optimize --dry-run --pipeline
 
-# Switch projection system (steamer, depthcharts, thebatx, steamer-ros, depthcharts-ros, thebatx-ros)
+# Switch projection system (steamer, depthcharts, thebatx, atc, steamer-ros, depthcharts-ros, thebatx-ros, atc-ros)
 rosterbot optimize --dry-run --projections steamer
+rosterbot optimize --dry-run --projections atc
 rosterbot optimize --dry-run --projections steamer-ros   # Rest-of-Season variant
 
 # Bypass API cache (force fresh data)

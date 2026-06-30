@@ -51,7 +51,7 @@ var dateOrRange = `^\d{4}-\d{2}-\d{2}(:\d{4}-\d{2}-\d{2})?$`
 // csvCodes matches a comma-separated list of alphanumeric codes (e.g. OF,SP).
 var csvCodes = `^[A-Za-z0-9]+(,[A-Za-z0-9]+)*$`
 
-var projectionSystems = []string{"steamer", "depthcharts", "thebatx", "steamer-ros", "depthcharts-ros", "thebatx-ros"}
+var projectionSystems = []string{"steamer", "depthcharts", "thebatx", "atc", "steamer-ros", "depthcharts-ros", "thebatx-ros", "atc-ros"}
 
 // jobSpecs is the allowlist. Each spec's build closure is the ONLY way params
 // become argv, so an unknown name or an invalid value can never reach the CLI.
