@@ -73,8 +73,8 @@ func TestAggregate_KeysAndShape(t *testing.T) {
 	if _, ok := m.Views["0|all"]; !ok {
 		t.Fatalf("missing season|all view; keys=%v", m.Views)
 	}
-	if _, ok := m.Trends["pitchers"]; !ok {
-		t.Fatalf("missing pitchers trend")
+	if _, ok := m.Trends["7|pitchers"]; !ok {
+		t.Fatalf("missing 7|pitchers trend; keys=%v", m.Trends)
 	}
 	// season|all should see both rows
 	if m.Views["0|all"].Scorecard.Cur.N != 2 {

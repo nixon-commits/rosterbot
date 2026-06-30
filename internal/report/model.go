@@ -32,7 +32,7 @@ type Model struct {
 	LatestDate  string                  `json:"latestDate"`
 	Windows     []int                   `json:"windows"` // [7,14,30,0]; 0 = season
 	Roles       []string                `json:"roles"`   // ["all","hitters","pitchers"]
-	Trends      map[string][]TrendPoint `json:"trends"`  // keyed by role
+	Trends      map[string][]TrendPoint `json:"trends"`  // keyed "window|role"
 	Views       map[string]View         `json:"views"`   // keyed "window|role"
 }
 
@@ -70,8 +70,10 @@ func Aggregate(rows []analysis.GradeRow, generatedAt, seasonStart time.Time) *Mo
 	}
 	for _, role := range stdRoles {
 		rr := filterRole(rows, role)
-		m.Trends[role] = rollingTrend(rr, 7)
 		for _, w := range stdWindows {
+			// Trend is keyed by window|role: rolling-w-day for w>0, expanding
+			// (cumulative) for w==0 (Season). Lets the WINDOW toggle drive the chart.
+			m.Trends[viewKey(w, role)] = rollingTrend(rr, w)
 			cur := windowRows(rr, latest, w)
 			prior := priorWindowRows(rr, latest, w)
 			curM := computeMetrics(cur)

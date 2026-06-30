@@ -53,7 +53,7 @@
 
   <div id="scorecard" class="cards"></div>
 
-  <section class="panel"><h2>Rolling accuracy (7-day) over the season</h2><div class="chartwrap"><canvas id="trendChart"></canvas></div></section>
+  <section class="panel"><h2 id="trendTitle">Rolling accuracy over the season</h2><div class="chartwrap"><canvas id="trendChart"></canvas></div></section>
   <section class="panel"><h2>Accuracy by position</h2><div class="chartwrap"><canvas id="posChart"></canvas></div></section>
   <section class="panel" id="calib"><h2>Calibration — projected vs actual</h2><div class="chartwrap"><canvas id="calibChart"></canvas></div></section>
   <section class="panel" id="insights"><h2>Insights</h2><ul class="insights" id="insightList"></ul></section>
@@ -125,7 +125,9 @@ function renderScorecard(v) {
 function destroy(id){ if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
 
 function renderTrend() {
-  const tp = MODEL.trends[state.role] || [];
+  const tp = MODEL.trends[state.window+"|"+state.role] || [];
+  document.getElementById("trendTitle").textContent =
+    (state.window<=0 ? "Cumulative accuracy over the season" : "Rolling accuracy ("+state.window+"-day) over the season");
   destroy("trendChart");
   charts.trendChart = new Chart(document.getElementById("trendChart"), {
     type: "line",
