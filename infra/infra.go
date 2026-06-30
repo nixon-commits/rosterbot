@@ -86,13 +86,42 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		},
 	})
 
-	// Task role: read/write its S3 prefixes and read the rosterbot SSM secrets.
+	// --- CloudFront in front of the recap + report buckets (HTTPS + CDN) ---
+	// Created before the container so their distribution IDs can be injected as
+	// env vars; entrypoint.sh invalidates them after each S3 sync so a freshly
+	// rendered page is served immediately instead of after the ~24h cache TTL.
+	dist := awscloudfront.NewDistribution(stack, jsii.String("SiteCdn"), &awscloudfront.DistributionProps{
+		DefaultRootObject: jsii.String("index.html"),
+		DefaultBehavior: &awscloudfront.BehaviorOptions{
+			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(siteBucket, nil),
+			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
+		},
+	})
+	reportDist := awscloudfront.NewDistribution(stack, jsii.String("ReportCdn"), &awscloudfront.DistributionProps{
+		DefaultRootObject: jsii.String("index.html"),
+		DefaultBehavior: &awscloudfront.BehaviorOptions{
+			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(reportBucket, nil),
+			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
+		},
+	})
+	cfArn := func(d awscloudfront.Distribution) *string {
+		return awscdk.Fn_Join(jsii.String(""), &[]*string{
+			jsii.String("arn:aws:cloudfront::"), stack.Account(), jsii.String(":distribution/"), d.DistributionId(),
+		})
+	}
+
+	// Task role: read/write its S3 prefixes, read the rosterbot SSM secrets, and
+	// invalidate the two CloudFront distributions after publishing a site.
 	stateBucket.GrantReadWrite(taskDef.TaskRole(), nil)
 	siteBucket.GrantReadWrite(taskDef.TaskRole(), nil)
 	reportBucket.GrantReadWrite(taskDef.TaskRole(), nil)
 	taskDef.TaskRole().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Actions:   jsii.Strings("ssm:GetParameters", "ssm:GetParameter"),
 		Resources: jsii.Strings("arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/*"),
+	}))
+	taskDef.TaskRole().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions:   jsii.Strings("cloudfront:CreateInvalidation"),
+		Resources: &[]*string{cfArn(dist), cfArn(reportDist)},
 	}))
 
 	secret := func(name string) awsecs.Secret {
@@ -111,6 +140,8 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			"STATE_BUCKET":       stateBucket.BucketName(),
 			"SITE_BUCKET":        siteBucket.BucketName(),
 			"REPORT_BUCKET":      reportBucket.BucketName(),
+			"SITE_CF_DIST_ID":    dist.DistributionId(),
+			"REPORT_CF_DIST_ID":  reportDist.DistributionId(),
 			"CLAIMS_CURSOR_PATH": jsii.String(".waivers/last-claims.json"),
 		},
 		Secrets: &map[string]awsecs.Secret{
@@ -131,24 +162,10 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	awscdk.NewCfnOutput(stack, jsii.String("ClusterName"), &awscdk.CfnOutputProps{Value: cluster.ClusterName()})
 	awscdk.NewCfnOutput(stack, jsii.String("TaskDefArn"), &awscdk.CfnOutputProps{Value: taskDef.TaskDefinitionArn()})
 
-	// --- Phase 5: CloudFront in front of the recap site bucket (HTTPS + CDN) ---
-	dist := awscloudfront.NewDistribution(stack, jsii.String("SiteCdn"), &awscloudfront.DistributionProps{
-		DefaultRootObject: jsii.String("index.html"),
-		DefaultBehavior: &awscloudfront.BehaviorOptions{
-			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(siteBucket, nil),
-			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
-		},
-	})
+	// --- Phase 5: CloudFront URLs (distributions are created above, before the
+	// container, so their IDs can be injected as env vars for cache invalidation) ---
 	awscdk.NewCfnOutput(stack, jsii.String("SiteUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dist.DistributionDomainName()}),
-	})
-
-	reportDist := awscloudfront.NewDistribution(stack, jsii.String("ReportCdn"), &awscloudfront.DistributionProps{
-		DefaultRootObject: jsii.String("index.html"),
-		DefaultBehavior: &awscloudfront.BehaviorOptions{
-			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(reportBucket, nil),
-			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
-		},
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("ReportUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), reportDist.DistributionDomainName()}),

@@ -20,10 +20,19 @@ sync_up() {
   aws s3 sync ./.fantrax-cache/ "s3://$STATE_BUCKET/session/"  --quiet || true
   aws s3 sync ./.waivers/       "s3://$STATE_BUCKET/claims/"   --quiet || true
   aws s3 sync ./.backtest/      "s3://$STATE_BUCKET/backtest/" --quiet || true
-  # Publish the recap site when present (recap-site writes ./dist).
-  [ -d ./dist ] && [ -n "${SITE_BUCKET:-}" ] && aws s3 sync ./dist/ "s3://$SITE_BUCKET/" --delete --quiet || true
+  # Publish the recap site when present (recap-site writes ./dist). Invalidate
+  # the CDN after the sync so the new page isn't masked by the ~24h cache TTL.
+  if [ -d ./dist ] && [ -n "${SITE_BUCKET:-}" ]; then
+    aws s3 sync ./dist/ "s3://$SITE_BUCKET/" --delete --quiet || true
+    [ -n "${SITE_CF_DIST_ID:-}" ] && aws cloudfront create-invalidation \
+      --distribution-id "$SITE_CF_DIST_ID" --paths '/*' >/dev/null 2>&1 || true
+  fi
   # Publish the projection dashboard when present (projection-site writes ./report).
-  [ -d ./report ] && [ -n "${REPORT_BUCKET:-}" ] && aws s3 sync ./report/ "s3://$REPORT_BUCKET/" --delete --quiet || true
+  if [ -d ./report ] && [ -n "${REPORT_BUCKET:-}" ]; then
+    aws s3 sync ./report/ "s3://$REPORT_BUCKET/" --delete --quiet || true
+    [ -n "${REPORT_CF_DIST_ID:-}" ] && aws cloudfront create-invalidation \
+      --distribution-id "$REPORT_CF_DIST_ID" --paths '/*' >/dev/null 2>&1 || true
+  fi
 }
 
 # run_id derives a stable id from the ECS task metadata (the API returns this
