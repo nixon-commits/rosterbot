@@ -22,6 +22,8 @@ sync_up() {
   aws s3 sync ./.backtest/      "s3://$STATE_BUCKET/backtest/" --quiet || true
   # Publish the recap site when present (recap-site writes ./dist).
   [ -d ./dist ] && [ -n "${SITE_BUCKET:-}" ] && aws s3 sync ./dist/ "s3://$SITE_BUCKET/" --delete --quiet || true
+  # Publish the projection dashboard when present (projection-site writes ./report).
+  [ -d ./report ] && [ -n "${REPORT_BUCKET:-}" ] && aws s3 sync ./report/ "s3://$REPORT_BUCKET/" --delete --quiet || true
 }
 
 # run_id derives a stable id from the ECS task metadata (the API returns this

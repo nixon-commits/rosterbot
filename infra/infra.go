@@ -53,6 +53,12 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		AutoDeleteObjects: jsii.Bool(true),
 	})
 
+	// Projection-accuracy dashboard bucket (private; served via its own CDN).
+	reportBucket := awss3.NewBucket(stack, jsii.String("ReportBucket"), &awss3.BucketProps{
+		RemovalPolicy:     awscdk.RemovalPolicy_DESTROY,
+		AutoDeleteObjects: jsii.Bool(true),
+	})
+
 	// Shared log group for all task runs.
 	logGroup := awslogs.NewLogGroup(stack, jsii.String("Logs"), &awslogs.LogGroupProps{
 		Retention:     awslogs.RetentionDays_ONE_MONTH,
@@ -62,6 +68,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	awscdk.NewCfnOutput(stack, jsii.String("RepoUri"), &awscdk.CfnOutputProps{Value: repo.RepositoryUri()})
 	awscdk.NewCfnOutput(stack, jsii.String("StateBucketName"), &awscdk.CfnOutputProps{Value: stateBucket.BucketName()})
 	awscdk.NewCfnOutput(stack, jsii.String("SiteBucketName"), &awscdk.CfnOutputProps{Value: siteBucket.BucketName()})
+	awscdk.NewCfnOutput(stack, jsii.String("ReportBucketName"), &awscdk.CfnOutputProps{Value: reportBucket.BucketName()})
 
 	// --- Phase 3: compute (VPC, cluster, ARM64 Fargate task definition) ---
 
@@ -82,6 +89,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// Task role: read/write its S3 prefixes and read the rosterbot SSM secrets.
 	stateBucket.GrantReadWrite(taskDef.TaskRole(), nil)
 	siteBucket.GrantReadWrite(taskDef.TaskRole(), nil)
+	reportBucket.GrantReadWrite(taskDef.TaskRole(), nil)
 	taskDef.TaskRole().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Actions:   jsii.Strings("ssm:GetParameters", "ssm:GetParameter"),
 		Resources: jsii.Strings("arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/*"),
@@ -102,6 +110,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		Environment: &map[string]*string{
 			"STATE_BUCKET":       stateBucket.BucketName(),
 			"SITE_BUCKET":        siteBucket.BucketName(),
+			"REPORT_BUCKET":      reportBucket.BucketName(),
 			"CLAIMS_CURSOR_PATH": jsii.String(".waivers/last-claims.json"),
 		},
 		Secrets: &map[string]awsecs.Secret{
@@ -132,6 +141,17 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("SiteUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dist.DistributionDomainName()}),
+	})
+
+	reportDist := awscloudfront.NewDistribution(stack, jsii.String("ReportCdn"), &awscloudfront.DistributionProps{
+		DefaultRootObject: jsii.String("index.html"),
+		DefaultBehavior: &awscloudfront.BehaviorOptions{
+			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(reportBucket, nil),
+			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
+		},
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("ReportUrl"), &awscdk.CfnOutputProps{
+		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), reportDist.DistributionDomainName()}),
 	})
 
 	// --- Lineup + control API: Go Lambda behind a Function URL ---
@@ -302,6 +322,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		{"Recap", "cron(0 11 ? * MON *)", jsii.Strings("recap-site", "--out", "dist")},
 		{"Backtest", "cron(0 12 ? * MON *)", jsii.Strings("backtest")},
 		{"Grade", "cron(30 13 * * ? *)", jsii.Strings("grade")},
+		{"ProjectionSite", "cron(0 15 * * ? *)", jsii.Strings("projection-site", "--out", "report")},
 	}
 	for _, j := range jobs {
 		r := awsevents.NewRule(stack, jsii.String(j.id+"Rule"), &awsevents.RuleProps{
