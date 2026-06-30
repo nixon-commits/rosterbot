@@ -186,23 +186,9 @@ When adding new commands, flags, env vars, or changing architecture, update `REA
 > rides the single-writer S3 `claims/` prefix. The section below is retained as historical
 > reference for how the jobs ran on GHA.
 
-**Auth in GHA** — all workflows install Chrome via `browser-actions/setup-chrome@v2` and restore/save `.fantrax-cache/` under the shared `fantrax-session-` cache key prefix. The first workflow that runs each day does a full chromedp browser login (15–20 s) and writes the session to the GHA cache; subsequent workflows restore the cached cookie and skip the browser. No `FANTRAX_COOKIES` secret is needed or used — the env var short-circuits the library's fallback chain and bypasses the browser login.
+**Auth in AWS** — every Fargate task syncs `.fantrax-cache/` from S3 `session/` before it runs and syncs it back after completion. The first task run after a stale cache may still do a chromedp browser login; subsequent tasks reuse the cached cookie.
 
-`.github/workflows/lineup.yml` runs hourly during the active window — `cron: '0 14-23 * * *'` (6am–3pm PT) and `'0 0-3 * * *'` (4pm–7pm PT) — plus `workflow_dispatch`. Requires six repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`. Optional: `GS_MAX` (game-start max), `GS_MIN` (game-start min). Invokes `optimize --matchup --archive-projections` so each run also writes `.backtest/snapshots/<YYYY-MM-DD>.json`. Uses `actions/cache@v4` with key prefix `projections-` and a multi-path config (`.cache` + `.backtest/snapshots`), so snapshots persist across runs and accumulate one per day.
-
-`.github/workflows/prospects.yml` runs daily at 11am UTC (7am ET) and on `workflow_dispatch`. Runs `prospects` to surface call-up alerts, hot streaks, and upgrade recommendations; pipes `[HIGH ...]` lines into a Pushover notification when present. Uses `actions/cache@v4` with key prefix `projections-`.
-
-`.github/workflows/gs-check.yml` runs daily at 12pm UTC (8am ET) and on `workflow_dispatch` (with `force` and `dry_run` inputs). Checks league-wide GS violations at period end. Additional secrets: `GS_MAX`, `GS_MIN` (optional).
-
-`.github/workflows/transactions.yml` runs daily at 2pm UTC (10am ET) and on `workflow_dispatch` (with `dry_run` input). Checks recent league trades and sends Pushover notifications with HKB valuations. Uses `actions/cache@v4` with key prefix `transactions-` (falls back to `projections-`) so HKB rankings warm-start from neighboring runs.
-
-`.github/workflows/waivers.yml` runs daily at 1pm UTC (9am ET) and on `workflow_dispatch` (with `dry_run` and `top` inputs). Calls `waivers` to surface Statcast-driven free-agent pickups; sends Pushover when not in dry-run. Same secrets as `transactions.yml`. Uses `actions/cache@v4` with key prefix `waivers-` (falls back to `projections-`) so the FanGraphs JSON and Savant CSVs survive across runs.
-
-`.github/workflows/claims.yml` runs daily at 2pm UTC (10am ET, after `waivers.yml` at 1pm warms the Savant cache) and on `workflow_dispatch` (with a `dry_run` boolean input). Calls `claims` to produce a league-wide recap of processed waiver/FA claims. Same secrets as `waivers.yml` (`PUSHOVER_USER_KEY` + `PUSHOVER_API_TOKEN`). Uses `actions/cache@v5` with key prefix `claims-` (falls back to `projections-`) over a multi-path config (`.cache` + `.waivers/claims`) so the cursor and audit ledger persist across runs.
-
-`.github/workflows/recap.yml` runs Mondays at 11am UTC (7am ET) and on `workflow_dispatch`. Calls `recap-site --out dist` to build the full site (every completed week + index.html), uploads `dist/` via `actions/upload-pages-artifact@v3`, and deploys with `actions/deploy-pages@v4`. No HTML is committed back to the repo. Needs `permissions: pages: write, id-token: write` and the repo's Pages source set to "GitHub Actions" (Settings → Pages → Source). The Pushover notification uses `steps.deployment.outputs.page_url` so the link always points at the live site root.
-
-`.github/workflows/backtest.yml` runs Mondays at 12pm UTC (after `recap.yml`) and on `workflow_dispatch` (with an optional `dates` input). Runs `backtest` (lineup + projection grading of the just-completed week) then `backtest --recency-experiment` (hitter recency-strategy comparison). Restores the shared `projections-` cache (`.cache` + `.backtest/snapshots`) so projection grading has snapshot data — **that data only exists in the GHA cache** (written by the hourly `lineup.yml`), so the backtest must run in CI to grade it. Read-only; results land in the job log, no Pushover.
+`The `.github/workflows/*` details below are retained only as historical reference. The current deployment uses EventBridge schedule rules for the same set of commands and cadence, not GitHub Actions.
 
 ## Agent skills
 

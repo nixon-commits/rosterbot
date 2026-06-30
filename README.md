@@ -256,9 +256,9 @@ want to validate that a cache key is being populated correctly.
 The cache is just a directory — `rm -rf .cache/` is a safe reset.
 The next run repopulates everything on demand. Don't delete `.fantrax-cache/` (that's the auth session cookie, not
 the data cache; deleting it triggers a chromedp browser login on the
-next run). In GHA, `.fantrax-cache/` is persisted across all workflows
-via the shared `fantrax-session-` cache key so only the first daily run
-needs to do a full browser login.
+next run). On AWS, `.fantrax-cache/` is synced to S3 under `session/` by
+`entrypoint.sh`, so the first task run after a stale cookie may still
+need a browser login.
 
 ## Automation
 
@@ -266,20 +266,28 @@ needs to do a full browser login.
 > launched by **EventBridge** schedules (account `476646938644`, `us-west-1`), not GitHub
 > Actions. Infra is AWS CDK (Go) under `infra/`; operations, schedules, and the cutover/
 > rollback procedure live in **[`docs/aws-deployment.md`](docs/aws-deployment.md)**. The
-> recap site is served from CloudFront. The table below documents the original schedule
-> cadence, now mirrored 1:1 by the EventBridge rules.
+> recap site is served from CloudFront. The table below documents the current job cadence
+> in the AWS deployment.
 
-| Workflow | Schedule | Command |
+| Job | Schedule | Command |
 |---|---|---|
-| `lineup.yml` | Every hour 8am-7pm PT | `optimize --matchup` |
-| `gs-check.yml` | 8am ET daily | `gs-check` |
-| `transactions.yml` | 10am ET daily | `transactions` |
-| `prospects.yml` | 7am ET daily | `prospects` |
-| `waivers.yml` | 9am ET daily | `waivers` (Statcast-driven free-agent picks) |
-| `claims.yml` | 10am ET daily | `claims` (daily league-wide waiver/FA claims recap) |
-| `recap.yml` | 7am ET Mondays | `recap-site` (builds every completed week + index, deploys to GitHub Pages) |
-| `grade` (daily 13:30 UTC) | daily | `grade` (writes Graded Snapshots to the Analysis Store for model auditing) |
-| `ProjectionSite` (daily 15:00 UTC) | daily | `projection-site` (renders projection-accuracy dashboard to `REPORT_BUCKET` / CloudFront `ReportCdn`) |
+| `optimize --matchup` | Every hour 8am-7pm PT | `optimize --matchup` |
+| `gs-check` | 8am ET daily | `gs-check` |
+| `transactions` | 10am ET daily | `transactions` |
+| `prospects` | 7am ET daily | `prospects` |
+| `waivers` | 9am ET daily | `waivers` |
+| `claims` | 10am ET daily | `claims` |
+| `recap-site` | 7am ET Mondays | `recap-site --out dist` |
+| `grade` | daily 13:30 UTC | `grade` |
+| `projection-site` | daily 15:00 UTC | `projection-site --out report` |
+
+Scheduled jobs can also be started manually by running the same command in a Fargate task.
+Required repository secrets for local runs: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`,
+`FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
+
+The recap site is published from `./dist` to `SITE_BUCKET` by `entrypoint.sh`.
+The projection dashboard is published from `./report` to `REPORT_BUCKET` by `entrypoint.sh`.
+There is no GitHub Pages workflow in the current deployment.
 
 ### Model auditing (Analysis Store)
 
