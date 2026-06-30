@@ -127,7 +127,7 @@ function destroy(id){ if (charts[id]) { charts[id].destroy(); delete charts[id];
 function renderTrend() {
   const tp = MODEL.trends[state.window+"|"+state.role] || [];
   document.getElementById("trendTitle").textContent =
-    (state.window<=0 ? "Cumulative accuracy over the season" : "Rolling accuracy ("+state.window+"-day) over the season");
+    (state.window<=0 ? "Rolling 7-day accuracy over the season" : "Daily accuracy — last "+state.window+" days");
   destroy("trendChart");
   charts.trendChart = new Chart(document.getElementById("trendChart"), {
     type: "line",

@@ -71,9 +71,10 @@ func Aggregate(rows []analysis.GradeRow, generatedAt, seasonStart time.Time) *Mo
 	for _, role := range stdRoles {
 		rr := filterRole(rows, role)
 		for _, w := range stdWindows {
-			// Trend is keyed by window|role: rolling-w-day for w>0, expanding
-			// (cumulative) for w==0 (Season). Lets the WINDOW toggle drive the chart.
-			m.Trends[viewKey(w, role)] = rollingTrend(rr, w)
+			// Trend is keyed by window|role and spans the window's date range:
+			// daily points over the last w days for w>0, rolling-7 over the whole
+			// season for w==0. Lets the WINDOW toggle drive the chart's x-axis.
+			m.Trends[viewKey(w, role)] = windowTrend(rr, latest, w)
 			cur := windowRows(rr, latest, w)
 			prior := priorWindowRows(rr, latest, w)
 			curM := computeMetrics(cur)

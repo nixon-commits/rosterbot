@@ -40,11 +40,7 @@ func rollingTrend(rows []analysis.GradeRow, roll int) []TrendPoint {
 		if err != nil {
 			continue
 		}
-		// roll<=0 means "Season": expanding window from the first graded day.
-		lo := "0000-00-00"
-		if roll > 0 {
-			lo = dt.AddDate(0, 0, -(roll - 1)).Format("2006-01-02")
-		}
+		lo := dt.AddDate(0, 0, -(roll - 1)).Format("2006-01-02")
 		var win []analysis.GradeRow
 		for _, r := range rows {
 			if r.Dt >= lo && r.Dt <= d {

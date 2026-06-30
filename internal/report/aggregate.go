@@ -99,6 +99,17 @@ func windowRows(rows []analysis.GradeRow, latest time.Time, window int) []analys
 	return out
 }
 
+// windowTrend builds the trend series the chart plots for a given window.
+// w>0: one point per day across the last w graded days (daily metric), so the
+// x-axis spans exactly the window. w<=0 (Season): rolling-7 over the whole
+// season, a denoised season-long view.
+func windowTrend(rows []analysis.GradeRow, latest time.Time, w int) []TrendPoint {
+	if w <= 0 {
+		return rollingTrend(rows, 7)
+	}
+	return rollingTrend(windowRows(rows, latest, w), 1)
+}
+
 // priorWindowRows returns the equal-length window immediately before the current
 // one. Returns nil for the season window (no prior).
 func priorWindowRows(rows []analysis.GradeRow, latest time.Time, window int) []analysis.GradeRow {
