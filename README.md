@@ -109,7 +109,7 @@ rosterbot recap --dates 2026-04-20:2026-04-26 --out /tmp/recap.html
 # Build a multi-week static site (one HTML per completed week + index.html)
 rosterbot recap-site --out dist
 
-# Render projection-accuracy dashboard from the grades store (reads S3 when STATE_BUCKET is set, else .analysis/)
+# Render projection-accuracy dashboard from the grades store (reads S3 when STATE_BUCKET is set, else .analysis/); renders to <out>/index.html (--out defaults to report)
 rosterbot projection-site --out report
 rosterbot projection-site --out report --open   # render and auto-open in default browser
 

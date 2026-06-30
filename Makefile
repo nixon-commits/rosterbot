@@ -44,6 +44,6 @@ run-all:
 	@echo "=== backtest --recency-experiment ===";        time go run . backtest --recency-experiment --dates 2026-05-01:2026-05-07 || true; echo
 	@echo "=== recap --out /tmp/recap.html ===";          time go run . recap --out /tmp/recap.html;                      echo
 	@echo "=== recap-site --out /tmp/recap-site ===";     time go run . recap-site --out /tmp/recap-site;                 echo
-	@echo "=== projection-site --out /tmp/rosterbot-proj-report ==="; go run . projection-site --out /tmp/rosterbot-proj-report || true; echo
+	@echo "=== projection-site --out /tmp/rosterbot-proj-report ==="; time go run . projection-site --out /tmp/rosterbot-proj-report || true; echo
 	@echo "=== cache size ===";                           du -sh .cache/ 2>/dev/null || echo "(no cache directory)";      echo
 	@echo "=== DONE ==="
