@@ -11,7 +11,7 @@
           },
           {
             "type": "command",
-            "command": "cd /Users/jnixon/fantrax && go vet ./... 2>&1",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && go vet ./... 2>&1",
             "statusMessage": "Running go vet..."
           }
         ]
