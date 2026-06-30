@@ -28,6 +28,8 @@
   section.panel h2 { margin:0 0 12px; font-size:15px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #23262e; }
+  th.sortable { cursor:pointer; user-select:none; }
+  th.sortable:hover { color:var(--ink); }
   th { color:var(--muted); font-weight:600; }
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
   .over { color:var(--bad); } .under { color:var(--good); }
@@ -63,6 +65,27 @@ const MODEL = {{.Data}};
 
 let state = { window: 7, role: "all" };
 let charts = {};
+
+// Draws a faint vertical crosshair at the hovered x on a line chart, so the
+// index-mode tooltip's per-series values read against a clear reference line.
+const vLine = {
+  id: "vLine",
+  afterDraw(chart) {
+    const t = chart.tooltip;
+    const active = t && t.getActiveElements ? t.getActiveElements() : [];
+    if (!active.length) return;
+    const x = active[0].element.x;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x, chart.scales.y.top);
+    ctx.lineTo(x, chart.scales.y.bottom);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(230,232,235,0.35)";
+    ctx.stroke();
+    ctx.restore();
+  }
+};
 
 const fmt = (x, d=1) => (x===0?0:x).toFixed(d);
 const winLabel = w => w<=0 ? "Season" : w+"d";
@@ -110,7 +133,16 @@ function renderTrend() {
       { label:"MAE", data: tp.map(p=>p.mae), borderColor:"#4f9dff", backgroundColor:"#4f9dff", pointRadius:0, tension:.25 },
       { label:"Bias", data: tp.map(p=>p.bias), borderColor:"#ffb454", backgroundColor:"#ffb454", pointRadius:0, tension:.25 },
     ]},
-    options: { maintainAspectRatio:false, scales:{ x:{ ticks:{ color:"#9aa0a8", maxTicksLimit:10 } }, y:{ ticks:{ color:"#9aa0a8" } } }, plugins:{ legend:{ labels:{ color:"#e6e8eb" } } } }
+    plugins: [vLine],
+    options: {
+      maintainAspectRatio:false,
+      interaction: { mode:"index", intersect:false },
+      scales:{ x:{ ticks:{ color:"#9aa0a8", maxTicksLimit:10 } }, y:{ ticks:{ color:"#9aa0a8" } } },
+      plugins:{
+        legend:{ labels:{ color:"#e6e8eb" } },
+        tooltip:{ callbacks:{ label: ctx => ctx.dataset.label + ": " + fmt(ctx.parsed.y, 2) } }
+      }
+    }
   });
 }
 
@@ -128,16 +160,16 @@ function renderPos(v) {
 
 function renderCalib(v) {
   destroy("calibChart");
-  const pts = v.calib.map(p=>({x:p.proj, y:p.actual}));
+  const pts = v.calib.map(p=>({x:p.proj, y:p.actual, n:p.n}));
   let max = 1;
   pts.forEach(p=>{ max = Math.max(max, p.x, p.y); });
   charts.calibChart = new Chart(document.getElementById("calibChart"), {
     type: "scatter",
     data: { datasets: [
-      { label:"bins", data: pts, backgroundColor:"#5fd38d", pointRadius:5 },
+      { label:"avg actual per projected bucket", data: pts, backgroundColor:"#5fd38d", pointRadius:5 },
       { label:"perfect (y=x)", type:"line", data:[{x:0,y:0},{x:max,y:max}], borderColor:"#9aa0a8", borderDash:[5,5], pointRadius:0 },
     ]},
-    options: { maintainAspectRatio:false, scales:{ x:{ title:{display:true,text:"projected",color:"#9aa0a8"}, ticks:{ color:"#9aa0a8" } }, y:{ title:{display:true,text:"actual",color:"#9aa0a8"}, ticks:{ color:"#9aa0a8" } } }, plugins:{ legend:{ labels:{ color:"#e6e8eb" } } } }
+    options: { maintainAspectRatio:false, scales:{ x:{ title:{display:true,text:"projected",color:"#9aa0a8"}, ticks:{ color:"#9aa0a8" } }, y:{ title:{display:true,text:"actual",color:"#9aa0a8"}, ticks:{ color:"#9aa0a8" } } }, plugins:{ legend:{ labels:{ color:"#e6e8eb" } }, tooltip:{ callbacks:{ label: ctx => ctx.datasetIndex===0 ? ("proj "+ctx.raw.x.toFixed(1)+" → actual "+ctx.raw.y.toFixed(1)+"  (n="+ctx.raw.n+")") : "y=x" } } } }
   });
 }
 
@@ -147,16 +179,52 @@ function renderInsights(v) {
   ul.innerHTML = v.insights.map(i => '<li class="'+(i.severity==="warn"?"warn":"")+'">'+escapeHtml(i.text)+'</li>').join("");
 }
 
-function renderMisses(v) {
+// Worst-misses table state. key=null keeps the server order (by |diff| desc).
+let lastMisses = [];
+let missSort = { key: null, dir: "desc" };
+const missCols = [["name","Player",""],["bucket","Pos",""],["date","Date",""],["projected","Proj","num"],["actual","Actual","num"],["diff","Diff","num"]];
+
+function sortMisses(key) {
+  if (missSort.key === key) {
+    missSort.dir = missSort.dir === "asc" ? "desc" : "asc";
+  } else {
+    missSort.key = key;
+    // text columns default ascending, numeric columns descending (biggest first)
+    missSort.dir = (key==="name"||key==="bucket"||key==="date") ? "asc" : "desc";
+  }
+  drawMisses();
+}
+
+function drawMisses() {
   const el = document.getElementById("missTable");
-  if (!v.misses || v.misses.length===0) { el.innerHTML = '<div class="empty">No data.</div>'; return; }
-  const rows = v.misses.map(m => {
+  const data = lastMisses.slice();
+  if (missSort.key) {
+    const k = missSort.key, num = (k==="projected"||k==="actual"||k==="diff");
+    data.sort((a,b) => {
+      const c = num ? (a[k]-b[k]) : String(a[k]).localeCompare(String(b[k]));
+      return missSort.dir==="asc" ? c : -c;
+    });
+  }
+  const arrow = k => missSort.key===k ? (missSort.dir==="asc"?" ▲":" ▼") : "";
+  const head = missCols.map(([k,label,c]) =>
+    '<th class="'+(c?c+" ":"")+'sortable" onclick="sortMisses(\''+k+'\')">'+label+arrow(k)+'</th>').join("");
+  const rows = data.map(m => {
     const cls = m.diff < 0 ? "over" : "under";
-    return '<tr><td>'+escapeHtml(m.name)+'</td><td>'+escapeHtml(m.bucket)+'</td><td>'+m.date+'</td>'+
+    return '<tr><td>'+escapeHtml(m.name)+'</td><td>'+escapeHtml(m.bucket)+'</td><td>'+escapeHtml(m.date)+'</td>'+
       '<td class="num">'+fmt(m.projected)+'</td><td class="num">'+fmt(m.actual)+'</td>'+
       '<td class="num '+cls+'">'+(m.diff>0?"+":"")+fmt(m.diff)+'</td></tr>';
   }).join("");
-  el.innerHTML = '<table><thead><tr><th>Player</th><th>Pos</th><th>Date</th><th class="num">Proj</th><th class="num">Actual</th><th class="num">Diff</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  el.innerHTML = '<table><thead><tr>'+head+'</tr></thead><tbody>'+rows+'</tbody></table>';
+}
+
+function renderMisses(v) {
+  if (!v.misses || v.misses.length===0) {
+    lastMisses = [];
+    document.getElementById("missTable").innerHTML = '<div class="empty">No data.</div>';
+    return;
+  }
+  lastMisses = v.misses;
+  drawMisses();
 }
 
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
