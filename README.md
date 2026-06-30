@@ -8,7 +8,7 @@ Fantasy baseball roster automation for Fantrax head-to-head points leagues. Opti
 - **Real-life lineup awareness** — Checks MLB starting lineups so players sitting out (rest days, etc.) get benched in favor of active hitters.
 - **Prospect monitoring** — Scans MLB transactions, MiLB performance breakouts, and prospect rankings (MLB Pipeline / FanGraphs) to surface call-up alerts, hot streaks, and upgrade recommendations.
 - **Trade monitoring** — Fetches recent league trades, values each side using HKB player rankings, and sends a Pushover notification with the trade report.
-- **Statcast-driven waiver picks** — Cross-references league free agents against Baseball Savant data to surface buy-low candidates (xStats outpacing surface stats) and confirmed hot streaks (recent production backed by barrel/hard-hit quality). Ranks by Steamer-projected fantasy points per game.
+- **Statcast-driven waiver picks** — Cross-references league free agents against Baseball Savant data to surface buy-low candidates (xStats outpacing surface stats) and confirmed hot streaks (recent production backed by barrel/hard-hit quality). Ranks by various Fangraph projection systems fantasy points per game.
 - **Daily claims recap** — League-wide recap of processed waiver/FA claims with HKB value gained per move, a daily value leaderboard by team, notable-drops watch, and Statcast signal tie-in for picked-up players. Writes an audit ledger to `.waivers/claims/<date>.json` and uses a cursor to avoid duplicate alerts across runs.
 - **GS violation detection** — Tallies game starts across all league teams and sends Pushover notifications when a team exceeds the cap.
 - **Roster hygiene** — Flags healthy players stuck in IL slots, called-up players still in Minors slots, and injured players occupying active slots.
@@ -201,13 +201,13 @@ Pitchers are scored based on probable starter data. SPs confirmed as starters ge
 
 Projections blend FanGraphs season projections with recent Fantrax scoring data using PA-based dynamic weights:
 
-| Season Point | Steamer Weight | Recent Weight |
+| Season Point | Proj. Weight | Recent Weight |
 |---|---|---|
 | Early (4 GP) | 94% | 6% |
 | Mid-season (66 GP) | 50% | 50% |
 | Full season (150+ GP) | 30% (floor) | 70% |
 
-Requires a minimum of 4 games played before recent stats are factored in. Falls back to 100% Steamer when no recent data is available.
+Requires a minimum of 4 games played before recent stats are factored in. Falls back to 100% projection when no recent data is available.
 
 Matchup adjustments (opposing pitcher FIP + platoon splits) are layered on top.
 
@@ -244,7 +244,7 @@ names follow `<source>-<entity>-<scope>.json` — for example
 - **7 days** for season-invariant config (slot counts, scoring
   weights, season date range).
 
-Provider-specific caches use their own TTLs: FanGraphs Steamer (12 h),
+Provider-specific caches use their own TTLs: FanGraphs Projections (12 h),
 MLB handedness (7 d), Baseball Savant CSVs (12 h), HKB rankings (8 h),
 prospect rankings (`PROSPECT_RANK_CACHE_HOURS`, default 168 h),
 in-season MiLB game logs (1 h).
