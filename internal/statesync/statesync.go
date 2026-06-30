@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -66,12 +67,25 @@ func (s *Syncer) Down(ctx context.Context, bucket, prefix, localDir string) erro
 	if err != nil {
 		return err
 	}
+	root, err := filepath.Abs(localDir)
+	if err != nil {
+		return err
+	}
 	for _, key := range keys {
 		rel := strings.TrimPrefix(key, prefix)
 		if rel == "" || strings.HasSuffix(rel, "/") {
 			continue // the prefix "folder" placeholder, nothing to write
 		}
 		dst := filepath.Join(localDir, filepath.FromSlash(rel))
+		// Defense-in-depth: a crafted key ("../etc/...") must not let a write
+		// escape localDir, even though the source bucket is ours.
+		abs, err := filepath.Abs(dst)
+		if err != nil {
+			return err
+		}
+		if abs != root && !strings.HasPrefix(abs, root+string(os.PathSeparator)) {
+			return fmt.Errorf("refusing key %q: escapes %s", key, localDir)
+		}
 		if err := s.download(ctx, bucket, key, dst); err != nil {
 			return fmt.Errorf("download %s: %w", key, err)
 		}
@@ -184,10 +198,12 @@ func (s *Syncer) download(ctx context.Context, bucket, key, dst string) error {
 		return err
 	}
 	defer out.Body.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	// 0700/0600: Down targets include the Fantrax session cookie (a credential);
+	// keep state owner-only.
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
-	f, err := os.Create(dst)
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -202,6 +218,13 @@ func (s *Syncer) upload(ctx context.Context, bucket, key, src string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = s.s3.PutObject(ctx, &s3.PutObjectInput{Bucket: &bucket, Key: &key, Body: f})
+	in := &s3.PutObjectInput{Bucket: &bucket, Key: &key, Body: f}
+	// awscli set Content-Type from the file extension; without it S3 serves
+	// application/octet-stream and browsers download the recap/report HTML
+	// instead of rendering it. Restore ext-based detection.
+	if ct := mime.TypeByExtension(filepath.Ext(src)); ct != "" {
+		in.ContentType = &ct
+	}
+	_, err = s.s3.PutObject(ctx, in)
 	return err
 }

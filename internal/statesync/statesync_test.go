@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -15,7 +16,10 @@ import (
 )
 
 // fakeS3 is an in-memory object store keyed by full object key.
-type fakeS3 struct{ objects map[string][]byte }
+type fakeS3 struct {
+	objects      map[string][]byte
+	contentTypes map[string]string
+}
 
 func (f *fakeS3) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	var contents []types.Object
@@ -40,6 +44,12 @@ func (f *fakeS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*
 func (f *fakeS3) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	b, _ := io.ReadAll(in.Body)
 	f.objects[*in.Key] = b
+	if f.contentTypes == nil {
+		f.contentTypes = map[string]string{}
+	}
+	if in.ContentType != nil {
+		f.contentTypes[*in.Key] = *in.ContentType
+	}
 	return &s3.PutObjectOutput{}, nil
 }
 func (f *fakeS3) DeleteObject(_ context.Context, in *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
@@ -113,6 +123,34 @@ func TestUp_NoDelete_LeavesRemoteUntouched(t *testing.T) {
 	}
 	if _, ok := f.objects["backtest/new.json"]; !ok {
 		t.Fatal("expected uploaded object")
+	}
+}
+
+func TestUp_SetsContentTypeFromExtension(t *testing.T) {
+	f := &fakeS3{objects: map[string][]byte{}}
+	s := &Syncer{s3: f}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<h1>x</h1>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Up(context.Background(), "b", "", dir, false); err != nil {
+		t.Fatal(err)
+	}
+	ct := f.contentTypes["index.html"]
+	if !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("html must serve as text/html (else browser downloads it), got %q", ct)
+	}
+}
+
+func TestDown_RejectsPathEscape(t *testing.T) {
+	f := &fakeS3{objects: map[string][]byte{
+		"session/../../etc/evil": []byte("pwn"),
+	}}
+	s := &Syncer{s3: f}
+	dir := t.TempDir()
+	err := s.Down(context.Background(), "b", "session/", dir)
+	if err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("expected escape rejection, got %v", err)
 	}
 }
 
