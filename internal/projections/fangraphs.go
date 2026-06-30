@@ -18,6 +18,14 @@ var fangraphsBattingURL = "https://www.fangraphs.com/api/projections?type=fangra
 // the "bat"/"pit" entity and the projection-system type are appended per call.
 const keyFanGraphs = "fangraphs"
 
+// ProjectionCacheTTL is the canonical on-disk lifetime for FanGraphs batting and
+// pitching projection slices. FanGraphs refreshes these ~once daily, so 24h
+// matches the upstream cadence without redundant refetches. Every command that
+// loads projections (optimize, backtest, waivers, claims) uses this one value so
+// they share cache entries with a single freshness policy. Callers apply their
+// own --no-cache zeroing on top.
+const ProjectionCacheTTL = 24 * time.Hour
+
 // currentAPIType tracks the FanGraphs API type parameter (e.g. "fangraphsdc", "steamerr")
 // set by SetProjectionSystem. Used as part of the cache key.
 var currentAPIType = "fangraphsdc"

@@ -25,10 +25,10 @@ func TestS3Writer_KeyAndBody(t *testing.T) {
 	f := &fakeAPI{puts: map[string][]byte{}}
 	w := &Writer{client: f, bucket: "b", prefix: "analysis/"}
 	date := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
-	if err := w.WriteGrades(date, []analysis.GradeRow{{Dt: "2026-06-15", PlayerID: "1"}}); err != nil {
+	if err := w.WriteGrades(date, "thebatx-ros", []analysis.GradeRow{{Dt: "2026-06-15", PlayerID: "1"}}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	key := "analysis/grades/dt=2026-06-15/grades.ndjson"
+	key := "analysis/grades/dt=2026-06-15/system=thebatx-ros/grades.ndjson"
 	if _, ok := f.puts[key]; !ok {
 		t.Fatalf("object not at %s; keys=%v", key, f.puts)
 	}
@@ -59,9 +59,9 @@ func TestS3Reader_ReadAll(t *testing.T) {
 	d1, _ := analysis.MarshalNDJSON([]analysis.GradeRow{{Dt: "2026-06-14", PlayerID: "1"}})
 	d2, _ := analysis.MarshalNDJSON([]analysis.GradeRow{{Dt: "2026-06-15", PlayerID: "2"}, {Dt: "2026-06-15", PlayerID: "3"}})
 	f := &fakeReadAPI{objs: map[string][]byte{
-		"analysis/grades/dt=2026-06-14/grades.ndjson": d1,
-		"analysis/grades/dt=2026-06-15/grades.ndjson": d2,
-		"analysis/other/ignore.json":                  []byte("{}"),
+		"analysis/grades/dt=2026-06-14/system=atc-ros/grades.ndjson": d1,
+		"analysis/grades/dt=2026-06-15/system=atc-ros/grades.ndjson": d2,
+		"analysis/other/ignore.json":                                 []byte("{}"),
 	}}
 	r := &Reader{client: f, bucket: "b", prefix: "analysis/"}
 	rows, err := r.ReadAll()
@@ -73,5 +73,8 @@ func TestS3Reader_ReadAll(t *testing.T) {
 	}
 	if rows[0].Dt != "2026-06-14" {
 		t.Fatalf("want sorted-by-key first row 2026-06-14, got %q", rows[0].Dt)
+	}
+	if rows[0].System != "atc-ros" {
+		t.Fatalf("want System populated from key, got %q", rows[0].System)
 	}
 }

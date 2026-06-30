@@ -19,9 +19,8 @@ import (
 )
 
 const (
-	defaultTopN     = 15
-	defaultCacheTTL = 24 * time.Hour
-	pushoverTitle   = "RosterBot: Waiver picks"
+	defaultTopN   = 15
+	pushoverTitle = "RosterBot: Waiver picks"
 )
 
 // Run executes the waivers report end-to-end. Mirrors prospects.RunProspectReport
@@ -38,9 +37,10 @@ func Run(ft FantraxClient, today time.Time, opts Options) error {
 		return fmt.Errorf("creating cache dir: %w", err)
 	}
 
-	ttl := defaultCacheTTL
+	// Each upstream uses its source's canonical TTL (both 24h); --no-cache zeroes them.
+	projTTL, savantTTL := projections.ProjectionCacheTTL, SavantCacheTTL
 	if opts.NoCache {
-		ttl = 0
+		projTTL, savantTTL = 0, 0
 	}
 
 	var (
@@ -66,7 +66,7 @@ func Run(ft FantraxClient, today time.Time, opts Options) error {
 	})
 
 	g.Go(func() error {
-		src, _, err := projections.LoadBattingProjections(projections.ProjectionSteamer, opts.CacheDir, ttl)
+		src, _, err := projections.LoadBattingProjections(projections.ProjectionSteamer, opts.CacheDir, projTTL)
 		if err != nil {
 			log.Printf("WARNING: batting projections unavailable: %v", err)
 			return nil
@@ -76,7 +76,7 @@ func Run(ft FantraxClient, today time.Time, opts Options) error {
 	})
 
 	g.Go(func() error {
-		src, _, err := projections.LoadPitcherProjections(projections.ProjectionSteamer, opts.CacheDir, ttl)
+		src, _, err := projections.LoadPitcherProjections(projections.ProjectionSteamer, opts.CacheDir, projTTL)
 		if err != nil {
 			log.Printf("WARNING: pitcher projections unavailable: %v", err)
 			return nil
@@ -104,7 +104,7 @@ func Run(ft FantraxClient, today time.Time, opts Options) error {
 	})
 
 	g.Go(func() error {
-		b, err := LoadSavant(opts.CacheDir, today.Year(), today, ttl)
+		b, err := LoadSavant(opts.CacheDir, today.Year(), today, savantTTL)
 		if err != nil {
 			log.Printf("WARNING: savant load failed: %v", err)
 			return nil

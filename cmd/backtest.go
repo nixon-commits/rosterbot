@@ -223,7 +223,7 @@ func runRecencyExperiment(
 ) error {
 	// Base hitter projection source (depthcharts-ros), shared across all variants.
 	// Mirrors cmd/optimize.go base-source construction.
-	projTTL := cacheTTL(24 * time.Hour)
+	projTTL := cacheTTL(projections.ProjectionCacheTTL)
 	fgSrc, _, err := projections.LoadBattingProjections("depthcharts-ros", cacheDir, projTTL)
 	if err != nil {
 		return fmt.Errorf("load base projections: %w", err)

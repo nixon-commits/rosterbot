@@ -70,40 +70,57 @@ func runGrade(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "WARNING: MLB backfill: %v\n", err)
 	}
 
-	results := backtest.RunProjectionAnalysis(days, backtestSnapshotDir)
-
-	byDate := map[string][]analysis.GradeRow{}
-	for _, d := range results {
-		if d.Source == "missing" || d.Source == "stale" {
-			fmt.Fprintf(os.Stderr, "skip %s: source=%s\n", d.Date.Format("2006-01-02"), d.Source)
-			continue
+	// Grade every projection system the shadow command captured. Actuals
+	// (days) are fetched once above and reused — only the projection side
+	// differs per system. Each system's rows land in its own Hive partition
+	// (grades/dt=X/system=Y/...). The depthcharts-ros slice keeps feeding the
+	// existing detailed dashboard; the others power the comparison panel.
+	bySystemDate := map[string]map[string][]analysis.GradeRow{}
+	for _, sys := range shadowSystems {
+		dir := systemSnapshotDir(shadowSnapshotRoot, sys)
+		results := backtest.RunProjectionAnalysis(days, dir)
+		byDate := map[string][]analysis.GradeRow{}
+		for _, d := range results {
+			if d.Source == "missing" || d.Source == "stale" {
+				// Forward-only: before the shadow command has captured a day,
+				// its snapshot is absent and the day is skipped, not graded.
+				continue
+			}
+			dt := d.Date.UTC().Format("2006-01-02")
+			for _, p := range d.Players {
+				byDate[dt] = append(byDate[dt], analysis.GradeRow{
+					Dt:        dt,
+					PlayerID:  p.PlayerID,
+					Name:      p.Name,
+					MLBTeam:   p.MLBTeam,
+					Projected: p.Projected,
+					Actual:    p.Actual,
+					Diff:      p.Diff,
+					Bucket:    p.Bucket,
+					IsPitcher: p.IsPitcher,
+					Source:    p.Source,
+				})
+			}
 		}
-		dt := d.Date.UTC().Format("2006-01-02")
-		for _, p := range d.Players {
-			byDate[dt] = append(byDate[dt], analysis.GradeRow{
-				Dt:        dt,
-				PlayerID:  p.PlayerID,
-				Name:      p.Name,
-				MLBTeam:   p.MLBTeam,
-				Projected: p.Projected,
-				Actual:    p.Actual,
-				Diff:      p.Diff,
-				Bucket:    p.Bucket,
-				IsPitcher: p.IsPitcher,
-				Source:    p.Source,
-			})
+		if len(byDate) > 0 {
+			bySystemDate[sys] = byDate
 		}
 	}
 
+	// Aggregate per-date row counts across all systems for the health signal.
 	counts := map[string]int{}
-	for dt, rows := range byDate {
-		counts[dt] = len(rows)
+	for _, byDate := range bySystemDate {
+		for dt, rows := range byDate {
+			counts[dt] += len(rows)
+		}
 	}
 	lineupapi.RecordOutput("grade", gradeToWireResult(counts))
 
 	if cfg.DryRun {
-		for dt, rows := range byDate {
-			fmt.Printf("[dry-run] %s: %d graded rows\n", dt, len(rows))
+		for _, sys := range shadowSystems {
+			for dt, rows := range bySystemDate[sys] {
+				fmt.Printf("[dry-run] %s %s: %d graded rows\n", sys, dt, len(rows))
+			}
 		}
 		return nil
 	}
@@ -119,12 +136,14 @@ func runGrade(cmd *cobra.Command, args []string) error {
 		w = analysis.NewFileWriter(".analysis")
 	}
 
-	for dt, rows := range byDate {
-		date, _ := time.Parse("2006-01-02", dt)
-		if err := w.WriteGrades(date, rows); err != nil {
-			return fmt.Errorf("write grades %s: %w", dt, err)
+	for _, sys := range shadowSystems {
+		for dt, rows := range bySystemDate[sys] {
+			date, _ := time.Parse("2006-01-02", dt)
+			if err := w.WriteGrades(date, sys, rows); err != nil {
+				return fmt.Errorf("write grades %s %s: %w", sys, dt, err)
+			}
+			fmt.Printf("wrote %d graded rows for %s %s\n", len(rows), sys, dt)
 		}
-		fmt.Printf("wrote %d graded rows for %s\n", len(rows), dt)
 	}
 	return nil
 }

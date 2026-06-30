@@ -21,7 +21,8 @@ func TestRender_EmbedsModelAndPanels(t *testing.T) {
 	}
 	html := buf.String()
 	for _, want := range []string{"const MODEL =", "chart.js", "id=\"scorecard\"", "id=\"calib\"", "id=\"insights\"", "id=\"misses\"",
-		"sortMisses(", "id: \"vLine\"", "per projected bucket"} {
+		"sortMisses(", "id: \"vLine\"", "per projected bucket",
+		"id=\"comparePanel\"", "id=\"compareChart\"", "function renderCompare("} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("rendered HTML missing %q", want)
 		}

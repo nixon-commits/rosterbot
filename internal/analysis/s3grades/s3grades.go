@@ -36,13 +36,13 @@ func New(ctx context.Context, bucket, prefix string) (*Writer, error) {
 }
 
 // WriteGrades serializes rows as NDJSON and puts them to S3 at
-// <prefix>grades/dt=YYYY-MM-DD/grades.ndjson.
-func (w *Writer) WriteGrades(date time.Time, rows []analysis.GradeRow) error {
+// <prefix>grades/dt=YYYY-MM-DD/system=SYSTEM/grades.ndjson.
+func (w *Writer) WriteGrades(date time.Time, system string, rows []analysis.GradeRow) error {
 	b, err := analysis.MarshalNDJSON(rows)
 	if err != nil {
 		return err
 	}
-	key := w.prefix + analysis.ObjectKey(date)
+	key := w.prefix + analysis.ObjectKey(date, system)
 	_, err = w.client.PutObject(context.Background(), &s3.PutObjectInput{
 		Bucket: &w.bucket, Key: &key, Body: bytes.NewReader(b),
 	})
@@ -112,6 +112,10 @@ func (r *Reader) ReadAll() ([]analysis.GradeRow, error) {
 		rs, err := analysis.UnmarshalNDJSON(b)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", k, err)
+		}
+		system := analysis.SystemFromKey(k)
+		for i := range rs {
+			rs[i].System = system
 		}
 		rows = append(rows, rs...)
 	}

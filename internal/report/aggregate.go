@@ -68,6 +68,87 @@ func computeMetrics(rows []analysis.GradeRow) Metrics {
 	return Metrics{MAE: sumAbs / n, Bias: sumSigned / n, RMSE: math.Sqrt(sumSq / n), N: len(rows)}
 }
 
+// SystemScore is one projection system's accuracy for a window×role, used by
+// the head-to-head comparison panel. Best flags the lowest-MAE system.
+type SystemScore struct {
+	System string  `json:"system"`
+	MAE    float64 `json:"mae"`
+	Bias   float64 `json:"bias"`
+	RMSE   float64 `json:"rmse"`
+	N      int     `json:"n"`
+	Best   bool    `json:"best"`
+}
+
+// normalizeSystems returns a copy of rows with any empty System attributed to
+// detailSystem (the production system / legacy attribution), so un-attributed
+// input still feeds the detail dashboard. Non-empty systems pass through.
+func normalizeSystems(rows []analysis.GradeRow) []analysis.GradeRow {
+	out := make([]analysis.GradeRow, len(rows))
+	copy(out, rows)
+	for i := range out {
+		if out[i].System == "" {
+			out[i].System = detailSystem
+		}
+	}
+	return out
+}
+
+// distinctSystems returns the sorted set of projection systems present in rows.
+func distinctSystems(rows []analysis.GradeRow) []string {
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if r.System != "" {
+			seen[r.System] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func filterSystem(rows []analysis.GradeRow, system string) []analysis.GradeRow {
+	out := make([]analysis.GradeRow, 0, len(rows))
+	for _, r := range rows {
+		if r.System == system {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// rankSystems scores each system over the window×role slice and returns them
+// ordered by MAE ascending (best first); the lowest-MAE system with data is
+// flagged Best. Systems with no rows in the window sort last (MAE 0, N 0) and
+// are never marked Best.
+func rankSystems(rows []analysis.GradeRow, systems []string, latest time.Time, window int, role string) []SystemScore {
+	out := make([]SystemScore, 0, len(systems))
+	for _, sys := range systems {
+		slice := windowRows(filterRole(filterSystem(rows, sys), role), latest, window)
+		m := computeMetrics(slice)
+		out = append(out, SystemScore{System: sys, MAE: m.MAE, Bias: m.Bias, RMSE: m.RMSE, N: m.N})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		// Empty (N==0) systems always sort after any system with data.
+		if (out[i].N == 0) != (out[j].N == 0) {
+			return out[j].N == 0
+		}
+		if out[i].MAE != out[j].MAE {
+			return out[i].MAE < out[j].MAE
+		}
+		return out[i].System < out[j].System // stable tiebreak
+	})
+	for i := range out {
+		if out[i].N > 0 {
+			out[i].Best = true
+			break
+		}
+	}
+	return out
+}
+
 func filterRole(rows []analysis.GradeRow, role string) []analysis.GradeRow {
 	if role == "all" {
 		return rows

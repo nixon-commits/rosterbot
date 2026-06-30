@@ -2,6 +2,8 @@
 package analysis
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -29,10 +31,10 @@ func TestFileReader_ReadAll(t *testing.T) {
 	w := NewFileWriter(dir)
 	d1 := time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC)
 	d2 := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
-	if err := w.WriteGrades(d1, []GradeRow{{Dt: "2026-06-14", PlayerID: "1"}}); err != nil {
+	if err := w.WriteGrades(d1, "atc-ros", []GradeRow{{Dt: "2026-06-14", PlayerID: "1"}}); err != nil {
 		t.Fatalf("write d1: %v", err)
 	}
-	if err := w.WriteGrades(d2, []GradeRow{{Dt: "2026-06-15", PlayerID: "2"}, {Dt: "2026-06-15", PlayerID: "3"}}); err != nil {
+	if err := w.WriteGrades(d2, "atc-ros", []GradeRow{{Dt: "2026-06-15", PlayerID: "2"}, {Dt: "2026-06-15", PlayerID: "3"}}); err != nil {
 		t.Fatalf("write d2: %v", err)
 	}
 	rows, err := NewFileReader(dir).ReadAll()
@@ -45,6 +47,30 @@ func TestFileReader_ReadAll(t *testing.T) {
 	// Glob is sorted, so the 2026-06-14 partition comes first.
 	if rows[0].Dt != "2026-06-14" {
 		t.Fatalf("want first row from 2026-06-14, got %q", rows[0].Dt)
+	}
+	if rows[0].System != "atc-ros" {
+		t.Fatalf("want System populated from path, got %q", rows[0].System)
+	}
+}
+
+// Legacy partitions (no system= segment) read back under LegacySystem so the
+// detailed dashboard keeps its pre-migration history across cutover.
+func TestFileReader_LegacyPartition(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "grades", "dt=2026-06-10")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := MarshalNDJSON([]GradeRow{{Dt: "2026-06-10", PlayerID: "9"}})
+	if err := os.WriteFile(filepath.Join(legacy, "grades.ndjson"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := NewFileReader(dir).ReadAll()
+	if err != nil {
+		t.Fatalf("readall: %v", err)
+	}
+	if len(rows) != 1 || rows[0].System != LegacySystem {
+		t.Fatalf("want 1 legacy row under %q, got %+v", LegacySystem, rows)
 	}
 }
 

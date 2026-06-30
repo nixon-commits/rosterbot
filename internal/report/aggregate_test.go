@@ -99,3 +99,53 @@ func TestWorstMisses_SortedByAbsDiff(t *testing.T) {
 		t.Fatalf("misses: %+v", got)
 	}
 }
+
+func TestRankSystems_OrdersByMAEAndFlagsBest(t *testing.T) {
+	latest := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+	rows := []analysis.GradeRow{
+		// atc-ros: |diff| avg 1  (best)
+		{System: "atc-ros", Dt: "2026-06-15", Diff: 1},
+		{System: "atc-ros", Dt: "2026-06-15", Diff: -1},
+		// steamer-ros: |diff| avg 3
+		{System: "steamer-ros", Dt: "2026-06-15", Diff: 3},
+		{System: "steamer-ros", Dt: "2026-06-15", Diff: -3},
+		// thebatx-ros: present in set but no rows in window -> sorts last, never best
+	}
+	systems := []string{"atc-ros", "steamer-ros", "thebatx-ros"}
+	got := rankSystems(rows, systems, latest, 7, "all")
+	if len(got) != 3 {
+		t.Fatalf("want 3 scores, got %d", len(got))
+	}
+	if got[0].System != "atc-ros" || !got[0].Best {
+		t.Fatalf("want atc-ros best first, got %+v", got[0])
+	}
+	if got[1].System != "steamer-ros" || got[1].Best {
+		t.Fatalf("want steamer-ros second, not best: %+v", got[1])
+	}
+	if got[2].System != "thebatx-ros" || got[2].N != 0 || got[2].Best {
+		t.Fatalf("want empty thebatx-ros last: %+v", got[2])
+	}
+}
+
+func TestAggregate_DetailUsesProductionSystemOnly(t *testing.T) {
+	gen := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	seasonStart := time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC)
+	rows := []analysis.GradeRow{
+		{System: detailSystem, Dt: "2026-06-15", Diff: 2, IsPitcher: false, Bucket: "OF"},
+		{System: "atc-ros", Dt: "2026-06-15", Diff: 8, IsPitcher: false, Bucket: "OF"},
+	}
+	m := Aggregate(rows, gen, seasonStart)
+	// Detail scorecard (all/season) must reflect only the production system's row.
+	v := m.Views["0|all"]
+	if v.Scorecard.Cur.N != 1 || !approx(v.Scorecard.Cur.MAE, 2) {
+		t.Fatalf("detail should use %s slice only: %+v", detailSystem, v.Scorecard.Cur)
+	}
+	// Comparison must include both systems.
+	if len(m.Systems) != 2 {
+		t.Fatalf("want 2 systems, got %v", m.Systems)
+	}
+	cmp := m.Compare["0|all"]
+	if len(cmp) != 2 || cmp[0].System != detailSystem || !cmp[0].Best {
+		t.Fatalf("want production system best in compare: %+v", cmp)
+	}
+}

@@ -38,6 +38,14 @@ var (
 	snapshotFlag       bool
 	publishLineupFlag  bool
 
+	// captureSystemRoot, when non-empty, puts a runOptimize call into "shadow
+	// capture" mode: snapshots are written (regardless of --dry-run) to
+	// <captureSystemRoot>/system=<projSystem>/<date>.json instead of the flat
+	// .backtest/snapshots/ path, so the shadow command can capture every
+	// projection system's snapshot side-by-side without clobbering. Set by the
+	// `shadow` command; empty for a normal optimize run.
+	captureSystemRoot string
+
 	// projDisplayName maps projection system flag values to display-friendly names.
 	projDisplayName = map[string]string{
 		"steamer":         "Steamer",
@@ -130,7 +138,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 	}
 
 	// Cache TTLs (0 when --no-cache is set).
-	projTTL := cacheTTL(24 * time.Hour)
+	projTTL := cacheTTL(projections.ProjectionCacheTTL)
 	staticTTL := cacheTTL(7 * 24 * time.Hour)
 
 	today := todayET()
@@ -877,7 +885,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 	// accumulates backtest data automatically. In dry-run nothing is written
 	// unless explicitly requested via --snapshot (or the --archive-projections /
 	// BACKTEST_ARCHIVE aliases, kept for backward compatibility).
-	if !cfg.DryRun || snapshotFlag || archiveProjections || os.Getenv("BACKTEST_ARCHIVE") == "1" {
+	if !cfg.DryRun || snapshotFlag || archiveProjections || captureSystemRoot != "" || os.Getenv("BACKTEST_ARCHIVE") == "1" {
 		for _, dr := range results {
 			if err := writeProjectionSnapshot(dr, batLoadResult.System, slotName); err != nil {
 				fmt.Printf("  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)
@@ -1332,8 +1340,15 @@ func publishLineup(dr dateResult, cfg *config.Config, hitterSlots, pitcherSlots 
 // writeProjectionSnapshot archives the per-date projection values the optimizer
 // used so a future `rosterbot backtest` can grade projection accuracy exactly
 // (no reconstruction). One file per date at .backtest/snapshots/<YYYY-MM-DD>.json.
+// In shadow-capture mode (captureSystemRoot set) it writes instead to
+// <captureSystemRoot>/system=<projSystem>/<date>.json so each system's snapshot
+// lives in its own partition.
 func writeProjectionSnapshot(dr dateResult, projSystem string, slotName map[string]string) error {
-	return backtest.WriteSnapshot(".backtest/snapshots", buildSnapshot(dr, projSystem, slotName))
+	dir := backtestSnapshotDir
+	if captureSystemRoot != "" {
+		dir = systemSnapshotDir(captureSystemRoot, projSystem)
+	}
+	return backtest.WriteSnapshot(dir, buildSnapshot(dr, projSystem, slotName))
 }
 
 // buildSnapshot is the pure mapping from a day's optimizer results to the

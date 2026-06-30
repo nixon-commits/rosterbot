@@ -18,6 +18,12 @@ import (
 // entity/window parts ("hit"/"pit", "exp"/"sc"/"exp14"/…) are appended per call.
 const keySavant = "savant"
 
+// SavantCacheTTL is the canonical on-disk lifetime for the Baseball Savant CSV
+// slices. Savant recomputes these daily, so 24h matches the upstream cadence.
+// Both consumers (waivers, claims) use this one value so they share cache
+// entries with a single freshness policy.
+const SavantCacheTTL = 24 * time.Hour
+
 // Baseball Savant CSV endpoints. Defined as `var` so tests can replace them
 // with httptest server URLs (matches the convention in internal/schedule and
 // internal/projections/fangraphs.go).
