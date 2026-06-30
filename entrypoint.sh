@@ -8,31 +8,19 @@ set -u
 # The TTL Cache (cache/ prefix) is NOT synced here — the bot reads/writes it
 # per-key directly to S3 via cache.Store (STATE_BUCKET). Only the chromedp
 # session cookie and the claims ledger/cursor need bulk sync.
+#
+# The S3 dir-sync, --delete site mirroring, and CloudFront invalidation that
+# used to shell out to awscli now live in the bot itself (internal/statesync),
+# so the runtime image no longer ships python+awscli. Both subcommands are
+# best-effort and exit 0 even on a partial failure, so the `|| true` is belt-
+# and-suspenders. STATE_BUCKET/SITE_BUCKET/REPORT_BUCKET and the *_CF_DIST_ID
+# vars are read from the environment by the bot, same as before.
 sync_down() {
-  [ -n "${STATE_BUCKET:-}" ] || return 0
-  aws s3 sync "s3://$STATE_BUCKET/session/"  ./.fantrax-cache/ --quiet || true
-  aws s3 sync "s3://$STATE_BUCKET/claims/"   ./.waivers/       --quiet || true
-  aws s3 sync "s3://$STATE_BUCKET/backtest/" ./.backtest/      --quiet || true
+  ./rosterbot sync-down || true
 }
 
 sync_up() {
-  [ -n "${STATE_BUCKET:-}" ] || return 0
-  aws s3 sync ./.fantrax-cache/ "s3://$STATE_BUCKET/session/"  --quiet || true
-  aws s3 sync ./.waivers/       "s3://$STATE_BUCKET/claims/"   --quiet || true
-  aws s3 sync ./.backtest/      "s3://$STATE_BUCKET/backtest/" --quiet || true
-  # Publish the recap site when present (recap-site writes ./dist). Invalidate
-  # the CDN after the sync so the new page isn't masked by the ~24h cache TTL.
-  if [ -d ./dist ] && [ -n "${SITE_BUCKET:-}" ]; then
-    aws s3 sync ./dist/ "s3://$SITE_BUCKET/" --delete --quiet || true
-    [ -n "${SITE_CF_DIST_ID:-}" ] && aws cloudfront create-invalidation \
-      --distribution-id "$SITE_CF_DIST_ID" --paths '/*' >/dev/null 2>&1 || true
-  fi
-  # Publish the projection dashboard when present (projection-site writes ./report).
-  if [ -d ./report ] && [ -n "${REPORT_BUCKET:-}" ]; then
-    aws s3 sync ./report/ "s3://$REPORT_BUCKET/" --delete --quiet || true
-    [ -n "${REPORT_CF_DIST_ID:-}" ] && aws cloudfront create-invalidation \
-      --distribution-id "$REPORT_CF_DIST_ID" --paths '/*' >/dev/null 2>&1 || true
-  fi
+  ./rosterbot sync-up || true
 }
 
 # run_id derives a stable id from the ECS task metadata (the API returns this
