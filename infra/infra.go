@@ -255,9 +255,20 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			},
 			EnvironmentVariables: &map[string]*awscodebuild.BuildEnvironmentVariable{
 				"ECR_URI": {Value: repo.RepositoryUri()},
+				// Launch coordinates for the post-build projection-site render so a
+				// push to main re-renders the dashboard immediately instead of
+				// waiting for the daily ProjectionSite schedule. Reuses the same
+				// egress-only SG + public subnets the API uses to launch tasks.
+				"CLUSTER":         {Value: cluster.ClusterArn()},
+				"TASK_DEF":        {Value: taskDef.TaskDefinitionArn()},
+				"SUBNETS":         {Value: awscdk.Fn_Join(jsii.String(","), publicSubnets.SubnetIds)},
+				"SECURITY_GROUPS": {Value: taskSg.SecurityGroupId()},
 			},
 		})
 		repo.GrantPullPush(project)
+		// Let the build launch the projection-site task (ecs:RunTask + the
+		// iam:PassRole on the task's execution/task roles that RunTask requires).
+		taskDef.GrantRun(project)
 		awscdk.NewCfnOutput(stack, jsii.String("BuildProject"), &awscdk.CfnOutputProps{Value: project.ProjectName()})
 	}
 

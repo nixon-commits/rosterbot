@@ -21,10 +21,10 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
   selected when `STATE_BUCKET` is set) — not bulk-synced by the entrypoint. `session/` (chromedp
   cookie) and `claims/` (ledger+cursor) are still bulk-synced by `entrypoint.sh`. Clear the cache
   with `aws s3 rm s3://<state-bucket>/cache/ --recursive`.
-- **S3 site bucket** (`SITE_BUCKET`) + **CloudFront** (`https://d3g6t1hhf4o9r6.cloudfront.net`) — recap site.
-- **S3 report bucket** (`REPORT_BUCKET`) + **CloudFront** (`ReportCdn`, URL in `ReportUrl` stack output) — projection-accuracy dashboard. Written per-run by `projection-site` via `entrypoint.sh` sync; served from its own CDN distribution, distinct from the recap site.
+- **S3 site bucket** (`SITE_BUCKET`) + **CloudFront** (`https://d3g6t1hhf4o9r6.cloudfront.net`) — recap site. `entrypoint.sh` invalidates the distribution (`SITE_CF_DIST_ID`) after each sync so a fresh render isn't masked by the CDN cache TTL.
+- **S3 report bucket** (`REPORT_BUCKET`) + **CloudFront** (`ReportCdn`, URL in `ReportUrl` stack output) — projection-accuracy dashboard. Written per-run by `projection-site` via `entrypoint.sh` sync; the entrypoint then invalidates the distribution (`REPORT_CF_DIST_ID`). Served from its own CDN distribution, distinct from the recap site.
 - **SSM Parameter Store** (`/rosterbot/*`, SecureString) — all secrets, injected as task env.
-- **CodeBuild** — builds + pushes the image to ECR on push to `main`. Gated by `enableBuild`.
+- **CodeBuild** — builds + pushes the image to ECR on push to `main`, then `post_build` launches the `projection-site` task (`ecs:RunTask` via `taskDef.GrantRun`, reusing `TaskSg` + public subnets) so the dashboard re-renders immediately with the new image instead of waiting for the daily `ProjectionSite` schedule. Gated by `enableBuild`.
 
 ## Common operations
 

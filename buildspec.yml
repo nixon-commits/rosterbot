@@ -14,3 +14,19 @@ phases:
     commands:
       - docker push "$ECR_URI:latest"
       - docker push "$ECR_URI:$TAG"
+      # Re-render the projection dashboard with the image just pushed, so a push
+      # to main updates the site immediately instead of waiting for the daily
+      # ProjectionSite schedule. Fargate pulls :latest fresh on each RunTask, so
+      # this uses the new build. Reuses the API's egress-only SG + public subnets.
+      - |
+        if [ -n "${CLUSTER:-}" ]; then
+          aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition "$TASK_DEF" \
+            --launch-type FARGATE \
+            --count 1 \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SECURITY_GROUPS],assignPublicIp=ENABLED}" \
+            --overrides '{"containerOverrides":[{"name":"bot","command":["projection-site","--out","report"]}]}'
+        else
+          echo "CLUSTER not set (project env not yet deployed via cdk); skipping projection-site render"
+        fi
