@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -67,4 +68,22 @@ func (w fileWriter) WriteGrades(date time.Time, rows []GradeRow) error {
 		return err
 	}
 	return os.WriteFile(p, b, 0o644)
+}
+
+// UnmarshalNDJSON parses newline-delimited JSON (one GradeRow per line).
+func UnmarshalNDJSON(b []byte) ([]GradeRow, error) {
+	var rows []GradeRow
+	dec := json.NewDecoder(bytes.NewReader(b))
+	for {
+		var r GradeRow
+		err := dec.Decode(&r)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, r)
+	}
+	return rows, nil
 }
