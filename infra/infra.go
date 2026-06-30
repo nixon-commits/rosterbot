@@ -288,7 +288,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		TableInput: &awsglue.CfnTable_TableInputProperty{
 			Name:          jsii.String("grades"),
 			TableType:     jsii.String("EXTERNAL_TABLE"),
-			PartitionKeys: &[]interface{}{col("dt", "string")},
+			PartitionKeys: &[]interface{}{col("dt", "string"), col("system", "string")},
 			Parameters: &map[string]*string{
 				"classification":              jsii.String("json"),
 				"projection.enabled":          jsii.String("true"),
@@ -297,7 +297,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				"projection.dt.range":         jsii.String("2026-01-01,NOW"),
 				"projection.dt.interval":      jsii.String("1"),
 				"projection.dt.interval.unit": jsii.String("DAYS"),
-				"storage.location.template":   awscdk.Fn_Join(jsii.String(""), &[]*string{gradesLoc, jsii.String("dt=${dt}/")}),
+				// system is an enum projection over the captured projection
+				// systems. Legacy objects without a system= path segment predate
+				// this partition and are not visible to Athena (the report reads
+				// them via the store readers, which attribute them to depthcharts-ros).
+				"projection.system.type":    jsii.String("enum"),
+				"projection.system.values":  jsii.String("steamer-ros,depthcharts-ros,thebatx-ros,atc-ros"),
+				"storage.location.template": awscdk.Fn_Join(jsii.String(""), &[]*string{gradesLoc, jsii.String("dt=${dt}/system=${system}/")}),
 			},
 			StorageDescriptor: &awsglue.CfnTable_StorageDescriptorProperty{
 				Location:     gradesLoc,
@@ -351,6 +357,12 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		{"Backtest", "cron(0 12 ? * MON *)", jsii.Strings("backtest")},
 		{"Grade", "cron(30 13 * * ? *)", jsii.Strings("grade")},
 		{"ProjectionSite", "cron(0 15 * * ? *)", jsii.Strings("projection-site", "--out", "report")},
+		// Shadow captures every projection system's lineup projection for the
+		// model-comparison report. It runs at 23:40 UTC (~late ET evening, same
+		// UTC/ET calendar day so the snapshot's generated_at passes the backtest
+		// stale-guard) after the 23:00 Lineup run, so the next day's Grade
+		// (13:30 UTC) finds and scores its per-system snapshots.
+		{"Shadow", "cron(40 23 * * ? *)", jsii.Strings("shadow")},
 	}
 	for _, j := range jobs {
 		r := awsevents.NewRule(stack, jsii.String(j.id+"Rule"), &awsevents.RuleProps{

@@ -33,6 +33,11 @@
   th { color:var(--muted); font-weight:600; }
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
   .over { color:var(--bad); } .under { color:var(--good); }
+  tr.best td { background:rgba(95,211,141,0.10); }
+  tr.best td:first-child { box-shadow:inset 3px 0 0 var(--good); }
+  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+  .pill { font-size:11px; color:var(--good); border:1px solid var(--good); border-radius:10px; padding:1px 6px; margin-left:6px; }
+  .pill.prod { color:var(--accent); border-color:var(--accent); }
   ul.insights { list-style:none; margin:0; padding:0; }
   ul.insights li { padding:8px 12px; border-radius:8px; margin-bottom:8px; background:#1d2129; border-left:3px solid var(--accent); }
   ul.insights li.warn { border-left-color:var(--warn); }
@@ -51,6 +56,14 @@
     <div class="grp"><span class="lbl">Players</span><div id="roleseg"></div></div>
   </div>
 
+  <section class="panel" id="comparePanel">
+    <h2>Projection system comparison <span class="sub" id="compareSub"></span></h2>
+    <div id="compareTable"></div>
+    <div class="chartwrap" style="margin-top:14px"><canvas id="compareChart"></canvas></div>
+  </section>
+
+  <h2 style="font-size:15px;margin:28px 0 4px">Detail — <span id="detailSysLabel"></span></h2>
+  <div class="sub" style="margin-bottom:12px">The bot's production projection, broken down below.</div>
   <div id="scorecard" class="cards"></div>
 
   <section class="panel"><h2 id="trendTitle">Rolling accuracy over the season</h2><div class="chartwrap"><canvas id="trendChart"></canvas></div></section>
@@ -123,6 +136,78 @@ function renderScorecard(v) {
 }
 
 function destroy(id){ if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+// Deterministic per-system colors, assigned by position in MODEL.systems so a
+// system keeps its color across window/role toggles.
+const SYS_PALETTE = ["#4f9dff","#5fd38d","#ffb454","#ff6b6b","#b48bff","#3fd0d0"];
+function sysColor(sys) {
+  const i = (MODEL.systems || []).indexOf(sys);
+  return SYS_PALETTE[(i < 0 ? 0 : i) % SYS_PALETTE.length];
+}
+function sysLabel(sys) { return sys.replace(/-ros$/, " RoS"); }
+
+function renderCompare() {
+  const key = state.window+"|"+state.role;
+  const scores = (MODEL.compare && MODEL.compare[key]) || [];
+  const sub = document.getElementById("compareSub");
+  const withData = scores.filter(s => s.n > 0);
+  sub.textContent = withData.length
+    ? "· ranked by MAE (lower = better) · " + winLabel(state.window) + " · " + state.role
+    : "";
+
+  // Ranking table.
+  const el = document.getElementById("compareTable");
+  if (!withData.length) {
+    el.innerHTML = '<div class="empty">No graded data across systems in this window yet.</div>';
+  } else {
+    const head = '<tr><th>System</th><th class="num">MAE</th><th class="num">Bias</th><th class="num">RMSE</th><th class="num">Sample</th></tr>';
+    const body = scores.map(s => {
+      if (s.n === 0) return "";
+      const prod = s.system === MODEL.detailSystem ? '<span class="pill prod">prod</span>' : "";
+      const best = s.best ? '<span class="pill">best</span>' : "";
+      const sw = '<span class="swatch" style="background:'+sysColor(s.system)+'"></span>';
+      return '<tr class="'+(s.best?"best":"")+'"><td>'+sw+escapeHtml(sysLabel(s.system))+prod+best+'</td>'+
+        '<td class="num">'+fmt(s.mae,2)+'</td>'+
+        '<td class="num">'+(s.bias>0?"+":"")+fmt(s.bias,2)+'</td>'+
+        '<td class="num">'+fmt(s.rmse,2)+'</td>'+
+        '<td class="num">'+s.n.toLocaleString()+'</td></tr>';
+    }).join("");
+    el.innerHTML = '<table><thead>'+head+'</thead><tbody>'+body+'</tbody></table>';
+  }
+
+  // Overlaid MAE trend, one line per system.
+  destroy("compareChart");
+  const trends = (MODEL.compareTrends && MODEL.compareTrends[key]) || {};
+  // Union of all date labels across systems (sorted), so lines align on x.
+  const labelSet = {};
+  (MODEL.systems || []).forEach(sys => (trends[sys]||[]).forEach(p => labelSet[p.date] = true));
+  const labels = Object.keys(labelSet).sort();
+  const datasets = (MODEL.systems || []).map(sys => {
+    const byDate = {};
+    (trends[sys]||[]).forEach(p => byDate[p.date] = p.mae);
+    return {
+      label: sysLabel(sys),
+      data: labels.map(d => d in byDate ? byDate[d] : null),
+      borderColor: sysColor(sys), backgroundColor: sysColor(sys),
+      pointRadius: 0, tension: .25, spanGaps: true,
+      borderWidth: sys === MODEL.detailSystem ? 3 : 1.5,
+    };
+  });
+  charts.compareChart = new Chart(document.getElementById("compareChart"), {
+    type: "line",
+    data: { labels, datasets },
+    plugins: [vLine],
+    options: {
+      maintainAspectRatio:false,
+      interaction: { mode:"index", intersect:false },
+      scales:{ x:{ ticks:{ color:"#9aa0a8", maxTicksLimit:10 } }, y:{ title:{display:true,text:"MAE",color:"#9aa0a8"}, ticks:{ color:"#9aa0a8" } } },
+      plugins:{
+        legend:{ labels:{ color:"#e6e8eb" } },
+        tooltip:{ callbacks:{ label: ctx => ctx.dataset.label + ": " + (ctx.parsed.y==null?"—":fmt(ctx.parsed.y, 2)) } }
+      }
+    }
+  });
+}
 
 function renderTrend() {
   const tp = MODEL.trends[state.window+"|"+state.role] || [];
@@ -234,6 +319,7 @@ function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;',
 function render() {
   seg("winseg", MODEL.windows.map(w=>({val:w,label:winLabel(w)})), "window");
   seg("roleseg", MODEL.roles.map(r=>({val:r,label:r[0].toUpperCase()+r.slice(1)})), "role");
+  renderCompare();
   const v = MODEL.views[state.window+"|"+state.role];
   renderScorecard(v);
   renderTrend();
@@ -245,6 +331,7 @@ function render() {
 
 document.getElementById("meta").textContent =
   "Latest graded: " + MODEL.latestDate + " · season since " + MODEL.seasonStart + " · generated " + MODEL.generatedAt;
+document.getElementById("detailSysLabel").textContent = sysLabel(MODEL.detailSystem || "");
 render();
 </script>
 </body>

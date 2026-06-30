@@ -110,7 +110,15 @@ rosterbot recap --dates 2026-04-20:2026-04-26 --out /tmp/recap.html
 # Build a multi-week static site (one HTML per completed week + index.html)
 rosterbot recap-site --out dist
 
+# Capture every projection system's lineup projections (read-only) for model comparison.
+# Runs the optimize pipeline once per RoS system in dry-run, writing a per-system
+# snapshot the next day's `grade` run scores. No lineup applied, no notification.
+rosterbot shadow                 # capture today
+rosterbot shadow --dates 2026-06-30
+
 # Render projection-accuracy dashboard from the grades store (reads S3 when STATE_BUCKET is set, else .analysis/); renders to <out>/index.html (--out defaults to report)
+# Headlines with a system-comparison panel (4 RoS systems ranked by MAE + overlaid
+# trend lines); the detail dashboard below is the production system's slice.
 rosterbot projection-site --out report
 rosterbot projection-site --out report --open   # render and auto-open in default browser
 
@@ -279,6 +287,7 @@ need a browser login.
 | `waivers` | 9am ET daily | `waivers` |
 | `claims` | 10am ET daily | `claims` |
 | `recap-site` | 7am ET Mondays | `recap-site --out dist` |
+| `shadow` | daily 23:40 UTC | `shadow` |
 | `grade` | daily 13:30 UTC | `grade` |
 | `projection-site` | daily 15:00 UTC | `projection-site --out report` |
 
@@ -292,13 +301,22 @@ There is no GitHub Pages workflow in the current deployment.
 
 ### Model auditing (Analysis Store)
 
-The daily `grade` job materializes projected-vs-actual rows to S3 as NDJSON, queryable in Athena (workgroup `rosterbot`, table `rosterbot_analysis.grades`). Example — projection accuracy by position since June:
+The daily `grade` job materializes projected-vs-actual rows to S3 as NDJSON, queryable in Athena (workgroup `rosterbot`, table `rosterbot_analysis.grades`). Rows are partitioned by `dt` and `system` (the projection system that produced the projection — captured daily by `shadow`). Example — projection accuracy by position since June, for the production system:
 
 ```sql
 SELECT bucket, count(*) n, avg(abs(diff)) mae, avg(diff) bias
 FROM rosterbot_analysis.grades
-WHERE dt >= '2026-06-01'
+WHERE dt >= '2026-06-01' AND system = 'depthcharts-ros'
 GROUP BY bucket ORDER BY mae DESC;
+```
+
+Compare projection systems head-to-head (which base source is most accurate):
+
+```sql
+SELECT system, count(*) n, avg(abs(diff)) mae, avg(diff) bias
+FROM rosterbot_analysis.grades
+WHERE dt >= '2026-06-01'
+GROUP BY system ORDER BY mae ASC;
 ```
 
 All workflows support `workflow_dispatch` for manual triggering. Required repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.

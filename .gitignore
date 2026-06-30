@@ -5,6 +5,8 @@ rosterbot
 .cache/
 .fantrax-cache/
 .backtest/
+.analysis/
+report/
 .waivers/
 .lineup/
 .superpowers/

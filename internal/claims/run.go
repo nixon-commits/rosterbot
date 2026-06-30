@@ -10,11 +10,9 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
+	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/waivers"
 )
-
-// projectionTTL matches the FanGraphs 12h cache cadence used elsewhere.
-const projectionTTL = 12 * time.Hour
 
 // WeightsProvider lets Run fetch league scoring weights for projection scoring.
 // Satisfied by *fantrax.Client.
@@ -83,7 +81,7 @@ func Run(ft ClaimsClient, today time.Time, opts Options) error {
 	// Enrichment: MLBAM IDs, Statcast signals, projections (all best-effort).
 	resolveAddedIDs(moves, opts.CacheDir)
 	if !opts.NoSignals {
-		if bundle, berr := waivers.LoadSavant(opts.CacheDir, today.Year(), today, projectionTTL); berr == nil {
+		if bundle, berr := waivers.LoadSavant(opts.CacheDir, today.Year(), today, waivers.SavantCacheTTL); berr == nil {
 			EnrichSignals(moves, bundle, waivers.DefaultThresholds())
 		} else {
 			log.Printf("WARNING: signal enrichment skipped: %v", berr)
@@ -93,7 +91,7 @@ func Run(ft ClaimsClient, today time.Time, opts Options) error {
 		hw, herr := wp.GetScoringWeights()
 		pw, perr := wp.GetPitcherScoringWeights()
 		if herr == nil && perr == nil {
-			enrichProjections(moves, hw, pw, opts.CacheDir, projectionTTL)
+			enrichProjections(moves, hw, pw, opts.CacheDir, projections.ProjectionCacheTTL)
 		} else {
 			log.Printf("WARNING: projection scoring skipped: %v / %v", herr, perr)
 		}
