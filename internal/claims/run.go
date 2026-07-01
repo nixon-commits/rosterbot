@@ -11,7 +11,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/projections"
-	"github.com/nixon-commits/rosterbot/internal/waivers"
+	"github.com/nixon-commits/rosterbot/internal/statcast"
 )
 
 // WeightsProvider lets Run fetch league scoring weights for projection scoring.
@@ -81,8 +81,8 @@ func Run(ft ClaimsClient, today time.Time, opts Options) error {
 	// Enrichment: MLBAM IDs, Statcast signals, projections (all best-effort).
 	resolveAddedIDs(moves, opts.CacheDir)
 	if !opts.NoSignals {
-		if bundle, berr := waivers.LoadSavant(opts.CacheDir, today.Year(), today, waivers.SavantCacheTTL); berr == nil {
-			EnrichSignals(moves, bundle, waivers.DefaultThresholds())
+		if bundle, berr := statcast.LoadBundle(opts.CacheDir, today.Year(), today, statcast.CacheTTL); berr == nil {
+			EnrichSignals(moves, bundle, statcast.DefaultThresholds())
 		} else {
 			log.Printf("WARNING: signal enrichment skipped: %v", berr)
 		}

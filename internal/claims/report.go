@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nixon-commits/rosterbot/internal/waivers"
+	"github.com/nixon-commits/rosterbot/internal/statcast"
 )
 
 const (
@@ -73,7 +73,7 @@ func formatSidePlayer(p SidePlayer, added bool) string {
 	} else if p.Trend30D < 0 {
 		s += fmt.Sprintf(" ▼-%s", formatValue(-p.Trend30D))
 	}
-	if added && p.Signal != waivers.SignalNone {
+	if added && p.Signal != statcast.SignalNone {
 		s += " · " + p.Signal.String()
 	}
 	if added && p.ProjectedFPG > 0 {

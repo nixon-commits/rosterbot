@@ -9,7 +9,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/prospects"
-	"github.com/nixon-commits/rosterbot/internal/waivers"
+	"github.com/nixon-commits/rosterbot/internal/statcast"
 	"github.com/spf13/cobra"
 )
 
@@ -40,7 +40,7 @@ func runArchive(cmd *cobra.Command, args []string) error {
 	sources := []archive.Source{
 		archive.FuncSource{N: "hkb", F: hkb.ArchiveArtifacts},
 		archive.FuncSource{N: "projections", F: projections.ArchiveArtifacts},
-		archive.FuncSource{N: "savant", F: waivers.ArchiveArtifacts},
+		archive.FuncSource{N: "savant", F: statcast.ArchiveArtifacts},
 		archive.FuncSource{N: "prospects", F: prospects.ArchiveArtifacts},
 	}
 	return runArchiveSources(context.Background(), sources, archive.Writer{Root: ".archive"}, date, archiveDryRun)

@@ -1,4 +1,4 @@
-package waivers
+package statcast
 
 import (
 	"context"

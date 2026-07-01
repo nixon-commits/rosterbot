@@ -17,12 +17,12 @@ func toWireResult(r Report) lineupapi.WaiversResult {
 			ProjectedFPG: c.ProjectedFPG,
 			DropName:     c.DropName,
 			Gap:          c.Gap,
-			Xwoba:        c.XwOBA,
-			Woba:         c.WOBA,
-			BarrelPct:    c.Barrel,
-			HardHitPct:   c.HardHit,
-			Era:          c.ERA,
-			Xera:         c.XERA,
+			Xwoba:        c.Metrics.XwOBA,
+			Woba:         c.Metrics.WOBA,
+			BarrelPct:    c.Metrics.Barrel,
+			HardHitPct:   c.Metrics.HardHit,
+			Era:          c.Metrics.ERA,
+			Xera:         c.Metrics.XERA,
 			Rank:         i + 1,
 		})
 	}

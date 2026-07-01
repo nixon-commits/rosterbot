@@ -1,4 +1,4 @@
-package waivers
+package statcast
 
 import (
 	"bytes"
@@ -16,13 +16,14 @@ import (
 
 // keySavant is the cache-key source prefix for every Baseball Savant CSV. The
 // entity/window parts ("hit"/"pit", "exp"/"sc"/"exp14"/…) are appended per call.
+// The literal stays "savant" so existing .cache/savant-* entries keep hitting.
 const keySavant = "savant"
 
-// SavantCacheTTL is the canonical on-disk lifetime for the Baseball Savant CSV
-// slices. Savant recomputes these daily, so 24h matches the upstream cadence.
-// Both consumers (waivers, claims) use this one value so they share cache
+// CacheTTL is the canonical on-disk lifetime for the Baseball Savant CSV slices.
+// Savant recomputes these daily, so 24h matches the upstream cadence. Every
+// consumer (waivers, claims, recap) uses this one value so they share cache
 // entries with a single freshness policy.
-const SavantCacheTTL = 24 * time.Hour
+const CacheTTL = 24 * time.Hour
 
 // Baseball Savant CSV endpoints. Defined as `var` so tests can replace them
 // with httptest server URLs (matches the convention in internal/schedule and
@@ -37,31 +38,31 @@ var (
 
 const savantHTTPTimeout = 30 * time.Second
 
-// LoadSavant fetches all five Savant CSV slices in sequence (cached) and
-// returns the combined bundle keyed by MLBAM ID. Any individual fetch failure
-// is logged and the corresponding map is left empty — Run continues with the
-// signals it has.
-func LoadSavant(cacheDir string, year int, today time.Time, ttl time.Duration) (*SavantBundle, error) {
+// LoadBundle fetches all five Savant CSV slices in sequence (cached) and returns
+// the combined Statcast Bundle keyed by MLBAM ID. Any individual fetch failure
+// is logged and the corresponding map is left empty — callers continue with the
+// signals they have.
+func LoadBundle(cacheDir string, year int, today time.Time, ttl time.Duration) (*Bundle, error) {
 	end := today.AddDate(0, 0, -1)
 	start14 := end.AddDate(0, 0, -13)
 	start30 := end.AddDate(0, 0, -29)
 	dateKey := end.Format("20060102")
 
-	bundle := &SavantBundle{
-		HitterExp:     map[int]SavantHitterRow{},
-		HitterSC:      map[int]SavantHitterStatcastRow{},
-		HitterExp14d:  map[int]SavantHitterRow{},
-		PitcherExp:    map[int]SavantPitcherRow{},
-		PitcherExp30d: map[int]SavantPitcherRow{},
+	bundle := &Bundle{
+		HitterExp:     map[int]HitterRow{},
+		HitterSC:      map[int]HitterStatcastRow{},
+		HitterExp14d:  map[int]HitterRow{},
+		PitcherExp:    map[int]PitcherRow{},
+		PitcherExp30d: map[int]PitcherRow{},
 	}
 
-	hitExpC := cache.New[[]SavantHitterRow](cacheDir, ttl)
-	hitSCC := cache.New[[]SavantHitterStatcastRow](cacheDir, ttl)
-	hitExp14C := cache.New[[]SavantHitterRow](cacheDir, ttl)
-	pitExpC := cache.New[[]SavantPitcherRow](cacheDir, ttl)
-	pitExp30C := cache.New[[]SavantPitcherRow](cacheDir, ttl)
+	hitExpC := cache.New[[]HitterRow](cacheDir, ttl)
+	hitSCC := cache.New[[]HitterStatcastRow](cacheDir, ttl)
+	hitExp14C := cache.New[[]HitterRow](cacheDir, ttl)
+	pitExpC := cache.New[[]PitcherRow](cacheDir, ttl)
+	pitExp30C := cache.New[[]PitcherRow](cacheDir, ttl)
 
-	if rows, err := hitExpC.Get(cache.Key(keySavant, "hit", "exp", strconv.Itoa(year)), func() ([]SavantHitterRow, error) {
+	if rows, err := hitExpC.Get(cache.Key(keySavant, "hit", "exp", strconv.Itoa(year)), func() ([]HitterRow, error) {
 		return fetchHitterExp(fmt.Sprintf(savantHitterExpURL, year))
 	}); err == nil {
 		for _, r := range rows {
@@ -71,7 +72,7 @@ func LoadSavant(cacheDir string, year int, today time.Time, ttl time.Duration) (
 		log.Printf("WARNING: savant hit-exp fetch failed: %v", err)
 	}
 
-	if rows, err := hitSCC.Get(cache.Key(keySavant, "hit", "sc", strconv.Itoa(year)), func() ([]SavantHitterStatcastRow, error) {
+	if rows, err := hitSCC.Get(cache.Key(keySavant, "hit", "sc", strconv.Itoa(year)), func() ([]HitterStatcastRow, error) {
 		return fetchHitterSC(fmt.Sprintf(savantHitterSCURL, year))
 	}); err == nil {
 		for _, r := range rows {
@@ -81,7 +82,7 @@ func LoadSavant(cacheDir string, year int, today time.Time, ttl time.Duration) (
 		log.Printf("WARNING: savant hit-sc fetch failed: %v", err)
 	}
 
-	if rows, err := hitExp14C.Get(cache.Key(keySavant, "hit", "exp14", strconv.Itoa(year), dateKey), func() ([]SavantHitterRow, error) {
+	if rows, err := hitExp14C.Get(cache.Key(keySavant, "hit", "exp14", strconv.Itoa(year), dateKey), func() ([]HitterRow, error) {
 		return fetchHitterExp(fmt.Sprintf(savantHitterExp14dURL, year, start14.Format("2006-01-02"), end.Format("2006-01-02")))
 	}); err == nil {
 		for _, r := range rows {
@@ -91,7 +92,7 @@ func LoadSavant(cacheDir string, year int, today time.Time, ttl time.Duration) (
 		log.Printf("WARNING: savant hit-exp14 fetch failed: %v", err)
 	}
 
-	if rows, err := pitExpC.Get(cache.Key(keySavant, "pit", "exp", strconv.Itoa(year)), func() ([]SavantPitcherRow, error) {
+	if rows, err := pitExpC.Get(cache.Key(keySavant, "pit", "exp", strconv.Itoa(year)), func() ([]PitcherRow, error) {
 		return fetchPitcherExp(fmt.Sprintf(savantPitcherExpURL, year))
 	}); err == nil {
 		for _, r := range rows {
@@ -101,7 +102,7 @@ func LoadSavant(cacheDir string, year int, today time.Time, ttl time.Duration) (
 		log.Printf("WARNING: savant pit-exp fetch failed: %v", err)
 	}
 
-	if rows, err := pitExp30C.Get(cache.Key(keySavant, "pit", "exp30", strconv.Itoa(year), dateKey), func() ([]SavantPitcherRow, error) {
+	if rows, err := pitExp30C.Get(cache.Key(keySavant, "pit", "exp30", strconv.Itoa(year), dateKey), func() ([]PitcherRow, error) {
 		return fetchPitcherExp(fmt.Sprintf(savantPitcherExp30URL, year, start30.Format("2006-01-02"), end.Format("2006-01-02")))
 	}); err == nil {
 		for _, r := range rows {
@@ -186,7 +187,7 @@ func cellInt(record []string, idx int) int {
 // Required columns (looked up by lowercase name with reasonable aliases):
 //
 //	player_id, pa, woba, est_woba (xwOBA).
-func fetchHitterExp(url string) ([]SavantHitterRow, error) {
+func fetchHitterExp(url string) ([]HitterRow, error) {
 	col, rows, err := fetchCSV(url)
 	if err != nil {
 		return nil, err
@@ -198,13 +199,13 @@ func fetchHitterExp(url string) ([]SavantHitterRow, error) {
 	if idID < 0 || idWOBA < 0 || idXWOBA < 0 {
 		return nil, fmt.Errorf("savant hitter exp: missing required columns")
 	}
-	out := make([]SavantHitterRow, 0, len(rows))
+	out := make([]HitterRow, 0, len(rows))
 	for _, rec := range rows {
 		mlbam := cellInt(rec, idID)
 		if mlbam == 0 {
 			continue
 		}
-		out = append(out, SavantHitterRow{
+		out = append(out, HitterRow{
 			MLBAMID: mlbam,
 			PA:      cellInt(rec, idPA),
 			WOBA:    cellFloat(rec, idWOBA),
@@ -215,7 +216,7 @@ func fetchHitterExp(url string) ([]SavantHitterRow, error) {
 }
 
 // fetchHitterSC parses the hitter Statcast quality-of-contact CSV.
-func fetchHitterSC(url string) ([]SavantHitterStatcastRow, error) {
+func fetchHitterSC(url string) ([]HitterStatcastRow, error) {
 	col, rows, err := fetchCSV(url)
 	if err != nil {
 		return nil, err
@@ -227,13 +228,13 @@ func fetchHitterSC(url string) ([]SavantHitterStatcastRow, error) {
 	if idID < 0 {
 		return nil, fmt.Errorf("savant hitter statcast: missing player_id")
 	}
-	out := make([]SavantHitterStatcastRow, 0, len(rows))
+	out := make([]HitterStatcastRow, 0, len(rows))
 	for _, rec := range rows {
 		mlbam := cellInt(rec, idID)
 		if mlbam == 0 {
 			continue
 		}
-		out = append(out, SavantHitterStatcastRow{
+		out = append(out, HitterStatcastRow{
 			MLBAMID:   mlbam,
 			Barrel:    cellFloat(rec, idBarrel),
 			HardHit:   cellFloat(rec, idHard),
@@ -244,7 +245,7 @@ func fetchHitterSC(url string) ([]SavantHitterStatcastRow, error) {
 }
 
 // fetchPitcherExp parses the pitcher expected_statistics CSV.
-func fetchPitcherExp(url string) ([]SavantPitcherRow, error) {
+func fetchPitcherExp(url string) ([]PitcherRow, error) {
 	col, rows, err := fetchCSV(url)
 	if err != nil {
 		return nil, err
@@ -258,13 +259,13 @@ func fetchPitcherExp(url string) ([]SavantPitcherRow, error) {
 	if idID < 0 || idXERA < 0 {
 		return nil, fmt.Errorf("savant pitcher exp: missing required columns")
 	}
-	out := make([]SavantPitcherRow, 0, len(rows))
+	out := make([]PitcherRow, 0, len(rows))
 	for _, rec := range rows {
 		mlbam := cellInt(rec, idID)
 		if mlbam == 0 {
 			continue
 		}
-		out = append(out, SavantPitcherRow{
+		out = append(out, PitcherRow{
 			MLBAMID: mlbam,
 			PA:      cellInt(rec, idPA),
 			ERA:     cellFloat(rec, idERA),

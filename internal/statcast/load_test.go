@@ -1,4 +1,4 @@
-package waivers
+package statcast
 
 import (
 	"net/http"
@@ -39,7 +39,7 @@ func TestFetchHitterExp(t *testing.T) {
 	}
 
 	// Find Soto.
-	var soto SavantHitterRow
+	var soto HitterRow
 	for _, r := range rows {
 		if r.MLBAMID == 665742 {
 			soto = r

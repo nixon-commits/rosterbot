@@ -1,15 +1,19 @@
 package waivers
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nixon-commits/rosterbot/internal/statcast"
+)
 
 func TestToWireResult(t *testing.T) {
 	r := Report{
 		Total: 2,
 		Top: []Candidate{
-			{Name: "Hitter X", MLBTeam: "BAL", Position: "OF", Signal: SignalHot, ProjectedFPG: 4.2,
-				WOBA: 0.360, XwOBA: 0.400, Barrel: 14, HardHit: 48, DropName: "Bench Y", Gap: 1.1},
-			{Name: "Pitcher Z", MLBTeam: "NYY", Position: "SP", IsPitcher: true, Signal: SignalBuyLow,
-				ProjectedFPG: 9.5, ERA: 4.5, XERA: 3.2},
+			{Name: "Hitter X", MLBTeam: "BAL", Position: "OF", Signal: statcast.SignalHot, ProjectedFPG: 4.2,
+				Metrics: statcast.SignalMetrics{WOBA: 0.360, XwOBA: 0.400, Barrel: 14, HardHit: 48}, DropName: "Bench Y", Gap: 1.1},
+			{Name: "Pitcher Z", MLBTeam: "NYY", Position: "SP", IsPitcher: true, Signal: statcast.SignalBuyLow,
+				ProjectedFPG: 9.5, Metrics: statcast.SignalMetrics{ERA: 4.5, XERA: 3.2}},
 		},
 	}
 	out := toWireResult(r)
