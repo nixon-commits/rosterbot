@@ -358,7 +358,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		{"Grade", "cron(30 13 * * ? *)", jsii.Strings("grade")},
 		{"ProjectionSite", "cron(0 15 * * ? *)", jsii.Strings("projection-site", "--out", "report")},
 		// daily capture of ephemeral upstream data (HKB, projections, Savant, prospects) after upstreams' once-daily refresh
-		{"Archive", "cron(0 14 * * ? *)", jsii.Strings("archive")},
+		{"Archive", "cron(15 14 * * ? *)", jsii.Strings("archive")},
 		// Shadow captures every projection system's lineup projection for the
 		// model-comparison report. It runs at 23:40 UTC (~late ET evening, same
 		// UTC/ET calendar day so the snapshot's generated_at passes the backtest

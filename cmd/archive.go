@@ -49,6 +49,9 @@ func runArchive(cmd *cobra.Command, args []string) error {
 // runArchiveSources runs each source independently. A single source failure is
 // logged and skipped; the command errors only when every source failed.
 func runArchiveSources(ctx context.Context, sources []archive.Source, w archive.Writer, date time.Time, dryRun bool) error {
+	if len(sources) == 0 {
+		return nil
+	}
 	var failed int
 	for _, s := range sources {
 		arts, err := s.Fetch(ctx, date)

@@ -70,21 +70,56 @@ func (w Writer) Write(date time.Time, source string, arts []Artifact) error {
 // generous (Savant CSVs are the slowest); ctx carries any tighter deadline.
 var archiveHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+// getRetryBackoff controls Get's retry cadence; one entry per RETRY (so
+// len+1 total attempts). Overridable in tests to eliminate sleep delays.
+var getRetryBackoff = []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
+
 // Get performs a raw HTTP GET and returns the response body verbatim. It is the
 // single fetch primitive every Source uses, so the GET+status+read block is not
 // duplicated across the hkb/projections/waivers/prospects archive files.
+//
+// Transient failures (transport errors and 5xx responses) are retried according
+// to getRetryBackoff. 4xx responses are permanent and returned immediately.
 func Get(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
+	maxAttempts := 1 + len(getRetryBackoff)
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err // bad URL — not retryable
+		}
+		resp, err := archiveHTTPClient.Do(req)
+		if err != nil {
+			// Transport error: retryable.
+			lastErr = err
+		} else if resp.StatusCode == http.StatusOK {
+			defer resp.Body.Close()
+			return io.ReadAll(resp.Body)
+		} else {
+			// Non-200: drain body so the connection can be reused, then decide.
+			io.Copy(io.Discard, resp.Body) //nolint:errcheck
+			resp.Body.Close()
+			lastErr = fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+			if resp.StatusCode < 500 {
+				// 4xx: permanent failure — do not retry.
+				return nil, lastErr
+			}
+			// 5xx: retryable (fall through to sleep + next attempt).
+		}
+
+		// Retryable failure: sleep before the next attempt if one remains.
+		if attempt+1 < maxAttempts {
+			d := getRetryBackoff[attempt]
+			if d > 0 {
+				timer := time.NewTimer(d)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return nil, ctx.Err()
+				case <-timer.C:
+				}
+			}
+		}
 	}
-	resp, err := archiveHTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
-	}
-	return io.ReadAll(resp.Body)
+	return nil, fmt.Errorf("GET %s: failed after %d attempt(s): %w", url, maxAttempts, lastErr)
 }

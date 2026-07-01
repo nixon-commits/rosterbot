@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -60,6 +61,11 @@ func TestWriterLastWriteWinsAndNoTempLeft(t *testing.T) {
 }
 
 func TestGetReturnsRawBytesAndErrorsOnNon200(t *testing.T) {
+	// Use zero backoff so the 500 sub-test doesn't sleep during CI.
+	orig := getRetryBackoff
+	getRetryBackoff = []time.Duration{0, 0}
+	defer func() { getRetryBackoff = orig }()
+
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("RAW"))
 	}))
@@ -75,5 +81,72 @@ func TestGetReturnsRawBytesAndErrorsOnNon200(t *testing.T) {
 	defer bad.Close()
 	if _, err := Get(context.Background(), bad.URL); err == nil {
 		t.Error("Get on 500 should error")
+	}
+}
+
+func TestGetRetriesThenSucceeds(t *testing.T) {
+	orig := getRetryBackoff
+	getRetryBackoff = []time.Duration{0, 0}
+	defer func() { getRetryBackoff = orig }()
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte("OK"))
+	}))
+	defer srv.Close()
+
+	got, err := Get(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("expected success after retry, got error: %v", err)
+	}
+	if string(got) != "OK" {
+		t.Fatalf("body = %q, want OK", got)
+	}
+}
+
+func TestGetExhaustsRetriesOn500(t *testing.T) {
+	orig := getRetryBackoff
+	getRetryBackoff = []time.Duration{0, 0}
+	defer func() { getRetryBackoff = orig }()
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, err := Get(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("expected error after exhausting retries, got nil")
+	}
+	wantCalls := int32(len(getRetryBackoff) + 1)
+	if n := calls.Load(); n != wantCalls {
+		t.Errorf("handler called %d times, want %d", n, wantCalls)
+	}
+}
+
+func TestGetDoesNotRetry4xx(t *testing.T) {
+	orig := getRetryBackoff
+	getRetryBackoff = []time.Duration{0, 0}
+	defer func() { getRetryBackoff = orig }()
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	_, err := Get(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("expected error on 404, got nil")
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("handler called %d times, want 1 (no retry on 4xx)", n)
 	}
 }
