@@ -13,6 +13,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/statcast"
 	"github.com/pmurley/go-fantrax/auth_client"
 	"github.com/pmurley/go-fantrax/models"
 	"golang.org/x/sync/errgroup"
@@ -38,7 +39,7 @@ func Run(ft FantraxClient, today time.Time, opts Options) error {
 	}
 
 	// Each upstream uses its source's canonical TTL (both 24h); --no-cache zeroes them.
-	projTTL, savantTTL := projections.ProjectionCacheTTL, SavantCacheTTL
+	projTTL, savantTTL := projections.ProjectionCacheTTL, statcast.CacheTTL
 	if opts.NoCache {
 		projTTL, savantTTL = 0, 0
 	}
@@ -49,7 +50,7 @@ func Run(ft FantraxClient, today time.Time, opts Options) error {
 		pitSrc         projections.PitcherSource
 		hitterScoring  fantrax.ScoringWeights
 		pitcherScoring fantrax.ScoringWeights
-		savant         *SavantBundle
+		savant         *statcast.Bundle
 		hitterRoster   []fantrax.Player
 		pitcherRoster  []fantrax.Player
 	)
@@ -104,7 +105,7 @@ func Run(ft FantraxClient, today time.Time, opts Options) error {
 	})
 
 	g.Go(func() error {
-		b, err := LoadSavant(opts.CacheDir, today.Year(), today, savantTTL)
+		b, err := statcast.LoadBundle(opts.CacheDir, today.Year(), today, savantTTL)
 		if err != nil {
 			log.Printf("WARNING: savant load failed: %v", err)
 			return nil
@@ -147,7 +148,7 @@ func Run(ft FantraxClient, today time.Time, opts Options) error {
 	hitterDrop := worstRosteredHitter(hitterRoster, batSrc, hitterScoring)
 	pitcherDrop := worstRosteredPitcher(pitcherRoster, pitSrc, pitcherScoring)
 
-	th := DefaultThresholds()
+	th := statcast.DefaultThresholds()
 	candidates := buildCandidates(freeAgents, mlbamByName, savant, batSrc, pitSrc, hitterScoring, pitcherScoring, hitterDrop, pitcherDrop, th)
 
 	report := Report{
@@ -349,14 +350,14 @@ func worstRosteredPitcher(roster []fantrax.Player, src projections.PitcherSource
 func buildCandidates(
 	freeAgents []models.PoolPlayer,
 	mlbamByName map[string]int,
-	savant *SavantBundle,
+	savant *statcast.Bundle,
 	batSrc projections.Source,
 	pitSrc projections.PitcherSource,
 	hitterScoring fantrax.ScoringWeights,
 	pitcherScoring fantrax.ScoringWeights,
 	hitterDrop rosteredPlayer,
 	pitcherDrop rosteredPlayer,
-	th Thresholds,
+	th statcast.Thresholds,
 ) []Candidate {
 	var out []Candidate
 	for _, p := range freeAgents {
@@ -370,10 +371,11 @@ func buildCandidates(
 
 		// Pitcher path (SP-only — RP-only is excluded per the user's scope).
 		if spEligible && pitSrc != nil {
-			sig, c := TagPitcher(savant, mlbamID, th)
-			if sig != SignalNone {
+			sig, m := statcast.TagPitcher(savant, mlbamID, th)
+			if sig != statcast.SignalNone {
 				proj, ok := pitSrc.GetPitcherProjection(p.Name, p.MLBTeamShortName)
 				if ok {
+					c := Candidate{MLBAMID: mlbamID, IsPitcher: true, Signal: sig, Metrics: m}
 					c.ProjectedFPG = projections.PitcherExpectedPtsFromProj(proj, pitcherScoring)
 					c.Name = p.Name
 					c.MLBTeam = p.MLBTeamShortName
@@ -395,10 +397,11 @@ func buildCandidates(
 		// Hitter path. (Two-way players: prefer pitcher signal when SP-eligible
 		// and a pitcher signal fired; otherwise fall through to hitter.)
 		if hitter && batSrc != nil {
-			sig, c := TagHitter(savant, mlbamID, th)
-			if sig != SignalNone {
+			sig, m := statcast.TagHitter(savant, mlbamID, th)
+			if sig != statcast.SignalNone {
 				proj, ok := batSrc.GetProjection(p.Name, p.MLBTeamShortName)
 				if ok {
+					c := Candidate{MLBAMID: mlbamID, IsPitcher: false, Signal: sig, Metrics: m}
 					c.ProjectedFPG = projections.ExpectedPtsFromProj(proj, hitterScoring)
 					c.Name = p.Name
 					c.MLBTeam = p.MLBTeamShortName
@@ -457,13 +460,13 @@ const (
 	colorGray  = "\033[90m"
 )
 
-func signalColor(s Signal) string {
+func signalColor(s statcast.Signal) string {
 	switch s {
-	case SignalBuyLow:
+	case statcast.SignalBuyLow:
 		return colorRed
-	case SignalHot:
+	case statcast.SignalHot:
 		return colorGreen
-	case SignalBoth:
+	case statcast.SignalBoth:
 		return colorBold + colorCyan
 	default:
 		return ""
@@ -517,31 +520,31 @@ func candidateDetail(c Candidate) string {
 
 func hitterDetail(c Candidate) string {
 	parts := []string{}
-	if c.Signal == SignalBuyLow || c.Signal == SignalBoth {
-		parts = append(parts, fmt.Sprintf("xwOBA %s", signedDelta(c.BuyLowDelta, 3)))
+	if c.Signal == statcast.SignalBuyLow || c.Signal == statcast.SignalBoth {
+		parts = append(parts, fmt.Sprintf("xwOBA %s", signedDelta(c.Metrics.BuyLowDelta, 3)))
 	}
-	if c.Signal == SignalHot || c.Signal == SignalBoth {
-		parts = append(parts, fmt.Sprintf("14d wOBA %s", omitLeadZero(c.HotHitter.Window14dWOBA)))
+	if c.Signal == statcast.SignalHot || c.Signal == statcast.SignalBoth {
+		parts = append(parts, fmt.Sprintf("14d wOBA %s", omitLeadZero(c.Metrics.HotHitter.Window14dWOBA)))
 	}
-	if c.Barrel > 0 {
-		parts = append(parts, fmt.Sprintf("%.1f%% Brl", c.Barrel))
+	if c.Metrics.Barrel > 0 {
+		parts = append(parts, fmt.Sprintf("%.1f%% Brl", c.Metrics.Barrel))
 	}
-	if c.HardHit > 0 {
-		parts = append(parts, fmt.Sprintf("%.0f%% HH", c.HardHit))
+	if c.Metrics.HardHit > 0 {
+		parts = append(parts, fmt.Sprintf("%.0f%% HH", c.Metrics.HardHit))
 	}
 	return strings.Join(parts, " · ")
 }
 
 func pitcherDetail(c Candidate) string {
 	parts := []string{}
-	if c.Signal == SignalBuyLow || c.Signal == SignalBoth {
-		parts = append(parts, fmt.Sprintf("ERA %.2f / xERA %.2f", c.ERA, c.XERA))
+	if c.Signal == statcast.SignalBuyLow || c.Signal == statcast.SignalBoth {
+		parts = append(parts, fmt.Sprintf("ERA %.2f / xERA %.2f", c.Metrics.ERA, c.Metrics.XERA))
 	}
-	if c.Signal == SignalHot || c.Signal == SignalBoth {
-		parts = append(parts, fmt.Sprintf("30d ERA %.2f", c.HotPitcher.Window30dERA))
+	if c.Signal == statcast.SignalHot || c.Signal == statcast.SignalBoth {
+		parts = append(parts, fmt.Sprintf("30d ERA %.2f", c.Metrics.HotPitcher.Window30dERA))
 	}
-	if c.XwOBA > 0 {
-		parts = append(parts, fmt.Sprintf("xwOBA %s", omitLeadZero(c.XwOBA)))
+	if c.Metrics.XwOBA > 0 {
+		parts = append(parts, fmt.Sprintf("xwOBA %s", omitLeadZero(c.Metrics.XwOBA)))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -605,13 +608,13 @@ func writeGHASummary(r Report, path string) {
 // ---------------------------------------------------------------------------
 
 // signalEmoji returns a compact emoji for each signal type.
-func signalEmoji(s Signal) string {
+func signalEmoji(s statcast.Signal) string {
 	switch s {
-	case SignalHot:
+	case statcast.SignalHot:
 		return "🔥"
-	case SignalBuyLow:
+	case statcast.SignalBuyLow:
 		return "📉"
-	case SignalBoth:
+	case statcast.SignalBoth:
 		return "⚡"
 	default:
 		return ""

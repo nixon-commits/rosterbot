@@ -36,6 +36,16 @@ _Avoid_: roster spot, lineup position.
 A reporting grouping a hitter falls into by eligibility precedence C > INF > OF > UT (the scarcest defensive role wins); pitchers bucket by role (SP/RP). Used by the backtest's per-position accuracy table.
 _Avoid_: position group, category.
 
+### Statcast
+
+**Statcast Bundle**:
+The joined set of Baseball Savant expected-stats and quality-of-contact slices for one day, keyed by MLBAM ID — season wOBA/xwOBA/barrel/hard-hit for hitters, season ERA/xERA/xwOBA for pitchers, plus a 14-day hitter window and a 30-day pitcher window. `statcast.Bundle` in `internal/statcast`, loaded by `LoadBundle` (cached 24 h, matching the Savant recompute cadence). The raw CSVs are the source; the Bundle is the in-memory join every consumer reads. Lives in its own leaf so `waivers`, `claims`, and `recap` depend on the data — not on each other's command package.
+_Avoid_: savant data, statcast blob, CSV bundle.
+
+**Statcast Signal**:
+A classification of why a player is worth surfacing, derived from a Statcast Bundle against tunable Thresholds: BUY-LOW (expected stats outrun surface stats), HOT (recent production backed by quality contact), BOTH, or None. `statcast.Signal` plus `TagHitter`/`TagPitcher`, which return the Signal and a `SignalMetrics` carrying the facts behind it. Consumed by the waivers report and the claims recap; independent of any command.
+_Avoid_: tag, flag, waiver signal, alert.
+
 ### Storage
 
 **Cache**:

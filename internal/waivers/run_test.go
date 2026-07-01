@@ -8,6 +8,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/statcast"
 	"github.com/pmurley/go-fantrax/auth_client"
 	"github.com/pmurley/go-fantrax/models"
 )
@@ -115,19 +116,19 @@ func TestBuildCandidates_SortAndIdempotent(t *testing.T) {
 		projections.NormalizeName("Strider Spencer"): 675911,
 		projections.NormalizeName("Buylow Pitcher"):  888001,
 	}
-	savant := &SavantBundle{
-		HitterExp: map[int]SavantHitterRow{
+	savant := &statcast.Bundle{
+		HitterExp: map[int]statcast.HitterRow{
 			665742: {MLBAMID: 665742, PA: 200, WOBA: 0.310, XwOBA: 0.360},
 		},
-		HitterSC: map[int]SavantHitterStatcastRow{
+		HitterSC: map[int]statcast.HitterStatcastRow{
 			665742: {MLBAMID: 665742, Barrel: 12.0, HardHit: 46.0},
 		},
-		HitterExp14d: map[int]SavantHitterRow{},
-		PitcherExp: map[int]SavantPitcherRow{
+		HitterExp14d: map[int]statcast.HitterRow{},
+		PitcherExp: map[int]statcast.PitcherRow{
 			675911: {MLBAMID: 675911, PA: 150, ERA: 3.30, XERA: 3.40, XwOBA: 0.310},
 			888001: {MLBAMID: 888001, PA: 150, ERA: 4.50, XERA: 3.20, XwOBA: 0.290},
 		},
-		PitcherExp30d: map[int]SavantPitcherRow{
+		PitcherExp30d: map[int]statcast.PitcherRow{
 			675911: {MLBAMID: 675911, PA: 60, ERA: 2.80, XERA: 3.10},
 		},
 	}
@@ -152,7 +153,7 @@ func TestBuildCandidates_SortAndIdempotent(t *testing.T) {
 		"K": 2, "W": 5, "QS": 4, "ER": -1, "IP": 1, "BB": -0.5, "H": -0.5, "HR": -2,
 	}
 
-	got := buildCandidates(freeAgents, mlbamByName, savant, bat, pit, hitterScoring, pitcherScoring, rosteredPlayer{}, rosteredPlayer{}, DefaultThresholds())
+	got := buildCandidates(freeAgents, mlbamByName, savant, bat, pit, hitterScoring, pitcherScoring, rosteredPlayer{}, rosteredPlayer{}, statcast.DefaultThresholds())
 	if len(got) != 3 {
 		t.Fatalf("want 3 candidates, got %d", len(got))
 	}
@@ -161,7 +162,7 @@ func TestBuildCandidates_SortAndIdempotent(t *testing.T) {
 	// summation noise inside ExpectedPts*FromProj (which iterates a Go map).
 	// What matters for idempotency is the same MLBAM IDs in the same order
 	// with ProjectedFPG within a tiny epsilon.
-	got2 := buildCandidates(freeAgents, mlbamByName, savant, bat, pit, hitterScoring, pitcherScoring, rosteredPlayer{}, rosteredPlayer{}, DefaultThresholds())
+	got2 := buildCandidates(freeAgents, mlbamByName, savant, bat, pit, hitterScoring, pitcherScoring, rosteredPlayer{}, rosteredPlayer{}, statcast.DefaultThresholds())
 	if len(got) != len(got2) {
 		t.Fatalf("idempotency: lengths differ %d vs %d", len(got), len(got2))
 	}
@@ -179,8 +180,8 @@ func TestBuildCandidates_SkipsWithoutMLBAMID(t *testing.T) {
 	freeAgents := []models.PoolPlayer{
 		{Name: "Unknown Player", FantasyStatus: "FA", Positions: []string{auth_client.PosOF}, MultiPositions: "OF"},
 	}
-	got := buildCandidates(freeAgents, map[string]int{}, &SavantBundle{}, mockBatSrc{}, mockPitSrc{},
-		fantrax.ScoringWeights{}, fantrax.ScoringWeights{}, rosteredPlayer{}, rosteredPlayer{}, DefaultThresholds())
+	got := buildCandidates(freeAgents, map[string]int{}, &statcast.Bundle{}, mockBatSrc{}, mockPitSrc{},
+		fantrax.ScoringWeights{}, fantrax.ScoringWeights{}, rosteredPlayer{}, rosteredPlayer{}, statcast.DefaultThresholds())
 	if len(got) != 0 {
 		t.Fatalf("want 0 candidates without MLBAM ID, got %d", len(got))
 	}
@@ -191,17 +192,17 @@ func TestBuildCandidates_SkipsWithoutProjection(t *testing.T) {
 		{Name: "Has Signal", FantasyStatus: "FA", Positions: []string{auth_client.PosOF}, MultiPositions: "OF"},
 	}
 	mlbamByName := map[string]int{projections.NormalizeName("Has Signal"): 1}
-	savant := &SavantBundle{
-		HitterExp: map[int]SavantHitterRow{
+	savant := &statcast.Bundle{
+		HitterExp: map[int]statcast.HitterRow{
 			1: {MLBAMID: 1, PA: 200, WOBA: 0.310, XwOBA: 0.360},
 		},
-		HitterSC: map[int]SavantHitterStatcastRow{
+		HitterSC: map[int]statcast.HitterStatcastRow{
 			1: {MLBAMID: 1, Barrel: 12.0, HardHit: 46.0},
 		},
 	}
 	// No projection in mockBatSrc → candidate dropped.
 	got := buildCandidates(freeAgents, mlbamByName, savant, mockBatSrc{}, mockPitSrc{},
-		fantrax.ScoringWeights{}, fantrax.ScoringWeights{}, rosteredPlayer{}, rosteredPlayer{}, DefaultThresholds())
+		fantrax.ScoringWeights{}, fantrax.ScoringWeights{}, rosteredPlayer{}, rosteredPlayer{}, statcast.DefaultThresholds())
 	if len(got) != 0 {
 		t.Fatalf("want 0 candidates without projection, got %d", len(got))
 	}
@@ -215,11 +216,13 @@ func TestPushoverFitsLimit(t *testing.T) {
 			Name:         "Reasonable LongName",
 			MLBTeam:      "TEAM",
 			Position:     "OF",
-			Signal:       SignalBuyLow,
-			BuyLowDelta:  0.045,
-			Barrel:       12.5,
-			HardHit:      45,
+			Signal:       statcast.SignalBuyLow,
 			ProjectedFPG: 6.5,
+			Metrics: statcast.SignalMetrics{
+				BuyLowDelta: 0.045,
+				Barrel:      12.5,
+				HardHit:     45,
+			},
 		})
 	}
 	msg := formatPushover(r)
@@ -236,10 +239,10 @@ func TestPushoverFormat_TwoLineStructure(t *testing.T) {
 		Date:  time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		Total: 2,
 		Top: []Candidate{
-			{Signal: SignalHot, Name: "Nathaniel Lowe", MLBTeam: "CIN", DropName: "Colt Emerson",
-				Gap: 0.77, HotHitter: HotHitterMetrics{Window14dWOBA: 0.387}, Barrel: 14.1, HardHit: 46},
-			{Signal: SignalBuyLow, Name: "Tyler Stephenson", MLBTeam: "CIN", DropName: "Colt Emerson",
-				Gap: 0.09, BuyLowDelta: 0.046, Barrel: 12.0, HardHit: 44},
+			{Signal: statcast.SignalHot, Name: "Nathaniel Lowe", MLBTeam: "CIN", DropName: "Colt Emerson",
+				Gap: 0.77, Metrics: statcast.SignalMetrics{HotHitter: statcast.HotHitterMetrics{Window14dWOBA: 0.387}, Barrel: 14.1, HardHit: 46}},
+			{Signal: statcast.SignalBuyLow, Name: "Tyler Stephenson", MLBTeam: "CIN", DropName: "Colt Emerson",
+				Gap: 0.09, Metrics: statcast.SignalMetrics{BuyLowDelta: 0.046, Barrel: 12.0, HardHit: 44}},
 		},
 	}
 	msg := formatPushover(r)
@@ -268,12 +271,12 @@ func TestBuildCandidates_GapFilter(t *testing.T) {
 		projections.NormalizeName("Better FA"): 100,
 		projections.NormalizeName("Worse FA"):  101,
 	}
-	savant := &SavantBundle{
-		HitterExp: map[int]SavantHitterRow{
+	savant := &statcast.Bundle{
+		HitterExp: map[int]statcast.HitterRow{
 			100: {MLBAMID: 100, PA: 200, WOBA: 0.310, XwOBA: 0.360},
 			101: {MLBAMID: 101, PA: 200, WOBA: 0.310, XwOBA: 0.360},
 		},
-		HitterSC: map[int]SavantHitterStatcastRow{
+		HitterSC: map[int]statcast.HitterStatcastRow{
 			100: {MLBAMID: 100, Barrel: 12.0, HardHit: 46.0},
 			101: {MLBAMID: 101, Barrel: 12.0, HardHit: 46.0},
 		},
@@ -288,7 +291,7 @@ func TestBuildCandidates_GapFilter(t *testing.T) {
 	// Drop FPG = 3.0 — Better FA beats it, Worse FA doesn't.
 	drop := rosteredPlayer{Name: "Bench Player", FPG: 3.0}
 	got := buildCandidates(freeAgents, mlbamByName, savant, bat, mockPitSrc{},
-		hitterScoring, fantrax.ScoringWeights{}, drop, rosteredPlayer{}, DefaultThresholds())
+		hitterScoring, fantrax.ScoringWeights{}, drop, rosteredPlayer{}, statcast.DefaultThresholds())
 	if len(got) != 1 {
 		t.Fatalf("want 1 candidate (Better FA only), got %d", len(got))
 	}

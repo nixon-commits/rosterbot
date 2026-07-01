@@ -1,4 +1,4 @@
-package waivers
+package statcast
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 
 // ArchiveArtifacts fetches all five Baseball Savant CSVs (raw bytes) for durable
 // archival. The 14d/30d windows are rolling and roll off permanently upstream, so
-// this is the only way to preserve them. Window math mirrors LoadSavant so the
+// this is the only way to preserve them. Window math mirrors LoadBundle so the
 // archived windows match what the waivers/claims path actually consumes.
 func ArchiveArtifacts(ctx context.Context, date time.Time) ([]archive.Artifact, error) {
 	year := date.Year()

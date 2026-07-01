@@ -7,14 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nixon-commits/rosterbot/internal/waivers"
+	"github.com/nixon-commits/rosterbot/internal/statcast"
 )
 
 func TestBuildAndWriteLedger(t *testing.T) {
 	day := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
 	moves := []Move{
 		{TeamName: "Aces", TeamID: "t1", ClaimType: "WW", BidAmount: "12", Priority: "3",
-			Added:   []SidePlayer{{Name: "Added Guy", Position: "OF", MLBAMID: 99, Value: 3000, Rank: 120, Signal: waivers.SignalHot, ProjectedFPG: 4.2}},
+			Added:   []SidePlayer{{Name: "Added Guy", Position: "OF", MLBAMID: 99, Value: 3000, Rank: 120, Signal: statcast.SignalHot, ProjectedFPG: 4.2}},
 			Dropped: []SidePlayer{{Name: "Dropped Guy", Value: 1000}}},
 	}
 	led := BuildLedger(day, moves)

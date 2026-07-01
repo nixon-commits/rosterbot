@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/hkb"
-	"github.com/nixon-commits/rosterbot/internal/waivers"
+	"github.com/nixon-commits/rosterbot/internal/statcast"
 	"github.com/pmurley/go-fantrax/models"
 )
 
@@ -33,7 +33,7 @@ type SidePlayer struct {
 
 	// Enrichment (added players only).
 	MLBAMID      int
-	Signal       waivers.Signal
+	Signal       statcast.Signal
 	ProjectedFPG float64 // 0 = unavailable
 }
 

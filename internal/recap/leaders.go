@@ -13,7 +13,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/positions"
-	"github.com/nixon-commits/rosterbot/internal/waivers"
+	"github.com/nixon-commits/rosterbot/internal/statcast"
 	"github.com/pmurley/go-fantrax/models"
 )
 
@@ -64,7 +64,7 @@ func buildLeaders(ft *fantrax.Client, year int, today time.Time, cacheDir string
 	}
 
 	// Hitters → season wOBA via the Savant expected-stats CSV (qualified only).
-	if savant, err := waivers.LoadSavant(cacheDir, year, today, cacheTTL); err != nil {
+	if savant, err := statcast.LoadBundle(cacheDir, year, today, cacheTTL); err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: league leaders (savant): %v\n", err)
 	} else {
 		wobaLeaders = computeWOBALeaders(rostered, resolved, savant, n)
@@ -116,7 +116,7 @@ func isHitter(p models.PoolPlayer) bool {
 }
 
 // computeWOBALeaders ranks rostered hitters by season-to-date wOBA descending.
-func computeWOBALeaders(rostered []models.PoolPlayer, resolved *playername.ResolvedPlayers, savant *waivers.SavantBundle, n int) []LeaderLine {
+func computeWOBALeaders(rostered []models.PoolPlayer, resolved *playername.ResolvedPlayers, savant *statcast.Bundle, n int) []LeaderLine {
 	var out []LeaderLine
 	for _, p := range rostered {
 		if !isHitter(p) {

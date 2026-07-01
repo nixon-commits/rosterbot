@@ -6,12 +6,12 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
-	"github.com/nixon-commits/rosterbot/internal/waivers"
+	"github.com/nixon-commits/rosterbot/internal/statcast"
 )
 
 // EnrichSignals tags each added player with a Statcast signal using the shared
 // waivers tagging rules. No-op when bundle is nil or MLBAMID is unresolved.
-func EnrichSignals(moves []Move, bundle *waivers.SavantBundle, th waivers.Thresholds) {
+func EnrichSignals(moves []Move, bundle *statcast.Bundle, th statcast.Thresholds) {
 	if bundle == nil {
 		return
 	}
@@ -21,11 +21,11 @@ func EnrichSignals(moves []Move, bundle *waivers.SavantBundle, th waivers.Thresh
 			if p.MLBAMID == 0 {
 				continue
 			}
-			var sig waivers.Signal
+			var sig statcast.Signal
 			if p.IsPitcher {
-				sig, _ = waivers.TagPitcher(bundle, p.MLBAMID, th)
+				sig, _ = statcast.TagPitcher(bundle, p.MLBAMID, th)
 			} else {
-				sig, _ = waivers.TagHitter(bundle, p.MLBAMID, th)
+				sig, _ = statcast.TagHitter(bundle, p.MLBAMID, th)
 			}
 			p.Signal = sig
 		}

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/playername"
-	"github.com/nixon-commits/rosterbot/internal/waivers"
+	"github.com/nixon-commits/rosterbot/internal/statcast"
 	"github.com/pmurley/go-fantrax/models"
 )
 
@@ -103,7 +103,7 @@ func TestComputeWOBALeaders(t *testing.T) {
 		playername.Normalize("Average Joe"):    11,
 		playername.Normalize("Just A Pitcher"): 12,
 	}}
-	savant := &waivers.SavantBundle{HitterExp: map[int]waivers.SavantHitterRow{
+	savant := &statcast.Bundle{HitterExp: map[int]statcast.HitterRow{
 		10: {MLBAMID: 10, WOBA: 0.410},
 		11: {MLBAMID: 11, WOBA: 0.330},
 		12: {MLBAMID: 12, WOBA: 0.150}, // pitcher hitting — excluded (isHitter false)
