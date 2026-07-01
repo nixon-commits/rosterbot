@@ -31,6 +31,7 @@
   - `type Source interface { Name() string; Fetch(ctx context.Context, date time.Time) ([]Artifact, error) }`
   - `type FuncSource struct { N string; F func(context.Context, time.Time) ([]Artifact, error) }` implementing `Source`
   - `type Writer struct { Root string }` with `func (w Writer) Write(date time.Time, source string, arts []Artifact) error`
+  - `func Get(ctx context.Context, url string) ([]byte, error)` — shared raw-bytes HTTP GET (status check + body read), used by all four sources so the fetch block isn't duplicated per package.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -92,7 +93,28 @@ func TestWriterLastWriteWinsAndNoTempLeft(t *testing.T) {
 		}
 	}
 }
+
+func TestGetReturnsRawBytesAndErrorsOnNon200(t *testing.T) {
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("RAW"))
+	}))
+	defer ok.Close()
+	got, err := Get(context.Background(), ok.URL)
+	if err != nil || string(got) != "RAW" {
+		t.Fatalf("Get ok = %q, %v; want RAW, nil", got, err)
+	}
+
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer bad.Close()
+	if _, err := Get(context.Background(), bad.URL); err == nil {
+		t.Error("Get on 500 should error")
+	}
+}
 ```
+
+The test file needs these imports: `context`, `net/http`, `net/http/httptest`, `os`, `path/filepath`, `testing`, `time`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -110,6 +132,9 @@ package archive
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -166,9 +191,32 @@ func (w Writer) Write(date time.Time, source string, arts []Artifact) error {
 	}
 	return os.Rename(tmp, dir)
 }
+
+// archiveHTTPClient is the shared client for raw archival fetches. Timeout is
+// generous (Savant CSVs are the slowest); ctx carries any tighter deadline.
+var archiveHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+// Get performs a raw HTTP GET and returns the response body verbatim. It is the
+// single fetch primitive every Source uses, so the GET+status+read block is not
+// duplicated across the hkb/projections/waivers/prospects archive files.
+func Get(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := archiveHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
+}
 ```
 
-Note: `context` is referenced by the `Source` interface signature, so the import is used — no blank-identifier trick needed.
+Note: `context` is referenced by the `Source` interface signature and `Get`, so the import is used.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -242,8 +290,6 @@ package hkb
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/archive"
@@ -254,21 +300,9 @@ import (
 // preserve a given day's rankings. The date arg is unused (no date param
 // upstream) but present for archive.Source conformance.
 func ArchiveArtifacts(ctx context.Context, _ time.Time) ([]archive.Artifact, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, nil)
+	body, err := archive.Get(ctx, fetchURL)
 	if err != nil {
-		return nil, err
-	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("hkb archive fetch: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("hkb archive: status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("hkb archive read: %w", err)
+		return nil, fmt.Errorf("hkb archive: %w", err)
 	}
 	return []archive.Artifact{{Filename: "rankings.html", Bytes: body}}, nil
 }
@@ -363,8 +397,6 @@ package projections
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/archive"
@@ -384,7 +416,6 @@ var archivedSystems = []string{
 // RoS system and returns them as <system>-bat.json / <system>-pit.json. It builds
 // URLs directly (not via SetProjectionSystem, which mutates package globals).
 func ArchiveArtifacts(ctx context.Context, _ time.Time) ([]archive.Artifact, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
 	var arts []archive.Artifact
 	for _, sys := range archivedSystems {
 		apiType, ok := fgProjectionType[sys]
@@ -392,8 +423,7 @@ func ArchiveArtifacts(ctx context.Context, _ time.Time) ([]archive.Artifact, err
 			return nil, fmt.Errorf("archive: unknown system %q", sys)
 		}
 		for _, stats := range []string{"bat", "pit"} {
-			url := fmt.Sprintf(fgBaseURL, apiType, stats)
-			body, err := fetchRaw(ctx, client, url)
+			body, err := archive.Get(ctx, fmt.Sprintf(fgBaseURL, apiType, stats))
 			if err != nil {
 				return nil, fmt.Errorf("archive %s %s: %w", sys, stats, err)
 			}
@@ -404,22 +434,6 @@ func ArchiveArtifacts(ctx context.Context, _ time.Time) ([]archive.Artifact, err
 		}
 	}
 	return arts, nil
-}
-
-func fetchRaw(ctx context.Context, client *http.Client, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d", resp.StatusCode)
-	}
-	return io.ReadAll(resp.Body)
 }
 ```
 
@@ -516,8 +530,6 @@ package waivers
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/archive"
@@ -545,24 +557,11 @@ func ArchiveArtifacts(ctx context.Context, date time.Time) ([]archive.Artifact, 
 		{"pitcher-exp-30d.csv", fmt.Sprintf(savantPitcherExp30URL, year, df(start30), df(end))},
 	}
 
-	client := &http.Client{Timeout: savantHTTPTimeout}
 	var arts []archive.Artifact
 	for _, s := range specs {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.url, nil)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := client.Do(req)
+		body, err := archive.Get(ctx, s.url)
 		if err != nil {
 			return nil, fmt.Errorf("savant archive %s: %w", s.filename, err)
-		}
-		body, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("savant archive %s: status %d", s.filename, resp.StatusCode)
-		}
-		if readErr != nil {
-			return nil, fmt.Errorf("savant archive %s read: %w", s.filename, readErr)
 		}
 		arts = append(arts, archive.Artifact{Filename: s.filename, Bytes: body})
 	}
@@ -643,8 +642,6 @@ package prospects
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/archive"
@@ -655,22 +652,9 @@ import (
 // FanGraphsRankingSource.GetTopProspects.
 func ArchiveArtifacts(ctx context.Context, date time.Time) ([]archive.Artifact, error) {
 	season := date.Year()
-	url := fmt.Sprintf(fgProspectURL, season, season)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	body, err := archive.Get(ctx, fmt.Sprintf(fgProspectURL, season, season))
 	if err != nil {
-		return nil, err
-	}
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("prospects archive fetch: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("prospects archive: status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("prospects archive read: %w", err)
+		return nil, fmt.Errorf("prospects archive: %w", err)
 	}
 	return []archive.Artifact{{Filename: "fangraphs-board.json", Bytes: body}}, nil
 }
