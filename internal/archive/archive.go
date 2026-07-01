@@ -93,8 +93,9 @@ func Get(ctx context.Context, url string) ([]byte, error) {
 			// Transport error: retryable.
 			lastErr = err
 		} else if resp.StatusCode == http.StatusOK {
-			defer resp.Body.Close()
-			return io.ReadAll(resp.Body)
+			b, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return b, readErr
 		} else {
 			// Non-200: drain body so the connection can be reused, then decide.
 			io.Copy(io.Discard, resp.Body) //nolint:errcheck
