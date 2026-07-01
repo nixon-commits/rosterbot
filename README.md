@@ -116,6 +116,10 @@ rosterbot recap-site --out dist
 rosterbot shadow                 # capture today
 rosterbot shadow --dates 2026-06-30
 
+# Archive today's ephemeral upstream data (HKB, projections, Savant, prospects) as a durable daily snapshot
+rosterbot archive --dry-run           # fetch + print sizes, write nothing
+rosterbot archive --date 2026-06-30   # capture a specific date
+
 # Render projection-accuracy dashboard from the grades store (reads S3 when STATE_BUCKET is set, else .analysis/); renders to <out>/index.html (--out defaults to report)
 # Headlines with a system-comparison panel (4 RoS systems ranked by MAE + overlaid
 # trend lines); the detail dashboard below is the production system's slice.
@@ -290,6 +294,7 @@ need a browser login.
 | `shadow` | daily 23:40 UTC | `shadow` |
 | `grade` | daily 13:30 UTC | `grade` |
 | `projection-site` | daily 15:00 UTC | `projection-site --out report` |
+| `archive` | daily 14:00 UTC | `archive` |
 
 Scheduled jobs can also be started manually by running the same command in a Fargate task.
 Required repository secrets for local runs: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`,

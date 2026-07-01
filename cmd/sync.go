@@ -26,6 +26,7 @@ var statePairs = []struct {
 	{".fantrax-cache/", "session/"},
 	{".waivers/", "claims/"},
 	{".backtest/", "backtest/"},
+	{".archive/", "archive/"},
 }
 
 var syncDownCmd = &cobra.Command{
