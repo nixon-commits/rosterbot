@@ -11,7 +11,9 @@ import (
 )
 
 func TestArchiveArtifactsReturnsFiveCSVs(t *testing.T) {
+	var capturedQueries []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQueries = append(capturedQueries, r.URL.RawQuery)
 		w.Write([]byte("player_id,x\n1,2\n"))
 	}))
 	defer srv.Close()
@@ -47,5 +49,34 @@ func TestArchiveArtifactsReturnsFiveCSVs(t *testing.T) {
 	want := "hitter-exp-14d.csv,hitter-exp.csv,hitter-statcast.csv,pitcher-exp-30d.csv,pitcher-exp.csv"
 	if strings.Join(names, ",") != want {
 		t.Errorf("names = %v, want %v", names, want)
+	}
+
+	// Verify rolling-window date math: for 2026-06-30, end=06-29, 14d starts at 06-16, 30d starts at 05-31.
+	wantSeasonYear := "year=2026"
+	want14d := "year=2026&s=2026-06-16&e=2026-06-29"
+	want30d := "year=2026&s=2026-05-31&e=2026-06-29"
+
+	found14d := false
+	found30d := false
+	seasonCount := 0
+	for _, q := range capturedQueries {
+		if q == want14d {
+			found14d = true
+		}
+		if q == want30d {
+			found30d = true
+		}
+		if q == wantSeasonYear {
+			seasonCount++
+		}
+	}
+	if !found14d {
+		t.Errorf("14d window query not found. want %s, got queries: %v", want14d, capturedQueries)
+	}
+	if !found30d {
+		t.Errorf("30d window query not found. want %s, got queries: %v", want30d, capturedQueries)
+	}
+	if seasonCount < 3 {
+		t.Errorf("season year query count = %d, want at least 3, got queries: %v", seasonCount, capturedQueries)
 	}
 }
