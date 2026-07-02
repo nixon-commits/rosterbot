@@ -2,7 +2,9 @@ package statcast
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/archive"
@@ -31,12 +33,24 @@ func ArchiveArtifacts(ctx context.Context, date time.Time) ([]archive.Artifact, 
 	}
 
 	var arts []archive.Artifact
+	var errs []error
 	for _, s := range specs {
 		body, err := archive.Get(ctx, s.url)
 		if err != nil {
-			return nil, fmt.Errorf("savant archive %s: %w", s.filename, err)
+			// A single leaderboard 500 must not discard the others — the rolling
+			// 14d/30d windows roll off upstream and can never be re-fetched, so
+			// keep whatever we could grab today.
+			errs = append(errs, fmt.Errorf("%s: %w", s.filename, err))
+			continue
 		}
 		arts = append(arts, archive.Artifact{Filename: s.filename, Bytes: body})
+	}
+	if len(arts) == 0 {
+		return nil, fmt.Errorf("savant archive: all fetches failed: %w", errors.Join(errs...))
+	}
+	if len(errs) > 0 {
+		fmt.Fprintf(os.Stderr, "warn: savant archive: %d of %d CSVs failed, archived the rest: %v\n",
+			len(errs), len(specs), errors.Join(errs...))
 	}
 	return arts, nil
 }
