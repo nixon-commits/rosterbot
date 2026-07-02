@@ -80,3 +80,78 @@ func TestArchiveArtifactsReturnsFiveCSVs(t *testing.T) {
 		t.Errorf("season year query count = %d, want at least 3, got queries: %v", seasonCount, capturedQueries)
 	}
 }
+
+// One Savant CSV failing (Savant occasionally 500s a single leaderboard) must
+// not discard the four that fetched fine — especially since the rolling 14d/30d
+// windows roll off upstream and can never be re-fetched. A 404 stands in for the
+// failure so archive.Get returns without retry-backoff sleeps.
+func TestArchiveArtifactsPersistsPartialWhenOneCSVFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Fail only the 14d window (unique start date), succeed on the rest.
+		if strings.Contains(r.URL.RawQuery, "s=2026-06-16") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Write([]byte("player_id,x\n1,2\n"))
+	}))
+	defer srv.Close()
+	save := []*string{&savantHitterExpURL, &savantHitterExp14dURL, &savantHitterSCURL, &savantPitcherExpURL, &savantPitcherExp30URL}
+	orig := make([]string, len(save))
+	for i, p := range save {
+		orig[i] = *p
+	}
+	savantHitterExpURL = srv.URL + "?year=%d"
+	savantHitterExp14dURL = srv.URL + "?year=%d&s=%s&e=%s"
+	savantHitterSCURL = srv.URL + "?year=%d"
+	savantPitcherExpURL = srv.URL + "?year=%d"
+	savantPitcherExp30URL = srv.URL + "?year=%d&s=%s&e=%s"
+	defer func() {
+		for i, p := range save {
+			*p = orig[i]
+		}
+	}()
+
+	arts, err := ArchiveArtifacts(context.Background(), time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("partial failure should not error: %v", err)
+	}
+	if len(arts) != 4 {
+		t.Fatalf("got %d artifacts, want 4 (all but hitter-exp-14d)", len(arts))
+	}
+	for _, a := range arts {
+		if a.Filename == "hitter-exp-14d.csv" {
+			t.Errorf("hitter-exp-14d.csv should be absent after its fetch failed")
+		}
+	}
+}
+
+// When every CSV fails there is nothing to archive, so the source reports an error.
+func TestArchiveArtifactsErrorsWhenAllCSVsFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	save := []*string{&savantHitterExpURL, &savantHitterExp14dURL, &savantHitterSCURL, &savantPitcherExpURL, &savantPitcherExp30URL}
+	orig := make([]string, len(save))
+	for i, p := range save {
+		orig[i] = *p
+	}
+	savantHitterExpURL = srv.URL + "?year=%d"
+	savantHitterExp14dURL = srv.URL + "?year=%d&s=%s&e=%s"
+	savantHitterSCURL = srv.URL + "?year=%d"
+	savantPitcherExpURL = srv.URL + "?year=%d"
+	savantPitcherExp30URL = srv.URL + "?year=%d&s=%s&e=%s"
+	defer func() {
+		for i, p := range save {
+			*p = orig[i]
+		}
+	}()
+
+	arts, err := ArchiveArtifacts(context.Background(), time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatalf("expected an error when every CSV fails, got nil (%d artifacts)", len(arts))
+	}
+	if len(arts) != 0 {
+		t.Errorf("got %d artifacts, want 0 when all fail", len(arts))
+	}
+}
