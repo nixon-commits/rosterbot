@@ -52,7 +52,7 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 		"at":     0,
 		"av":     "0.0",
 		"tz":     "UTC",
-		"v":      "180.0.0",
+		"v":      "181.0.0",
 	}
 
 	jsonStr, err := json.Marshal(fullRequest)
