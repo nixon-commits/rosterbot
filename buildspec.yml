@@ -1,8 +1,31 @@
 version: 0.2
-# Built by AWS CodeBuild on push to main; pushes the image to ECR.
-# ECR_URI is injected by the CodeBuild project (CDK). The build host is ARM64
-# so the image matches the Fargate ARM64 (Graviton) task definition.
+# Built by AWS CodeBuild on push to main. Builds + pushes the app image to ECR,
+# re-renders the projection dashboard, then runs `cdk deploy` so infrastructure
+# changes (EventBridge schedules, task defs, IAM, Lambda) ship on merge — not
+# just the image. Before this, a PR that touched infra/ rebuilt the image but its
+# infra change was never applied until someone ran `cdk deploy` by hand.
+#
+# ECR_URI / CLUSTER / TASK_DEF / SUBNETS / SECURITY_GROUPS are injected by the
+# CodeBuild project (CDK). The build host is ARM64 so the image matches the
+# Fargate ARM64 (Graviton) task definition.
+env:
+  variables:
+    # infra/go.mod requires Go 1.25; the AL2 standard build image ships 1.20
+    # (too old to even auto-download a toolchain), so install a matching Go.
+    GO_VERSION: "1.25.0"
+    # Match the cdk library version the infra module builds against.
+    CDK_VERSION: "2.1128.1"
 phases:
+  install:
+    commands:
+      # cdk's app command is `go run infra.go`, so the build host needs Go 1.25
+      # and the cdk CLI (neither present by default on this image).
+      - curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz" -o /tmp/go.tgz
+      - rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tgz
+      - export PATH="/usr/local/go/bin:${PATH}"
+      - go version
+      - npm install -g "aws-cdk@${CDK_VERSION}"
+      - cdk --version
   pre_build:
     commands:
       - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_URI"
@@ -30,3 +53,11 @@ phases:
         else
           echo "CLUSTER not set (project env not yet deployed via cdk); skipping projection-site render"
         fi
+      # Apply infra changes so a merge deploys infra, not just the image. The
+      # image is already pushed above, so a deploy failure shows up as a red
+      # build without blocking the image rollout. `-c enableBuild=true` is
+      # REQUIRED: without it cdk would delete this very CodeBuild project
+      # mid-build. cdk assumes the bootstrap roles, so the build role only needs
+      # sts:AssumeRole on cdk-hnb659fds-* (granted in infra.go).
+      - export PATH="/usr/local/go/bin:${PATH}"
+      - cd infra && cdk deploy -c enableBuild=true --require-approval never
