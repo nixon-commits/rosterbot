@@ -269,6 +269,15 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// Let the build launch the projection-site task (ecs:RunTask + the
 		// iam:PassRole on the task's execution/task roles that RunTask requires).
 		taskDef.GrantRun(project)
+		// Let a push-to-main build run `cdk deploy` (buildspec post_build) so
+		// infra changes ship on merge, not just the image. cdk v2 performs all
+		// CloudFormation/IAM work through the bootstrap roles, so the build role
+		// only needs to assume them — not broad admin. Wildcard covers the
+		// deploy / file-publishing / image-publishing / lookup roles.
+		project.Role().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Actions:   jsii.Strings("sts:AssumeRole"),
+			Resources: jsii.Strings("arn:aws:iam::476646938644:role/cdk-hnb659fds-*"),
+		}))
 		awscdk.NewCfnOutput(stack, jsii.String("BuildProject"), &awscdk.CfnOutputProps{Value: project.ProjectName()})
 	}
 
