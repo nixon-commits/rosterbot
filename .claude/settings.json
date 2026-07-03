@@ -2,31 +2,53 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Edit|Write",
         "hooks": [
           {
-            "type": "command",
-            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; case \"$f\" in *.go) gofmt -w \"$f\" ;; esac; } 2>/dev/null || true",
-            "statusMessage": "Formatting Go code..."
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; case \"$f\" in *.go) gofmt -w \"$f\" ;; esac; } 2\u003e/dev/null || true",
+            "statusMessage": "Formatting Go code...",
+            "type": "command"
           },
           {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && go vet ./... 2>&1",
-            "statusMessage": "Running go vet..."
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" \u0026\u0026 go vet ./... 2\u003e\u00261",
+            "statusMessage": "Running go vet...",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "Edit|Write"
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "command": "bd prime",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write",
         "hooks": [
           {
-            "type": "command",
-            "command": "case \"$CLAUDE_FILE_PATH\" in *.env|*.env.*|*/.fantrax-cache/*|*/.cache/*) echo 'BLOCKED: refusing to edit sensitive/cache file' >&2; exit 1;; *) exit 0;; esac",
-            "description": "Block edits to credential and cache files"
+            "command": "case \"$CLAUDE_FILE_PATH\" in *.env|*.env.*|*/.fantrax-cache/*|*/.cache/*) echo 'BLOCKED: refusing to edit sensitive/cache file' \u003e\u00262; exit 1;; *) exit 0;; esac",
+            "description": "Block edits to credential and cache files",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "Edit|Write"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bd prime",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
       }
     ]
   }

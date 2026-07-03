@@ -19,3 +19,8 @@ ideas
 infra/infra
 infra/cdk.out/
 infra/cdk.context.json.bak
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
