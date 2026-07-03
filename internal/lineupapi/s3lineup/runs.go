@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
@@ -85,32 +84,47 @@ func (s *RunsStore) Get(ctx context.Context, id string) (*lineupapi.RunDetail, b
 	return nil, false, nil
 }
 
-// recent lists the newest `limit` ledger objects and reads each. Keys sort
-// newest-first (inverted-timestamp prefix), so a single MaxKeys=limit page is
-// the newest window.
+// recent lists the newest `limit` ledger objects and reads each. Ledger keys
+// sort newest-first (inverted-timestamp prefix) among themselves, but they
+// share the runs/ prefix with per-run sub-objects (runs/<hex-id>/output.json)
+// whose hex ids can sort anywhere relative to the ledger block - including
+// entirely before it. A single-page list can therefore turn up zero ledger
+// keys even though many exist, so this paginates (following
+// NextContinuationToken) until it has collected `limit` ledger keys or pages
+// are exhausted.
 func (s *RunsStore) recent(ctx context.Context, limit int) ([]lineupapi.RunDetail, error) {
-	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket:  &s.bucket,
-		Prefix:  &s.prefix,
-		MaxKeys: aws.Int32(int32(limit)),
-	})
-	if err != nil {
-		return nil, err
-	}
-	keys := make([]string, 0, len(out.Contents))
-	for _, o := range out.Contents {
-		if o.Key == nil {
-			continue
+	var keys []string
+	var token *string
+	for {
+		out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            &s.bucket,
+			Prefix:            &s.prefix,
+			ContinuationToken: token,
+		})
+		if err != nil {
+			return nil, err
 		}
-		// Ledger records are <prefix><invts>-<id>.json (flat). Skip per-run
-		// sub-objects like <prefix><id>/output.json so they don't decode as
-		// phantom zero-value runs.
-		if strings.Contains(strings.TrimPrefix(*o.Key, s.prefix), "/") {
-			continue
+		for _, o := range out.Contents {
+			if o.Key == nil {
+				continue
+			}
+			// Ledger records are <prefix><invts>-<id>.json (flat). Skip
+			// per-run sub-objects like <prefix><id>/output.json so they
+			// don't decode as phantom zero-value runs.
+			if strings.Contains(strings.TrimPrefix(*o.Key, s.prefix), "/") {
+				continue
+			}
+			keys = append(keys, *o.Key)
 		}
-		keys = append(keys, *o.Key)
+		if len(keys) >= limit || out.IsTruncated == nil || !*out.IsTruncated || out.NextContinuationToken == nil {
+			break
+		}
+		token = out.NextContinuationToken
 	}
 	sort.Strings(keys) // defensive: ensure newest-first ordering
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
 
 	var recs []lineupapi.RunDetail
 	for _, k := range keys {

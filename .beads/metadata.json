@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "rosterbot",
+  "project_id": "84c49704-f660-4da3-9570-64978dd2a307"
+}
