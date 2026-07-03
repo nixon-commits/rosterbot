@@ -116,11 +116,11 @@ func (f *listFakeS3) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input,
 
 func TestRunsListIgnoresOutputSubKeys(t *testing.T) {
 	f := &fakeS3{objects: map[string][]byte{
-		"runs/9999999999-abc.json": []byte(`{"id":"abc","status":"SUCCESS","started_at":"2026-06-20T00:00:00Z"}`),
-		"runs/abc/output.json":     []byte(`{"type":"grade","data":{}}`),
+		"runledger/9999999999-abc.json": []byte(`{"id":"abc","status":"SUCCESS","started_at":"2026-06-20T00:00:00Z"}`),
+		"runledger/abc/output.json":     []byte(`{"type":"grade","data":{}}`),
 	}}
 	lf := &listFakeS3{fakeS3: f}
-	s := &RunsStore{client: lf, bucket: "b", prefix: "runs/"}
+	s := &RunsStore{client: lf, bucket: "b", prefix: "runledger/"}
 	runs, err := s.List(context.Background(), 50)
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -130,32 +130,35 @@ func TestRunsListIgnoresOutputSubKeys(t *testing.T) {
 	}
 }
 
-// TestRunsListPaginatesPastOutputSubKeys reproduces the live bug: run output
-// sub-objects (runs/<hex-id>/output.json) whose hex id starts with a
-// character below the ledger's inverted-timestamp prefix ("8...") sort first
-// in S3's lexicographic listing. With enough of them to fill a page, a
-// single-page list (the old MaxKeys=limit behavior) sees zero ledger records
-// and returns an empty run list even though ledger records exist. The reader
-// must paginate (follow NextContinuationToken) until it collects `limit`
-// ledger records or exhausts all pages.
+// TestRunsListPaginatesPastOutputSubKeys reproduces the live bug that
+// motivated rosterbot-432: sub-objects sharing a ledger's prefix (formerly
+// runs/<hex-id>/output.json; the scenario is now purely defensive since
+// runledger/ never actually holds anything but flat ledger keys in
+// production) whose hex id starts with a character below the ledger's
+// inverted-timestamp prefix ("8...") sort first in S3's lexicographic
+// listing. With enough of them to fill a page, a single-page list (the old
+// MaxKeys=limit behavior) sees zero ledger records and returns an empty run
+// list even though ledger records exist. The reader must paginate (follow
+// NextContinuationToken) until it collects `limit` ledger records or
+// exhausts all pages.
 func TestRunsListPaginatesPastOutputSubKeys(t *testing.T) {
 	objects := map[string][]byte{}
-	// 32 output sub-objects with hex ids "00".."1f" - all start with a digit
-	// below '8', so they sort before every ledger key below and would fully
-	// occupy a small page on their own.
+	// 32 output-shaped sub-objects with hex ids "00".."1f" - all start with a
+	// digit below '8', so they sort before every ledger key below and would
+	// fully occupy a small page on their own.
 	for i := 0; i < 32; i++ {
 		id := fmt.Sprintf("%02x", i)
-		objects["runs/"+id+"/output.json"] = []byte(`{"type":"grade","data":{}}`)
+		objects["runledger/"+id+"/output.json"] = []byte(`{"type":"grade","data":{}}`)
 	}
 	// 3 ledger records, newest first by inverted timestamp, sorting after all
 	// of the above.
-	objects["runs/8214999999-newest.json"] = []byte(`{"id":"newest","status":"SUCCESS","started_at":"2026-07-03T00:00:00Z"}`)
-	objects["runs/8215999999-middle.json"] = []byte(`{"id":"middle","status":"SUCCESS","started_at":"2026-07-02T00:00:00Z"}`)
-	objects["runs/8216999999-oldest.json"] = []byte(`{"id":"oldest","status":"SUCCESS","started_at":"2026-07-01T00:00:00Z"}`)
+	objects["runledger/8214999999-newest.json"] = []byte(`{"id":"newest","status":"SUCCESS","started_at":"2026-07-03T00:00:00Z"}`)
+	objects["runledger/8215999999-middle.json"] = []byte(`{"id":"middle","status":"SUCCESS","started_at":"2026-07-02T00:00:00Z"}`)
+	objects["runledger/8216999999-oldest.json"] = []byte(`{"id":"oldest","status":"SUCCESS","started_at":"2026-07-01T00:00:00Z"}`)
 
 	f := &fakeS3{objects: objects}
 	lf := &listFakeS3{fakeS3: f}
-	s := &RunsStore{client: lf, bucket: "b", prefix: "runs/"}
+	s := &RunsStore{client: lf, bucket: "b", prefix: "runledger/"}
 
 	runs, err := s.List(context.Background(), 2)
 	if err != nil {

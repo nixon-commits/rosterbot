@@ -173,9 +173,10 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 
 	// --- Lineup + control API: Go Lambda behind a Function URL ---
 	// Serves GET /v1/lineup/today from the precomputed JSON the hourly optimize
-	// run publishes (lineup/ prefix), GET /v1/runs from the run ledger (runs/
-	// prefix written by entrypoint.sh), and POST /v1/jobs/{name} which launches
-	// the existing Fargate task. No Chrome/Fantrax on the request path.
+	// run publishes (lineup/ prefix), GET /v1/runs from the run ledger
+	// (runledger/ prefix written by entrypoint.sh) plus captured output blobs
+	// (runs/<id>/output.json), and POST /v1/jobs/{name} which launches the
+	// existing Fargate task. No Chrome/Fantrax on the request path.
 	//
 	// A dedicated egress-only SG for tasks the API launches (RunTask requires a
 	// concrete SG; tasks only need outbound to pull the image + hit upstreams).
@@ -204,8 +205,11 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			"CONTAINER_NAME":  jsii.String("bot"),
 		},
 	})
-	// Least privilege: read lineup/ + runs/ objects and the one token param.
+	// Least privilege: read lineup/ + the run ledger/output objects + the one
+	// token param. runledger/ is the ledger (rosterbot-432); runs/ is still
+	// read for per-run captured output blobs (runs/<id>/output.json).
 	stateBucket.GrantRead(apiFn, jsii.String("lineup/*"))
+	stateBucket.GrantRead(apiFn, jsii.String("runledger/*"))
 	stateBucket.GrantRead(apiFn, jsii.String("runs/*"))
 	stateBucket.GrantRead(apiFn, jsii.String("notifications/*"))
 	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
