@@ -84,21 +84,19 @@ func (s *RunsStore) Get(ctx context.Context, id string) (*lineupapi.RunDetail, b
 	return nil, false, nil
 }
 
-// recent lists the newest `limit` ledger objects and reads each. Ledger keys
-// sort newest-first (inverted-timestamp prefix) among themselves, but they
-// share the runs/ prefix with per-run sub-objects (runs/<hex-id>/output.json)
-// whose hex ids can sort anywhere relative to the ledger block - including
-// entirely before it. A single-page list can therefore turn up zero ledger
-// keys even though many exist, so this paginates (following
-// NextContinuationToken) until it has collected `limit` ledger keys or pages
-// are exhausted.
-func (s *RunsStore) recent(ctx context.Context, limit int) ([]lineupapi.RunDetail, error) {
+// listFlatKeys lists every flat ledger key under prefix -- i.e. every key
+// immediately under prefix with no further "/" in the remainder, which
+// excludes per-run output sub-objects like <prefix><id>/output.json.
+// Pagination follows NextContinuationToken. If limit > 0, listing stops once
+// at least limit flat keys have been collected and the result is trimmed to
+// exactly limit; limit <= 0 collects every flat key under the prefix.
+func listFlatKeys(ctx context.Context, client listAPI, bucket, prefix string, limit int) ([]string, error) {
 	var keys []string
 	var token *string
 	for {
-		out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:            &s.bucket,
-			Prefix:            &s.prefix,
+		out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            &bucket,
+			Prefix:            &prefix,
 			ContinuationToken: token,
 		})
 		if err != nil {
@@ -111,19 +109,38 @@ func (s *RunsStore) recent(ctx context.Context, limit int) ([]lineupapi.RunDetai
 			// Ledger records are <prefix><invts>-<id>.json (flat). Skip
 			// per-run sub-objects like <prefix><id>/output.json so they
 			// don't decode as phantom zero-value runs.
-			if strings.Contains(strings.TrimPrefix(*o.Key, s.prefix), "/") {
+			if strings.Contains(strings.TrimPrefix(*o.Key, prefix), "/") {
 				continue
 			}
 			keys = append(keys, *o.Key)
 		}
-		if len(keys) >= limit || out.IsTruncated == nil || !*out.IsTruncated || out.NextContinuationToken == nil {
+		if limit > 0 && len(keys) >= limit {
+			break
+		}
+		if out.IsTruncated == nil || !*out.IsTruncated || out.NextContinuationToken == nil {
 			break
 		}
 		token = out.NextContinuationToken
 	}
 	sort.Strings(keys) // defensive: ensure newest-first ordering
-	if len(keys) > limit {
+	if limit > 0 && len(keys) > limit {
 		keys = keys[:limit]
+	}
+	return keys, nil
+}
+
+// recent lists the newest `limit` ledger objects and reads each. Ledger keys
+// sort newest-first (inverted-timestamp prefix) among themselves, but they
+// share the runs/ prefix with per-run sub-objects (runs/<hex-id>/output.json)
+// whose hex ids can sort anywhere relative to the ledger block - including
+// entirely before it. A single-page list can therefore turn up zero ledger
+// keys even though many exist, so listFlatKeys paginates (following
+// NextContinuationToken) until it has collected `limit` ledger keys or pages
+// are exhausted.
+func (s *RunsStore) recent(ctx context.Context, limit int) ([]lineupapi.RunDetail, error) {
+	keys, err := listFlatKeys(ctx, s.client, s.bucket, s.prefix, limit)
+	if err != nil {
+		return nil, err
 	}
 
 	var recs []lineupapi.RunDetail
