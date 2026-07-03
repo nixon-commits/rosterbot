@@ -193,7 +193,7 @@ return `501` from local `serve`, which has no ECS):
 | `POST /v1/jobs/{name}` | Launch a job as a Fargate task (async). Returns `202 {id, command, status:"RUNNING"}`; poll `/v1/runs` for completion. Allowlist: `optimize, waivers, prospects, claims, gs-check, transactions, recap-site, backtest, grade`. |
 
 The run ledger is written by `entrypoint.sh` (one S3 object per run under the
-`runs/` prefix, via the internal `run-ledger` command) so it covers both
+`runledger/` prefix, via the internal `run-ledger` command) so it covers both
 scheduled and API-triggered runs. **Triggered jobs run for real** — `POST
 /v1/jobs/optimize` applies your lineup and sends Pushover; gate it behind a
 confirmation in any client.

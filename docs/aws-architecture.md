@@ -41,7 +41,8 @@ flowchart TB
         P_claims["claims/ — claims ledger + cursor"]
         P_backtest["backtest/ — projection snapshots"]
         P_lineup["lineup/ — precomputed lineup JSON"]
-        P_runs["runs/ — run ledger + captured output"]
+        P_runledger["runledger/ — run ledger records"]
+        P_runs["runs/ — captured run output (output.json)"]
         P_notif["notifications/ — activity feed events"]
         P_grades["analysis/grades/ — NDJSON graded snapshots"]
         P_athena["athena-results/"]
@@ -52,7 +53,8 @@ flowchart TB
     TASK <-->|"sync_down / sync_up"| P_claims
     TASK <-->|"sync_down / sync_up"| P_backtest
     TASK -->|optimize publishes| P_lineup
-    TASK -->|run-ledger writes| P_runs
+    TASK -->|run-ledger writes| P_runledger
+    TASK -->|job output writes| P_runs
     TASK -->|notify events| P_notif
     TASK -->|grade writes| P_grades
 
@@ -66,6 +68,7 @@ flowchart TB
         LAMBDA["Lambda LineupApi<br/>provided.al2023 · ARM64 · 10s<br/>Function URL (AuthType NONE,<br/>Bearer token enforced in-handler)"]
     end
     P_lineup --> LAMBDA
+    P_runledger --> LAMBDA
     P_runs --> LAMBDA
     P_notif --> LAMBDA
     SSM -->|API token| LAMBDA
