@@ -76,7 +76,7 @@ func runLedger(cmd *cobra.Command, args []string) error {
 
 	var w runWriter
 	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		s, err := s3lineup.NewRuns(context.Background(), bucket, "runs/")
+		s, err := s3lineup.NewRuns(context.Background(), bucket, "runledger/")
 		if err != nil {
 			return err
 		}

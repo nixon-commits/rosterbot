@@ -39,7 +39,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("init s3 lineup store: %v", err)
 	}
-	runs, err := s3lineup.NewRuns(ctx, bucket, "runs/")
+	runs, err := s3lineup.NewRuns(ctx, bucket, "runledger/")
 	if err != nil {
 		log.Fatalf("init s3 runs store: %v", err)
 	}
