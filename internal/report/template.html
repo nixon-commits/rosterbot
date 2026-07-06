@@ -31,7 +31,8 @@
   th.sortable { cursor:pointer; user-select:none; }
   th.sortable:hover { color:var(--ink); }
   th { color:var(--muted); font-weight:600; }
-  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  th.num,td.num { text-align:right; }
+  td.num { font-variant-numeric:tabular-nums; }
   .over { color:var(--bad); } .under { color:var(--good); }
   tr.best td { background:rgba(95,211,141,0.10); }
   tr.best td:first-child { box-shadow:inset 3px 0 0 var(--good); }
@@ -62,8 +63,11 @@
     <div class="chartwrap" style="margin-top:14px"><canvas id="compareChart"></canvas></div>
   </section>
 
-  <h2 style="font-size:15px;margin:28px 0 4px">Detail — <span id="detailSysLabel"></span></h2>
-  <div class="sub" style="margin-bottom:12px">The bot's production projection, broken down below.</div>
+  <div class="controls" style="margin:28px 0 4px">
+    <div class="grp"><span class="lbl">System</span><div id="sysseg"></div></div>
+  </div>
+  <h2 style="font-size:15px;margin:8px 0 4px">Detail — <span id="detailSysLabel"></span></h2>
+  <div class="sub" style="margin-bottom:12px" id="detailSub"></div>
   <div id="scorecard" class="cards"></div>
 
   <section class="panel"><h2 id="trendTitle">Rolling accuracy over the season</h2><div class="chartwrap"><canvas id="trendChart"></canvas></div></section>
@@ -76,7 +80,7 @@
 <script>
 const MODEL = {{.Data}};
 
-let state = { window: 7, role: "all" };
+let state = { window: 7, role: "all", system: null };
 let charts = {};
 
 // Draws a faint vertical crosshair at the hovered x on a line chart, so the
@@ -210,7 +214,7 @@ function renderCompare() {
 }
 
 function renderTrend() {
-  const tp = MODEL.trends[state.window+"|"+state.role] || [];
+  const tp = MODEL.trends[state.system+"|"+state.window+"|"+state.role] || [];
   document.getElementById("trendTitle").textContent =
     (state.window<=0 ? "Rolling 7-day accuracy over the season" : "Daily accuracy — last "+state.window+" days");
   destroy("trendChart");
@@ -319,8 +323,13 @@ function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;',
 function render() {
   seg("winseg", MODEL.windows.map(w=>({val:w,label:winLabel(w)})), "window");
   seg("roleseg", MODEL.roles.map(r=>({val:r,label:r[0].toUpperCase()+r.slice(1)})), "role");
+  seg("sysseg", (MODEL.systems||[]).map(s=>({val:s,label:sysLabel(s)})), "system");
   renderCompare();
-  const v = MODEL.views[state.window+"|"+state.role];
+  document.getElementById("detailSysLabel").textContent = sysLabel(state.system || "");
+  document.getElementById("detailSub").textContent = state.system === MODEL.detailSystem
+    ? "The bot's production projection, broken down below."
+    : "Captured for comparison — not used in production lineups.";
+  const v = MODEL.views[state.system+"|"+state.window+"|"+state.role];
   renderScorecard(v);
   renderTrend();
   renderPos(v);
@@ -331,7 +340,11 @@ function render() {
 
 document.getElementById("meta").textContent =
   "Latest graded: " + MODEL.latestDate + " · season since " + MODEL.seasonStart + " · generated " + MODEL.generatedAt;
-document.getElementById("detailSysLabel").textContent = sysLabel(MODEL.detailSystem || "");
+// Prefer the production system, but only if it actually has captured rows;
+// otherwise fall back to whichever system does, so the page never lands on an
+// empty Detail view while other systems have real data.
+const sysList = MODEL.systems || [];
+state.system = sysList.includes(MODEL.detailSystem) ? MODEL.detailSystem : (sysList[0] || MODEL.detailSystem || "");
 render();
 </script>
 </body>

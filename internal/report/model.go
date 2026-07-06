@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/analysis"
@@ -14,8 +15,9 @@ type Scorecard struct {
 	Prior Metrics `json:"prior"`
 }
 
-// View is the fully precomputed dashboard for one (window, role) pair.
+// View is the fully precomputed dashboard for one (system, window, role) triple.
 type View struct {
+	System    string        `json:"system"`
 	Window    int           `json:"window"`
 	Role      string        `json:"role"`
 	Scorecard Scorecard     `json:"scorecard"`
@@ -27,9 +29,11 @@ type View struct {
 
 // Model is the complete payload embedded into the dashboard HTML.
 //
-// The detailed dashboard (Views/Trends) is computed from the detailSystem slice
-// only — the bot's production projection — so its meaning is unchanged. Compare
-// and CompareTrends span every captured system for the head-to-head panel.
+// Views/Trends span every captured system (keyed "system|window|role") so the
+// Detail panel's system picker can switch between them client-side without a
+// re-render. DetailSystem is just the default-selected system (the bot's
+// production projection). Compare/CompareTrends span every system too, keyed
+// "window|role" → system, for the head-to-head panel.
 type Model struct {
 	GeneratedAt   string                             `json:"generatedAt"`
 	SeasonStart   string                             `json:"seasonStart"`
@@ -37,9 +41,9 @@ type Model struct {
 	Windows       []int                              `json:"windows"`       // [7,14,30,0]; 0 = season
 	Roles         []string                           `json:"roles"`         // ["all","hitters","pitchers"]
 	Systems       []string                           `json:"systems"`       // projection systems present, sorted
-	DetailSystem  string                             `json:"detailSystem"`  // system feeding Views/Trends
-	Trends        map[string][]TrendPoint            `json:"trends"`        // keyed "window|role"
-	Views         map[string]View                    `json:"views"`         // keyed "window|role"
+	DetailSystem  string                             `json:"detailSystem"`  // default system for Views/Trends
+	Trends        map[string][]TrendPoint            `json:"trends"`        // keyed "system|window|role"
+	Views         map[string]View                    `json:"views"`         // keyed "system|window|role"
 	Compare       map[string][]SystemScore           `json:"compare"`       // keyed "window|role" → systems ranked by MAE
 	CompareTrends map[string]map[string][]TrendPoint `json:"compareTrends"` // keyed "window|role" → system → trend
 }
@@ -49,10 +53,12 @@ var (
 	stdRoles   = []string{"all", "hitters", "pitchers"}
 )
 
-// detailSystem is the projection system whose slice drives the detailed
-// dashboard (scorecard, by-position, calibration, misses). It is the bot's
-// production system — the same one legacy pre-migration grades are attributed
-// to — so the existing views keep meaning "how accurate is what we ship".
+// detailSystem is the default-selected system for the detailed dashboard
+// (scorecard, by-position, calibration, misses) when the page loads. It is the
+// bot's production system — the same one legacy pre-migration grades are
+// attributed to — so the default view keeps meaning "how accurate is what we
+// ship". The Detail panel's system picker can switch to any other captured
+// system client-side.
 const detailSystem = analysis.LegacySystem
 
 func windowLabel(w int) string {
@@ -63,6 +69,19 @@ func windowLabel(w int) string {
 }
 
 func viewKey(window int, role string) string { return fmt.Sprintf("%d|%s", window, role) }
+
+func detailKey(system string, window int, role string) string {
+	return system + "|" + viewKey(window, role)
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
 
 // Aggregate builds the full embedded Model from graded rows. generatedAt stamps
 // the render time; seasonStart is a display floor. Pure: no I/O.
@@ -93,28 +112,40 @@ func Aggregate(rows []analysis.GradeRow, generatedAt, seasonStart time.Time) *Mo
 		CompareTrends: map[string]map[string][]TrendPoint{},
 	}
 
-	// Detailed dashboard: the production system's slice only.
-	detailRows := filterSystem(rows, detailSystem)
-	for _, role := range stdRoles {
-		rr := filterRole(detailRows, role)
-		for _, w := range stdWindows {
-			// Trend is keyed by window|role and spans the window's date range:
-			// daily points over the last w days for w>0, rolling-7 over the whole
-			// season for w==0. Lets the WINDOW toggle drive the chart's x-axis.
-			m.Trends[viewKey(w, role)] = windowTrend(rr, latest, w)
-			cur := windowRows(rr, latest, w)
-			prior := priorWindowRows(rr, latest, w)
-			curM := computeMetrics(cur)
-			priorM := computeMetrics(prior)
-			bp := byPosition(cur)
-			m.Views[viewKey(w, role)] = View{
-				Window:    w,
-				Role:      role,
-				Scorecard: Scorecard{Cur: curM, Prior: priorM},
-				ByPos:     bp,
-				Calib:     calibration(cur),
-				Misses:    worstMisses(cur, 25),
-				Insights:  generateInsights(curM, priorM, bp, windowLabel(w)),
+	// Detailed dashboard: every captured system, so the Detail panel's system
+	// picker can switch views client-side. detailSystem is always included even
+	// with zero rows so the default selection never comes up empty.
+	detailSystems := append([]string{}, m.Systems...)
+	if !containsString(detailSystems, detailSystem) {
+		detailSystems = append(detailSystems, detailSystem)
+		sort.Strings(detailSystems)
+	}
+	for _, sys := range detailSystems {
+		sysRows := filterSystem(rows, sys)
+		for _, role := range stdRoles {
+			rr := filterRole(sysRows, role)
+			for _, w := range stdWindows {
+				// Trend is keyed by system|window|role and spans the window's date
+				// range: daily points over the last w days for w>0, rolling-7 over
+				// the whole season for w==0. Lets the WINDOW toggle drive the chart's
+				// x-axis.
+				key := detailKey(sys, w, role)
+				m.Trends[key] = windowTrend(rr, latest, w)
+				cur := windowRows(rr, latest, w)
+				prior := priorWindowRows(rr, latest, w)
+				curM := computeMetrics(cur)
+				priorM := computeMetrics(prior)
+				bp := byPosition(cur)
+				m.Views[key] = View{
+					System:    sys,
+					Window:    w,
+					Role:      role,
+					Scorecard: Scorecard{Cur: curM, Prior: priorM},
+					ByPos:     bp,
+					Calib:     calibration(cur),
+					Misses:    worstMisses(cur, 25),
+					Insights:  generateInsights(curM, priorM, bp, windowLabel(w)),
+				}
 			}
 		}
 	}

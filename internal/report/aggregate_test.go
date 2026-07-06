@@ -127,7 +127,7 @@ func TestRankSystems_OrdersByMAEAndFlagsBest(t *testing.T) {
 	}
 }
 
-func TestAggregate_DetailUsesProductionSystemOnly(t *testing.T) {
+func TestAggregate_ViewsPerSystem(t *testing.T) {
 	gen := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
 	seasonStart := time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC)
 	rows := []analysis.GradeRow{
@@ -135,10 +135,19 @@ func TestAggregate_DetailUsesProductionSystemOnly(t *testing.T) {
 		{System: "atc-ros", Dt: "2026-06-15", Diff: 8, IsPitcher: false, Bucket: "OF"},
 	}
 	m := Aggregate(rows, gen, seasonStart)
-	// Detail scorecard (all/season) must reflect only the production system's row.
-	v := m.Views["0|all"]
-	if v.Scorecard.Cur.N != 1 || !approx(v.Scorecard.Cur.MAE, 2) {
-		t.Fatalf("detail should use %s slice only: %+v", detailSystem, v.Scorecard.Cur)
+	// Each system gets its own Detail view (system|window|role), not just the
+	// production system, so the dashboard's system picker has data to show.
+	prodView := m.Views[detailKey(detailSystem, 0, "all")]
+	if prodView.Scorecard.Cur.N != 1 || !approx(prodView.Scorecard.Cur.MAE, 2) {
+		t.Fatalf("%s view: %+v", detailSystem, prodView.Scorecard.Cur)
+	}
+	atcView := m.Views[detailKey("atc-ros", 0, "all")]
+	if atcView.Scorecard.Cur.N != 1 || !approx(atcView.Scorecard.Cur.MAE, 8) {
+		t.Fatalf("atc-ros view: %+v", atcView.Scorecard.Cur)
+	}
+	// DetailSystem still names the default-selected system for the UI.
+	if m.DetailSystem != detailSystem {
+		t.Fatalf("DetailSystem: %q", m.DetailSystem)
 	}
 	// Comparison must include both systems.
 	if len(m.Systems) != 2 {
@@ -147,5 +156,27 @@ func TestAggregate_DetailUsesProductionSystemOnly(t *testing.T) {
 	cmp := m.Compare["0|all"]
 	if len(cmp) != 2 || cmp[0].System != detailSystem || !cmp[0].Best {
 		t.Fatalf("want production system best in compare: %+v", cmp)
+	}
+}
+
+func TestAggregate_DetailSystemFallsBackWhenNoProductionRows(t *testing.T) {
+	gen := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	seasonStart := time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC)
+	// Only a non-production system has been captured so far (e.g. early in a
+	// shadow rollout) — the production system's Detail view must still exist,
+	// just empty, so the default UI selection never looks up a missing key.
+	rows := []analysis.GradeRow{
+		{System: "atc-ros", Dt: "2026-06-15", Diff: 8, IsPitcher: false, Bucket: "OF"},
+	}
+	m := Aggregate(rows, gen, seasonStart)
+	if len(m.Systems) != 1 || m.Systems[0] != "atc-ros" {
+		t.Fatalf("want only atc-ros in Systems, got %v", m.Systems)
+	}
+	prodView, ok := m.Views[detailKey(detailSystem, 0, "all")]
+	if !ok {
+		t.Fatalf("missing fallback %s view; keys=%v", detailSystem, m.Views)
+	}
+	if prodView.Scorecard.Cur.N != 0 {
+		t.Fatalf("fallback view should be empty: %+v", prodView.Scorecard.Cur)
 	}
 }

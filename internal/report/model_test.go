@@ -66,28 +66,34 @@ func TestAggregate_KeysAndShape(t *testing.T) {
 	if len(m.Windows) != 4 || len(m.Roles) != 3 {
 		t.Fatalf("windows/roles: %+v %+v", m.Windows, m.Roles)
 	}
-	// 4 windows x 3 roles = 12 views
+	// Both rows are un-attributed (System=="") -> normalized to detailSystem, so
+	// only one system's slice exists: 1 system x 4 windows x 3 roles = 12 views.
 	if len(m.Views) != 12 {
 		t.Fatalf("want 12 views, got %d", len(m.Views))
 	}
-	if _, ok := m.Views["0|all"]; !ok {
-		t.Fatalf("missing season|all view; keys=%v", m.Views)
+	seasonAllKey := detailKey(detailSystem, 0, "all")
+	if _, ok := m.Views[seasonAllKey]; !ok {
+		t.Fatalf("missing %q view; keys=%v", seasonAllKey, m.Views)
 	}
-	if _, ok := m.Trends["7|pitchers"]; !ok {
-		t.Fatalf("missing 7|pitchers trend; keys=%v", m.Trends)
+	pitchersKey := detailKey(detailSystem, 7, "pitchers")
+	if _, ok := m.Trends[pitchersKey]; !ok {
+		t.Fatalf("missing %q trend; keys=%v", pitchersKey, m.Trends)
 	}
 	// season|all should see both rows
-	if m.Views["0|all"].Scorecard.Cur.N != 2 {
-		t.Fatalf("season|all N: %+v", m.Views["0|all"].Scorecard.Cur)
+	if m.Views[seasonAllKey].Scorecard.Cur.N != 2 {
+		t.Fatalf("season|all N: %+v", m.Views[seasonAllKey].Scorecard.Cur)
 	}
 }
 
 func TestAggregate_Empty(t *testing.T) {
 	m := Aggregate(nil, time.Now(), time.Now())
+	// No rows at all -> Systems is empty, but detailSystem is always included as
+	// a fallback so the default Detail view is never missing.
 	if len(m.Views) != 12 {
 		t.Fatalf("want 12 (empty) views, got %d", len(m.Views))
 	}
-	if m.Views["7|all"].Scorecard.Cur.N != 0 {
+	key := detailKey(detailSystem, 7, "all")
+	if m.Views[key].Scorecard.Cur.N != 0 {
 		t.Fatalf("empty view should have N=0")
 	}
 }
