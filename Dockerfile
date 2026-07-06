@@ -19,8 +19,22 @@ FROM debian:bookworm-slim
 # --disable-gpu and never initialises system GL, so the shared object is never
 # loaded. We delete just that .so and then prove headless chromium still renders
 # DOM without it — the `grep -q` fails the build loudly if the assumption breaks.
+#
+# CHROMIUM_VERSION is pinned (not just "chromium" latest): on 2026-07-06
+# debian-security bumped chromium to 150.0.7871.46-1~deb12u1 mid-cycle and it
+# started crashing (SIGTRAP) on the CodeBuild Graviton (arm64) build host during
+# this exact headless smoke test — 149.0.7827.196-1~deb12u1 had built clean days
+# earlier with no Dockerfile change. Debian doesn't keep old point versions
+# around once superseded, so once broken there's no unpinned way back; 147.x
+# below is the newest version still available from plain bookworm/main (not
+# -security) as of the incident. Bumping this later must be re-validated on the
+# actual CI build host — this smoke test can pass locally (e.g. Apple Silicon)
+# while still crashing on Graviton, which is exactly what happened here.
+ARG CHROMIUM_VERSION=147.0.7727.137-1~deb12u1
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      chromium ca-certificates tini curl \
+      chromium=${CHROMIUM_VERSION} chromium-common=${CHROMIUM_VERSION} chromium-sandbox=${CHROMIUM_VERSION} \
+      ca-certificates tini curl \
+ && apt-mark hold chromium chromium-common chromium-sandbox \
  && rm -rf /var/lib/apt/lists/* \
  && rm -f /usr/lib/*/libLLVM-15.so* \
  && chromium --headless=new --disable-gpu --no-sandbox --dump-dom \
