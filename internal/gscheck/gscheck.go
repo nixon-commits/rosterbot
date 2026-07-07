@@ -99,11 +99,32 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config) error {
 		return nil
 	}
 
+	// Prefer the real Fantrax-configured min/max for this period over the
+	// static GS_MAX/GS_MIN env vars — Fantrax scales the real min/max
+	// whenever a period spans more than one calendar week (season opener,
+	// All-Star break), which a flat env var can't express. Falls back to
+	// the configured values if the live fetch fails for any reason.
+	gsMax, gsMin := cfg.GSMax, cfg.GSMin
+	if liveMin, liveMax, gerr := ft.GetGSLimits(cfg.TeamID, period.Number); gerr != nil {
+		fmt.Printf("WARNING: live GS limit fetch failed (%v) — using configured GS_MAX=%d/GS_MIN=%d\n", gerr, cfg.GSMax, cfg.GSMin)
+	} else {
+		if liveMax != nil {
+			gsMax = *liveMax
+		} else {
+			fmt.Printf("WARNING: no GS max configured for period %d — using configured GS_MAX=%d\n", period.Number, cfg.GSMax)
+		}
+		if liveMin != nil {
+			gsMin = *liveMin
+		} else if cfg.GSMin > 0 {
+			fmt.Printf("WARNING: no GS min configured for period %d — using configured GS_MIN=%d\n", period.Number, cfg.GSMin)
+		}
+	}
+
 	periodLabel := fmt.Sprintf("%s (%s – %s)", period.Caption, period.StartDate.Format("2006-01-02"), period.EndDate.Format("2006-01-02"))
 	fmt.Printf("Checking: %s\n", periodLabel)
-	fmt.Printf("GS max: %d\n", cfg.GSMax)
-	if cfg.GSMin > 0 {
-		fmt.Printf("GS min: %d\n", cfg.GSMin)
+	fmt.Printf("GS max: %d\n", gsMax)
+	if gsMin > 0 {
+		fmt.Printf("GS min: %d\n", gsMin)
 	}
 
 	if len(teamMap) == 0 {
@@ -125,7 +146,7 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config) error {
 		if cfg.DryRun {
 			fmt.Printf("  --- %s (per-day GS deltas) ---\n", teamName)
 		}
-		gs, starts, err := ft.GetTeamGS(teamID, teamName, *period, seasonStart, today, cfg.GSMax, cfg.DryRun)
+		gs, starts, err := ft.GetTeamGS(teamID, teamName, *period, seasonStart, today, gsMax, cfg.DryRun)
 		if err != nil {
 			fmt.Printf("WARNING: failed to get GS for %s: %v\n", teamName, err)
 			continue
@@ -142,10 +163,10 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config) error {
 	// Find violations.
 	var violations []Violation
 	for _, r := range results {
-		if r.gs > cfg.GSMax {
+		if r.gs > gsMax {
 			v := Violation{TeamName: r.name, GSUsed: r.gs, Kind: ViolationMax}
 			// Deduct the N highest-scoring starts where N = overage.
-			overage := r.gs - cfg.GSMax
+			overage := r.gs - gsMax
 			if len(r.starts) > 0 {
 				sorted := make([]fantrax.PitcherStart, len(r.starts))
 				copy(sorted, r.starts)
@@ -157,25 +178,25 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config) error {
 			}
 			violations = append(violations, v)
 		}
-		if periodComplete && cfg.GSMin > 0 && r.gs < cfg.GSMin {
+		if periodComplete && gsMin > 0 && r.gs < gsMin {
 			violations = append(violations, Violation{TeamName: r.name, GSUsed: r.gs, Kind: ViolationMin})
 		}
 	}
 
-	lineupapi.RecordOutput("gs-check", toWireResult(violations, periodLabel, cfg.GSMax, cfg.GSMin))
+	lineupapi.RecordOutput("gs-check", toWireResult(violations, periodLabel, gsMax, gsMin))
 
 	// Print report.
 	sort.Slice(results, func(i, j int) bool { return results[i].gs > results[j].gs })
-	fmt.Printf("\n--- GS Report: %s (max=%d", periodLabel, cfg.GSMax)
-	if cfg.GSMin > 0 {
-		fmt.Printf(", min=%d", cfg.GSMin)
+	fmt.Printf("\n--- GS Report: %s (max=%d", periodLabel, gsMax)
+	if gsMin > 0 {
+		fmt.Printf(", min=%d", gsMin)
 	}
 	fmt.Println(") ---")
 	for _, r := range results {
 		flag := ""
-		if r.gs > cfg.GSMax {
+		if r.gs > gsMax {
 			flag = " *** OVER MAX ***"
-		} else if periodComplete && cfg.GSMin > 0 && r.gs < cfg.GSMin {
+		} else if periodComplete && gsMin > 0 && r.gs < gsMin {
 			flag = " *** UNDER MIN ***"
 		}
 		fmt.Printf("  %s: %d GS%s\n", r.name, r.gs, flag)
@@ -187,7 +208,7 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config) error {
 	}
 
 	fmt.Printf("\n%d violation(s) found.\n", len(violations))
-	_, shortSummary := BuildReport(violations, periodLabel, cfg.GSMax, cfg.GSMin)
+	_, shortSummary := BuildReport(violations, periodLabel, gsMax, gsMin)
 
 	if cfg.DryRun {
 		fmt.Println("\n[DRY RUN] Would send Pushover notification:")
