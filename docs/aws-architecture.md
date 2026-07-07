@@ -29,7 +29,7 @@ flowchart TB
         TASK["Task 'bot' (one container, single binary)<br/><b>entrypoint.sh</b>:<br/>sync_down → run-ledger RUNNING →<br/><code>rosterbot &lt;cmd&gt;</code> → run-ledger SUCCESS/FAILED → sync_up"]
     end
 
-    SSM[["SSM Parameter Store<br/>/rosterbot/* (SecureString)<br/>Fantrax creds · GS_MAX/MIN · Pushover · API token"]]
+    SSM[["SSM Parameter Store<br/>/rosterbot/* (SecureString)<br/>Fantrax creds · Pushover · API token"]]
     ECR -. latest image .-> TASK
     triggers ==>|RunTask, command override| TASK
     SSM -->|container secrets| TASK

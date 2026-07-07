@@ -9,35 +9,17 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// envIntWithFallback reads primary env var first, then falls back to deprecated.
-// Prints a warning to stderr if the deprecated var is used.
-func envIntWithFallback(primary, deprecated string, fallback int) int {
-	if s := os.Getenv(primary); s != "" {
-		if v, err := strconv.Atoi(s); err == nil {
-			return v
-		}
-	}
-	if s := os.Getenv(deprecated); s != "" {
-		if v, err := strconv.Atoi(s); err == nil {
-			fmt.Fprintf(os.Stderr, "WARNING: %s is deprecated, use %s instead\n", deprecated, primary)
-			return v
-		}
-	}
-	return fallback
-}
-
 type Config struct {
-	Username    string
-	Password    string
-	LeagueID    string
-	TeamID      string
-	DryRun      bool
-	Dates       []time.Time
-	ILSlots     int
-	MinorsSlots int
-	GSMax       int // max game starts per matchup week (0 = no limit); also used by gs-check
-	GSMin       int // min game starts per matchup week (0 = no minimum); used by gs-check
-	BlendMinGP  int // min games played before blending recent stats (default 2)
+	Username          string
+	Password          string
+	LeagueID          string
+	TeamID            string
+	DryRun            bool
+	Dates             []time.Time
+	ILSlots           int
+	MinorsSlots       int
+	GSTrackingEnabled bool // enables GS-budget tracking (optimizer) and gs-check; the real min/max are always fetched live from Fantrax, never guessed
+	BlendMinGP        int  // min games played before blending recent stats (default 2)
 
 	// Prospect report settings (all optional, with defaults).
 	ProspectRollingDays    int
@@ -56,17 +38,16 @@ func Load(dryRun bool, dates []time.Time) (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		Username:    os.Getenv("FANTRAX_USERNAME"),
-		Password:    os.Getenv("FANTRAX_PASSWORD"),
-		LeagueID:    os.Getenv("FANTRAX_LEAGUE_ID"),
-		TeamID:      os.Getenv("FANTRAX_TEAM_ID"),
-		DryRun:      dryRun,
-		Dates:       dates,
-		ILSlots:     envInt("FANTRAX_IL_SLOTS", 0),
-		MinorsSlots: envInt("FANTRAX_MINORS_SLOTS", 0),
-		GSMax:       envIntWithFallback("GS_MAX", "GS_CAP", 0),
-		GSMin:       envInt("GS_MIN", 0),
-		BlendMinGP:  envInt("BLEND_MIN_GP", 2),
+		Username:          os.Getenv("FANTRAX_USERNAME"),
+		Password:          os.Getenv("FANTRAX_PASSWORD"),
+		LeagueID:          os.Getenv("FANTRAX_LEAGUE_ID"),
+		TeamID:            os.Getenv("FANTRAX_TEAM_ID"),
+		DryRun:            dryRun,
+		Dates:             dates,
+		ILSlots:           envInt("FANTRAX_IL_SLOTS", 0),
+		MinorsSlots:       envInt("FANTRAX_MINORS_SLOTS", 0),
+		GSTrackingEnabled: envBool("GS_TRACKING_ENABLED", false),
+		BlendMinGP:        envInt("BLEND_MIN_GP", 2),
 
 		ProspectRollingDays:    envInt("PROSPECT_ROLLING_DAYS", 14),
 		ProspectMinGames:       envInt("PROSPECT_MIN_GAMES", 8),
@@ -102,6 +83,18 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	v, err := strconv.Atoi(s)
+	if err != nil {
+		return fallback
+	}
+	return v
+}
+
+func envBool(key string, fallback bool) bool {
+	s := os.Getenv(key)
+	if s == "" {
+		return fallback
+	}
+	v, err := strconv.ParseBool(s)
 	if err != nil {
 		return fallback
 	}

@@ -10,7 +10,7 @@ import (
 // GSBudget carries weekly game-start budget state for pitcher optimization.
 // A nil *GSBudget means no GS limit is configured.
 type GSBudget struct {
-	Limit    int       // max GS per matchup week (from GS_MAX)
+	Limit    int       // max GS per matchup week (fetched live from Fantrax's per-period config)
 	Used     int       // GS already consumed this matchup week (past days)
 	Today    time.Time // the date being optimized
 	WeekEnd  time.Time // last day of matchup week (inclusive)
