@@ -479,6 +479,8 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				prog.Logf("WARNING: live GS limit fetch failed (%v) — using configured GS_MAX=%d", gerr, cfg.GSMax)
 			} else if liveMax != nil {
 				gsLimit = *liveMax
+			} else {
+				prog.Logf("WARNING: no GS max configured for period %d — using configured GS_MAX=%d", periodNum, cfg.GSMax)
 			}
 
 			prog.Logf("GS limit: %d per week (%s to %s)",
