@@ -467,8 +467,22 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			// league-wide violation detection.
 			prog.Logf("WARNING: per-day GS walk failed (%v) — GS limit disabled", gsErr)
 		} else {
+			// Prefer the real Fantrax-configured limit for this scoring period
+			// over the static GS_MAX env var — Fantrax scales the real min/max
+			// whenever a period spans more than one calendar week (season
+			// opener, All-Star break), which a flat env var can't express.
+			// Falls back to GS_MAX if the live fetch fails for any reason.
+			gsLimit := cfg.GSMax
+			if periodNum, perr := ft.GetMatchupWeekNumberForDate(today); perr != nil || periodNum <= 0 {
+				prog.Logf("WARNING: could not resolve scoring period number (%v) — using configured GS_MAX=%d", perr, cfg.GSMax)
+			} else if _, liveMax, gerr := ft.GetGSLimits(cfg.TeamID, periodNum); gerr != nil {
+				prog.Logf("WARNING: live GS limit fetch failed (%v) — using configured GS_MAX=%d", gerr, cfg.GSMax)
+			} else if liveMax != nil {
+				gsLimit = *liveMax
+			}
+
 			prog.Logf("GS limit: %d per week (%s to %s)",
-				cfg.GSMax,
+				gsLimit,
 				weekStart.Format("2006-01-02"),
 				weekEnd.Format("2006-01-02"))
 
@@ -544,14 +558,14 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			}
 
 			gsBudget = &optimizer.GSBudget{
-				Limit:    cfg.GSMax,
+				Limit:    gsLimit,
 				Used:     usedGS,
 				Today:    today,
 				WeekEnd:  weekEnd,
 				Forecast: forecast,
 			}
 			prog.Logf("GS budget: %d/%d used, %.1f projected future starts",
-				usedGS, cfg.GSMax, gsBudget.FutureDemand())
+				usedGS, gsLimit, gsBudget.FutureDemand())
 		}
 	}
 	if cfg.GSMax > 0 {
