@@ -23,5 +23,6 @@ const (
 	keyRecentStatsPitcher = "fantrax-recent-stats-pitcher"
 	keyRosterStats        = "fantrax-roster-stats"
 	keySeasonRange        = "fantrax-season-range"
+	keyGSLimits           = "fantrax-gs-limits"
 	keyMLBGameLog         = "mlb-game-log"
 )
