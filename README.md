@@ -208,7 +208,7 @@ Players whose team isn't playing, who are confirmed out of the real-life MLB sta
 
 ### Pitcher Optimization
 
-Pitchers are scored based on probable starter data. SPs confirmed as starters get full value. SPs not listed as probable starters get a 0.10x discount so RPs are preferred for limited P slots. When a weekly GS limit is set (`GS_MAX`), the GS budget gate allocates starts proportionally across the matchup period, keeping the highest-value starters.
+Pitchers are scored based on probable starter data. SPs confirmed as starters get full value. SPs not listed as probable starters get a 0.10x discount so RPs are preferred for limited P slots. When GS tracking is enabled (`GS_TRACKING_ENABLED=true`), the GS budget gate fetches the real games-started limit directly from Fantrax's own per-period configuration (which scales the limit whenever a period spans more than one calendar week, e.g. the All-Star break) and allocates starts proportionally across the matchup period, keeping the highest-value starters.
 
 ### Projection Blending
 
@@ -228,8 +228,7 @@ Matchup adjustments (opposing pitcher FIP + platoon splits) are layered on top.
 
 | Env Var | Default | Description |
 |---|---|---|
-| `GS_MAX` | 0 (disabled) | Max game starts per matchup week — used by optimizer (weekly GS budget) and gs-check (violation detection) |
-| `GS_MIN` | 0 (disabled) | Min game starts per matchup week — used by gs-check to flag teams below the floor |
+| `GS_TRACKING_ENABLED` | false (disabled) | Enables games-started tracking — used by optimizer (weekly GS budget) and gs-check (violation detection). The actual min/max are always fetched live from Fantrax's own per-period configuration, never a fixed number |
 | `PROSPECT_ROLLING_DAYS` | 14 | Days of MiLB stats for breakout detection |
 | `PROSPECT_MIN_GAMES` | 8 | Minimum games for prospect breakout eligibility |
 | `PROSPECT_RANK_CACHE_HOURS` | 168 | Hours to cache prospect rankings |

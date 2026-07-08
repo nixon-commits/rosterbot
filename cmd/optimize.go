@@ -448,10 +448,10 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 	// --- GS Budget (weekly game-start limit awareness) ---
 	var gsBudget *optimizer.GSBudget
-	if cfg.GSMax > 0 {
+	if cfg.GSTrackingEnabled {
 		prog.Start("GS budget")
 	}
-	if cfg.GSMax > 0 && !seasonStart.IsZero() {
+	if cfg.GSTrackingEnabled && !seasonStart.IsZero() {
 		weekStart, weekEnd, err := ft.GetMatchupWeekBounds(today, seasonStart)
 		if err != nil {
 			prog.Logf("WARNING: could not determine matchup week (%v) — GS limit disabled", err)
@@ -466,22 +466,24 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			// YTD GS deltas — the same source of truth gs-check uses for
 			// league-wide violation detection.
 			prog.Logf("WARNING: per-day GS walk failed (%v) — GS limit disabled", gsErr)
-		} else {
-			// Prefer the real Fantrax-configured limit for this scoring period
-			// over the static GS_MAX env var — Fantrax scales the real min/max
-			// whenever a period spans more than one calendar week (season
-			// opener, All-Star break), which a flat env var can't express.
-			// Falls back to GS_MAX if the live fetch fails for any reason.
-			gsLimit := cfg.GSMax
-			if periodNum, perr := ft.GetMatchupWeekNumberForDate(today); perr != nil || periodNum <= 0 {
-				prog.Logf("WARNING: could not resolve scoring period number (%v) — using configured GS_MAX=%d", perr, cfg.GSMax)
-			} else if _, liveMax, gerr := ft.GetGSLimits(cfg.TeamID, periodNum); gerr != nil {
-				prog.Logf("WARNING: live GS limit fetch failed (%v) — using configured GS_MAX=%d", gerr, cfg.GSMax)
-			} else if liveMax != nil {
-				gsLimit = *liveMax
-			} else {
-				prog.Logf("WARNING: no GS max configured for period %d — using configured GS_MAX=%d", periodNum, cfg.GSMax)
+		} else if periodNum, perr := ft.GetMatchupWeekNumberForDate(today); perr != nil || periodNum <= 0 {
+			prog.Logf("WARNING: could not resolve scoring period number (%v) — GS limit disabled", perr)
+		} else if _, liveMax, gerr := ft.GetGSLimits(cfg.TeamID, periodNum); gerr != nil {
+			// The real GS max comes straight from Fantrax's own per-period
+			// configuration — there's no static fallback, so a fetch failure
+			// means we genuinely can't gate today. Alert (this degrades the
+			// lineup's pitcher usage silently otherwise) and skip the gate.
+			msg := fmt.Sprintf("optimize: live GS limit fetch failed for period %d (%v) — GS limit disabled", periodNum, gerr)
+			prog.Logf("WARNING: %s", msg)
+			if cfg.PushoverUserKey != "" && cfg.PushoverAPIToken != "" {
+				if perr := notify.SendPushover(cfg.PushoverUserKey, cfg.PushoverAPIToken, "optimize: GS limit fetch failed", msg); perr != nil {
+					prog.Logf("WARNING: failed to send failure Pushover: %v", perr)
+				}
 			}
+		} else if liveMax == nil {
+			prog.Logf("No GS max configured by Fantrax for period %d — GS limit disabled", periodNum)
+		} else {
+			gsLimit := *liveMax
 
 			prog.Logf("GS limit: %d per week (%s to %s)",
 				gsLimit,
@@ -570,7 +572,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				usedGS, gsLimit, gsBudget.FutureDemand())
 		}
 	}
-	if cfg.GSMax > 0 {
+	if cfg.GSTrackingEnabled {
 		if gsBudget != nil {
 			prog.Done("GS budget", fmt.Sprintf("%d/%d used · %.1f projected", gsBudget.Used, gsBudget.Limit, gsBudget.FutureDemand()))
 		} else {

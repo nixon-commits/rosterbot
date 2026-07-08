@@ -25,8 +25,9 @@ func runGSCheck(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if cfg.GSMax <= 0 {
-		return fmt.Errorf("GS_MAX env var required for gs-check command")
+	if !cfg.GSTrackingEnabled {
+		fmt.Println("GS tracking disabled (GS_TRACKING_ENABLED not set) — nothing to check.")
+		return nil
 	}
 	if cfg.PushoverGroupKey == "" || cfg.PushoverAPIToken == "" {
 		return fmt.Errorf("PUSHOVER_GROUP_KEY and PUSHOVER_API_TOKEN env vars required for gs-check command")

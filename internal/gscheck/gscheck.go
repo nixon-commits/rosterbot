@@ -16,8 +16,8 @@ import (
 type ViolationKind int
 
 const (
-	ViolationMax ViolationKind = iota // exceeded GS_MAX
-	ViolationMin                      // below GS_MIN
+	ViolationMax ViolationKind = iota // exceeded the period's GS max
+	ViolationMin                      // below the period's GS min
 )
 
 // Violation represents a team that violated a GS limit.
@@ -99,25 +99,31 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config) error {
 		return nil
 	}
 
-	// Prefer the real Fantrax-configured min/max for this period over the
-	// static GS_MAX/GS_MIN env vars — Fantrax scales the real min/max
-	// whenever a period spans more than one calendar week (season opener,
-	// All-Star break), which a flat env var can't express. Falls back to
-	// the configured values if the live fetch fails for any reason.
-	gsMax, gsMin := cfg.GSMax, cfg.GSMin
-	if liveMin, liveMax, gerr := ft.GetGSLimits(cfg.TeamID, period.Number); gerr != nil {
-		fmt.Printf("WARNING: live GS limit fetch failed (%v) — using configured GS_MAX=%d/GS_MIN=%d\n", gerr, cfg.GSMax, cfg.GSMin)
-	} else {
-		if liveMax != nil {
-			gsMax = *liveMax
-		} else {
-			fmt.Printf("WARNING: no GS max configured for period %d — using configured GS_MAX=%d\n", period.Number, cfg.GSMax)
+	// The real GS min/max come straight from Fantrax's own per-period
+	// configuration — it scales the limit whenever a period spans more than
+	// one calendar week (season opener, All-Star break), which a flat
+	// constant can't express. There's no static fallback: if the live fetch
+	// fails, or Fantrax has no GS max configured for this period, there's
+	// nothing to check against, so alert (on a real fetch error) and stop.
+	liveMin, liveMax, gerr := ft.GetGSLimits(cfg.TeamID, period.Number)
+	if gerr != nil {
+		msg := fmt.Sprintf("gs-check: live GS limit fetch failed for period %d (%v) — could not run violation check", period.Number, gerr)
+		fmt.Println(msg)
+		if cfg.PushoverUserKey != "" && cfg.PushoverAPIToken != "" {
+			if perr := notify.SendPushover(cfg.PushoverUserKey, cfg.PushoverAPIToken, "gs-check: GS limit fetch failed", msg); perr != nil {
+				fmt.Printf("WARNING: failed to send failure Pushover: %v\n", perr)
+			}
 		}
-		if liveMin != nil {
-			gsMin = *liveMin
-		} else if cfg.GSMin > 0 {
-			fmt.Printf("WARNING: no GS min configured for period %d — using configured GS_MIN=%d\n", period.Number, cfg.GSMin)
-		}
+		return fmt.Errorf("fetch GS limits: %w", gerr)
+	}
+	if liveMax == nil {
+		fmt.Printf("No GS max configured by Fantrax for period %d — nothing to check.\n", period.Number)
+		return nil
+	}
+	gsMax := *liveMax
+	gsMin := 0
+	if liveMin != nil {
+		gsMin = *liveMin
 	}
 
 	periodLabel := fmt.Sprintf("%s (%s – %s)", period.Caption, period.StartDate.Format("2006-01-02"), period.EndDate.Format("2006-01-02"))
