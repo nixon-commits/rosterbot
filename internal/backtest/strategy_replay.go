@@ -25,6 +25,7 @@ type VariantResult struct {
 	MeanGap     float64 // mean daily (realized − hindsight-optimal), hitter slots
 	MAE         float64 // mean abs per-player projection error vs actual
 	Bias        float64 // signed mean per-player error (projected − actual)
+	HasProjDiag bool    // false when the variant's Source doesn't implement PtsPerGameSource, so MAE/Bias are unset zero-values rather than real 0.00 error
 }
 
 // RunStrategyComparison replays the hitter optimizer for each variant across the
@@ -100,6 +101,7 @@ func RunStrategyComparison(
 		if a.errN > 0 {
 			out[i].MAE = a.absErr / float64(a.errN)
 			out[i].Bias = a.signErr / float64(a.errN)
+			out[i].HasProjDiag = true
 		}
 	}
 	return out, nil

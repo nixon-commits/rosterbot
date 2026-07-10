@@ -257,6 +257,12 @@ func runRecencyExperiment(
 	}
 
 	variants := []backtest.StrategyVariant{
+		{
+			Name: "base",
+			Build: func(asOf time.Time) (projections.Source, error) {
+				return baseSrc, nil
+			},
+		},
 		mkVariant("ytd", projections.YTDWeight),
 		mkVariant("w14", projections.WindowWeight(14)),
 		mkVariant("w30", projections.WindowWeight(30)),
@@ -269,9 +275,17 @@ func runRecencyExperiment(
 	}
 
 	fmt.Printf("\nRecency strategy comparison (hitters, %d days)\n", len(gradeDays))
+	fmt.Printf("  base = depthcharts-ros with no YTD blend at all, isolating whether blending recent form on top of an\n")
+	fmt.Printf("  already-in-season-updated RoS projection helps or hurts (MAE/bias are n/a for base: ChainedSource doesn't\n")
+	fmt.Printf("  implement PtsPerGameSource, so only realized/mean-gap are comparable for that row).\n")
 	fmt.Printf("%-10s %12s %10s %8s %8s\n", "mode", "realized", "mean gap", "MAE", "bias")
 	for _, r := range results {
-		fmt.Printf("%-10s %12.1f %10.2f %8.2f %8.2f\n", r.Name, r.RealizedPts, r.MeanGap, r.MAE, r.Bias)
+		mae, bias := "n/a", "n/a"
+		if r.HasProjDiag {
+			mae = fmt.Sprintf("%.2f", r.MAE)
+			bias = fmt.Sprintf("%.2f", r.Bias)
+		}
+		fmt.Printf("%-10s %12.1f %10.2f %8s %8s\n", r.Name, r.RealizedPts, r.MeanGap, mae, bias)
 	}
 	return nil
 }
