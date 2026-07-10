@@ -81,9 +81,11 @@ func runGrade(cmd *cobra.Command, args []string) error {
 		results := backtest.RunProjectionAnalysis(days, dir)
 		byDate := map[string][]analysis.GradeRow{}
 		for _, d := range results {
-			if d.Source == "missing" || d.Source == "stale" {
+			if d.Source == "missing" || d.Source == "stale" || d.Source == "no-data" {
 				// Forward-only: before the shadow command has captured a day,
 				// its snapshot is absent and the day is skipped, not graded.
+				// "no-data" means the system had a real outage that day (see
+				// Snapshot.HittersNoData/PitchersNoData) — same treatment.
 				continue
 			}
 			dt := d.Date.UTC().Format("2006-01-02")

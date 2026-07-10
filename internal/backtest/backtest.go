@@ -123,6 +123,17 @@ type Snapshot struct {
 	GeneratedAt      time.Time        `json:"generated_at"`
 	Hitters          []SnapshotPlayer `json:"hitters"`
 	Pitchers         []SnapshotPlayer `json:"pitchers"`
+	// HittersNoData/PitchersNoData record when the projection source had no
+	// real data for that role that day (e.g. an upstream outage) as opposed to
+	// a legitimate zero-point projection. Hitters/Pitchers still get a scored
+	// row per roster player at 0 pts either way (the optimizer scores every
+	// rostered player regardless), so without this flag a data-availability
+	// gap would be graded identically to "this system projects everyone at
+	// zero," tanking the system's accuracy for the wrong reason. Zero-value
+	// false is the safe default for snapshots written before this field
+	// existed — they're graded as before, not silently excluded.
+	HittersNoData  bool `json:"hitters_no_data,omitempty"`
+	PitchersNoData bool `json:"pitchers_no_data,omitempty"`
 }
 
 // RunLineupAnalysis grades each day's actual lineup against the hindsight
@@ -458,6 +469,17 @@ func RunProjectionAnalysis(days []fantrax.DayRoster, snapshotDir string) []Proje
 			results = append(results, ProjectionDayResult{
 				Date:   day.Date,
 				Source: "stale",
+			})
+			continue
+		}
+		// A system with no real data for either role that day still gets a
+		// scored row per roster player at 0 pts (see the Snapshot field
+		// comment) — grading that would tank the system's MAE for a data
+		// outage, not a real accuracy problem. Excluded like stale/missing.
+		if snap.HittersNoData || snap.PitchersNoData {
+			results = append(results, ProjectionDayResult{
+				Date:   day.Date,
+				Source: "no-data",
 			})
 			continue
 		}
