@@ -298,6 +298,78 @@ func TestRunProjectionAnalysis_StaleSnapshotMarkedStale(t *testing.T) {
 	}
 }
 
+func TestRunProjectionAnalysis_NoDataSnapshotExcluded(t *testing.T) {
+	dir := t.TempDir()
+	date := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)
+	// The captured system had no real projection data that day (e.g. an
+	// upstream outage) — buildSnapshot still records a scored row per roster
+	// player at 0 projected points, so without this flag the day would be
+	// graded as if the system projected zero for everyone, tanking its MAE
+	// for a data-availability problem rather than a real accuracy one.
+	s := Snapshot{
+		Date:             "2026-04-15",
+		ProjectionSystem: "atc-ros",
+		GeneratedAt:      time.Date(2026, 4, 15, 13, 0, 0, 0, time.UTC),
+		HittersNoData:    true,
+		Hitters: []SnapshotPlayer{
+			{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", ProjPtsPerGame: 0, HasGame: true},
+		},
+	}
+	if err := WriteSnapshot(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	days := []fantrax.DayRoster{
+		{
+			Date:    date,
+			Players: []fantrax.DayPlayerFP{{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", FPts: 14.0, HadGame: true}},
+		},
+	}
+	results := RunProjectionAnalysis(days, dir)
+	if len(results) != 1 {
+		t.Fatalf("want 1 result, got %d", len(results))
+	}
+	if results[0].Source != "no-data" {
+		t.Errorf("source = %q, want no-data", results[0].Source)
+	}
+	if len(results[0].Players) != 0 {
+		t.Errorf("want no graded players for a no-data snapshot, got %d", len(results[0].Players))
+	}
+}
+
+func TestRunProjectionAnalysis_PitchersNoDataAlsoExcludesDay(t *testing.T) {
+	dir := t.TempDir()
+	date := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)
+	// Hitters had real data but pitchers didn't (e.g. a role-specific upstream
+	// gap) — day-level exclusion is intentionally coarse, matching the existing
+	// stale/missing granularity: either role's outage excludes the whole day
+	// for this system rather than partially grading it.
+	s := Snapshot{
+		Date:             "2026-04-15",
+		ProjectionSystem: "atc-ros",
+		GeneratedAt:      time.Date(2026, 4, 15, 13, 0, 0, 0, time.UTC),
+		PitchersNoData:   true,
+		Hitters: []SnapshotPlayer{
+			{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", ProjPtsPerGame: 10.0, HasGame: true},
+		},
+	}
+	if err := WriteSnapshot(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	days := []fantrax.DayRoster{
+		{
+			Date:    date,
+			Players: []fantrax.DayPlayerFP{{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", FPts: 14.0, HadGame: true}},
+		},
+	}
+	results := RunProjectionAnalysis(days, dir)
+	if results[0].Source != "no-data" {
+		t.Errorf("source = %q, want no-data", results[0].Source)
+	}
+	if len(results[0].Players) != 0 {
+		t.Errorf("want no graded players when pitchers had no data, got %d", len(results[0].Players))
+	}
+}
+
 func TestRunProjectionAnalysis_SameDaySnapshotGraded(t *testing.T) {
 	dir := t.TempDir()
 	date := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)

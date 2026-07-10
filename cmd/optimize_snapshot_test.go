@@ -48,7 +48,7 @@ func TestBuildSnapshot_MapsRichFields(t *testing.T) {
 		},
 	}
 
-	snap := buildSnapshot(dr, "depthcharts", slotName)
+	snap := buildSnapshot(dr, "depthcharts", slotName, false, false)
 
 	if snap.Date != "2026-05-29" {
 		t.Errorf("Date = %q, want 2026-05-29", snap.Date)
@@ -75,5 +75,28 @@ func TestBuildSnapshot_MapsRichFields(t *testing.T) {
 	p := snap.Pitchers[0]
 	if p.Role != "SP" || !p.IsStarter || p.Slot != "P" || !p.IsPitcher {
 		t.Errorf("pitcher mapping wrong: %+v", p)
+	}
+}
+
+// TestBuildSnapshot_SetsNoDataFlags verifies the two load-result availability
+// flags pass straight through onto the serialized snapshot, independently per
+// role, so a later backtest run can tell a data outage from a real projection.
+func TestBuildSnapshot_SetsNoDataFlags(t *testing.T) {
+	dr := dateResult{date: time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)}
+
+	snap := buildSnapshot(dr, "atc-ros", nil, true, false)
+	if !snap.HittersNoData {
+		t.Error("HittersNoData = false, want true")
+	}
+	if snap.PitchersNoData {
+		t.Error("PitchersNoData = true, want false")
+	}
+
+	snap = buildSnapshot(dr, "atc-ros", nil, false, true)
+	if snap.HittersNoData {
+		t.Error("HittersNoData = true, want false")
+	}
+	if !snap.PitchersNoData {
+		t.Error("PitchersNoData = false, want true")
 	}
 }

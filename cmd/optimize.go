@@ -905,7 +905,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 	// BACKTEST_ARCHIVE aliases, kept for backward compatibility).
 	if !cfg.DryRun || snapshotFlag || archiveProjections || captureSystemRoot != "" || os.Getenv("BACKTEST_ARCHIVE") == "1" {
 		for _, dr := range results {
-			if err := writeProjectionSnapshot(dr, batLoadResult.System, slotName); err != nil {
+			if err := writeProjectionSnapshot(dr, batLoadResult.System, slotName, batLoadResult.NoData, pitLoadResult.NoData); err != nil {
 				fmt.Printf("  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)
 			}
 		}
@@ -1360,13 +1360,16 @@ func publishLineup(dr dateResult, cfg *config.Config, hitterSlots, pitcherSlots 
 // (no reconstruction). One file per date at .backtest/snapshots/<YYYY-MM-DD>.json.
 // In shadow-capture mode (captureSystemRoot set) it writes instead to
 // <captureSystemRoot>/system=<projSystem>/<date>.json so each system's snapshot
-// lives in its own partition.
-func writeProjectionSnapshot(dr dateResult, projSystem string, slotName map[string]string) error {
+// lives in its own partition. hittersNoData/pitchersNoData carry the load
+// result's availability signal through to the snapshot (see Snapshot's field
+// comment) so a later backtest run can exclude a data outage from grading
+// instead of scoring it as "this system projects everyone at zero."
+func writeProjectionSnapshot(dr dateResult, projSystem string, slotName map[string]string, hittersNoData, pitchersNoData bool) error {
 	dir := backtestSnapshotDir
 	if captureSystemRoot != "" {
 		dir = systemSnapshotDir(captureSystemRoot, projSystem)
 	}
-	return backtest.WriteSnapshot(dir, buildSnapshot(dr, projSystem, slotName))
+	return backtest.WriteSnapshot(dir, buildSnapshot(dr, projSystem, slotName, hittersNoData, pitchersNoData))
 }
 
 // buildSnapshot is the pure mapping from a day's optimizer results to the
@@ -1375,11 +1378,13 @@ func writeProjectionSnapshot(dr dateResult, projSystem string, slotName map[stri
 // started the player — so future analysis can slice projection error along any
 // of those dimensions. slotName maps a player's RosterPosition (slot pos ID) to
 // its display name; benched players (no active slot) get an empty Slot.
-func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string) backtest.Snapshot {
+func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string, hittersNoData, pitchersNoData bool) backtest.Snapshot {
 	snap := backtest.Snapshot{
 		Date:             dr.date.Format("2006-01-02"),
 		ProjectionSystem: projSystem,
 		GeneratedAt:      time.Now().UTC(),
+		HittersNoData:    hittersNoData,
+		PitchersNoData:   pitchersNoData,
 	}
 
 	for _, sp := range dr.hitterResult.Scored {
