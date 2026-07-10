@@ -1,17 +1,50 @@
 # Triage Labels
 
-The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.
+The skills speak in terms of five canonical **state** roles plus a **category** role
+(bug/enhancement). This file maps those onto **bd (beads)**, this repo's actual issue
+tracker (see CLAUDE.md's "Beads Issue Tracker" section) — not the `.scratch/` markdown
+convention `issue-tracker.md` still describes, which predates the bd migration.
 
-Because issues are tracked as local markdown (see `issue-tracker.md`), the label is recorded as a `Status:` line near the top of each issue file rather than via a `gh`/`glab` label.
+## State role → bd state dimension
 
-| Label in mattpocock/skills | Label in our tracker | Meaning                                  |
-| -------------------------- | -------------------- | ---------------------------------------- |
-| `needs-triage`             | `needs-triage`       | Maintainer needs to evaluate this issue  |
-| `needs-info`               | `needs-info`         | Waiting on reporter for more information |
-| `ready-for-agent`          | `ready-for-agent`    | Fully specified, ready for an AFK agent  |
-| `ready-for-human`          | `ready-for-human`    | Requires human implementation            |
-| `wontfix`                  | `wontfix`            | Will not be actioned                     |
+bd has a purpose-built primitive for exactly this — a named **state dimension**
+(`bd set-state`), which atomically replaces the prior value, records a `--reason`, and
+writes an event bead (audit trail of every transition). Use the dimension `triage`:
 
-When a skill mentions a role (e.g. "apply the AFK-ready triage label"), set the `Status:` line to the corresponding label string from this table.
+| Canonical role    | bd command                                                                  |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `needs-triage`      | `bd set-state <id> triage=needs-triage --reason "..."`                       |
+| `needs-info`        | `bd set-state <id> triage=needs-info --reason "..."`                         |
+| `ready-for-agent`   | `bd set-state <id> triage=ready-for-agent --reason "..."`                    |
+| `ready-for-human`   | `bd set-state <id> triage=ready-for-human --reason "..."`                    |
+| `wontfix`           | `bd set-state <id> triage=wontfix --reason "..."` then `bd close <id>`       |
 
-Edit the right-hand column to match whatever vocabulary you actually use.
+This produces a `triage:<value>` label under the hood (queryable via
+`bd state <id> triage` or `bd label list <id>`) plus a permanent event-log entry —
+strictly better than a bare label for this use case since the *why* isn't lost.
+`wontfix` also closes the issue — "will not be actioned" has no other bd status.
+
+Post agent briefs and triage notes via `bd comment <id> "..."` (every comment must open
+with the required AI-disclaimer line — see the triage skill's top-level instructions).
+
+## Category role → bd type
+
+bd's `type` field already distinguishes `bug` from `feature`, and bd recognizes
+`enhancement`/`feat` as aliases for `feature` natively:
+
+| Canonical role | bd command                          |
+| -------------- | ------------------------------------ |
+| `bug`          | `bd update <id> --type bug`          |
+| `enhancement`  | `bd update <id> --type enhancement`  |
+
+bd also has `task`/`epic`/`chore`/`decision` types with no canonical-role equivalent.
+Default new/pre-existing `task`-typed issues to whichever of bug/enhancement the content
+actually reads as during triage; leave `epic`/`chore`/`decision` issues out of the
+triage-role system entirely (they aren't work items in the triage sense).
+
+## Querying
+
+- "Unlabeled" (never triaged) = a bd issue with none of the five state labels set —
+  `bd list --status=open` and check each issue's labels (bd has no `--label` list filter
+  as of this writing; filter client-side).
+- `bd list` output and `bd show <id>` both surface labels when present.
