@@ -73,7 +73,8 @@ func (b *GSBudget) FutureDemand() float64 {
 // Locked players are never suppressed: a locked active-slot SP has already
 // consumed its GS (reflected in budget.Used) and a locked bench SP can't
 // be moved into an active slot, so either way gate suppression has no
-// practical effect and only misleads the displayed pts/gate delta.
+// practical effect and only misleads the displayed pts/gate delta. Suppressed
+// starters fall to NonStarterSPDiscount downstream.
 func applyGSGate(scored []ScoredPitcher, budget *GSBudget) []ScoredPitcher {
 	if budget == nil || budget.Limit == 0 {
 		return scored
