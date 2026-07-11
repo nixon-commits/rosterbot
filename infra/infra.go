@@ -45,6 +45,19 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	stateBucket := awss3.NewBucket(stack, jsii.String("StateBucket"), &awss3.BucketProps{
 		Versioned:     jsii.Bool(true),
 		RemovalPolicy: awscdk.RemovalPolicy_RETAIN,
+		LifecycleRules: &[]*awss3.LifecycleRule{{
+			// cache/ is TTL-driven and safe to trim: every overwrite of a
+			// FileCache key (the S3 Store adapter, see cache-store-seam) left
+			// the prior version live forever with versioning on but no
+			// expiration rule, so storage cost grew unbounded relative to
+			// actual live cache size. analysis/, backtest/, runs/ (and
+			// runledger/), lineup/, session/, and claims/ are intentionally
+			// durable/bounded (append-only archives or small ledgers) and
+			// stay untouched — only cache/ gets this rule.
+			Id:                          jsii.String("ExpireNoncurrentCacheVersions"),
+			Prefix:                      jsii.String("cache/"),
+			NoncurrentVersionExpiration: awscdk.Duration_Days(jsii.Number(14)),
+		}},
 	})
 
 	// Static recap site bucket (private; served via CloudFront in Phase 5).
