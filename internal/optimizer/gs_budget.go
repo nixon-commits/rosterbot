@@ -155,11 +155,19 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) []ScoredPitcher {
 	}
 
 	type rankEntry struct {
-		pts      float64
-		isToday  bool
-		todayRef int    // index into todayStarters; -1 for non-today entries
-		tiebreak string // stable ordering on ties
+		pts         float64
+		isToday     bool
+		isEstimated bool // true only for placeholder (unconfirmed) future entries
+		todayRef    int  // index into todayStarters; -1 for non-today entries
+		tiebreak    string
 	}
+
+	// certaintyMargin: an estimated (unconfirmed) future claim must exceed
+	// today's value by more than this fraction before it outranks a start
+	// that's already happening — extends the exact-tie "prefer today" rule
+	// below to near-ties. Confirmed future starts are just as certain as
+	// today's and are deliberately excluded from this leniency.
+	const certaintyMargin = 0.10
 
 	estCount := int(math.Ceil(futureEstimated))
 	entries := make([]rankEntry, 0, totalKnown+estCount)
@@ -174,19 +182,41 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) []ScoredPitcher {
 	for _, p := range futureConfirmed {
 		entries = append(entries, rankEntry{pts: p, isToday: false, todayRef: -1})
 	}
+	// Distribute the fractional estimate across ceil(futureEstimated) entries
+	// so its total value mass equals placeholder*futureEstimated exactly,
+	// instead of ceil-rounding a fractional demand (e.g. 0.2) into one
+	// FULL-value entry that competes on equal footing with certain starts.
+	remainingFrac := futureEstimated
 	for i := 0; i < estCount; i++ {
-		entries = append(entries, rankEntry{pts: placeholder, isToday: false, todayRef: -1})
+		weight := 1.0
+		if remainingFrac < 1.0 {
+			weight = remainingFrac
+		}
+		entries = append(entries, rankEntry{pts: placeholder * weight, isToday: false, isEstimated: true, todayRef: -1})
+		remainingFrac -= 1.0
 	}
 
 	sort.SliceStable(entries, func(i, j int) bool {
-		if math.Abs(entries[i].pts-entries[j].pts) > eps {
-			return entries[i].pts > entries[j].pts
+		ei, ej := entries[i], entries[j]
+		if ei.isToday != ej.isToday && (ei.isEstimated || ej.isEstimated) {
+			todayPts, futurePts := ei.pts, ej.pts
+			todayIsI := ei.isToday
+			if !todayIsI {
+				todayPts, futurePts = ej.pts, ei.pts
+			}
+			if futurePts > todayPts*(1+certaintyMargin)+eps {
+				return !todayIsI
+			}
+			return todayIsI
 		}
-		// On ties, prefer today (certain start) over future entries.
-		if entries[i].isToday != entries[j].isToday {
-			return entries[i].isToday
+		if math.Abs(ei.pts-ej.pts) > eps {
+			return ei.pts > ej.pts
 		}
-		return entries[i].tiebreak < entries[j].tiebreak
+		// On exact ties, prefer today (certain start) over future entries.
+		if ei.isToday != ej.isToday {
+			return ei.isToday
+		}
+		return ei.tiebreak < ej.tiebreak
 	})
 
 	keepToday := make(map[int]bool, len(todayStarters))
