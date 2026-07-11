@@ -3,15 +3,19 @@ package lineupapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 )
+
+var errFakeList = errors.New("fake list error")
 
 // fakeStore is an in-memory ObjectStore for handler tests.
 type fakeStore struct {
@@ -192,9 +196,13 @@ func TestHandlerNotFoundWhenNoLineup(t *testing.T) {
 type fakeRuns struct {
 	runs   []Run
 	detail *RunDetail
+	err    error
 }
 
 func (f fakeRuns) List(_ context.Context, limit int) ([]Run, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	if len(f.runs) > limit {
 		return f.runs[:limit], nil
 	}
@@ -446,5 +454,102 @@ func TestRunsNotImplementedWhenNil(t *testing.T) {
 	}
 	if rec := do(h, http.MethodPost, "/v1/jobs/optimize"); rec.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d, want 501", rec.Code)
+	}
+}
+
+// --- inFlightRun (rosterbot-744: manual-trigger race guard) ---
+
+func TestInFlightRun_MatchesRunningSameJobName(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	runs := fakeRuns{runs: []Run{
+		{ID: "r1", Command: "claims --dry-run", Status: "RUNNING", StartedAt: now.Add(-5 * time.Minute).Format(time.RFC3339)},
+	}}
+	got := inFlightRun(context.Background(), runs, "claims", now)
+	if got == nil || got.ID != "r1" {
+		t.Fatalf("expected in-flight run r1, got %+v", got)
+	}
+}
+
+func TestInFlightRun_IgnoresDifferentJobName(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	runs := fakeRuns{runs: []Run{
+		{ID: "r1", Command: "waivers --top 15", Status: "RUNNING", StartedAt: now.Add(-1 * time.Minute).Format(time.RFC3339)},
+	}}
+	if got := inFlightRun(context.Background(), runs, "claims", now); got != nil {
+		t.Errorf("expected nil for different job name, got %+v", got)
+	}
+}
+
+func TestInFlightRun_IgnoresFinishedRun(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	runs := fakeRuns{runs: []Run{
+		{ID: "r1", Command: "claims --dry-run", Status: "SUCCESS", StartedAt: now.Add(-1 * time.Minute).Format(time.RFC3339)},
+	}}
+	if got := inFlightRun(context.Background(), runs, "claims", now); got != nil {
+		t.Errorf("expected nil for a finished run, got %+v", got)
+	}
+}
+
+// TestInFlightRun_IgnoresStaleRunningEntry is the regression test for the
+// crash-recovery edge case: entrypoint.sh only flips a run to SUCCESS/FAILED
+// after the bot command exits, so a hard crash mid-run leaves the ledger
+// entry RUNNING forever. Without a staleness bound, one crashed task would
+// permanently block manual triggers for that job name.
+func TestInFlightRun_IgnoresStaleRunningEntry(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	runs := fakeRuns{runs: []Run{
+		{ID: "stuck", Command: "claims --dry-run", Status: "RUNNING", StartedAt: now.Add(-3 * time.Hour).Format(time.RFC3339)},
+	}}
+	if got := inFlightRun(context.Background(), runs, "claims", now); got != nil {
+		t.Errorf("expected nil for a stale RUNNING entry beyond maxJobDuration, got %+v", got)
+	}
+}
+
+func TestInFlightRun_NilRunStoreSkipsCheck(t *testing.T) {
+	if got := inFlightRun(context.Background(), nil, "claims", time.Now()); got != nil {
+		t.Errorf("expected nil with no RunStore configured, got %+v", got)
+	}
+}
+
+func TestInFlightRun_ListErrorFailsOpen(t *testing.T) {
+	runs := fakeRuns{err: errFakeList}
+	if got := inFlightRun(context.Background(), runs, "claims", time.Now()); got != nil {
+		t.Errorf("expected nil (fail-open) on a RunStore list error, got %+v", got)
+	}
+}
+
+// --- POST /v1/jobs/{name} in-flight rejection (rosterbot-744) ---
+
+func TestJobTrigger_RejectsWhenAlreadyRunning(t *testing.T) {
+	now := time.Now().UTC()
+	runs := fakeRuns{runs: []Run{
+		{ID: "sched-1", Command: "claims", Status: "RUNNING", StartedAt: now.Add(-2 * time.Minute).Format(time.RFC3339), Trigger: "schedule"},
+	}}
+	jobs := &fakeJobs{id: "should-not-launch"}
+	h := Handler(Config{Token: "t", Runs: runs, Jobs: jobs})
+
+	rec := do(h, http.MethodPost, "/v1/jobs/claims")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+	if jobs.lastCommand != nil {
+		t.Errorf("expected job runner NOT to be invoked while a run is in-flight, got command %v", jobs.lastCommand)
+	}
+}
+
+func TestJobTrigger_AllowsWhenPriorRunFinished(t *testing.T) {
+	now := time.Now().UTC()
+	runs := fakeRuns{runs: []Run{
+		{ID: "sched-1", Command: "claims", Status: "SUCCESS", StartedAt: now.Add(-2 * time.Hour).Format(time.RFC3339)},
+	}}
+	jobs := &fakeJobs{id: "task-456"}
+	h := Handler(Config{Token: "t", Runs: runs, Jobs: jobs})
+
+	rec := do(h, http.MethodPost, "/v1/jobs/claims")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	if strings.Join(jobs.lastCommand, " ") != "claims" {
+		t.Errorf("expected job runner invoked with 'claims', got %v", jobs.lastCommand)
 	}
 }

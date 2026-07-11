@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // TodayKey is the object key (storage-adapter relative) for the most recent
@@ -189,6 +190,10 @@ func (cfg Config) handleJob(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if run := inFlightRun(r.Context(), cfg.Runs, name, time.Now()); run != nil {
+		writeErr(w, http.StatusConflict, "job "+name+" is already running (run "+run.ID+", started "+run.StartedAt+")")
 		return
 	}
 	id, runErr := cfg.Jobs.Run(r.Context(), args)
