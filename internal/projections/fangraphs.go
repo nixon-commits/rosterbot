@@ -10,6 +10,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/playername"
+	"github.com/nixon-commits/rosterbot/internal/teams"
 )
 
 var fangraphsBattingURL = "https://www.fangraphs.com/api/projections?type=fangraphsdc&stats=bat&pos=all&team=0&players=0&lg=all"
@@ -292,32 +293,7 @@ func (s *FanGraphsSource) GetProjection(name, mlbTeam string) (*Projection, bool
 }
 
 func projKey(name, team string) string {
-	return NormalizeName(name) + "|" + NormalizeTeam(team)
-}
-
-// NormalizeTeam maps team abbreviations from various sources (FanGraphs, MLB API)
-// to the Fantrax convention, which is the canonical form used throughout the system.
-func NormalizeTeam(team string) string {
-	switch strings.ToUpper(strings.TrimSpace(team)) {
-	case "SDP":
-		return "SD"
-	case "SFG":
-		return "SF"
-	case "KCR":
-		return "KC"
-	case "WSN":
-		return "WSH"
-	case "TBR":
-		return "TB"
-	case "AZ":
-		return "ARI"
-	case "CWS":
-		return "CHW"
-	case "OAK":
-		return "ATH"
-	default:
-		return strings.ToUpper(strings.TrimSpace(team))
-	}
+	return NormalizeName(name) + "|" + teams.Normalize(team)
 }
 
 // MLBAMIDs returns a map of NormalizeName(name) → MLBAM player ID.

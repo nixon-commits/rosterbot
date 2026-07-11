@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
+	"github.com/nixon-commits/rosterbot/internal/teams"
 	"github.com/pmurley/go-fantrax/auth_client"
 	"github.com/pmurley/go-fantrax/models"
 )
@@ -310,7 +311,7 @@ func playerStatsFromTables(tables []models.RosterTable) periodSnapshot {
 			y := playerYTD{
 				PlayerID:      row.Scorer.ScorerID,
 				Name:          row.Scorer.Name,
-				MLBTeam:       row.Scorer.TeamShortName,
+				MLBTeam:       teams.Normalize(row.Scorer.TeamShortName),
 				PosShortNames: row.Scorer.PosShortNames,
 				Positions:     append([]string(nil), row.Scorer.PosIDs...),
 				SlotPosID:     row.PosID,
