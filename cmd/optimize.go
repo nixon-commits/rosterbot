@@ -284,10 +284,12 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		prog.Logf("current period: %d", currentPeriod)
 	}
 
-	// Authoritative per-date period lookup for the apply path below (see
-	// resolveDatePeriod's call site) — Fantrax's own date ranges per period,
-	// immune to mid-season inserted daily periods. A fetch failure just means
-	// fantrax.ResolvePeriod falls through to its anchor/day-math tiers.
+	// Authoritative per-date period lookup, shared by the fantrax.ResolvePeriod
+	// call in the apply loop below and the GS-budget block further down —
+	// Fantrax's own date ranges per period, immune to mid-season inserted daily
+	// periods. A fetch failure just means fantrax.ResolvePeriod falls through
+	// to its anchor/day-math tiers (the GS-budget block disables its gate
+	// instead, since it has no safe fallback for a budget decision).
 	periods, _, _, periodsErr := ft.GetScoringPeriodsAndTeams()
 	if periodsErr != nil {
 		prog.Logf("WARNING: could not fetch authoritative scoring periods (%v) — date→period resolution falls back to anchor/day-math", periodsErr)
@@ -453,16 +455,13 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			// YTD GS deltas — the same source of truth gs-check uses for
 			// league-wide violation detection.
 			prog.Logf("WARNING: per-day GS walk failed (%v) — GS limit disabled", gsErr)
-		} else if periods, _, _, perr := ft.GetScoringPeriodsAndTeams(); perr != nil {
-			// Same call gscheck.go makes for its period resolution — reusing it
-			// here (instead of GetMatchupWeekNumberForDate's positional count
-			// over matchupWeekRanges' same-opponent groupings) means both paths
-			// are structurally guaranteed to agree, not just coincidentally
-			// aligned. matchupWeekRanges groups purely by consecutive
-			// same-opponent entries with no gap check, so a genuine
-			// back-to-back rematch against the same opponent could desync its
-			// position count from Fantrax's real period number with no error.
-			prog.Logf("WARNING: could not fetch scoring periods (%v) — GS limit disabled", perr)
+		} else if periodsErr != nil {
+			// Reuses the periods list already fetched once above (shared with
+			// fantrax.ResolvePeriod's apply-path lookup) instead of gscheck's
+			// old pattern of each call site re-fetching GetScoringPeriodsAndTeams
+			// independently. Same authoritative source either way — this just
+			// avoids firing the request twice per run.
+			prog.Logf("WARNING: could not fetch scoring periods (%v) — GS limit disabled", periodsErr)
 		} else if sp := fantrax.FindCurrentPeriod(periods, today); sp == nil {
 			prog.Logf("WARNING: could not resolve scoring period for today — GS limit disabled")
 		} else if _, liveMax, gerr := ft.GetGSLimits(cfg.TeamID, sp.Number); gerr != nil {
