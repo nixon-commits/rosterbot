@@ -2,7 +2,6 @@ package fantrax
 
 import (
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
@@ -137,37 +136,9 @@ func PeriodForDate(seasonStart, date time.Time) int {
 	return AnchorPeriodForDate(seasonStart, 1, date)
 }
 
-// GetRecentStats fetches the most recent completed period's roster and returns
-// the cumulative season-to-date batting stats for each player.
-//
-// The Fantrax getTeamRosterInfo API returns YTD stats regardless of which period
-// is requested — the period parameter only controls the roster snapshot. We fetch
-// the latest completed period (currentPeriod-1) to get current YTD stats.
-//
-// Cached under fantrax-recent-stats-hitter-<teamID>-<period> with a TTL
-// determined by ttlForPeriod (30d for past, todayTTL otherwise).
-func (c *Client) GetRecentStats(currentPeriod, _ int) (map[string]RecentStat, error) {
-	period := currentPeriod - 1
-	if period < 1 {
-		return nil, fmt.Errorf("no completed periods (current=%d)", currentPeriod)
-	}
-
-	if c.cacheDir == "" {
-		return c.fetchRecentStats(period)
-	}
-	fc := cache.New[map[string]RecentStat](c.cacheDir, c.ttlForPeriod(period))
-	key := cache.Key(keyRecentStatsHitter, c.teamID, strconv.Itoa(period))
-	return fc.Get(key, func() (map[string]RecentStat, error) {
-		return c.fetchRecentStats(period)
-	})
-}
-
-func (c *Client) fetchRecentStats(period int) (map[string]RecentStat, error) {
-	roster, err := c.auth.GetTeamRosterInfo(strconv.Itoa(period), c.teamID)
-	if err != nil {
-		return nil, fmt.Errorf("fetch roster for period %d: %w", period, err)
-	}
-
-	players := append(roster.ActiveRoster, roster.ReserveRoster...)
-	return extractHitterStats(players), nil
-}
+// Note: the former GetRecentStats (unbounded season-to-date hitter FP/G from a
+// single roster snapshot) was retired when the optimizer switched to a bounded
+// trailing-30-day recency window (see cmd/optimize.go windowedHitterRecent,
+// rosterbot-2nd). The window is built from the daily FPts series instead of one
+// cumulative snapshot. extractHitterStats is retained for its unit tests and as
+// the shared snapshot→RecentStat adapter.
