@@ -102,28 +102,6 @@ func cacheTTL(d time.Duration) time.Duration {
 	return d
 }
 
-// resolveDatePeriod returns the scoring period to optimize+apply for a date.
-//
-// We anchor on Fantrax's authoritative current period — the same period the
-// roster was read under (GetPitcherRoster -> GetCurrentPeriodTeamRosterInfo) —
-// for today AND the near-future --matchup window. Fantrax can insert extra
-// daily scoring periods mid-season (doubleheaders / postponed-game makeups),
-// which makes naive season-start day arithmetic drift one behind. If the apply
-// used the date-math period instead, it would write to the wrong period and
-// silently no-op on the real lineup (the roster read, the apply, and the cache
-// invalidation must all agree on one period number). AnchorPeriodForDate(today,
-// currentPeriod, date) returns currentPeriod for today and currentPeriod+N for
-// N days out — exact within the insertion-free near-today window.
-//
-// When the current-period lookup is unavailable (periodErr) or unusable (<= 0)
-// fall back to PeriodForDate (season-start day math) — the best available signal.
-func resolveDatePeriod(currentPeriod int, periodErr error, seasonStart, today, date time.Time) int {
-	if periodErr == nil && currentPeriod > 0 {
-		return fantrax.AnchorPeriodForDate(today, currentPeriod, date)
-	}
-	return fantrax.PeriodForDate(seasonStart, date)
-}
-
 func runOptimize(cmd *cobra.Command, args []string) error {
 	if err := projections.SetProjectionSystem(projectionSystem); err != nil {
 		return err
@@ -304,6 +282,15 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		prog.Logf("WARNING: could not get current period (%v) — using %s only", periodErr, projDisplayName[projectionSystem])
 	} else {
 		prog.Logf("current period: %d", currentPeriod)
+	}
+
+	// Authoritative per-date period lookup for the apply path below (see
+	// resolveDatePeriod's call site) — Fantrax's own date ranges per period,
+	// immune to mid-season inserted daily periods. A fetch failure just means
+	// fantrax.ResolvePeriod falls through to its anchor/day-math tiers.
+	periods, _, _, periodsErr := ft.GetScoringPeriodsAndTeams()
+	if periodsErr != nil {
+		prog.Logf("WARNING: could not fetch authoritative scoring periods (%v) — date→period resolution falls back to anchor/day-math", periodsErr)
 	}
 
 	// --- Hitter projections (shared across dates) ---
@@ -615,7 +602,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		i, date := i, date
 		g.Go(func() error {
 			isToday := date.Equal(today)
-			period := resolveDatePeriod(currentPeriod, periodErr, seasonStart, today, date)
+			period := fantrax.ResolvePeriod(periods, currentPeriod, seasonStart, today, date)
 
 			var warnings []string
 
