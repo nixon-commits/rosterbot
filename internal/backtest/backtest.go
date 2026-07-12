@@ -198,8 +198,8 @@ func optimizeHitters(players []fantrax.DayPlayerFP, slots []fantrax.Slot) optimi
 
 // optimizePitchers runs the pitcher optimizer with a hindsight source. All
 // pitchers who actually appeared in a game are treated as "probable starters"
-// if they're SP-eligible — that way the optimizer doesn't apply the 0.10x
-// non-starter discount and can rank them by actual FPts.
+// if they're SP-eligible — that way the optimizer doesn't apply
+// optimizer.NonStarterSPDiscount and can rank them by actual FPts.
 func optimizePitchers(players []fantrax.DayPlayerFP, slots []fantrax.Slot) optimizer.PitcherResult {
 	roster := toPlayers(players)
 	playing := teamsWithGames(players)
@@ -244,10 +244,11 @@ func hitterOptimalPts(r optimizer.Result) float64 {
 }
 
 // pitcherOptimalPts is the pitcher analogue. In backtest the hindsight source
-// marks every SP who actually appeared as IsStarter=true, so the 0.10x
-// non-starter discount does not apply to hindsight-optimal pitchers. We still
-// apply it to any residual SP-eligible pitchers placed in active slots without
-// IsStarter set (e.g. an SP whose team played but who didn't actually pitch).
+// marks every SP who actually appeared as IsStarter=true, so
+// optimizer.NonStarterSPDiscount does not apply to hindsight-optimal
+// pitchers. We still apply it to any residual SP-eligible pitchers placed in
+// active slots without IsStarter set (e.g. an SP whose team played but who
+// didn't actually pitch).
 func pitcherOptimalPts(r optimizer.PitcherResult) float64 {
 	benched, activated := lineupSets(r.ToBench, r.ToActivate)
 	var total float64
@@ -259,7 +260,7 @@ func pitcherOptimalPts(r optimizer.PitcherResult) float64 {
 		if sp.IsStarter || isRP {
 			total += sp.ExpectedPts
 		} else {
-			total += sp.ExpectedPts * 0.10
+			total += sp.ExpectedPts * optimizer.NonStarterSPDiscount
 		}
 	}
 	return total
