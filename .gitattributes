@@ -1,0 +1,15 @@
+# Beads writes these JSONL exports on every branch operation (its
+# post-checkout / post-merge / pre-commit hooks re-export from the embedded
+# Dolt DB). They are a *passive export* — the source of truth is the Dolt DB,
+# synced between machines via `sync.remote` git refs, not these files
+# (.beads/config.yaml has `no-db: false`). Because each branch regenerates them
+# independently, a plain line-merge conflicts on essentially every PR.
+#
+# `merge=union` tells git to take both sides' lines instead of raising a
+# conflict, so a merge never blocks on them. beads' post-merge hook then
+# immediately re-exports the correct, deduplicated state from Dolt, so any
+# transient duplicate lines from the union are overwritten right away. Safe
+# specifically because this repo is embedded-Dolt mode (jsonl is export-only,
+# never the import source during normal ops).
+.beads/issues.jsonl merge=union
+.beads/interactions.jsonl merge=union
