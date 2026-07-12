@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
-	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/teams"
 )
 
 var mlbScheduleURL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&hydrate=team&date=%s"
@@ -107,8 +107,8 @@ func (c *Client) TeamsPlayingOn(date time.Time) (map[string]bool, error) {
 	playing := make(map[string]bool)
 	for _, d := range payload.Dates {
 		for _, g := range d.Games {
-			playing[projections.NormalizeTeam(g.Teams.Away.Team.Abbreviation)] = true
-			playing[projections.NormalizeTeam(g.Teams.Home.Team.Abbreviation)] = true
+			playing[teams.Normalize(g.Teams.Away.Team.Abbreviation)] = true
+			playing[teams.Normalize(g.Teams.Home.Team.Abbreviation)] = true
 		}
 	}
 	return playing, nil
@@ -126,8 +126,8 @@ func (c *Client) OpponentsOn(date time.Time) (map[string]string, error) {
 	opp := make(map[string]string)
 	for _, d := range payload.Dates {
 		for _, g := range d.Games {
-			away := projections.NormalizeTeam(g.Teams.Away.Team.Abbreviation)
-			home := projections.NormalizeTeam(g.Teams.Home.Team.Abbreviation)
+			away := teams.Normalize(g.Teams.Away.Team.Abbreviation)
+			home := teams.Normalize(g.Teams.Home.Team.Abbreviation)
 			if away != "" {
 				opp[away] = home
 			}
@@ -152,8 +152,8 @@ func (c *Client) LockedTeams(date time.Time) (map[string]bool, error) {
 		for _, g := range d.Games {
 			state := g.Status.AbstractGameState
 			if state == "Live" || state == "Final" {
-				locked[projections.NormalizeTeam(g.Teams.Away.Team.Abbreviation)] = true
-				locked[projections.NormalizeTeam(g.Teams.Home.Team.Abbreviation)] = true
+				locked[teams.Normalize(g.Teams.Away.Team.Abbreviation)] = true
+				locked[teams.Normalize(g.Teams.Home.Team.Abbreviation)] = true
 			}
 		}
 	}
@@ -249,8 +249,8 @@ func (c *Client) BenchedPlayers(date time.Time, rosterPlayers map[string]string)
 			if g.Lineups == nil {
 				continue
 			}
-			homeTeam := projections.NormalizeTeam(g.Teams.Home.Team.Abbreviation)
-			awayTeam := projections.NormalizeTeam(g.Teams.Away.Team.Abbreviation)
+			homeTeam := teams.Normalize(g.Teams.Home.Team.Abbreviation)
+			awayTeam := teams.Normalize(g.Teams.Away.Team.Abbreviation)
 
 			if len(g.Lineups.HomePlayers) > 0 {
 				starters := make(map[string]bool)
@@ -293,8 +293,8 @@ func (c *Client) GameVenues(date time.Time) (map[string]string, error) {
 	venues := make(map[string]string)
 	for _, d := range payload.Dates {
 		for _, g := range d.Games {
-			home := projections.NormalizeTeam(g.Teams.Home.Team.Abbreviation)
-			away := projections.NormalizeTeam(g.Teams.Away.Team.Abbreviation)
+			home := teams.Normalize(g.Teams.Home.Team.Abbreviation)
+			away := teams.Normalize(g.Teams.Away.Team.Abbreviation)
 			venues[home] = home
 			venues[away] = home
 		}

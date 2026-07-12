@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/teams"
 )
 
 var mlbTransactionsURL = "https://statsapi.mlb.com/api/v1/transactions?startDate=%s&endDate=%s"
@@ -55,7 +56,7 @@ func FetchTransactionAlerts(
 	var alerts []ProspectAlert
 	for _, txn := range payload.Transactions {
 		name := projections.NormalizeName(txn.Person.FullName)
-		team := projections.NormalizeTeam(txn.ToTeam.Abbreviation)
+		team := teams.Normalize(txn.ToTeam.Abbreviation)
 		rank := rankings[name]
 
 		switch txn.TypeCode {

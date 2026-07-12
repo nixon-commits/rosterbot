@@ -14,6 +14,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/teams"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -42,7 +43,7 @@ const gameLogTTL = time.Hour
 func resolveMLBPlayerID(name, team string) (int, bool) {
 	fc := cache.New[int](performanceCacheDir, playerIDTTL)
 	normName := projections.NormalizeName(name)
-	normTeam := strings.ToLower(projections.NormalizeTeam(team))
+	normTeam := strings.ToLower(teams.Normalize(team))
 	key := cache.Key("mlb-player-id", normName, normTeam)
 
 	id, err := fc.Get(key, func() (int, error) {
@@ -93,7 +94,7 @@ func fetchMLBPlayerID(name, team, normName, normTeam string) (int, bool) {
 		if pName != normName {
 			continue
 		}
-		pTeam := strings.ToLower(projections.NormalizeTeam(p.CurrentTeam.Abbreviation))
+		pTeam := strings.ToLower(teams.Normalize(p.CurrentTeam.Abbreviation))
 		if pTeam == normTeam {
 			return p.ID, true
 		}

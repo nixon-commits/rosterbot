@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
+	"github.com/nixon-commits/rosterbot/internal/teams"
 	"github.com/pmurley/go-fantrax/auth_client"
 	"github.com/pmurley/go-fantrax/models"
 )
@@ -368,7 +369,7 @@ func playerGSFromTables(tables []models.RosterTable) (map[string]playerGSSnapsho
 				GS:      int(math.Round(val)),
 				FPts:    fpts,
 				Name:    row.Scorer.Name,
-				MLBTeam: row.Scorer.TeamShortName,
+				MLBTeam: teams.Normalize(row.Scorer.TeamShortName),
 				Active:  row.StatusID == "1",
 			}
 		}

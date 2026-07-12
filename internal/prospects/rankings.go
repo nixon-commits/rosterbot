@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
-	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/teams"
 )
 
 // fgProspectURL is a var so tests can override it.
@@ -71,7 +71,7 @@ func (s *FanGraphsRankingSource) GetTopProspects(season int) ([]RankedProspect, 
 		}
 		result = append(result, RankedProspect{
 			Name:      row.PlayerName,
-			MLBTeam:   projections.NormalizeTeam(row.Team),
+			MLBTeam:   teams.Normalize(row.Team),
 			Position:  pos,
 			Rank:      row.OvrRank,
 			FV:        row.FV,

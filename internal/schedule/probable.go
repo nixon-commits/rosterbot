@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/playername"
-	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/teams"
 )
 
 var mlbProbablePitcherURL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&hydrate=probablePitcher,team&date=%s"
@@ -103,10 +103,10 @@ func (c *Client) fetchProbableStarters(date time.Time) (map[string]string, error
 	for _, d := range payload.Dates {
 		for _, g := range d.Games {
 			if pp := g.Teams.Away.ProbablePitcher; pp != nil && pp.FullName != "" {
-				starters[normalizePitcherName(pp.FullName)] = projections.NormalizeTeam(g.Teams.Away.Team.Abbreviation)
+				starters[normalizePitcherName(pp.FullName)] = teams.Normalize(g.Teams.Away.Team.Abbreviation)
 			}
 			if pp := g.Teams.Home.ProbablePitcher; pp != nil && pp.FullName != "" {
-				starters[normalizePitcherName(pp.FullName)] = projections.NormalizeTeam(g.Teams.Home.Team.Abbreviation)
+				starters[normalizePitcherName(pp.FullName)] = teams.Normalize(g.Teams.Home.Team.Abbreviation)
 			}
 		}
 	}

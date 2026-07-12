@@ -7,6 +7,11 @@ import (
 	"github.com/pmurley/go-fantrax/models"
 )
 
+func date(s string) time.Time {
+	t, _ := time.Parse("2006-01-02", s)
+	return t
+}
+
 func TestFindJustEndedPeriod(t *testing.T) {
 	periods := []ScoringPeriod{
 		{Number: 1, Caption: "Scoring Period 1", EndDate: time.Date(2026, 3, 29, 0, 0, 0, 0, time.UTC)},
@@ -74,6 +79,45 @@ func TestFindCurrentPeriod(t *testing.T) {
 	p = FindCurrentPeriod(periods, today)
 	if p != nil {
 		t.Errorf("expected nil, got period %d", p.Number)
+	}
+}
+
+// TestFindCurrentPeriod_MergedAllStarBreakPeriod locks in the shape of the
+// live 2026 data verified for rosterbot-2bl: Fantrax merges the All-Star
+// break into the following week under one Scoring Period (16, spanning
+// 2026-07-13 to 2026-07-26 — 14 days, not 7). FindCurrentPeriod's plain
+// date-range containment check needs no special-casing for this since it
+// doesn't assume a fixed week length, unlike the old
+// GetMatchupWeekNumberForDate positional count this replaced in
+// cmd/optimize.go's GS-budget block.
+func TestFindCurrentPeriod_MergedAllStarBreakPeriod(t *testing.T) {
+	periods := []ScoringPeriod{
+		{Number: 14, Caption: "Scoring Period 14", StartDate: date("2026-06-29"), EndDate: date("2026-07-05")},
+		{Number: 15, Caption: "Scoring Period 15", StartDate: date("2026-07-06"), EndDate: date("2026-07-12")},
+		{Number: 16, Caption: "Scoring Period 16", StartDate: date("2026-07-13"), EndDate: date("2026-07-26")},
+		{Number: 17, Caption: "Scoring Period 17", StartDate: date("2026-07-27"), EndDate: date("2026-08-02")},
+	}
+
+	tests := []struct {
+		name  string
+		today time.Time
+		want  int
+	}{
+		{"first day of merged period", date("2026-07-13"), 16},
+		{"deep in the All-Star break itself", date("2026-07-19"), 16},
+		{"last day of merged period", date("2026-07-26"), 16},
+		{"day after merged period rolls to 17", date("2026-07-27"), 17},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := FindCurrentPeriod(periods, tt.today)
+			if p == nil {
+				t.Fatalf("expected period %d, got nil", tt.want)
+			}
+			if p.Number != tt.want {
+				t.Errorf("expected period %d, got %d", tt.want, p.Number)
+			}
+		})
 	}
 }
 
