@@ -12,6 +12,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/positions"
 	"github.com/nixon-commits/rosterbot/internal/scoring"
+	"github.com/nixon-commits/rosterbot/internal/teams"
 	gofantrax "github.com/pmurley/go-fantrax"
 	"github.com/pmurley/go-fantrax/auth_client"
 	"github.com/pmurley/go-fantrax/models"
@@ -477,7 +478,7 @@ func (c *Client) fetchAvailableProspects() ([]Player, error) {
 		players = append(players, Player{
 			ID:            pp.PlayerID,
 			Name:          pp.Name,
-			MLBTeam:       pp.MLBTeamShortName,
+			MLBTeam:       teams.Normalize(pp.MLBTeamShortName),
 			Positions:     pp.Positions,
 			PosShortNames: pp.PosShortNames,
 			InMinors:      true,
@@ -592,7 +593,7 @@ func (c *Client) GetMinorsEligiblePool() ([]ProspectPoolPlayer, error) {
 			Player: Player{
 				ID:            pp.PlayerID,
 				Name:          pp.Name,
-				MLBTeam:       pp.MLBTeamShortName,
+				MLBTeam:       teams.Normalize(pp.MLBTeamShortName),
 				Positions:     pp.Positions,
 				PosShortNames: pp.PosShortNames,
 				InMinors:      true,
@@ -732,7 +733,7 @@ func toPlayer(rp models.RosterPlayer) Player {
 	return Player{
 		ID:             rp.PlayerID,
 		Name:           rp.Name,
-		MLBTeam:        rp.TeamShortName,
+		MLBTeam:        teams.Normalize(rp.TeamShortName),
 		Positions:      rp.Positions,
 		PosShortNames:  rp.PosShortNames,
 		RosterPosition: rp.RosterPosition,
