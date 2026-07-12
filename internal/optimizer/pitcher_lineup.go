@@ -9,6 +9,15 @@ import (
 	"github.com/pmurley/go-fantrax/auth_client"
 )
 
+// NonStarterSPDiscount is the value multiplier applied to an SP-eligible
+// pitcher whose team plays but who isn't a confirmed probable starter. 5%,
+// the upper end of a 3-5% target range: a high-projection starter's
+// discounted value (e.g. a 20pt/G ace -> 1.0) stays below a typical rostered
+// RP's full value instead of outranking it, while staying nonzero so a
+// likely-but-unconfirmed starter isn't valued at zero. Exported so
+// internal/backtest's hindsight scoring mirrors the same discount.
+const NonStarterSPDiscount = 0.05
+
 // ScoredPitcher pairs a pitcher with their expected fantasy points per game.
 type ScoredPitcher struct {
 	Player      fantrax.Player
@@ -55,8 +64,8 @@ func OptimizePitcherLineup(
 
 	// Convert to ScoredPlayer for slot assignment.
 	// Non-starting SPs whose team plays are eligible but unlikely to
-	// pitch a full game. Discount their value to 10% so RPs and probable
-	// starters are preferred, while non-starters still fill empty slots.
+	// pitch a full game. Discount their value so RPs and probable starters
+	// are preferred, while non-starters still fill empty slots.
 	var generic []ScoredPlayer
 	for _, sp := range scored {
 		if !sp.HasGame {
@@ -64,7 +73,7 @@ func OptimizePitcherLineup(
 		}
 		pts := sp.ExpectedPts
 		if !sp.IsStarter && (isSPEligible(sp.Player.Positions) || strings.Contains(sp.Player.PosShortNames, "SP")) {
-			pts *= 0.10
+			pts *= NonStarterSPDiscount
 		}
 		generic = append(generic, ScoredPlayer{
 			Player:      sp.Player,
@@ -208,9 +217,9 @@ func scorePitcherRoster(
 				}
 			} else {
 				// No probable data (future date/TBD): SP has a game if team plays
-				// but is NOT marked as a confirmed starter. The 0.10x non-starter
-				// discount applies, so RPs (full value) are preferred for limited
-				// P slots. The daily run corrects this when probables are announced.
+				// but is NOT marked as a confirmed starter. The NonStarterSPDiscount
+				// applies, so RPs (full value) are preferred for limited P slots.
+				// The daily run corrects this when probables are announced.
 				hasGame = teamPlays
 			}
 		} else {
