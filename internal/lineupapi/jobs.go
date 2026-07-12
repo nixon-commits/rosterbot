@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Param describes one tunable flag the app can present as a form field and the
@@ -290,3 +291,48 @@ type JobRunner interface {
 
 // commandString renders args for display.
 func commandString(args []string) string { return strings.Join(args, " ") }
+
+// maxJobDuration bounds how long a RUNNING ledger entry is trusted as
+// genuinely still in-flight. entrypoint.sh only flips a run's status to
+// SUCCESS/FAILED after the bot command exits — a hard crash (OOM kill, task
+// stopped) before that point leaves the entry RUNNING forever with nothing
+// to reap it. Past this bound a RUNNING entry is treated as stale/abandoned
+// rather than live, so a single crashed task can't permanently block manual
+// triggers for that job name. Generously above every job's real runtime
+// (single-digit minutes at most).
+const maxJobDuration = 2 * time.Hour
+
+// inFlightRun returns the most recent RUNNING run of the given job name
+// still within maxJobDuration of now, or nil if none. Matches on the run
+// Command's first token (the base job name, e.g. "claims"), ignoring flags —
+// the race this guards against (e.g. two concurrent claims runs reading the
+// same cursor before either writes) isn't specific to one param combination.
+//
+// Best-effort: a nil RunStore or a List error skips the check (fail-open)
+// rather than blocking a legitimate manual trigger on a ledger read hiccup —
+// this is a race-reduction guard, not a strict distributed lock.
+func inFlightRun(ctx context.Context, runs RunStore, name string, now time.Time) *Run {
+	if runs == nil {
+		return nil
+	}
+	list, err := runs.List(ctx, defaultRunsLimit)
+	if err != nil {
+		return nil
+	}
+	for i := range list {
+		r := &list[i]
+		if r.Status != "RUNNING" {
+			continue
+		}
+		fields := strings.Fields(r.Command)
+		if len(fields) == 0 || fields[0] != name {
+			continue
+		}
+		started, err := time.Parse(time.RFC3339, r.StartedAt)
+		if err != nil || now.Sub(started) > maxJobDuration {
+			continue
+		}
+		return r
+	}
+	return nil
+}
