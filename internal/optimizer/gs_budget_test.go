@@ -270,6 +270,93 @@ func TestApplyGSGate_ZeroRemaining_SuppressesAll(t *testing.T) {
 	}
 }
 
+// TestApplyGSGate_FractionalEstimateDoesNotOverSuppressToday is the
+// regression test for the ceil-rounding bug: a small fractional future
+// estimate (e.g. 0.2 expected starts) used to become one FULL-value
+// placeholder entry (ceil(0.2)=1), competing at full roster-mean value
+// against today's certain start. It should instead compete at only its
+// fractional share of that value.
+func TestApplyGSGate_FractionalEstimateDoesNotOverSuppressToday(t *testing.T) {
+	scored := []ScoredPitcher{
+		{Player: fantrax.Player{ID: "today", PosShortNames: "SP"}, ExpectedPts: 8, IsStarter: true},
+		// Bench SP feeding the roster-mean placeholder value (20).
+		{Player: fantrax.Player{ID: "bench", PosShortNames: "SP"}, ExpectedPts: 20},
+	}
+	budget := &GSBudget{
+		Limit:   12,
+		Used:    11,
+		Today:   date("2026-04-16"),
+		WeekEnd: date("2026-04-19"),
+		Forecast: []DayForecast{
+			// 0.2 expected starts, no probables announced yet.
+			{Date: date("2026-04-17"), Estimated: 0.2},
+		},
+	}
+	// remaining=1, totalPlanned=1(today)+0.2(estimated)=1.2 > remaining → gate engages.
+	// Old (ceil-rounded) code: 1 placeholder entry at full mean (20) beats today (8) → today cut.
+	// Fixed code: placeholder entry discounted to 20*0.2=4.0 → today (8) wins.
+	result := applyGSGate(scored, budget)
+	if !result[0].IsStarter {
+		t.Error("today's 8pt starter should survive a 0.2-expected-start future claim, not lose to a full-value phantom placeholder")
+	}
+}
+
+// TestApplyGSGate_NearTiePrefersTodayOverEstimated extends the existing
+// exact-tie "prefer today" rule to near-ties: an estimated (uncertain)
+// future start only slightly ahead of today's value on paper (within the
+// certainty margin) should not outrank a start that's already happening.
+func TestApplyGSGate_NearTiePrefersTodayOverEstimated(t *testing.T) {
+	scored := []ScoredPitcher{
+		{Player: fantrax.Player{ID: "today", PosShortNames: "SP"}, ExpectedPts: 10, IsStarter: true},
+		// Bench SP sets roster-mean placeholder to 10.5 — 5% above today's
+		// value, inside the certainty margin but NOT an exact tie.
+		{Player: fantrax.Player{ID: "bench", PosShortNames: "SP"}, ExpectedPts: 10.5},
+	}
+	budget := &GSBudget{
+		Limit:   12,
+		Used:    11,
+		Today:   date("2026-04-16"),
+		WeekEnd: date("2026-04-19"),
+		Forecast: []DayForecast{
+			{Date: date("2026-04-17"), Estimated: 1.0},
+		},
+	}
+	// remaining=1, totalPlanned=1(today)+1.0(estimated)=2.0 > remaining → gate engages.
+	// Estimated entry (10.5) is only ~5% above today (10) — inside the margin,
+	// so today should still win despite having the nominally lower value.
+	result := applyGSGate(scored, budget)
+	if !result[0].IsStarter {
+		t.Error("today's start should beat an estimated future start only marginally ahead in value (near-tie)")
+	}
+}
+
+// TestApplyGSGate_ConfirmedNearTieUnaffected locks in that the near-tie
+// leniency added for estimated future starts does NOT extend to confirmed
+// future starts — those remain on the original exact-tie-only rule.
+func TestApplyGSGate_ConfirmedNearTieUnaffected(t *testing.T) {
+	scored := []ScoredPitcher{
+		{Player: fantrax.Player{ID: "today", PosShortNames: "SP"}, ExpectedPts: 10, IsStarter: true},
+	}
+	budget := &GSBudget{
+		Limit:   12,
+		Used:    11,
+		Today:   date("2026-04-16"),
+		WeekEnd: date("2026-04-19"),
+		Forecast: []DayForecast{
+			// Confirmed (not estimated) future start, 5% above today — inside
+			// what would be the estimated-only near-tie margin.
+			{Date: date("2026-04-17"), ConfirmedStarters: []float64{10.5}},
+		},
+	}
+	// remaining=1, totalPlanned=2 (1 today + 1 confirmed future) > remaining.
+	// Confirmed future (10.5) is strictly higher than today (10) with no
+	// near-tie leniency for confirmed starts, so it wins the slot outright.
+	result := applyGSGate(scored, budget)
+	if result[0].IsStarter {
+		t.Error("confirmed future start narrowly ahead of today should still win — no near-tie leniency for confirmed starts")
+	}
+}
+
 func TestOptimizePitcherLineup_GSBudgetCapsStarter(t *testing.T) {
 	roster := []fantrax.Player{
 		{ID: "p1", Name: "Ace SP", MLBTeam: "NYY", Positions: []string{auth_client.PosSP}, PosShortNames: "SP", Status: "Reserve"},
