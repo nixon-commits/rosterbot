@@ -36,7 +36,7 @@ func init() {
 	backtestCmd.Flags().BoolVar(&backtestMatchup, "matchup", false, "backtest the most recently completed matchup week")
 	backtestCmd.Flags().BoolVar(&backtestSkipProjections, "skip-projections", false, "skip the projection-accuracy analysis (faster)")
 	backtestCmd.Flags().BoolVar(&backtestJSON, "json", false, "emit machine-readable JSON instead of a human report")
-	backtestCmd.Flags().BoolVar(&backtestRecencyExperiment, "recency-experiment", false, "compare YTD vs 14d/30d/decay recency strategies by lineup Gap (hitters only)")
+	backtestCmd.Flags().BoolVar(&backtestRecencyExperiment, "recency-experiment", false, "compare YTD vs 14d/30d/decay recency strategies by lineup Gap (hitters + pitchers)")
 	rootCmd.AddCommand(backtestCmd)
 }
 
@@ -103,7 +103,7 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 		if err := ft.BackfillDailyFPts(seriesDays); err != nil {
 			fmt.Fprintf(os.Stderr, "WARNING: recency series backfill: %v\n", err)
 		}
-		return runRecencyExperiment(ft, days, seriesDays, hitterSlots, hitterScoring, cfg.BlendMinGP)
+		return runRecencyExperiment(ft, days, seriesDays, hitterSlots, pitcherSlots, hitterScoring, cfg.BlendMinGP)
 	}
 
 	lineup := backtest.RunLineupAnalysis(days, hitterSlots, pitcherSlots)
@@ -218,6 +218,7 @@ func runRecencyExperiment(
 	gradeDays []fantrax.DayRoster,
 	seriesDays []fantrax.DayRoster,
 	hitterSlots []fantrax.Slot,
+	pitcherSlots []fantrax.Slot,
 	hitterScoring fantrax.ScoringWeights,
 	blendMinGP int,
 ) error {
@@ -278,6 +279,94 @@ func runRecencyExperiment(
 	fmt.Printf("  base = depthcharts-ros with no YTD blend at all, isolating whether blending recent form on top of an\n")
 	fmt.Printf("  already-in-season-updated RoS projection helps or hurts (MAE/bias are n/a for base: ChainedSource doesn't\n")
 	fmt.Printf("  implement PtsPerGameSource, so only realized/mean-gap are comparable for that row).\n")
+	printVariantTable(results)
+
+	return runPitcherRecencyExperiment(ft, gradeDays, seriesDays, pitcherSlots, blendMinGP)
+}
+
+// runPitcherRecencyExperiment is the pitcher analogue of the hitter comparison
+// above: it replays the pitcher optimizer under each recency strategy over the
+// same window and prints realized/mean-gap/MAE/bias. The recency signal is
+// built from the per-appearance pitcher FPts series; the base pitcher projection
+// (depthcharts-ros + rolling fallback) is shared across variants so only the
+// recency blend differs. Production is unaffected — backtest-only.
+func runPitcherRecencyExperiment(
+	ft *fantrax.Client,
+	gradeDays []fantrax.DayRoster,
+	seriesDays []fantrax.DayRoster,
+	pitcherSlots []fantrax.Slot,
+	blendMinGP int,
+) error {
+	projTTL := cacheTTL(projections.ProjectionCacheTTL)
+	fgPitSrc, _, err := projections.LoadPitcherProjections("depthcharts-ros", cacheDir, projTTL)
+	if err != nil {
+		return fmt.Errorf("load base pitcher projections: %w", err)
+	}
+	pitRolling := projections.NewPitcherRollingSource()
+	pitBaseSrc := projections.NewPitcherChainedSource(fgPitSrc, pitRolling)
+
+	pitcherScoring, err := ft.GetPitcherScoringWeights()
+	if err != nil {
+		return fmt.Errorf("get pitcher scoring weights: %w", err)
+	}
+
+	// Roster name→ID and ID→positions maps for role-aware pitcher blending.
+	pitcherRoster, err := ft.GetPitcherRoster()
+	if err != nil {
+		return fmt.Errorf("pitcher roster: %w", err)
+	}
+	pitNameToID := make(map[string]string)
+	pitPlayerPos := make(map[string][]string)
+	for _, p := range pitcherRoster {
+		pitNameToID[projections.NormalizeName(p.Name)] = p.ID
+		pitPlayerPos[p.ID] = p.Positions
+	}
+
+	series := backtest.BuildPitcherSeries(seriesDays)
+
+	mkVariant := func(name string, w projections.WeightFunc) backtest.PitcherStrategyVariant {
+		return backtest.PitcherStrategyVariant{
+			Name: name,
+			Build: func(asOf time.Time) (projections.PitcherSource, error) {
+				recent := make(map[string]fantrax.RecentStat, len(series))
+				for id, s := range series {
+					recent[id] = projections.WeightedRecent(s, asOf, w)
+				}
+				return projections.NewPitcherBlendedSource(pitBaseSrc, recent, pitcherScoring, pitNameToID, pitPlayerPos, blendMinGP), nil
+			},
+		}
+	}
+
+	variants := []backtest.PitcherStrategyVariant{
+		{
+			Name: "base",
+			Build: func(asOf time.Time) (projections.PitcherSource, error) {
+				return pitBaseSrc, nil
+			},
+		},
+		mkVariant("ytd", projections.YTDWeight),
+		mkVariant("w14", projections.WindowWeight(14)),
+		mkVariant("w30", projections.WindowWeight(30)),
+		mkVariant("decay21", projections.DecayWeight(21)),
+	}
+
+	results, err := backtest.RunPitcherStrategyComparison(variants, gradeDays, pitcherSlots, pitcherScoring)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\nRecency strategy comparison (pitchers, %d days)\n", len(gradeDays))
+	fmt.Printf("  base = depthcharts-ros with no recent blend at all. Recency signal is per-appearance pitcher FPts\n")
+	fmt.Printf("  (SP per-start, RP per-outing); role-aware stabilization applies (SP 15 GP, RP 25 GP). MAE/bias are\n")
+	fmt.Printf("  n/a for base: PitcherChainedSource doesn't implement PitcherPtsPerGameSource.\n")
+	printVariantTable(results)
+	return nil
+}
+
+// printVariantTable renders a VariantResult table (shared by hitter + pitcher
+// comparisons), showing "n/a" for MAE/bias when the variant's source doesn't
+// expose per-game projections.
+func printVariantTable(results []backtest.VariantResult) {
 	fmt.Printf("%-10s %12s %10s %8s %8s\n", "mode", "realized", "mean gap", "MAE", "bias")
 	for _, r := range results {
 		mae, bias := "n/a", "n/a"
@@ -287,5 +376,4 @@ func runRecencyExperiment(
 		}
 		fmt.Printf("%-10s %12.1f %10.2f %8s %8s\n", r.Name, r.RealizedPts, r.MeanGap, mae, bias)
 	}
-	return nil
 }

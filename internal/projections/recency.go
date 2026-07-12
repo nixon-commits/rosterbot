@@ -46,6 +46,33 @@ func DecayWeight(halfLifeDays float64) WeightFunc {
 	}
 }
 
+// WindowedRecent builds a per-player RecentStat map from a range of daily
+// rosters, applying weight w as of asOf. It groups each player's per-day FPts
+// into a DayFP series and collapses it via WeightedRecent, keeping only
+// pitchers when wantPitchers is true, only hitters otherwise. Used by the
+// production optimizer to feed a bounded rolling-window recency signal into the
+// blend (the unbounded-YTD alternative reads a single cumulative snapshot).
+func WindowedRecent(days []fantrax.DayRoster, asOf time.Time, w WeightFunc, wantPitchers bool) map[string]fantrax.RecentStat {
+	series := make(map[string][]DayFP)
+	for _, d := range days {
+		for _, p := range d.Players {
+			if p.IsPitcher != wantPitchers {
+				continue
+			}
+			series[p.PlayerID] = append(series[p.PlayerID], DayFP{
+				Date:   d.Date,
+				FP:     p.FPts,
+				Played: p.HadGame,
+			})
+		}
+	}
+	out := make(map[string]fantrax.RecentStat, len(series))
+	for id, s := range series {
+		out[id] = WeightedRecent(s, asOf, w)
+	}
+	return out
+}
+
 // WeightedRecent collapses a player's per-day series into a RecentStat as of
 // evalDate, using only games strictly before evalDate (leakage guard).
 //
