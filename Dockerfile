@@ -25,12 +25,20 @@ FROM debian:bookworm-slim
 # started crashing (SIGTRAP) on the CodeBuild Graviton (arm64) build host during
 # this exact headless smoke test — 149.0.7827.196-1~deb12u1 had built clean days
 # earlier with no Dockerfile change. Debian doesn't keep old point versions
-# around once superseded, so once broken there's no unpinned way back; 147.x
-# below is the newest version still available from plain bookworm/main (not
-# -security) as of the incident. Bumping this later must be re-validated on the
-# actual CI build host — this smoke test can pass locally (e.g. Apple Silicon)
-# while still crashing on Graviton, which is exactly what happened here.
-ARG CHROMIUM_VERSION=147.0.7727.137-1~deb12u1
+# around once superseded, so once broken there's no unpinned way back.
+#
+# 2026-07-12: the 147.0.7727.137-1~deb12u1 fallback pinned during that incident
+# was itself dropped from the live bookworm/main repo (apt: "Version not found",
+# exit 100) and broke every build for ~5h. The only version now available in
+# plain bookworm/main is 150.0.7871.100-1~deb12u1 — a newer point release than
+# the .46 that SIGTRAP'd, so the arm64 crash may be fixed. It is validated by the
+# CI build host itself via the headless smoke test below: if .100 still crashes
+# on Graviton, the build fails loudly here (this smoke test can pass locally on
+# Apple Silicon while crashing on Graviton, which is exactly what bit us before).
+# If it fails, the next currently-available bookworm/main version is the only
+# way forward — snapshot.debian.org still carries the older validated binaries if
+# a permanent pin to a known-good version is ever preferred over chasing current.
+ARG CHROMIUM_VERSION=150.0.7871.100-1~deb12u1
 RUN apt-get update && apt-get install -y --no-install-recommends \
       chromium=${CHROMIUM_VERSION} chromium-common=${CHROMIUM_VERSION} chromium-sandbox=${CHROMIUM_VERSION} \
       ca-certificates tini curl \
