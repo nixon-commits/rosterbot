@@ -95,7 +95,7 @@ rosterbot backtest
 # Backtest a specific window
 rosterbot backtest --dates 2026-04-13:2026-04-19
 
-# Compare recency-weighting strategies (YTD vs 14d/30d/decay) by lineup Gap (hitters)
+# Compare recency-weighting strategies (YTD vs 14d/30d/decay) by lineup Gap (hitters + pitchers)
 rosterbot backtest --recency-experiment --dates 2026-05-01:2026-05-14
 
 # Archive today's projections so a future backtest can grade them exactly
@@ -212,15 +212,15 @@ Pitchers are scored based on probable starter data. SPs confirmed as starters ge
 
 ### Projection Blending
 
-Projections blend FanGraphs season projections with recent Fantrax scoring data using PA-based dynamic weights:
+Projections blend FanGraphs season projections with recent Fantrax scoring data using games-based dynamic weights. The recent signal is a **trailing 30-day window** for hitters and **season-to-date** for pitchers:
 
-| Season Point | Proj. Weight | Recent Weight |
+| Games in recent signal | Proj. Weight | Recent Weight |
 |---|---|---|
-| Early (4 GP) | 94% | 6% |
-| Mid-season (66 GP) | 50% | 50% |
-| Full season (150+ GP) | 30% (floor) | 70% |
+| Few (4) | 94% | 6% |
+| Many (66) | 50% | 50% |
+| Stabilized (150+) | 30% (floor) | 70% |
 
-Requires a minimum of 4 games played before recent stats are factored in. Falls back to 100% projection when no recent data is available.
+For **hitters**, "games in recent signal" counts only games within the trailing 30 days (caps around 26), so the recent weight in practice tops out near ~28% while reflecting recent form only. The 30-day window replaced unbounded season-to-date after a full-season backtest showed it produces ~1 more realized point per game each day (`backtest --recency-experiment`). For **pitchers**, it is season-to-date games with role-aware stabilization (SP reaches 50/50 at 15 GP, RP at 25 GP, base floor 35%); the recency choice was measured to be immaterial for pitchers, so they stay on season-to-date. Both require a minimum games-played (`BLEND_MIN_GP`, default 2) before recent stats factor in, and fall back to 100% projection when no recent data is available.
 
 Matchup adjustments (opposing pitcher FIP + platoon splits) are layered on top.
 

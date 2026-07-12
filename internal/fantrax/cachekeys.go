@@ -19,7 +19,6 @@ const (
 	keyMinorsRoster       = "fantrax-minors-roster"
 	keyPitcherGS          = "fantrax-pitcher-gs"
 	keyPlayerPool         = "fantrax-player-pool"
-	keyRecentStatsHitter  = "fantrax-recent-stats-hitter"
 	keyRecentStatsPitcher = "fantrax-recent-stats-pitcher"
 	keyRosterStats        = "fantrax-roster-stats"
 	keySeasonRange        = "fantrax-season-range"
