@@ -295,6 +295,38 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			Resources: jsii.Strings("arn:aws:iam::476646938644:role/cdk-hnb659fds-*"),
 		}))
 		awscdk.NewCfnOutput(stack, jsii.String("BuildProject"), &awscdk.CfnOutputProps{Value: project.ProjectName()})
+
+		// Pushover on every terminal build outcome (rosterbot-00j). An EventBridge
+		// rule on the project's "CodeBuild Build State Change" events targets a
+		// small Go lambda that reads the Pushover creds from SSM and posts. This
+		// catches every failure phase (install/pre_build/build/deploy) + success —
+		// unlike a buildspec curl, which never runs if install/pre_build fail.
+		buildNotifyFn := awscdklambdagoalpha.NewGoFunction(stack, jsii.String("BuildNotify"), &awscdklambdagoalpha.GoFunctionProps{
+			Entry:        jsii.String("../buildnotify"),
+			Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
+			Architecture: awslambda.Architecture_ARM_64(),
+			Timeout:      awscdk.Duration_Seconds(jsii.Number(10)),
+		})
+		buildNotifyFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Actions: jsii.Strings("ssm:GetParameter"),
+			Resources: jsii.Strings(
+				"arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/PUSHOVER_USER_KEY",
+				"arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/PUSHOVER_API_TOKEN",
+			),
+		}))
+		awsevents.NewRule(stack, jsii.String("BuildNotifyRule"), &awsevents.RuleProps{
+			EventPattern: &awsevents.EventPattern{
+				Source:     jsii.Strings("aws.codebuild"),
+				DetailType: jsii.Strings("CodeBuild Build State Change"),
+				Detail: &map[string]interface{}{
+					"project-name": []interface{}{project.ProjectName()},
+					"build-status": []interface{}{"SUCCEEDED", "FAILED", "STOPPED"},
+				},
+			},
+			Targets: &[]awsevents.IRuleTarget{
+				awseventstargets.NewLambdaFunction(buildNotifyFn, &awseventstargets.LambdaFunctionProps{}),
+			},
+		})
 	}
 
 	// --- Analysis Store: Glue table over analysis/grades + Athena workgroup ---

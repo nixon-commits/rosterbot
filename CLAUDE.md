@@ -193,8 +193,10 @@ When adding new commands, flags, env vars, or changing architecture, update `REA
 > **`docs/aws-deployment.md`** for operations, the EventBridge schedule mapping, image builds
 > (CodeBuild, gated `enableBuild`), the schedule gate (`schedulesEnabled`), and cutover/rollback.
 > The `claims` cursor is relocated to `.waivers/last-claims.json` via `CLAIMS_CURSOR_PATH` so it
-> rides the single-writer S3 `claims/` prefix. The section below is retained as historical
-> reference for how the jobs ran on GHA.
+> rides the single-writer S3 `claims/` prefix. A push to `main` also triggers a Pushover alert on
+> build success/failure via an EventBridge rule on the `Build` project's CodeBuild state-change
+> events → the `buildnotify/` Lambda (SUCCEEDED/FAILED/STOPPED, priority 0, personal ops channel).
+> The section below is retained as historical reference for how the jobs ran on GHA.
 
 **Auth in AWS** — every Fargate task syncs `.fantrax-cache/` from S3 `session/` before it runs and syncs it back after completion. The first task run after a stale cache may still do a chromedp browser login; subsequent tasks reuse the cached cookie.
 
