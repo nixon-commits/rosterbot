@@ -62,6 +62,14 @@ const METRICS = [
 
 function fmt(n){ return n.toLocaleString(); }
 
+// esc HTML-escapes DATA-derived strings before they are interpolated into
+// innerHTML. Team names are set by league members (adversarial input), so a
+// name like `<img src=x onerror=…>` must not execute when the page is viewed.
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
 // index[teamID][dt] -> series row
 function buildIndex(){
   const idx = {};
@@ -156,10 +164,10 @@ function render(){
 
   const rows = DATA.latest.map((r, i) => {
     const badge = r.logo
-      ? `<img class="logo" src="${r.logo}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'swatch',style:'background:${r.color}'}))"/>`
+      ? `<img class="logo" src="${esc(r.logo)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'swatch',style:'background:${r.color}'}))"/>`
       : `<span class="swatch" style="background:${r.color}"></span>`;
     return `<tr class="${i===0?"lead":""}">
-      <td><div class="team">${badge}<span>${r.name || r.team}</span></div></td>
+      <td><div class="team">${badge}<span>${esc(r.name || r.team)}</span></div></td>
       <td class="num">${fmt(r.total)}</td>
       <td class="num">${fmt(r.mlb)}</td>
       <td class="num">${fmt(r.minors)}</td>
