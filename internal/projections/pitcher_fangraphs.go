@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
 )
 
 var fangraphsPitchingURL = "https://www.fangraphs.com/api/projections?type=fangraphsdc&stats=pit&pos=all&team=0&players=0&lg=all"
@@ -210,6 +211,27 @@ func NewFanGraphsPitcherSourceFromCSV(path string) (*FanGraphsPitcherSource, err
 
 // Len returns the number of players in this source.
 func (s *FanGraphsPitcherSource) Len() int { return len(s.projections) }
+
+// AverageFPG returns the unweighted mean projected FP/game across every
+// pitcher in this source. Used as the shrinkage baseline in
+// PitcherBlendedSource's no-base-projection fallback (rosterbot-4h7), so a
+// pitcher this system doesn't cover regresses toward a league-average rate
+// instead of trusting a small recent sample at full weight.
+func (s *FanGraphsPitcherSource) AverageFPG(scoring fantrax.ScoringWeights) float64 {
+	var total float64
+	var n int
+	for _, proj := range s.projections {
+		if proj.G <= 0 {
+			continue
+		}
+		total += PitcherExpectedPtsFromProj(proj, scoring)
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	return total / float64(n)
+}
 
 // PitcherInfo returns pitcher FIP and IP-weighted league average FIP.
 func (s *FanGraphsPitcherSource) PitcherInfo() (fip map[string]float64, leagueAvgFIP float64) {

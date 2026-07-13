@@ -46,6 +46,17 @@ var (
 	// `shadow` command; empty for a normal optimize run.
 	captureSystemRoot string
 
+	// lastProjectionLoadResult records whether the most recent runOptimize
+	// call found the configured system's batting/pitching projections
+	// entirely unavailable (LoadResult.NoData). runOptimize's signature is
+	// fixed by cobra, so this package var is how the `shadow` command (which
+	// loops runOptimize once per system) observes per-system data
+	// availability to detect a provider outage (rosterbot-784 follow-up).
+	lastProjectionLoadResult struct {
+		HittersNoData  bool
+		PitchersNoData bool
+	}
+
 	// projDisplayName maps projection system flag values to display-friendly names.
 	projDisplayName = map[string]string{
 		"steamer":         "Steamer",
@@ -212,6 +223,8 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 	if pitLoadResult.NoData {
 		prog.Logf("WARNING: pitching projections unavailable — running on schedule + recent stats only")
 	}
+	lastProjectionLoadResult.HittersNoData = batLoadResult.NoData
+	lastProjectionLoadResult.PitchersNoData = pitLoadResult.NoData
 
 	prog.Header(projDisplayName[batLoadResult.System], formatDates(cfg.Dates), cfg.DryRun)
 
@@ -334,7 +347,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			for _, p := range hitterRoster {
 				nameToID[projections.NormalizeName(p.Name)] = p.ID
 			}
-			hitterProjSrc = projections.NewBlendedSource(baseSrc, recentStats, hitterScoring, nameToID, cfg.BlendMinGP)
+			hitterProjSrc = projections.NewBlendedSource(baseSrc, recentStats, hitterScoring, nameToID, cfg.BlendMinGP, fgSrc.AverageFPG(hitterScoring))
 		}
 	}
 
@@ -365,7 +378,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 				pitNameToID[projections.NormalizeName(p.Name)] = p.ID
 				pitPlayerPos[p.ID] = p.Positions
 			}
-			pitcherProjSrc = projections.NewPitcherBlendedSource(pitBaseSrc, recentPitStats, pitcherScoring, pitNameToID, pitPlayerPos, cfg.BlendMinGP)
+			pitcherProjSrc = projections.NewPitcherBlendedSource(pitBaseSrc, recentPitStats, pitcherScoring, pitNameToID, pitPlayerPos, cfg.BlendMinGP, fgPitSrc.AverageFPG(pitcherScoring))
 		}
 	}
 	prog.Done("Projections", "batting + pitching loaded")

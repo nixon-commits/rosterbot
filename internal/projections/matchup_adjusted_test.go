@@ -355,7 +355,7 @@ func TestMatchupAdjusted_FullChainComposability(t *testing.T) {
 
 	// Blended: no recent stats → falls back to 100% projection.
 	blended := NewBlendedSource(innerProj, map[string]fantrax.RecentStat{}, scoring,
-		map[string]string{}, 2)
+		map[string]string{}, 2, 0)
 
 	matchupAdj := NewMatchupAdjustedSource(
 		blended,

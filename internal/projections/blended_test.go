@@ -29,7 +29,7 @@ func TestBlendedSource_WithRecentStats(t *testing.T) {
 
 	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{
 		"player1": {FPtsPerGame: 2.0, GamesPlayed: 5},
-	}, scoring, map[string]string{"test player": "player1"}, 2)
+	}, scoring, map[string]string{"test player": "player1"}, 2, 0)
 
 	pts, ok := src.GetPtsPerGame("Test Player", "NYY", scoring)
 	if !ok {
@@ -48,7 +48,7 @@ func TestBlendedSource_NoRecentStats_FallsBackToBase(t *testing.T) {
 	// Base only: (20/100)*4 = 0.8
 
 	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{}, scoring,
-		map[string]string{"test player": "player1"}, 2)
+		map[string]string{"test player": "player1"}, 2, 0)
 
 	pts, ok := src.GetPtsPerGame("Test Player", "NYY", scoring)
 	if !ok {
@@ -61,17 +61,69 @@ func TestBlendedSource_NoRecentStats_FallsBackToBase(t *testing.T) {
 
 func TestBlendedSource_NoBaseProjection_ReturnsFalse(t *testing.T) {
 	inner := &stubSource{proj: map[string]*Projection{}}
-	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{}, nil, map[string]string{}, 2)
+	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{}, nil, map[string]string{}, 2, 0)
 	_, ok := src.GetPtsPerGame("Unknown Player", "NYY", fantrax.ScoringWeights{"HR": 4.0})
 	if ok {
 		t.Error("expected false for unknown player")
 	}
 }
 
+func TestBlendedSource_NoBaseProjection_SmallSample_ShrinksTowardBaseline(t *testing.T) {
+	// A call-up with no FanGraphs projection who went 2-for-2 with 2 HR in
+	// their first 2 games. Before rosterbot-4h7, this raw 2-game rate would
+	// be returned unshrunk (~13+ FP/G). It should instead land close to the
+	// league-average baseline, since 2 GP carries almost no signal.
+	inner := &stubSource{proj: map[string]*Projection{}}
+	scoring := fantrax.ScoringWeights{"HR": 4.0}
+	const baseline = 1.2 // a plausible league-average hitter FP/G
+
+	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{
+		"player1": {FPtsPerGame: 13.0, GamesPlayed: 2},
+	}, scoring, map[string]string{"call-up": "player1"}, 2, baseline)
+
+	pts, ok := src.GetPtsPerGame("Call-Up", "NYY", scoring)
+	if !ok {
+		t.Fatal("expected true")
+	}
+	// At 2 GP the shrinkage curve puts recent weight well under 10%
+	// (matches TestHitterBlendWeights_Progression: 4 GP ~= 6% recent).
+	if pts > baseline+1.5 {
+		t.Errorf("expected small-sample outlier pulled near baseline %.2f, got %.4f (raw recent was 13.0)", baseline, pts)
+	}
+	if pts <= baseline {
+		t.Errorf("expected some upward pull from the hot recent sample, got %.4f <= baseline %.2f", pts, baseline)
+	}
+}
+
+func TestBlendedSource_NoBaseProjection_LargeSample_LargelyUnaffected(t *testing.T) {
+	// A player with a full season of recent data but no base projection
+	// (e.g. no upstream coverage at all) should stay close to their own
+	// established rate, not get dragged toward the baseline.
+	inner := &stubSource{proj: map[string]*Projection{}}
+	scoring := fantrax.ScoringWeights{"HR": 4.0}
+	const baseline = 1.2
+	const establishedRate = 5.0
+
+	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{
+		"player1": {FPtsPerGame: establishedRate, GamesPlayed: 150},
+	}, scoring, map[string]string{"veteran": "player1"}, 2, baseline)
+
+	pts, ok := src.GetPtsPerGame("Veteran", "NYY", scoring)
+	if !ok {
+		t.Fatal("expected true")
+	}
+	// At 150 GP, recent weight is ~70% (30% base floor), so the result
+	// should sit meaningfully closer to the established rate than to the
+	// baseline, though not identical to raw (base floor still applies).
+	if pts < establishedRate*0.6 {
+		t.Errorf("expected largely unaffected result close to %.2f, got %.4f", establishedRate, pts)
+	}
+}
+
 func TestBlendedSource_GetProjection_Delegates(t *testing.T) {
 	proj := &Projection{G: 100, HR: 20}
 	inner := &stubSource{proj: map[string]*Projection{"test player": proj}}
-	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{}, nil, nil, 2)
+	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{}, nil, nil, 2, 0)
 	p, ok := src.GetProjection("Test Player", "NYY")
 	if !ok {
 		t.Fatal("expected projection found")
