@@ -5,81 +5,91 @@ import (
 	"testing"
 )
 
-// TestGSPeriodWalk_MergedAllStarBreakPeriod is the regression test for the
-// GetTeamGS bug (rosterbot-uv6): a merged multi-day scoring period (period
-// 16, 2026-07-13 to 2026-07-26) walked day-by-day via bare anchor arithmetic
-// resolves every day except the one nearest the anchor to a WRONG, unrelated
-// period number. gsPeriodWalk must resolve every day in the span to 16.
-func TestGSPeriodWalk_MergedAllStarBreakPeriod(t *testing.T) {
-	periods := []ScoringPeriod{
-		{Number: 14, Caption: "Scoring Period 14", StartDate: date("2026-06-29"), EndDate: date("2026-07-05")},
-		{Number: 15, Caption: "Scoring Period 15", StartDate: date("2026-07-06"), EndDate: date("2026-07-12")},
-		{Number: 16, Caption: "Scoring Period 16", StartDate: date("2026-07-13"), EndDate: date("2026-07-26")},
-		{Number: 17, Caption: "Scoring Period 17", StartDate: date("2026-07-27"), EndDate: date("2026-08-02")},
-	}
-	sp := periods[2] // period 16, the merged span
+// TestGSPeriodWalk_NormalWeekDailyNumbering is the regression test for the
+// rosterbot-uv6 mis-fix: GetTeamGS diffs consecutive *daily* YTD snapshots, so
+// the walk must return the daily period number for each calendar day (distinct
+// per day), NOT the weekly matchup "Scoring Period" number. A normal week
+// (period 15, 2026-07-06..07-12) anchored on today=07-13 / currentPeriod=111
+// resolves to 104..110 — one number per day. Returning [15,15,…] made every day
+// fetch the same snapshot and collapsed the tally to ~one day's worth.
+func TestGSPeriodWalk_NormalWeekDailyNumbering(t *testing.T) {
+	sp := ScoringPeriod{Number: 15, StartDate: date("2026-07-06"), EndDate: date("2026-07-12")}
 	seasonStart := date("2026-03-25")
-	today := date("2026-07-27") // day after period 16 ends
-	currentPeriod := 17
+	today := date("2026-07-13")
+	currentPeriod := 111 // Fantrax's authoritative current daily period on 07-13
 
-	got := gsPeriodWalk(sp, periods, currentPeriod, seasonStart, today)
+	got := gsPeriodWalk(sp, currentPeriod, seasonStart, today)
 
-	want := make([]int, 14) // 07-13 through 07-26 inclusive = 14 days
+	want := []int{104, 105, 106, 107, 108, 109, 110}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("walk must yield distinct daily periods per day, got %v want %v", got, want)
+	}
+}
+
+// TestGSPeriodWalk_MergedAllStarBreakDailyNumbering: even a merged multi-day
+// weekly period (period 16, 2026-07-13..07-26 under one weekly number) is walked
+// by daily period — one number per calendar day — because the snapshot API is
+// daily-keyed regardless of how the weekly matchup groups those days.
+func TestGSPeriodWalk_MergedAllStarBreakDailyNumbering(t *testing.T) {
+	sp := ScoringPeriod{Number: 16, StartDate: date("2026-07-13"), EndDate: date("2026-07-26")}
+	seasonStart := date("2026-03-25")
+	today := date("2026-07-27") // day after the merged span ends
+	currentPeriod := 125        // daily period on 07-27
+
+	got := gsPeriodWalk(sp, currentPeriod, seasonStart, today)
+
+	// 07-13..07-26 = 14 days, anchored back from 07-27=125 → 111..124.
+	want := make([]int, 14)
 	for i := range want {
-		want[i] = 16
+		want[i] = 111 + i
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("gsPeriodWalk should resolve all 14 merged days to period 16, got %v", got)
+		t.Fatalf("merged weekly period must still walk by daily period, got %v want %v", got, want)
 	}
 }
 
 // TestGSPeriodWalk_CapsAtPeriodEndDate verifies the walk never reads past
-// sp.EndDate even if "yesterday" (today-1) would otherwise extend further —
-// mirrors GetTeamGS's existing yesterday-capping behavior.
+// sp.EndDate even if "yesterday" (today-1) would otherwise extend further.
 func TestGSPeriodWalk_CapsAtPeriodEndDate(t *testing.T) {
-	periods := []ScoringPeriod{
-		{Number: 5, Caption: "Scoring Period 5", StartDate: date("2026-04-20"), EndDate: date("2026-04-20")},
-	}
-	sp := periods[0]
+	sp := ScoringPeriod{Number: 5, StartDate: date("2026-04-20"), EndDate: date("2026-04-20")}
 	seasonStart := date("2026-03-25")
 	today := date("2026-04-25") // yesterday would be 04-24, well past sp.EndDate
-	currentPeriod := 7
+	currentPeriod := 31         // daily period on 04-25
 
-	got := gsPeriodWalk(sp, periods, currentPeriod, seasonStart, today)
+	got := gsPeriodWalk(sp, currentPeriod, seasonStart, today)
 
-	want := []int{5}
+	// Single-day period; anchored back from 04-25=31 → 04-20=26.
+	want := []int{26}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("walk should cap at sp.EndDate (one day, period 5), got %v", got)
+		t.Fatalf("walk should cap at sp.EndDate (one day), got %v want %v", got, want)
 	}
 }
 
-// TestGSPeriodWalk_NilWhenPeriodNotStarted verifies the existing
-// hasn't-started-yet short-circuit is preserved.
+// TestGSPeriodWalk_NilWhenPeriodNotStarted verifies the hasn't-started-yet
+// short-circuit is preserved.
 func TestGSPeriodWalk_NilWhenPeriodNotStarted(t *testing.T) {
 	sp := ScoringPeriod{Number: 5, StartDate: date("2026-04-20"), EndDate: date("2026-04-20")}
 	seasonStart := date("2026-03-25")
 	today := date("2026-04-20") // yesterday (04-19) is before sp.StartDate
 
-	got := gsPeriodWalk(sp, nil, 4, seasonStart, today)
+	got := gsPeriodWalk(sp, 27, seasonStart, today)
 
 	if got != nil {
 		t.Fatalf("expected nil for not-yet-started period, got %v", got)
 	}
 }
 
-// TestGSPeriodWalk_FallsBackWithoutPeriodsList verifies the pre-existing
-// anchor/day-math behavior is preserved when no authoritative periods list
-// is available (matches the old periodFor closure's fallback).
-func TestGSPeriodWalk_FallsBackWithoutPeriodsList(t *testing.T) {
+// TestGSPeriodWalk_DayMathFallback verifies the season-start day-math fallback
+// when Fantrax's current period isn't available (currentPeriod == 0).
+func TestGSPeriodWalk_DayMathFallback(t *testing.T) {
 	sp := ScoringPeriod{Number: 91, StartDate: date("2026-06-23"), EndDate: date("2026-06-23")}
 	seasonStart := date("2026-03-25")
 	today := date("2026-06-24")
-	currentPeriod := 92 // anchor: today (06-24) = period 92
 
-	got := gsPeriodWalk(sp, nil, currentPeriod, seasonStart, today)
+	got := gsPeriodWalk(sp, 0, seasonStart, today) // currentPeriod unknown
 
-	want := []int{91} // AnchorPeriodForDate(06-24, 92, 06-23) = 91
+	want := []int{PeriodForDate(seasonStart, date("2026-06-23"))}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("expected anchor fallback [91], got %v", got)
+		t.Fatalf("expected day-math fallback %v, got %v", want, got)
 	}
 }

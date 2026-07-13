@@ -446,7 +446,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			prog.Logf("WARNING: could not determine matchup week (%v) — GS limit disabled", err)
 		} else if weekStart.IsZero() {
 			prog.Logf("WARNING: no matchup week found for today — GS limit disabled")
-		} else if pastGS, _, gsErr := ft.GetTeamGS(cfg.TeamID, "", fantrax.ScoringPeriod{StartDate: weekStart, EndDate: today.AddDate(0, 0, -1)}, periods, seasonStart, today, 0, false); gsErr != nil {
+		} else if pastGS, _, gsErr := ft.GetTeamGS(cfg.TeamID, "", fantrax.ScoringPeriod{StartDate: weekStart, EndDate: today.AddDate(0, 0, -1)}, seasonStart, today, 0, false); gsErr != nil {
 			// Past GS uses the gs_check active-slot delta walk. The probables
 			// list is unreliable as a GS proxy: it counts current-roster SPs
 			// who were probable while sitting on bench (overcount) and misses

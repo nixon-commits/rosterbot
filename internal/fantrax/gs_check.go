@@ -162,7 +162,7 @@ type PitcherStart struct {
 // A pitcher moved to IL or bench mid-period won't have later starts counted,
 // and a pitcher called up mid-period will have their starts counted from the
 // day they entered an active slot.
-func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, periods []ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []PitcherStart, error) {
+func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []PitcherStart, error) {
 	// Use yesterday as the last completed day. If the period hasn't started yet, return 0.
 	yesterday := today.Truncate(24*time.Hour).AddDate(0, 0, -1)
 	if yesterday.Before(sp.StartDate) {
@@ -173,15 +173,12 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, periods []
 		yesterday = sp.EndDate
 	}
 
-	// currentPeriod backs gsPeriodWalk's anchor-arithmetic fallback tier for
-	// any day the caller's periods list doesn't cover.
+	// The per-day snapshot diff is keyed by the *daily* scoring period (one
+	// number per calendar day), anchored on Fantrax's authoritative current
+	// daily period. See dailyPeriodFor / gsPeriodWalk for why this must not be
+	// the weekly matchup number.
 	currentPeriod, _ := c.GetCurrentPeriod()
-
-	// Resolve every day in the walk to its scoring period number up front via
-	// ResolvePeriod (periods list first, immune to a merged multi-day period
-	// like the All-Star break, falling back to anchor/day-math) rather than
-	// bare per-day anchor arithmetic — see gsPeriodWalk's doc comment.
-	walkPeriods := gsPeriodWalk(sp, periods, currentPeriod, seasonStart, today)
+	walkPeriods := gsPeriodWalk(sp, currentPeriod, seasonStart, today)
 
 	// Get baseline YTD GS and FPts per player as of the day before the period started.
 	// For the first period of the season, baseline is zero (no prior data).
@@ -189,7 +186,7 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, periods []
 	prevGS := map[string]int{}
 	prevFPts := map[string]float64{}
 	if !dayBeforePeriod.Before(seasonStart) {
-		baselinePeriod := ResolvePeriod(periods, currentPeriod, seasonStart, today, dayBeforePeriod)
+		baselinePeriod := dailyPeriodFor(currentPeriod, seasonStart, today, dayBeforePeriod)
 		info, err := c.getPlayerGSSnapshotForPeriod(teamID, baselinePeriod)
 		if err != nil {
 			return 0, nil, fmt.Errorf("get baseline GS: %w", err)
