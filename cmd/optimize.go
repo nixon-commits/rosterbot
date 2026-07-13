@@ -102,28 +102,6 @@ func cacheTTL(d time.Duration) time.Duration {
 	return d
 }
 
-// resolveDatePeriod returns the scoring period to optimize+apply for a date.
-//
-// We anchor on Fantrax's authoritative current period — the same period the
-// roster was read under (GetPitcherRoster -> GetCurrentPeriodTeamRosterInfo) —
-// for today AND the near-future --matchup window. Fantrax can insert extra
-// daily scoring periods mid-season (doubleheaders / postponed-game makeups),
-// which makes naive season-start day arithmetic drift one behind. If the apply
-// used the date-math period instead, it would write to the wrong period and
-// silently no-op on the real lineup (the roster read, the apply, and the cache
-// invalidation must all agree on one period number). AnchorPeriodForDate(today,
-// currentPeriod, date) returns currentPeriod for today and currentPeriod+N for
-// N days out — exact within the insertion-free near-today window.
-//
-// When the current-period lookup is unavailable (periodErr) or unusable (<= 0)
-// fall back to PeriodForDate (season-start day math) — the best available signal.
-func resolveDatePeriod(currentPeriod int, periodErr error, seasonStart, today, date time.Time) int {
-	if periodErr == nil && currentPeriod > 0 {
-		return fantrax.AnchorPeriodForDate(today, currentPeriod, date)
-	}
-	return fantrax.PeriodForDate(seasonStart, date)
-}
-
 func runOptimize(cmd *cobra.Command, args []string) error {
 	if err := projections.SetProjectionSystem(projectionSystem); err != nil {
 		return err
@@ -306,6 +284,17 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		prog.Logf("current period: %d", currentPeriod)
 	}
 
+	// Authoritative per-date period lookup, shared by the fantrax.ResolvePeriod
+	// call in the apply loop below and the GS-budget block further down —
+	// Fantrax's own date ranges per period, immune to mid-season inserted daily
+	// periods. A fetch failure just means fantrax.ResolvePeriod falls through
+	// to its anchor/day-math tiers (the GS-budget block disables its gate
+	// instead, since it has no safe fallback for a budget decision).
+	periods, _, _, periodsErr := ft.GetScoringPeriodsAndTeams()
+	if periodsErr != nil {
+		prog.Logf("WARNING: could not fetch authoritative scoring periods (%v) — date→period resolution falls back to anchor/day-math", periodsErr)
+	}
+
 	// --- Hitter projections (shared across dates) ---
 	prog.Start("Projections")
 	if batLoadResult.FellBack {
@@ -466,16 +455,13 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			// YTD GS deltas — the same source of truth gs-check uses for
 			// league-wide violation detection.
 			prog.Logf("WARNING: per-day GS walk failed (%v) — GS limit disabled", gsErr)
-		} else if periods, _, _, perr := ft.GetScoringPeriodsAndTeams(); perr != nil {
-			// Same call gscheck.go makes for its period resolution — reusing it
-			// here (instead of GetMatchupWeekNumberForDate's positional count
-			// over matchupWeekRanges' same-opponent groupings) means both paths
-			// are structurally guaranteed to agree, not just coincidentally
-			// aligned. matchupWeekRanges groups purely by consecutive
-			// same-opponent entries with no gap check, so a genuine
-			// back-to-back rematch against the same opponent could desync its
-			// position count from Fantrax's real period number with no error.
-			prog.Logf("WARNING: could not fetch scoring periods (%v) — GS limit disabled", perr)
+		} else if periodsErr != nil {
+			// Reuses the periods list already fetched once above (shared with
+			// fantrax.ResolvePeriod's apply-path lookup) instead of gscheck's
+			// old pattern of each call site re-fetching GetScoringPeriodsAndTeams
+			// independently. Same authoritative source either way — this just
+			// avoids firing the request twice per run.
+			prog.Logf("WARNING: could not fetch scoring periods (%v) — GS limit disabled", periodsErr)
 		} else if sp := fantrax.FindCurrentPeriod(periods, today); sp == nil {
 			prog.Logf("WARNING: could not resolve scoring period for today — GS limit disabled")
 		} else if _, liveMax, gerr := ft.GetGSLimits(cfg.TeamID, sp.Number); gerr != nil {
@@ -615,7 +601,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		i, date := i, date
 		g.Go(func() error {
 			isToday := date.Equal(today)
-			period := resolveDatePeriod(currentPeriod, periodErr, seasonStart, today, date)
+			period := fantrax.ResolvePeriod(periods, currentPeriod, seasonStart, today, date)
 
 			var warnings []string
 

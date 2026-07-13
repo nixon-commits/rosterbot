@@ -406,11 +406,14 @@ func FindJustEndedPeriod(periods []ScoringPeriod, today time.Time) *ScoringPerio
 	return nil
 }
 
-// FindCurrentPeriod returns the period that contains today (start <= today <= end), or nil.
-func FindCurrentPeriod(periods []ScoringPeriod, today time.Time) *ScoringPeriod {
-	todayYMD := today.Format("2006-01-02")
+// FindCurrentPeriod returns the period containing date (start <= date <= end),
+// or nil. Despite the name, it's a plain range-containment check with no
+// dependency on "now" — most callers pass today (hence the name), but
+// fantrax.ResolvePeriod also calls it with arbitrary past/future dates.
+func FindCurrentPeriod(periods []ScoringPeriod, date time.Time) *ScoringPeriod {
+	dateYMD := date.Format("2006-01-02")
 	for i := range periods {
-		if periods[i].StartDate.Format("2006-01-02") <= todayYMD && todayYMD <= periods[i].EndDate.Format("2006-01-02") {
+		if periods[i].StartDate.Format("2006-01-02") <= dateYMD && dateYMD <= periods[i].EndDate.Format("2006-01-02") {
 			return &periods[i]
 		}
 	}
