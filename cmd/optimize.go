@@ -1217,6 +1217,24 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		// Resolve change-line names from THIS date's rosters. The global
+		// playerName map is built from today's base roster only, but future
+		// dates optimize against period-specific rosters that can include
+		// pitchers not on today's active roster (reserve/IL SPs surfaced for a
+		// merged matchup week). Without this, activating such a pitcher renders a
+		// blank name in the notification. Seed from the global map, then overlay
+		// the date's Scored players (which carry the period-specific names).
+		dateName := make(map[string]string, len(playerName))
+		for id, n := range playerName {
+			dateName[id] = n
+		}
+		for _, sp := range dr.hitterResult.Scored {
+			dateName[sp.Player.ID] = sp.Player.Name
+		}
+		for _, sp := range dr.pitcherResult.Scored {
+			dateName[sp.Player.ID] = sp.Player.Name
+		}
+
 		// Build effective-pts lookup for optimization delta.
 		// Hitters contribute full ExpectedPts when they have a game.
 		// Pitchers: RPs and confirmed starters contribute full pts;
@@ -1242,10 +1260,10 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 		fmt.Printf("\n  Changes (%+.2f pts) %s\n", delta, strings.Repeat("─", 35))
 		for _, ps := range allActivate {
-			fmt.Printf("    ↑ %-24s → %-4s  %+6.2f\n", playerName[ps.PlayerID], slotName[ps.PosID], ptsMap[ps.PlayerID])
+			fmt.Printf("    ↑ %-24s → %-4s  %+6.2f\n", dateName[ps.PlayerID], slotName[ps.PosID], ptsMap[ps.PlayerID])
 		}
 		for _, id := range allBench {
-			fmt.Printf("    ↓ %-24s → BN    %+6.2f\n", playerName[id], -ptsMap[id])
+			fmt.Printf("    ↓ %-24s → BN    %+6.2f\n", dateName[id], -ptsMap[id])
 		}
 
 		if isZeroGainDelta(delta) {
@@ -1292,10 +1310,10 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		summary := fmt.Sprintf("%s: %s changes (%+.2f pts)",
 			dr.date.Format("Mon Jan 2"), strings.Join(parts, " + "), delta)
 		for _, ps := range allActivate {
-			summary += fmt.Sprintf("\n  ↑ %s → %s", playerName[ps.PlayerID], slotName[ps.PosID])
+			summary += fmt.Sprintf("\n  ↑ %s → %s", dateName[ps.PlayerID], slotName[ps.PosID])
 		}
 		for _, id := range allBench {
-			summary += fmt.Sprintf("\n  ↓ %s → BN", playerName[id])
+			summary += fmt.Sprintf("\n  ↓ %s → BN", dateName[id])
 		}
 		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, summary)
 	}
