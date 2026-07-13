@@ -416,6 +416,11 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		{"ProjectionSite", "cron(0 15 * * ? *)", jsii.Strings("projection-site", "--out", "report")},
 		// daily capture of ephemeral upstream data (HKB, projections, Savant, prospects) after upstreams' once-daily refresh
 		{"Archive", "cron(15 14 * * ? *)", jsii.Strings("archive")},
+		// Appends today's per-team aggregate HKB dynasty value to the Team Value
+		// Store. Runs 14:30 UTC (after Archive's HKB refresh, before ProjectionSite
+		// at 15:00) so value.html renders today's point same-day. Accumulates
+		// forward — HKB has no history — so one write per day is the whole record.
+		{"TeamValues", "cron(30 14 * * ? *)", jsii.Strings("team-values")},
 		// Shadow captures every projection system's lineup projection for the
 		// model-comparison report. It runs at 23:40 UTC (~late ET evening, same
 		// UTC/ET calendar day so the snapshot's generated_at passes the backtest
