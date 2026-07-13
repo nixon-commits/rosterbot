@@ -12,7 +12,7 @@ import "time"
 // anchor. Returns nil if the period hasn't started yet (yesterday is before
 // sp.StartDate).
 func gsPeriodWalk(sp ScoringPeriod, periods []ScoringPeriod, currentPeriod int, seasonStart, today time.Time) []int {
-	yesterday := today.Truncate(24 * time.Hour).AddDate(0, 0, -1)
+	yesterday := today.Truncate(24*time.Hour).AddDate(0, 0, -1)
 	if yesterday.Before(sp.StartDate) {
 		return nil
 	}
