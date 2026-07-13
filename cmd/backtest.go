@@ -243,6 +243,7 @@ func runRecencyExperiment(
 	}
 
 	series := backtest.BuildHitterSeries(seriesDays)
+	hitterBaseline := fgSrc.AverageFPG(hitterScoring)
 
 	mkVariant := func(name string, w projections.WeightFunc) backtest.StrategyVariant {
 		return backtest.StrategyVariant{
@@ -252,7 +253,7 @@ func runRecencyExperiment(
 				for id, s := range series {
 					recent[id] = projections.WeightedRecent(s, asOf, w)
 				}
-				return projections.NewBlendedSource(baseSrc, recent, hitterScoring, nameToID, blendMinGP), nil
+				return projections.NewBlendedSource(baseSrc, recent, hitterScoring, nameToID, blendMinGP, hitterBaseline), nil
 			},
 		}
 	}
@@ -323,6 +324,7 @@ func runPitcherRecencyExperiment(
 	}
 
 	series := backtest.BuildPitcherSeries(seriesDays)
+	pitcherBaseline := fgPitSrc.AverageFPG(pitcherScoring)
 
 	mkVariant := func(name string, w projections.WeightFunc) backtest.PitcherStrategyVariant {
 		return backtest.PitcherStrategyVariant{
@@ -332,7 +334,7 @@ func runPitcherRecencyExperiment(
 				for id, s := range series {
 					recent[id] = projections.WeightedRecent(s, asOf, w)
 				}
-				return projections.NewPitcherBlendedSource(pitBaseSrc, recent, pitcherScoring, pitNameToID, pitPlayerPos, blendMinGP), nil
+				return projections.NewPitcherBlendedSource(pitBaseSrc, recent, pitcherScoring, pitNameToID, pitPlayerPos, blendMinGP, pitcherBaseline), nil
 			},
 		}
 	}

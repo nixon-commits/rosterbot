@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/spf13/cobra"
 )
 
@@ -54,12 +57,39 @@ func runShadow(cmd *cobra.Command, args []string) error {
 		captureSystemRoot = ""
 	}()
 
+	state := loadShadowNoDataState(shadowNoDataStateFile)
+	var transitions strings.Builder
+
 	for _, sys := range shadowSystems {
 		projectionSystem = sys
 		fmt.Printf("\n=== shadow capture: %s ===\n", sys)
 		if err := runOptimize(cmd, args); err != nil {
 			return fmt.Errorf("shadow capture %s: %w", sys, err)
 		}
+		cur := systemNoData{
+			Hitters:  lastProjectionLoadResult.HittersNoData,
+			Pitchers: lastProjectionLoadResult.PitchersNoData,
+		}
+		transitions.WriteString(describeNoDataTransition(sys, state[sys], cur))
+		state[sys] = cur
+	}
+
+	if err := saveShadowNoDataState(shadowNoDataStateFile, state); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not persist shadow no-data state: %v\n", err)
+	}
+
+	// Alert only on a state *change* (a system going down or recovering), not
+	// on every day an outage continues — a still-down system already logs a
+	// WARNING per run via runOptimize, this is for the transition itself.
+	if msg := strings.TrimSpace(transitions.String()); msg != "" {
+		userKey := os.Getenv("PUSHOVER_USER_KEY")
+		apiToken := os.Getenv("PUSHOVER_API_TOKEN")
+		if userKey != "" && apiToken != "" {
+			if err := notify.SendPushover(userKey, apiToken, "Shadow: projection system status changed", msg); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: shadow no-data Pushover failed: %v\n", err)
+			}
+		}
+		fmt.Println("\n" + msg)
 	}
 	return nil
 }

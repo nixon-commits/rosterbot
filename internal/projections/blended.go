@@ -21,11 +21,12 @@ type PtsPerGameSource interface {
 // BlendedSource wraps a projection source and blends its per-game value
 // with recent Fantrax scoring data.
 type BlendedSource struct {
-	inner    Source
-	recent   map[string]fantrax.RecentStat
-	scoring  fantrax.ScoringWeights
-	nameToID map[string]string // NormalizeName(name) → player ID
-	minGP    int
+	inner       Source
+	recent      map[string]fantrax.RecentStat
+	scoring     fantrax.ScoringWeights
+	nameToID    map[string]string // NormalizeName(name) → player ID
+	minGP       int
+	baselineFPG float64 // league-average FP/G; shrinkage prior when no base projection exists
 }
 
 func NewBlendedSource(
@@ -34,8 +35,9 @@ func NewBlendedSource(
 	scoring fantrax.ScoringWeights,
 	nameToID map[string]string,
 	minGP int,
+	baselineFPG float64,
 ) *BlendedSource {
-	return &BlendedSource{inner: inner, recent: recent, scoring: scoring, nameToID: nameToID, minGP: minGP}
+	return &BlendedSource{inner: inner, recent: recent, scoring: scoring, nameToID: nameToID, minGP: minGP, baselineFPG: baselineFPG}
 }
 
 // GetProjection delegates to the inner source.
@@ -44,9 +46,11 @@ func (b *BlendedSource) GetProjection(name, mlbTeam string) (*Projection, bool) 
 }
 
 // GetPtsPerGame returns blended FP/G using PA-based dynamic weights.
-// Falls back to 100% base projection if no recent data.
+// Falls back to 100% base projection if no recent data; regresses toward the
+// league-average baseline if there's no base projection at all (rosterbot-4h7).
 func (b *BlendedSource) GetPtsPerGame(name, mlbTeam string, scoring fantrax.ScoringWeights) (float64, bool) {
 	proj, hasProj := b.inner.GetProjection(name, mlbTeam)
+	hasProj = hasProj && proj.G > 0
 
 	playerID, idOK := b.nameToID[NormalizeName(name)]
 	var recent fantrax.RecentStat
@@ -56,21 +60,14 @@ func (b *BlendedSource) GetPtsPerGame(name, mlbTeam string, scoring fantrax.Scor
 		hasRecent = hasRecent && recent.GamesPlayed >= b.minGP
 	}
 
-	if !hasProj || proj.G <= 0 {
-		// No base projection — use recent stats only if available.
-		if hasRecent {
-			return recent.FPtsPerGame, true
-		}
-		return 0, false
+	var basePts float64
+	if hasProj {
+		basePts = ExpectedPtsFromProj(proj, scoring)
 	}
 
-	basePts := ExpectedPtsFromProj(proj, scoring)
-	if !hasRecent {
-		return basePts, true
-	}
-
-	sw, rw := hitterBlendWeights(recent.GamesPlayed)
-	return sw*basePts + rw*recent.FPtsPerGame, true
+	return blendResult(hasProj, basePts, hasRecent, recent.FPtsPerGame, b.baselineFPG, func() (float64, float64) {
+		return hitterBlendWeights(recent.GamesPlayed)
+	})
 }
 
 // hitterBlendWeights computes dynamic base/recent weights based on games played.

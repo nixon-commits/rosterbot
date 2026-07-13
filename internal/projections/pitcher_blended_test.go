@@ -105,7 +105,7 @@ func TestGetPitcherBreakdown_NoRecentData(t *testing.T) {
 	inner := &stubPitSrc{data: map[string]*PitcherProjection{"ace pitcher": proj}}
 	scoring := testPitScoring()
 
-	src := NewPitcherBlendedSource(inner, nil, scoring, map[string]string{"ace pitcher": "p1"}, map[string][]string{"p1": {auth_client.PosSP}}, 2)
+	src := NewPitcherBlendedSource(inner, nil, scoring, map[string]string{"ace pitcher": "p1"}, map[string][]string{"p1": {auth_client.PosSP}}, 2, 0)
 	bd := src.GetPitcherBreakdown("Ace Pitcher", "NYY", scoring)
 
 	if bd == nil {
@@ -136,7 +136,7 @@ func TestGetPitcherBreakdown_WithRecentData(t *testing.T) {
 	nameToID := map[string]string{"ace pitcher": "p1"}
 	playerPos := map[string][]string{"p1": {auth_client.PosSP}}
 
-	src := NewPitcherBlendedSource(inner, recent, scoring, nameToID, playerPos, 2)
+	src := NewPitcherBlendedSource(inner, recent, scoring, nameToID, playerPos, 2, 0)
 	bd := src.GetPitcherBreakdown("Ace Pitcher", "NYY", scoring)
 
 	if bd == nil {
@@ -172,7 +172,7 @@ func TestGetPitcherBreakdown_InsufficientGP(t *testing.T) {
 	nameToID := map[string]string{"reliever": "p1"}
 	playerPos := map[string][]string{"p1": {"016"}} // RP only
 
-	src := NewPitcherBlendedSource(inner, recent, scoring, nameToID, playerPos, 2)
+	src := NewPitcherBlendedSource(inner, recent, scoring, nameToID, playerPos, 2, 0)
 	bd := src.GetPitcherBreakdown("Reliever", "NYY", scoring)
 
 	if bd == nil {
@@ -190,10 +190,37 @@ func TestGetPitcherBreakdown_NoProjection(t *testing.T) {
 	inner := &stubPitSrc{data: map[string]*PitcherProjection{}}
 	scoring := testPitScoring()
 
-	src := NewPitcherBlendedSource(inner, nil, scoring, nil, nil, 2)
+	src := NewPitcherBlendedSource(inner, nil, scoring, nil, nil, 2, 0)
 	bd := src.GetPitcherBreakdown("Unknown Pitcher", "NYY", scoring)
 
 	if bd != nil {
 		t.Error("expected nil breakdown for unknown pitcher")
+	}
+}
+
+func TestPitcherBlendedSource_NoBaseProjection_SmallSample_ShrinksTowardBaseline(t *testing.T) {
+	// A call-up reliever with no FanGraphs projection who posted 2 dominant
+	// appearances. Before rosterbot-4h7, this raw small-sample rate would be
+	// trusted at full weight; it should instead land close to baseline.
+	inner := &stubPitSrc{data: map[string]*PitcherProjection{}}
+	scoring := testPitScoring()
+	const baseline = 3.0
+
+	nameToID := map[string]string{"call-up": "p1"}
+	playerPos := map[string][]string{"p1": {"016"}} // RP only
+
+	src := NewPitcherBlendedSource(inner, map[string]fantrax.RecentStat{
+		"p1": {FPtsPerGame: 25.0, GamesPlayed: 2},
+	}, scoring, nameToID, playerPos, 2, baseline)
+
+	pts, ok := src.GetPitcherPtsPerGame("Call-Up", "NYY", scoring)
+	if !ok {
+		t.Fatal("expected true")
+	}
+	if pts > baseline+2.0 {
+		t.Errorf("expected small-sample outlier pulled near baseline %.2f, got %.4f (raw recent was 25.0)", baseline, pts)
+	}
+	if pts <= baseline {
+		t.Errorf("expected some upward pull from the hot recent sample, got %.4f <= baseline %.2f", pts, baseline)
 	}
 }

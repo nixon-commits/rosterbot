@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/teams"
 )
@@ -264,6 +265,27 @@ func NewFanGraphsSourceFromCSV(path string) (*FanGraphsSource, error) {
 
 // Len returns the number of players in this source.
 func (s *FanGraphsSource) Len() int { return len(s.projections) }
+
+// AverageFPG returns the unweighted mean projected FP/game across every
+// player in this source. Used as the shrinkage baseline in BlendedSource's
+// no-base-projection fallback (rosterbot-4h7), so a player this system
+// doesn't cover regresses toward a league-average rate instead of trusting a
+// small recent sample at full weight.
+func (s *FanGraphsSource) AverageFPG(scoring fantrax.ScoringWeights) float64 {
+	var total float64
+	var n int
+	for _, proj := range s.projections {
+		if proj.G <= 0 {
+			continue
+		}
+		total += ExpectedPtsFromProj(proj, scoring)
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	return total / float64(n)
+}
 
 // GetProjection looks up a player's projection by name and MLB team.
 func (s *FanGraphsSource) GetProjection(name, mlbTeam string) (*Projection, bool) {
