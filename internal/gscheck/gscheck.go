@@ -152,7 +152,7 @@ func RunGSCheck(ft *fantrax.Client, cfg config.Config) error {
 		if cfg.DryRun {
 			fmt.Printf("  --- %s (per-day GS deltas) ---\n", teamName)
 		}
-		gs, starts, err := ft.GetTeamGS(teamID, teamName, *period, periods, seasonStart, today, gsMax, cfg.DryRun)
+		gs, starts, err := ft.GetTeamGS(teamID, teamName, *period, seasonStart, today, gsMax, cfg.DryRun)
 		if err != nil {
 			fmt.Printf("WARNING: failed to get GS for %s: %v\n", teamName, err)
 			continue
