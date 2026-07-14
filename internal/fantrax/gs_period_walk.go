@@ -2,7 +2,7 @@ package fantrax
 
 import "time"
 
-// dailyPeriodFor returns the *daily* scoring-period number for a calendar date,
+// DailyPeriodFor returns the *daily* scoring-period number for a calendar date,
 // anchored on Fantrax's authoritative current daily period when known, else
 // season-start day math.
 //
@@ -14,7 +14,21 @@ import "time"
 // for the whole week). Passing the weekly number makes every day fetch the same
 // snapshot, collapsing all day-over-day deltas to zero and under-counting the
 // tally to ~one day's worth (the rosterbot-uv6 regression).
-func dailyPeriodFor(currentPeriod int, seasonStart, today, date time.Time) int {
+//
+// Any other caller needing a *daily* period number for a specific calendar date
+// — not "which weekly matchup period contains this date" — should use this
+// directly instead of ResolvePeriod. ResolvePeriod's tier 1 trusts the periods
+// list from GetScoringPeriodsAndTeams, which is weekly-matchup-keyed (see
+// TestFindCurrentPeriod_MergedAllStarBreakPeriod); since virtually every
+// in-season date falls inside some weekly period's date range, tier 1 wins for
+// almost every call and hands back the wrong (weekly) number. internal/lineuprun's
+// per-date lineup-apply loop hit exactly this: every date inside the merged
+// All-Star-break weekly period (16, 2026-07-13..07-26) resolved to the same
+// period 16, so ApplyLineup/GetHitterRosterForPeriod for 11 different calendar
+// dates all read/wrote the same (wrong) daily snapshot — the same day's diff
+// never resolved, so the same lineup swap re-applied and re-notified every
+// hourly run.
+func DailyPeriodFor(currentPeriod int, seasonStart, today, date time.Time) int {
 	if currentPeriod > 0 {
 		return AnchorPeriodForDate(today, currentPeriod, date)
 	}
@@ -24,7 +38,7 @@ func dailyPeriodFor(currentPeriod int, seasonStart, today, date time.Time) int {
 // gsPeriodWalk returns the daily scoring-period number for each calendar day
 // from sp.StartDate through the last completed day (today's yesterday, capped at
 // sp.EndDate). Returns nil if the period hasn't started yet (yesterday is before
-// sp.StartDate). See dailyPeriodFor for why this is the daily numbering, not the
+// sp.StartDate). See DailyPeriodFor for why this is the daily numbering, not the
 // weekly one.
 func gsPeriodWalk(sp ScoringPeriod, currentPeriod int, seasonStart, today time.Time) []int {
 	yesterday := today.Truncate(24*time.Hour).AddDate(0, 0, -1)
@@ -36,7 +50,7 @@ func gsPeriodWalk(sp ScoringPeriod, currentPeriod int, seasonStart, today time.T
 	}
 	var out []int
 	for d := sp.StartDate; !d.After(yesterday); d = d.AddDate(0, 0, 1) {
-		out = append(out, dailyPeriodFor(currentPeriod, seasonStart, today, d))
+		out = append(out, DailyPeriodFor(currentPeriod, seasonStart, today, d))
 	}
 	return out
 }

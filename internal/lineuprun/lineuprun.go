@@ -279,12 +279,13 @@ func Run(ft *fantrax.Client, cfg *config.Config, opts Options) (Result, error) {
 		prog.Logf("current period: %d", currentPeriod)
 	}
 
-	// Authoritative per-date period lookup, shared by the fantrax.ResolvePeriod
-	// call in the apply loop below and the GS-budget block further down —
-	// Fantrax's own date ranges per period, immune to mid-season inserted daily
-	// periods. A fetch failure just means fantrax.ResolvePeriod falls through
-	// to its anchor/day-math tiers (the GS-budget block disables its gate
-	// instead, since it has no safe fallback for a budget decision).
+	// Weekly matchup "Scoring Period" list, used below by the GS-budget block
+	// (FindCurrentPeriod answers "which weekly period contains today," which is
+	// what GetGSLimits needs). NOT used for date→period resolution in the apply
+	// loop — that needs the *daily* period number, which this weekly-keyed list
+	// can't provide (see DailyPeriodFor's doc comment). A fetch failure just
+	// disables the GS-budget gate, since it has no safe fallback for a budget
+	// decision.
 	periods, _, _, periodsErr := ft.GetScoringPeriodsAndTeams()
 	if periodsErr != nil {
 		prog.Logf("WARNING: could not fetch authoritative scoring periods (%v) — date→period resolution falls back to anchor/day-math", periodsErr)
@@ -451,11 +452,10 @@ func Run(ft *fantrax.Client, cfg *config.Config, opts Options) (Result, error) {
 			// league-wide violation detection.
 			prog.Logf("WARNING: per-day GS walk failed (%v) — GS limit disabled", gsErr)
 		} else if periodsErr != nil {
-			// Reuses the periods list already fetched once above (shared with
-			// fantrax.ResolvePeriod's apply-path lookup) instead of gscheck's
-			// old pattern of each call site re-fetching GetScoringPeriodsAndTeams
-			// independently. Same authoritative source either way — this just
-			// avoids firing the request twice per run.
+			// Reuses the periods list already fetched once above instead of
+			// gscheck's old pattern of each call site re-fetching
+			// GetScoringPeriodsAndTeams independently. Same authoritative source
+			// either way — this just avoids firing the request twice per run.
 			prog.Logf("WARNING: could not fetch scoring periods (%v) — GS limit disabled", periodsErr)
 		} else if sp := fantrax.FindCurrentPeriod(periods, today); sp == nil {
 			prog.Logf("WARNING: could not resolve scoring period for today — GS limit disabled")
@@ -596,7 +596,19 @@ func Run(ft *fantrax.Client, cfg *config.Config, opts Options) (Result, error) {
 		i, date := i, date
 		g.Go(func() error {
 			isToday := date.Equal(today)
-			period := fantrax.ResolvePeriod(periods, currentPeriod, seasonStart, today, date)
+			// DailyPeriodFor, not ResolvePeriod: ApplyLineup/GetHitterRosterForPeriod
+			// are keyed by Fantrax's *daily* scoring period. ResolvePeriod's tier 1
+			// trusts periods (from GetScoringPeriodsAndTeams), which is the weekly
+			// matchup "Scoring Period" list — every date in a --matchup window falls
+			// inside some weekly period's date range, so tier 1 wins for nearly every
+			// call and hands back one weekly number for the whole span. During a
+			// merged week (e.g. the All-Star break, period 16 spanning 2026-07-13..26)
+			// that collapsed 11 distinct calendar dates onto the same period 16:
+			// GetHitterRosterForPeriod/GetPitcherRosterForPeriod fetched the identical
+			// stale snapshot for all of them, so each date's optimizer never saw its
+			// own prior apply, and the same swap re-applied (and re-notified via
+			// Pushover) on every hourly run. See DailyPeriodFor's doc comment.
+			period := fantrax.DailyPeriodFor(currentPeriod, seasonStart, today, date)
 
 			var warnings []string
 

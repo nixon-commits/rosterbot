@@ -175,7 +175,7 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStar
 
 	// The per-day snapshot diff is keyed by the *daily* scoring period (one
 	// number per calendar day), anchored on Fantrax's authoritative current
-	// daily period. See dailyPeriodFor / gsPeriodWalk for why this must not be
+	// daily period. See DailyPeriodFor / gsPeriodWalk for why this must not be
 	// the weekly matchup number.
 	currentPeriod, _ := c.GetCurrentPeriod()
 	walkPeriods := gsPeriodWalk(sp, currentPeriod, seasonStart, today)
@@ -186,7 +186,7 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStar
 	prevGS := map[string]int{}
 	prevFPts := map[string]float64{}
 	if !dayBeforePeriod.Before(seasonStart) {
-		baselinePeriod := dailyPeriodFor(currentPeriod, seasonStart, today, dayBeforePeriod)
+		baselinePeriod := DailyPeriodFor(currentPeriod, seasonStart, today, dayBeforePeriod)
 		info, err := c.getPlayerGSSnapshotForPeriod(teamID, baselinePeriod)
 		if err != nil {
 			return 0, nil, fmt.Errorf("get baseline GS: %w", err)
@@ -405,8 +405,11 @@ func FindJustEndedPeriod(periods []ScoringPeriod, today time.Time) *ScoringPerio
 
 // FindCurrentPeriod returns the period containing date (start <= date <= end),
 // or nil. Despite the name, it's a plain range-containment check with no
-// dependency on "now" — most callers pass today (hence the name), but
-// fantrax.ResolvePeriod also calls it with arbitrary past/future dates.
+// dependency on "now" — most callers pass today (hence the name). periods is
+// the weekly matchup "Scoring Period" list from GetScoringPeriodsAndTeams, so
+// this answers "which weekly period contains date," not "what daily period is
+// date" — callers needing the latter (roster/apply/GS-snapshot lookups) want
+// DailyPeriodFor instead.
 func FindCurrentPeriod(periods []ScoringPeriod, date time.Time) *ScoringPeriod {
 	dateYMD := date.Format("2006-01-02")
 	for i := range periods {
