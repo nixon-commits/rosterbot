@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/lineuprun"
 	"github.com/nixon-commits/rosterbot/internal/notify"
+	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/spf13/cobra"
 )
 
@@ -47,28 +50,57 @@ func init() {
 	rootCmd.AddCommand(shadowCmd)
 }
 
+// runShadow is the `shadow` cobra adapter: the second of lineuprun.Run's two
+// callers. Where cmd/optimize.go makes a single live/dry-run pass, this loops
+// once per projection system, forcing dry-run and building a distinct
+// lineuprun.Options (system, snapshot partition) per iteration — the two
+// adapters share the same orchestration engine but never any mutable state.
 func runShadow(cmd *cobra.Command, args []string) error {
-	// Capture mode: redirect snapshots to per-system partitions and never apply.
-	captureSystemRoot = shadowSnapshotRoot
+	today := todayET()
+	needsSeasonLookup := datesStr == "all"
+	var dates []time.Time
+	if !needsSeasonLookup {
+		var err error
+		dates, err = parseDates(datesStr, today)
+		if err != nil {
+			return fmt.Errorf("invalid --dates: %w", err)
+		}
+	}
+
+	// Force dry-run for every capture: shadow never applies a lineup.
 	dryRun = true
-	// Roster-alert noise is irrelevant to a capture run.
-	checkRoster = false
-	defer func() {
-		captureSystemRoot = ""
-	}()
 
 	state := loadShadowNoDataState(shadowNoDataStateFile)
 	var transitions strings.Builder
 
 	for _, sys := range shadowSystems {
-		projectionSystem = sys
+		if err := projections.SetProjectionSystem(sys); err != nil {
+			return err
+		}
+		cfg, ft, err := initApp(dates)
+		if err != nil {
+			return err
+		}
+
 		fmt.Printf("\n=== shadow capture: %s ===\n", sys)
-		if err := runOptimize(cmd, args); err != nil {
+		opts := lineuprun.Options{
+			Today:             today,
+			NeedsSeasonLookup: needsSeasonLookup,
+			ProjectionSystem:  sys,
+			CheckRoster:       false, // roster-alert noise is irrelevant to a capture run
+			SnapshotRoot:      systemSnapshotDir(shadowSnapshotRoot, sys),
+			ForceSnapshot:     true, // capture mode: always write, regardless of dry-run
+			NoCache:           noCache,
+			Verbose:           verbose,
+		}
+		res, err := lineuprun.Run(ft, cfg, opts)
+		if err != nil {
 			return fmt.Errorf("shadow capture %s: %w", sys, err)
 		}
+
 		cur := systemNoData{
-			Hitters:  lastProjectionLoadResult.HittersNoData,
-			Pitchers: lastProjectionLoadResult.PitchersNoData,
+			Hitters:  res.HittersNoData,
+			Pitchers: res.PitchersNoData,
 		}
 		transitions.WriteString(describeNoDataTransition(sys, state[sys], cur))
 		state[sys] = cur
@@ -80,7 +112,7 @@ func runShadow(cmd *cobra.Command, args []string) error {
 
 	// Alert only on a state *change* (a system going down or recovering), not
 	// on every day an outage continues — a still-down system already logs a
-	// WARNING per run via runOptimize, this is for the transition itself.
+	// WARNING per run via lineuprun.Run, this is for the transition itself.
 	if msg := strings.TrimSpace(transitions.String()); msg != "" {
 		userKey := os.Getenv("PUSHOVER_USER_KEY")
 		apiToken := os.Getenv("PUSHOVER_API_TOKEN")

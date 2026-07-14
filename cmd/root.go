@@ -26,6 +26,20 @@ var (
 	verbose bool
 )
 
+// cacheDir is the on-disk file cache root shared by every command's Fantrax
+// client (via initApp's SetCache call) and by any command that reads/writes
+// cache-backed data directly (e.g. backtest, recap, team-values).
+const cacheDir = ".cache"
+
+// cacheTTL returns d unless --no-cache is set, in which case it returns 0
+// (bypassing the cache entirely).
+func cacheTTL(d time.Duration) time.Duration {
+	if noCache {
+		return 0
+	}
+	return d
+}
+
 var rootCmd = &cobra.Command{
 	Use:   "rosterbot",
 	Short: "Fantasy baseball roster automation for Fantrax leagues",
