@@ -53,7 +53,10 @@ var fgProjectionType = map[string]string{
 	ProjectionSteamerRoS:     "steamerr",
 	ProjectionDepthChartsRoS: "rfangraphsdc",
 	ProjectionBatXRoS:        "rthebatx",
-	ProjectionATCRoS:         "ratc",
+	// "ratc" 500s permanently as of ~2026-07-10: FanGraphs retired the plain
+	// "ATC (RoS)" dropdown option and replaced it with "ATC DC (RoS)", whose
+	// own frontend links to type=ratcdc (rosterbot-orz).
+	ProjectionATCRoS: "ratcdc",
 }
 
 // fgBaseURL is the FanGraphs API base URL template. Tests can override this.

@@ -128,7 +128,7 @@ func TestSetProjectionSystem_UpdatesURLs(t *testing.T) {
 		{"steamer-ros", "type=steamerr&stats=bat", "type=steamerr&stats=pit", false},
 		{"depthcharts-ros", "type=rfangraphsdc&stats=bat", "type=rfangraphsdc&stats=pit", false},
 		{"thebatx-ros", "type=rthebatx&stats=bat", "type=rthebatx&stats=pit", false},
-		{"atc-ros", "type=ratc&stats=bat", "type=ratc&stats=pit", false},
+		{"atc-ros", "type=ratcdc&stats=bat", "type=ratcdc&stats=pit", false},
 		{"bogus", "", "", true},
 	}
 
