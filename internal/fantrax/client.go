@@ -201,6 +201,13 @@ type Client struct {
 	matchupsMu   sync.Mutex
 	matchupsMemo *auth_client.AllMatchupsResult
 
+	// periodMapMu guards periodMapMemo, an in-memory cache of the
+	// authoritative date→DailyPeriod map (parsed from getTeamRosterInfo's
+	// periodList dropdown). Fetched once per process — a recap-site build
+	// re-derives every completed week and would otherwise refetch per week.
+	periodMapMu   sync.Mutex
+	periodMapMemo map[string]DailyPeriod
+
 	// File-cache config, populated by SetCache. When cacheDir is empty
 	// every cached helper falls through to the uncached upstream call —
 	// this is how --no-cache (and tests) disable persistence.

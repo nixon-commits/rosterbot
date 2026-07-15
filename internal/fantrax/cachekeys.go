@@ -23,5 +23,6 @@ const (
 	keyRosterStats        = "fantrax-roster-stats"
 	keySeasonRange        = "fantrax-season-range"
 	keyGSLimits           = "fantrax-gs-limits"
+	keyPeriodDateMap      = "fantrax-period-date-map"
 	keyMLBGameLog         = "mlb-game-log"
 )
