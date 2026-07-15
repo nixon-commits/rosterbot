@@ -20,7 +20,7 @@ import (
 
 // ScoringPeriod represents a scoring period with its date range.
 type ScoringPeriod struct {
-	Number    int
+	Number    WeeklyPeriod
 	Caption   string
 	StartDate time.Time
 	EndDate   time.Time
@@ -128,7 +128,7 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 		}
 
 		periods = append(periods, ScoringPeriod{
-			Number:    num,
+			Number:    WeeklyPeriod(num),
 			Caption:   table.Caption,
 			StartDate: start,
 			EndDate:   end,

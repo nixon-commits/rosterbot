@@ -101,7 +101,7 @@ func TestFindCurrentPeriod_MergedAllStarBreakPeriod(t *testing.T) {
 	tests := []struct {
 		name  string
 		today time.Time
-		want  int
+		want  WeeklyPeriod
 	}{
 		{"first day of merged period", date("2026-07-13"), 16},
 		{"deep in the All-Star break itself", date("2026-07-19"), 16},

@@ -33,21 +33,21 @@ type gsLimits struct {
 // unrelated daily-period numbering (see period-drift-2026 memory). Once a
 // period's min/max is set at league setup time it doesn't change again,
 // past or current.
-func (c *Client) GetGSLimits(teamID string, period int) (min, max *int, err error) {
+func (c *Client) GetGSLimits(teamID string, period WeeklyPeriod) (min, max *int, err error) {
 	if c.cacheDir == "" {
 		limits, ferr := c.fetchGSLimits(teamID, period)
 		return limits.Min, limits.Max, ferr
 	}
 	fc := cache.New[gsLimits](c.cacheDir, pastPeriodTTL)
-	key := cache.Key(keyGSLimits, teamID, strconv.Itoa(period))
+	key := cache.Key(keyGSLimits, teamID, strconv.Itoa(int(period)))
 	limits, ferr := fc.Get(key, func() (gsLimits, error) {
 		return c.fetchGSLimits(teamID, period)
 	})
 	return limits.Min, limits.Max, ferr
 }
 
-func (c *Client) fetchGSLimits(teamID string, period int) (gsLimits, error) {
-	gpp, err := c.auth.GetTeamRosterPositionCounts(teamID, strconv.Itoa(period))
+func (c *Client) fetchGSLimits(teamID string, period WeeklyPeriod) (gsLimits, error) {
+	gpp, err := c.auth.GetTeamRosterPositionCounts(teamID, strconv.Itoa(int(period)))
 	if err != nil {
 		return gsLimits{}, err
 	}
