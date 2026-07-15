@@ -37,7 +37,7 @@ type DayPlayerFP struct {
 // DayRoster bundles every player's per-day FPts snapshot for a single date.
 type DayRoster struct {
 	Date    time.Time     `json:"date"`
-	Period  int           `json:"period"`
+	Period  DailyPeriod   `json:"period"`
 	Players []DayPlayerFP `json:"players"`
 }
 
@@ -100,7 +100,7 @@ func (c *Client) DailyFantasyPoints(
 	// pinned stale for the full 30-day past-period TTL and every later rebuild
 	// (the weekly recap-site re-renders every week) reuses the stale value.
 	curPeriod := PeriodForDate(seasonStart, time.Now().UTC())
-	snapCacheFor := func(period int) *cache.FileCache[periodSnapshot] {
+	snapCacheFor := func(period DailyPeriod) *cache.FileCache[periodSnapshot] {
 		ttl := cacheTTL
 		if cacheTTL > 0 && periodIsVolatile(period, curPeriod) {
 			ttl = cappedTTL(cacheTTL, c.todayTTL)
@@ -215,7 +215,7 @@ const recentPeriodLookback = 3
 // periodIsVolatile reports whether a period's snapshot can still change and so
 // must not be pinned for the long immutable-past-period TTL. True for the
 // current/future periods and the last recentPeriodLookback closed periods.
-func periodIsVolatile(period, curPeriod int) bool {
+func periodIsVolatile(period, curPeriod DailyPeriod) bool {
 	return period >= curPeriod-recentPeriodLookback
 }
 
@@ -240,9 +240,9 @@ func cappedTTL(callerTTL, periodTTL time.Duration) time.Duration {
 func (c *Client) getPeriodSnapshotCached(
 	snapCache *cache.FileCache[periodSnapshot],
 	teamID string,
-	period int,
+	period DailyPeriod,
 ) (snap periodSnapshot, hitNetwork bool, err error) {
-	key := cache.Key(keyRosterStats, teamID, strconv.Itoa(period))
+	key := cache.Key(keyRosterStats, teamID, strconv.Itoa(int(period)))
 	snap, err = snapCache.Get(key, func() (periodSnapshot, error) {
 		hitNetwork = true
 		return c.fetchPeriodSnapshot(teamID, period)
@@ -252,8 +252,8 @@ func (c *Client) getPeriodSnapshotCached(
 
 // fetchPeriodSnapshot pulls the raw team roster info for a period and extracts
 // hitter + pitcher YTD values.
-func (c *Client) fetchPeriodSnapshot(teamID string, period int) (periodSnapshot, error) {
-	rosterResp, err := c.auth.GetTeamRosterInfoRaw(strconv.Itoa(period), teamID,
+func (c *Client) fetchPeriodSnapshot(teamID string, period DailyPeriod) (periodSnapshot, error) {
+	rosterResp, err := c.auth.GetTeamRosterInfoRaw(strconv.Itoa(int(period)), teamID,
 		auth_client.WithScoringCategoryType("1"),
 		auth_client.WithStatsType("1"))
 	if err != nil {

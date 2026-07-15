@@ -14,7 +14,7 @@ func TestPeriodIsVolatile(t *testing.T) {
 	// not be pinned for the 30-day past-period TTL.
 	const cur = 100
 	cases := []struct {
-		period int
+		period DailyPeriod
 		want   bool
 	}{
 		{cur + 1, true},                         // future

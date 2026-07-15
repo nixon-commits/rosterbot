@@ -28,7 +28,7 @@ import "time"
 // dates all read/wrote the same (wrong) daily snapshot — the same day's diff
 // never resolved, so the same lineup swap re-applied and re-notified every
 // hourly run.
-func DailyPeriodFor(currentPeriod int, seasonStart, today, date time.Time) int {
+func DailyPeriodFor(currentPeriod DailyPeriod, seasonStart, today, date time.Time) DailyPeriod {
 	if currentPeriod > 0 {
 		return AnchorPeriodForDate(today, currentPeriod, date)
 	}
@@ -40,7 +40,7 @@ func DailyPeriodFor(currentPeriod int, seasonStart, today, date time.Time) int {
 // sp.EndDate). Returns nil if the period hasn't started yet (yesterday is before
 // sp.StartDate). See DailyPeriodFor for why this is the daily numbering, not the
 // weekly one.
-func gsPeriodWalk(sp ScoringPeriod, currentPeriod int, seasonStart, today time.Time) []int {
+func gsPeriodWalk(sp ScoringPeriod, currentPeriod DailyPeriod, seasonStart, today time.Time) []DailyPeriod {
 	yesterday := today.Truncate(24*time.Hour).AddDate(0, 0, -1)
 	if yesterday.Before(sp.StartDate) {
 		return nil
@@ -48,7 +48,7 @@ func gsPeriodWalk(sp ScoringPeriod, currentPeriod int, seasonStart, today time.T
 	if yesterday.After(sp.EndDate) {
 		yesterday = sp.EndDate
 	}
-	var out []int
+	var out []DailyPeriod
 	for d := sp.StartDate; !d.After(yesterday); d = d.AddDate(0, 0, 1) {
 		out = append(out, DailyPeriodFor(currentPeriod, seasonStart, today, d))
 	}

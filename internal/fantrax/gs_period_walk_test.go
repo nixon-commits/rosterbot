@@ -16,11 +16,11 @@ func TestGSPeriodWalk_NormalWeekDailyNumbering(t *testing.T) {
 	sp := ScoringPeriod{Number: 15, StartDate: date("2026-07-06"), EndDate: date("2026-07-12")}
 	seasonStart := date("2026-03-25")
 	today := date("2026-07-13")
-	currentPeriod := 111 // Fantrax's authoritative current daily period on 07-13
+	currentPeriod := DailyPeriod(111) // Fantrax's authoritative current daily period on 07-13
 
 	got := gsPeriodWalk(sp, currentPeriod, seasonStart, today)
 
-	want := []int{104, 105, 106, 107, 108, 109, 110}
+	want := []DailyPeriod{104, 105, 106, 107, 108, 109, 110}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("walk must yield distinct daily periods per day, got %v want %v", got, want)
 	}
@@ -33,15 +33,15 @@ func TestGSPeriodWalk_NormalWeekDailyNumbering(t *testing.T) {
 func TestGSPeriodWalk_MergedAllStarBreakDailyNumbering(t *testing.T) {
 	sp := ScoringPeriod{Number: 16, StartDate: date("2026-07-13"), EndDate: date("2026-07-26")}
 	seasonStart := date("2026-03-25")
-	today := date("2026-07-27") // day after the merged span ends
-	currentPeriod := 125        // daily period on 07-27
+	today := date("2026-07-27")       // day after the merged span ends
+	currentPeriod := DailyPeriod(125) // daily period on 07-27
 
 	got := gsPeriodWalk(sp, currentPeriod, seasonStart, today)
 
 	// 07-13..07-26 = 14 days, anchored back from 07-27=125 → 111..124.
-	want := make([]int, 14)
+	want := make([]DailyPeriod, 14)
 	for i := range want {
-		want[i] = 111 + i
+		want[i] = DailyPeriod(111 + i)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("merged weekly period must still walk by daily period, got %v want %v", got, want)
@@ -53,13 +53,13 @@ func TestGSPeriodWalk_MergedAllStarBreakDailyNumbering(t *testing.T) {
 func TestGSPeriodWalk_CapsAtPeriodEndDate(t *testing.T) {
 	sp := ScoringPeriod{Number: 5, StartDate: date("2026-04-20"), EndDate: date("2026-04-20")}
 	seasonStart := date("2026-03-25")
-	today := date("2026-04-25") // yesterday would be 04-24, well past sp.EndDate
-	currentPeriod := 31         // daily period on 04-25
+	today := date("2026-04-25")      // yesterday would be 04-24, well past sp.EndDate
+	currentPeriod := DailyPeriod(31) // daily period on 04-25
 
 	got := gsPeriodWalk(sp, currentPeriod, seasonStart, today)
 
 	// Single-day period; anchored back from 04-25=31 → 04-20=26.
-	want := []int{26}
+	want := []DailyPeriod{26}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("walk should cap at sp.EndDate (one day), got %v want %v", got, want)
 	}
@@ -88,7 +88,7 @@ func TestGSPeriodWalk_DayMathFallback(t *testing.T) {
 
 	got := gsPeriodWalk(sp, 0, seasonStart, today) // currentPeriod unknown
 
-	want := []int{PeriodForDate(seasonStart, date("2026-06-23"))}
+	want := []DailyPeriod{PeriodForDate(seasonStart, date("2026-06-23"))}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected day-math fallback %v, got %v", want, got)
 	}

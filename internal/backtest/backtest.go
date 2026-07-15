@@ -34,13 +34,13 @@ type PlayerPts struct {
 
 // LineupDayResult is the lineup-grade output for a single date.
 type LineupDayResult struct {
-	Date       time.Time   `json:"date"`
-	Period     int         `json:"period"`
-	ActualPts  float64     `json:"actual_pts"`
-	OptimalPts float64     `json:"optimal_pts"`
-	Gap        float64     `json:"gap"`            // ActualPts - OptimalPts (negative = left on bench)
-	Benched    []PlayerPts `json:"benched_points"` // players who scored but were not started
-	Started    []PlayerPts `json:"started_points"` // players who were started (for context)
+	Date       time.Time           `json:"date"`
+	Period     fantrax.DailyPeriod `json:"period"`
+	ActualPts  float64             `json:"actual_pts"`
+	OptimalPts float64             `json:"optimal_pts"`
+	Gap        float64             `json:"gap"`            // ActualPts - OptimalPts (negative = left on bench)
+	Benched    []PlayerPts         `json:"benched_points"` // players who scored but were not started
+	Started    []PlayerPts         `json:"started_points"` // players who were started (for context)
 }
 
 // PlayerProjection compares a single player-day's projection to actual FPts.

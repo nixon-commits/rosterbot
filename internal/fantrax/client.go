@@ -235,7 +235,7 @@ const pastPeriodTTL = 30 * 24 * time.Hour
 // change. The "current period" comparison uses PeriodForDate against
 // today rather than calling GetCurrentPeriod (which would itself be
 // cached and potentially circular).
-func (c *Client) ttlForPeriod(period int) time.Duration {
+func (c *Client) ttlForPeriod(period DailyPeriod) time.Duration {
 	seasonStart, _, err := c.fetchSeasonDateRange()
 	if err != nil {
 		return c.todayTTL // pessimistic on error — short TTL is always safe
@@ -308,12 +308,12 @@ func (c *Client) allMatchups() (*auth_client.AllMatchupsResult, error) {
 // a specific scoring period so the next call re-fetches from Fantrax. Called
 // after ApplyLineup so a second optimize run sees the updated lineup rather
 // than the stale pre-apply snapshot.
-func (c *Client) InvalidatePeriodRosterCache(period int) {
+func (c *Client) InvalidatePeriodRosterCache(period DailyPeriod) {
 	if c.cacheDir == "" {
 		return
 	}
 	fc := cache.New[[]Player](c.cacheDir, 0)
-	periodStr := strconv.Itoa(period)
+	periodStr := strconv.Itoa(int(period))
 	// Period-specific keys (used by GetHitterRosterForPeriod for future dates).
 	fc.Invalidate(cache.Key(keyHitterRoster, c.teamID, periodStr))
 	fc.Invalidate(cache.Key(keyPitcherRoster, c.teamID, periodStr))
@@ -338,7 +338,7 @@ func (c *Client) GetHitterRoster() ([]Player, error) {
 // GetHitterRosterForPeriod returns all hitters for the given scoring period.
 // Pass 0 to use the current period. Past-period rosters are cached at 30d
 // TTL via ttlForPeriod; current/future use todayTTL.
-func (c *Client) GetHitterRosterForPeriod(period int) ([]Player, error) {
+func (c *Client) GetHitterRosterForPeriod(period DailyPeriod) ([]Player, error) {
 	if c.cacheDir == "" || period == 0 {
 		// period==0 is "current" — let GetHitterRoster handle the today-keyed cache.
 		if period == 0 {
@@ -347,13 +347,13 @@ func (c *Client) GetHitterRosterForPeriod(period int) ([]Player, error) {
 		return c.fetchHitterRosterForPeriod(period)
 	}
 	fc := cache.New[[]Player](c.cacheDir, c.ttlForPeriod(period))
-	key := cache.Key(keyHitterRoster, c.teamID, strconv.Itoa(period))
+	key := cache.Key(keyHitterRoster, c.teamID, strconv.Itoa(int(period)))
 	return fc.Get(key, func() ([]Player, error) {
 		return c.fetchHitterRosterForPeriod(period)
 	})
 }
 
-func (c *Client) fetchHitterRosterForPeriod(period int) ([]Player, error) {
+func (c *Client) fetchHitterRosterForPeriod(period DailyPeriod) ([]Player, error) {
 	var roster *models.TeamRoster
 	var err error
 	if period == 0 {
@@ -688,13 +688,13 @@ func (c *Client) fetchScoringWeights() (ScoringWeights, error) {
 // lock state diverges from team-game lock state (mid-day announced lineups,
 // doubleheaders, timing edges) so the optimizer can stage moves Fantrax
 // considers locked even when our pre-flight LockedTeams check passed.
-func (c *Client) ApplyLineup(period int, active []PlayerSlot, reserve []string) error {
+func (c *Client) ApplyLineup(period DailyPeriod, active []PlayerSlot, reserve []string) error {
 	if period == 0 {
 		p, err := c.auth.GetCurrentPeriod()
 		if err != nil {
 			return fmt.Errorf("auto-detect period: %w", err)
 		}
-		period = p
+		period = DailyPeriod(p)
 	}
 
 	rawRoster, err := c.auth.GetTeamRosterInfoRaw(fmt.Sprintf("%d", period), c.teamID)
@@ -703,7 +703,7 @@ func (c *Client) ApplyLineup(period int, active []PlayerSlot, reserve []string) 
 	}
 
 	executor := func(fieldMap map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
-		return c.auth.ConfirmOrExecuteTeamRosterChangesRaw(period, c.teamID, fieldMap, false, true, false)
+		return c.auth.ConfirmOrExecuteTeamRosterChangesRaw(int(period), c.teamID, fieldMap, false, true, false)
 	}
 
 	return applyLineupWithLockedPlayerRetry(executor, rawRoster, active, reserve)

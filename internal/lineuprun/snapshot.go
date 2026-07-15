@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/backtest"
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 )
@@ -14,7 +15,7 @@ import (
 // / archive pass.
 type dateResult struct {
 	date             time.Time
-	period           int
+	period           fantrax.DailyPeriod
 	isToday          bool
 	hitterResult     optimizer.Result
 	pitcherResult    optimizer.PitcherResult

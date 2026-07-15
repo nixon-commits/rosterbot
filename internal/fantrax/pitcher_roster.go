@@ -38,7 +38,7 @@ func (c *Client) GetPitcherRoster() ([]Player, error) {
 // GetPitcherRosterForPeriod returns all pitchers for the given scoring period.
 // Pass 0 to use the current period. Past-period rosters are cached at 30d
 // TTL via ttlForPeriod; current/future use todayTTL.
-func (c *Client) GetPitcherRosterForPeriod(period int) ([]Player, error) {
+func (c *Client) GetPitcherRosterForPeriod(period DailyPeriod) ([]Player, error) {
 	if c.cacheDir == "" || period == 0 {
 		if period == 0 {
 			return c.GetPitcherRoster()
@@ -46,13 +46,13 @@ func (c *Client) GetPitcherRosterForPeriod(period int) ([]Player, error) {
 		return c.fetchPitcherRosterForPeriod(period)
 	}
 	fc := cache.New[[]Player](c.cacheDir, c.ttlForPeriod(period))
-	key := cache.Key(keyPitcherRoster, c.teamID, strconv.Itoa(period))
+	key := cache.Key(keyPitcherRoster, c.teamID, strconv.Itoa(int(period)))
 	return fc.Get(key, func() ([]Player, error) {
 		return c.fetchPitcherRosterForPeriod(period)
 	})
 }
 
-func (c *Client) fetchPitcherRosterForPeriod(period int) ([]Player, error) {
+func (c *Client) fetchPitcherRosterForPeriod(period DailyPeriod) ([]Player, error) {
 	var roster *models.TeamRoster
 	var err error
 	if period == 0 {

@@ -275,8 +275,8 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStar
 }
 
 // getPlayerGSSnapshotForPeriod returns per-player YTD GS and active-slot status for a single daily period.
-func (c *Client) getPlayerGSSnapshotForPeriod(teamID string, period int) (map[string]playerGSSnapshot, error) {
-	rosterResp, err := c.auth.GetTeamRosterInfoRaw(strconv.Itoa(period), teamID,
+func (c *Client) getPlayerGSSnapshotForPeriod(teamID string, period DailyPeriod) (map[string]playerGSSnapshot, error) {
+	rosterResp, err := c.auth.GetTeamRosterInfoRaw(strconv.Itoa(int(period)), teamID,
 		auth_client.WithScoringCategoryType("1"),
 		auth_client.WithStatsType("2"))
 	if err != nil {
@@ -299,13 +299,13 @@ func (c *Client) getPlayerGSSnapshotForPeriod(teamID string, period int) (map[st
 func (c *Client) getPlayerGSSnapshotForPeriodCached(
 	snapCache *cache.FileCache[map[string]playerGSSnapshot],
 	teamID string,
-	period int,
+	period DailyPeriod,
 ) (snap map[string]playerGSSnapshot, hitNetwork bool, err error) {
 	if snapCache == nil {
 		snap, err = c.getPlayerGSSnapshotForPeriod(teamID, period)
 		return snap, true, err
 	}
-	key := cache.Key(keyPitcherGS, teamID, strconv.Itoa(period))
+	key := cache.Key(keyPitcherGS, teamID, strconv.Itoa(int(period)))
 	snap, err = snapCache.Get(key, func() (map[string]playerGSSnapshot, error) {
 		hitNetwork = true
 		return c.getPlayerGSSnapshotForPeriod(teamID, period)

@@ -21,7 +21,7 @@ func TestAnchorPeriodForDate(t *testing.T) {
 	cases := []struct {
 		name string
 		date time.Time
-		want int
+		want DailyPeriod
 	}{
 		{"anchor day maps to anchor period", today, 92},
 		{"next day is +1", d(2026, 6, 24), 93},

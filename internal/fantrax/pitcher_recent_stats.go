@@ -89,7 +89,7 @@ func isPitcherByName(posShortNames string) bool {
 //
 // Cached under fantrax-recent-stats-pitcher-<teamID>-<period> with a TTL
 // determined by ttlForPeriod (30d for past, todayTTL otherwise).
-func (c *Client) GetRecentPitcherStats(currentPeriod, _ int) (map[string]RecentStat, error) {
+func (c *Client) GetRecentPitcherStats(currentPeriod DailyPeriod, _ int) (map[string]RecentStat, error) {
 	period := currentPeriod - 1
 	if period < 1 {
 		return nil, fmt.Errorf("no completed periods (current=%d)", currentPeriod)
@@ -99,14 +99,14 @@ func (c *Client) GetRecentPitcherStats(currentPeriod, _ int) (map[string]RecentS
 		return c.fetchRecentPitcherStats(period)
 	}
 	fc := cache.New[map[string]RecentStat](c.cacheDir, c.ttlForPeriod(period))
-	key := cache.Key(keyRecentStatsPitcher, c.teamID, strconv.Itoa(period))
+	key := cache.Key(keyRecentStatsPitcher, c.teamID, strconv.Itoa(int(period)))
 	return fc.Get(key, func() (map[string]RecentStat, error) {
 		return c.fetchRecentPitcherStats(period)
 	})
 }
 
-func (c *Client) fetchRecentPitcherStats(period int) (map[string]RecentStat, error) {
-	raw, err := c.auth.GetTeamRosterInfoRaw(strconv.Itoa(period), c.teamID)
+func (c *Client) fetchRecentPitcherStats(period DailyPeriod) (map[string]RecentStat, error) {
+	raw, err := c.auth.GetTeamRosterInfoRaw(strconv.Itoa(int(period)), c.teamID)
 	if err != nil {
 		return nil, fmt.Errorf("fetch roster for period %d: %w", period, err)
 	}
@@ -116,7 +116,7 @@ func (c *Client) fetchRecentPitcherStats(period int) (map[string]RecentStat, err
 	fptsMap := extractRawFPts(raw)
 
 	// Also parse the roster normally for FP/G and position info.
-	roster, err := c.auth.GetTeamRosterInfo(strconv.Itoa(period), c.teamID)
+	roster, err := c.auth.GetTeamRosterInfo(strconv.Itoa(int(period)), c.teamID)
 	if err != nil {
 		return nil, fmt.Errorf("parse roster for period %d: %w", period, err)
 	}
