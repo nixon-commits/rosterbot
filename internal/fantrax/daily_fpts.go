@@ -99,7 +99,7 @@ func (c *Client) DailyFantasyPoints(
 	// it, a snapshot cached during the lag window (e.g. a Sunday-night build) is
 	// pinned stale for the full 30-day past-period TTL and every later rebuild
 	// (the weekly recap-site re-renders every week) reuses the stale value.
-	curPeriod := PeriodForDate(seasonStart, time.Now().UTC())
+	curPeriod := c.dailyPeriodForDate(seasonStart, time.Now().UTC())
 	snapCacheFor := func(period DailyPeriod) *cache.FileCache[periodSnapshot] {
 		ttl := cacheTTL
 		if cacheTTL > 0 && periodIsVolatile(period, curPeriod) {
@@ -114,7 +114,7 @@ func (c *Client) DailyFantasyPoints(
 	prevPitchers := map[string]playerYTD{}
 	dayBefore := start.AddDate(0, 0, -1)
 	if !dayBefore.Before(seasonStart) {
-		basePeriod := PeriodForDate(seasonStart, dayBefore)
+		basePeriod := c.dailyPeriodForDate(seasonStart, dayBefore)
 		if basePeriod >= 1 {
 			base, _, err := c.getPeriodSnapshotCached(snapCacheFor(basePeriod), teamID, basePeriod)
 			if err != nil {
@@ -127,7 +127,7 @@ func (c *Client) DailyFantasyPoints(
 
 	var days []DayRoster
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-		period := PeriodForDate(seasonStart, d)
+		period := c.dailyPeriodForDate(seasonStart, d)
 		snap, hitNetwork, err := c.getPeriodSnapshotCached(snapCacheFor(period), teamID, period)
 		if err != nil {
 			return nil, fmt.Errorf("snapshot %s (period %d): %w", d.Format("2006-01-02"), period, err)
