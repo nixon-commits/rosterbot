@@ -47,14 +47,16 @@ func extractHitterStats(roster []models.RosterPlayer) map[string]RecentStat {
 // GetCurrentPeriod returns the current Fantrax scoring period number.
 // Cached under fantrax-current-period-<leagueID>-<YYYY-MM-DD> with a 15m
 // TTL when SetCache has been called.
-func (c *Client) GetCurrentPeriod() (int, error) {
+func (c *Client) GetCurrentPeriod() (DailyPeriod, error) {
 	if c.cacheDir == "" {
-		return c.auth.GetCurrentPeriod()
+		p, err := c.auth.GetCurrentPeriod()
+		return DailyPeriod(p), err
 	}
-	fc := cache.New[int](c.cacheDir, c.todayTTL)
+	fc := cache.New[DailyPeriod](c.cacheDir, c.todayTTL)
 	key := cache.Key(keyCurrentPeriod, c.leagueID, time.Now().UTC().Format("2006-01-02"))
-	return fc.Get(key, func() (int, error) {
-		return c.auth.GetCurrentPeriod()
+	return fc.Get(key, func() (DailyPeriod, error) {
+		p, err := c.auth.GetCurrentPeriod()
+		return DailyPeriod(p), err
 	})
 }
 
@@ -122,9 +124,9 @@ func parseMatchupDate(s string) (time.Time, error) {
 // span containing anchorDate; for dates separated from anchorDate by an
 // insertion it drifts by that insertion count (acceptable for the near-today
 // callers — deep-historical mapping is out of scope here).
-func AnchorPeriodForDate(anchorDate time.Time, anchorPeriod int, date time.Time) int {
+func AnchorPeriodForDate(anchorDate time.Time, anchorPeriod DailyPeriod, date time.Time) DailyPeriod {
 	days := int(date.Truncate(24*time.Hour).Sub(anchorDate.Truncate(24*time.Hour)).Hours() / 24)
-	return anchorPeriod + days
+	return anchorPeriod + DailyPeriod(days)
 }
 
 // PeriodForDate returns the daily scoring period number for the given date,
@@ -132,7 +134,7 @@ func AnchorPeriodForDate(anchorDate time.Time, anchorPeriod int, date time.Time)
 // one scoring period per calendar day, which Fantrax violates when it inserts
 // extra daily periods mid-season — see AnchorPeriodForDate. Retained as the
 // fallback anchor when the authoritative current period is unavailable.
-func PeriodForDate(seasonStart, date time.Time) int {
+func PeriodForDate(seasonStart, date time.Time) DailyPeriod {
 	return AnchorPeriodForDate(seasonStart, 1, date)
 }
 

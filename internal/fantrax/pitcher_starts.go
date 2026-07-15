@@ -47,7 +47,7 @@ func (c *Client) GetTeamPitcherStarts(teamID string, start, end, seasonStart tim
 	prevFPts := map[string]float64{}
 	dayBefore := start.AddDate(0, 0, -1)
 	if !dayBefore.Before(seasonStart) {
-		basePeriod := PeriodForDate(seasonStart, dayBefore)
+		basePeriod := c.dailyPeriodForDate(seasonStart, dayBefore)
 		if basePeriod >= 1 {
 			info, _, err := c.getPlayerGSSnapshotForPeriodCached(snapCache, teamID, basePeriod)
 			if err != nil {
@@ -62,7 +62,7 @@ func (c *Client) GetTeamPitcherStarts(teamID string, start, end, seasonStart tim
 
 	var starts []DatedPitcherStart
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-		period := PeriodForDate(seasonStart, d)
+		period := c.dailyPeriodForDate(seasonStart, d)
 		info, hitNetwork, err := c.getPlayerGSSnapshotForPeriodCached(snapCache, teamID, period)
 		if err != nil {
 			return nil, fmt.Errorf("pitcher snapshot %s (period %d): %w", d.Format("2006-01-02"), period, err)
