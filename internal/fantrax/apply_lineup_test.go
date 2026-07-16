@@ -143,7 +143,7 @@ func TestApplyLineupAttempt_LockedPlayerRetry_May1Hoerner(t *testing.T) {
 		return successResp(), nil
 	}
 
-	if err := applyLineupWithLockedPlayerRetry(executor, roster, active, reserve); err != nil {
+	if err := applyLineupWithLockedPlayerRetry(executor, nil, roster, active, reserve); err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}
 
@@ -190,7 +190,7 @@ func TestApplyLineupAttempt_LockedPlayerRetry_Apr26EmersonCampbell(t *testing.T)
 		return successResp(), nil
 	}
 
-	if err := applyLineupWithLockedPlayerRetry(executor, roster, active, nil); err != nil {
+	if err := applyLineupWithLockedPlayerRetry(executor, nil, roster, active, nil); err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}
 
@@ -221,7 +221,7 @@ func TestApplyLineupAttempt_LockedPersistsAfterRetry_DoesNotCrash(t *testing.T) 
 		return errResp(lockedErrSingle), nil
 	}
 
-	err := applyLineupWithLockedPlayerRetry(executor, roster, active, nil)
+	err := applyLineupWithLockedPlayerRetry(executor, nil, roster, active, nil)
 	if err == nil {
 		t.Fatal("expected error after retry still fails")
 	}
@@ -243,7 +243,7 @@ func TestApplyLineupAttempt_NonLockedRejection_NoRetry(t *testing.T) {
 		return errResp("max actions exceeded for this period"), nil
 	}
 
-	err := applyLineupWithLockedPlayerRetry(executor, roster, active, nil)
+	err := applyLineupWithLockedPlayerRetry(executor, nil, roster, active, nil)
 	if err == nil {
 		t.Fatal("expected error from unrelated rejection")
 	}
@@ -262,7 +262,7 @@ func TestApplyLineupAttempt_HappyPath(t *testing.T) {
 		return successResp(), nil
 	}
 
-	if err := applyLineupWithLockedPlayerRetry(executor, roster, active, nil); err != nil {
+	if err := applyLineupWithLockedPlayerRetry(executor, nil, roster, active, nil); err != nil {
 		t.Fatalf("happy path failed: %v", err)
 	}
 	if attempts != 1 {
@@ -278,7 +278,7 @@ func TestApplyLineupAttempt_NoChangesDetected_TreatedAsSuccess(t *testing.T) {
 		return errResp("no changes detected"), nil
 	}
 
-	if err := applyLineupWithLockedPlayerRetry(executor, roster, active, nil); err != nil {
+	if err := applyLineupWithLockedPlayerRetry(executor, nil, roster, active, nil); err != nil {
 		t.Errorf("no-change response should be benign success, got: %v", err)
 	}
 }
@@ -292,9 +292,153 @@ func TestApplyLineupAttempt_ExecutorError_Propagates(t *testing.T) {
 		return nil, want
 	}
 
-	err := applyLineupWithLockedPlayerRetry(executor, roster, active, nil)
+	err := applyLineupWithLockedPlayerRetry(executor, nil, roster, active, nil)
 	if err == nil || !errors.Is(err, want) {
 		t.Errorf("expected errors.Is(err, want), got: %v", err)
+	}
+}
+
+// lockedErrFor builds a locked-player rejection naming the given player so
+// parseLockedPlayerNames + excludeByName resolve it against the test roster.
+func lockedErrFor(name string) string {
+	return `You cannot make those changes because the following players are already locked in this period:<br/><br/><span class="defaultLink"><a class="hand " onclick="x">` + name + `</a></span><br/>`
+}
+
+// rosterWith builds a roster snapshot where each player carries an explicit
+// StatusID + PosID — used to model the *post-apply* state a verify re-fetch sees.
+func rosterWith(players ...struct{ id, st, pos string }) *models.TeamRosterResponse {
+	var rows []models.PlayerRow
+	for _, p := range players {
+		rows = append(rows, models.PlayerRow{
+			Scorer:   models.Player{ScorerID: p.id, Name: p.id},
+			StatusID: p.st,
+			PosID:    p.pos,
+		})
+	}
+	r := &models.TeamRosterResponse{}
+	r.Responses = append(r.Responses, struct {
+		Data models.TeamRosterResponseData `json:"data"`
+	}{
+		Data: models.TeamRosterResponseData{
+			Tables: []models.RosterTable{{Rows: rows}},
+		},
+	})
+	return r
+}
+
+// After a locked-player retry, a benign response must NOT be trusted blindly:
+// re-fetch and confirm the non-excluded intended changes actually landed. Here
+// the paired (non-locked) swap silently failed — verify must surface an error.
+func TestApplyLineup_PostRetryVerify_SilentFailureSurfaced(t *testing.T) {
+	roster := fakeRoster(
+		struct{ id, name string }{"lock", "Locked Guy"},
+		struct{ id, name string }{"swap", "Swap Guy"},
+	)
+	active := []PlayerSlot{
+		{PlayerID: "lock", PosID: "003"},
+		{PlayerID: "swap", PosID: "008"},
+	}
+
+	executor := func(fm map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
+		if fm["lock"].StID == auth_client.StatusActive {
+			return errResp(lockedErrFor("Locked Guy")), nil // first attempt: lock is locked
+		}
+		return successResp(), nil // retry: benign, but swap didn't really land
+	}
+	// Re-fetch shows swap STILL on the bench — the change never took effect.
+	fetch := func() (*models.TeamRosterResponse, error) {
+		return rosterWith(
+			struct{ id, st, pos string }{"lock", auth_client.StatusReserve, ""},
+			struct{ id, st, pos string }{"swap", auth_client.StatusReserve, ""},
+		), nil
+	}
+
+	err := applyLineupWithLockedPlayerRetry(executor, fetch, roster, active, nil)
+	if err == nil {
+		t.Fatal("expected verify error — the non-excluded swap silently failed to land")
+	}
+	if !strings.Contains(err.Error(), "swap") {
+		t.Errorf("error should name the unmet player, got: %v", err)
+	}
+}
+
+// When the re-fetch confirms the non-excluded changes landed, verify passes.
+func TestApplyLineup_PostRetryVerify_ChangesLanded_Success(t *testing.T) {
+	roster := fakeRoster(
+		struct{ id, name string }{"lock", "Locked Guy"},
+		struct{ id, name string }{"swap", "Swap Guy"},
+	)
+	active := []PlayerSlot{
+		{PlayerID: "lock", PosID: "003"},
+		{PlayerID: "swap", PosID: "008"},
+	}
+
+	executor := func(fm map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
+		if fm["lock"].StID == auth_client.StatusActive {
+			return errResp(lockedErrFor("Locked Guy")), nil
+		}
+		return successResp(), nil
+	}
+	// Re-fetch shows swap active in slot 008 — the intended change landed.
+	fetch := func() (*models.TeamRosterResponse, error) {
+		return rosterWith(
+			struct{ id, st, pos string }{"lock", auth_client.StatusReserve, ""},
+			struct{ id, st, pos string }{"swap", auth_client.StatusActive, "008"},
+		), nil
+	}
+
+	if err := applyLineupWithLockedPlayerRetry(executor, fetch, roster, active, nil); err != nil {
+		t.Fatalf("expected success when verify confirms changes landed, got: %v", err)
+	}
+}
+
+// A verify re-fetch that itself errors can't positively confirm the outcome:
+// soft-fail (no hard error) rather than turning a reported apply into a failure.
+func TestApplyLineup_PostRetryVerify_FetchError_SoftFails(t *testing.T) {
+	roster := fakeRoster(
+		struct{ id, name string }{"lock", "Locked Guy"},
+		struct{ id, name string }{"swap", "Swap Guy"},
+	)
+	active := []PlayerSlot{
+		{PlayerID: "lock", PosID: "003"},
+		{PlayerID: "swap", PosID: "008"},
+	}
+
+	executor := func(fm map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
+		if fm["lock"].StID == auth_client.StatusActive {
+			return errResp(lockedErrFor("Locked Guy")), nil
+		}
+		return successResp(), nil
+	}
+	fetch := func() (*models.TeamRosterResponse, error) {
+		return nil, errors.New("roster refetch broken")
+	}
+
+	if err := applyLineupWithLockedPlayerRetry(executor, fetch, roster, active, nil); err != nil {
+		t.Fatalf("verify fetch error should soft-fail, got: %v", err)
+	}
+}
+
+// No locked-player retry (no exclusions) → verify is skipped entirely; the
+// fetcher must never be called on the clean happy path (no extra API call).
+func TestApplyLineup_NoRetry_VerifySkipped(t *testing.T) {
+	roster := fakeRoster(struct{ id, name string }{"p1", "Alpha"})
+	active := []PlayerSlot{{PlayerID: "p1", PosID: "014"}}
+
+	executor := func(_ map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
+		return successResp(), nil
+	}
+	fetchCalled := false
+	fetch := func() (*models.TeamRosterResponse, error) {
+		fetchCalled = true
+		return rosterWith(), nil
+	}
+
+	if err := applyLineupWithLockedPlayerRetry(executor, fetch, roster, active, nil); err != nil {
+		t.Fatalf("happy path failed: %v", err)
+	}
+	if fetchCalled {
+		t.Error("verify must not re-fetch when no locked-player retry occurred")
 	}
 }
 
@@ -327,7 +471,7 @@ func TestApplyLineupAttempt_LockedReservedPlayer_DroppedFromRetry(t *testing.T) 
 		return successResp(), nil
 	}
 
-	if err := applyLineupWithLockedPlayerRetry(executor, roster, nil, []string{"04pkr"}); err != nil {
+	if err := applyLineupWithLockedPlayerRetry(executor, nil, roster, nil, []string{"04pkr"}); err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}
 

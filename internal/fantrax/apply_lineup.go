@@ -17,6 +17,12 @@ import (
 // without the auth_client's hardcoded fantrax.com URL.
 type rosterChangeExecutor func(map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error)
 
+// rosterFetcher re-fetches the current roster for post-retry verification.
+// Stored as a function value (like rosterChangeExecutor) so tests can inject a
+// fake without the auth_client's hardcoded fantrax.com URL. A nil fetcher
+// disables verification (used by tests that don't exercise that path).
+type rosterFetcher func() (*models.TeamRosterResponse, error)
+
 // lockedPlayerLink matches one <a class="hand"...>NAME</a> tag inside the
 // "already locked in this period" rejection message. Capture group 1 is the
 // raw player name.
@@ -53,6 +59,7 @@ func parseLockedPlayerNames(msg string) []string {
 // exit so the rest of the day's work surfaces.
 func applyLineupWithLockedPlayerRetry(
 	executor rosterChangeExecutor,
+	fetch rosterFetcher,
 	rawRoster *models.TeamRosterResponse,
 	active []PlayerSlot,
 	reserve []string,
@@ -81,12 +88,12 @@ func applyLineupWithLockedPlayerRetry(
 			}
 			msg = mainMsg(resp)
 			if msg == "" {
-				return nil
+				return verifyExcludedRetry(fetch, active, reserve, excluded)
 			}
 		}
 
 		if msg == "" || isBenignNoChangeMsg(msg) {
-			return nil
+			return verifyExcludedRetry(fetch, active, reserve, excluded)
 		}
 
 		lastMsg = msg
@@ -103,6 +110,61 @@ func applyLineupWithLockedPlayerRetry(
 
 	if lastMsg != "" {
 		return fmt.Errorf("roster change rejected after retry: %s", lastMsg)
+	}
+	return nil
+}
+
+// verifyExcludedRetry re-fetches the roster and confirms every non-excluded
+// intended change actually landed. Only meaningful after a locked-player retry
+// (excluded non-empty): Fantrax atomically rejects the first attempt, but the
+// retry payload — with the locked players dropped — can come back benign while
+// the remaining changes silently fail to land (e.g. the whole submission
+// targeted an already-closed period, the rosterbot-48z incident). A clean apply
+// with no exclusions is trusted as-is — Fantrax's own atomicity guarantees it —
+// so the happy path skips the extra roster round-trip entirely.
+//
+// Soft-fails on a re-fetch error: the apply itself reported success, so a
+// verify-only hiccup is logged as "outcome unconfirmed" rather than promoted to
+// a hard failure. A genuine mismatch (a change that didn't take effect) returns
+// an error naming the unmet players so the caller surfaces it (log + Pushover).
+func verifyExcludedRetry(
+	fetch rosterFetcher,
+	active []PlayerSlot,
+	reserve []string,
+	excluded map[string]bool,
+) error {
+	if fetch == nil || len(excluded) == 0 {
+		return nil
+	}
+	roster, err := fetch()
+	if err != nil {
+		log.Printf("fantrax: post-retry verify skipped — roster re-fetch failed: %v", err)
+		return nil
+	}
+	actual := auth_client.BuildFieldMapFromRoster(roster)
+
+	var unmet []string
+	for _, ps := range active {
+		if excluded[ps.PlayerID] {
+			continue
+		}
+		got := actual[ps.PlayerID]
+		if got.StID != auth_client.StatusActive || got.PosID != ps.PosID {
+			unmet = append(unmet, fmt.Sprintf("%s→active(%s) but st=%q pos=%q",
+				ps.PlayerID, ps.PosID, got.StID, got.PosID))
+		}
+	}
+	for _, id := range reserve {
+		if excluded[id] {
+			continue
+		}
+		if actual[id].StID != auth_client.StatusReserve {
+			unmet = append(unmet, fmt.Sprintf("%s→reserve but st=%q", id, actual[id].StID))
+		}
+	}
+	if len(unmet) > 0 {
+		return fmt.Errorf("post-retry verify failed — %d intended change(s) did not land: %s",
+			len(unmet), strings.Join(unmet, "; "))
 	}
 	return nil
 }
