@@ -121,11 +121,7 @@ func CheckTrades(ft TradeClient, cacheDir string, pushoverUserKey, pushoverAPITo
 
 // buildHKBLookup creates a map from normalized player name to HKB player.
 func buildHKBLookup(players []hkb.Player) map[string]hkb.Player {
-	m := make(map[string]hkb.Player, len(players))
-	for _, p := range players {
-		m[normalizeName(p.Name)] = p
-	}
-	return m
+	return hkb.BuildLookup(players)
 }
 
 // groupTrades groups transaction rows by TradeGroupID into Trade structs.
@@ -392,32 +388,24 @@ func groupPendingTrades(pts []fantrax.PendingTrade, lookup map[string]hkb.Player
 
 // newTradePlayer creates a TradePlayer populated with HKB metadata if found.
 func newTradePlayer(name, position string, lookup map[string]hkb.Player) TradePlayer {
-	tp := TradePlayer{
-		Name:     name,
-		Position: position,
+	e := hkb.Enrich(name, position, lookup, false)
+	return TradePlayer{
+		Name:           e.Name,
+		Position:       e.Position,
+		Value:          e.Value,
+		Ranked:         e.Ranked,
+		Age:            e.Age,
+		Rank:           e.Rank,
+		ValueChange30D: e.ValueChange30Days,
+		Level:          e.Level,
+		Prospect:       e.Prospect,
+		FYPD:           e.FYPD,
+		IsPitcher:      e.IsPitcher,
+		HasStats:       e.HasStats,
+		OPS:            e.OPS,
+		ERA:            e.ERA,
+		WHIP:           e.WHIP,
 	}
-	p, found := lookup[normalizeName(name)]
-	if !found {
-		return tp
-	}
-	tp.Ranked = true
-	tp.Value = p.Value
-	tp.Age = p.Age
-	tp.Rank = p.Rank
-	tp.ValueChange30D = p.ValueChange30Days
-	tp.Level = p.Level
-	tp.Prospect = p.Prospect
-	tp.FYPD = p.FYPD
-	if p.PitcherStats != nil {
-		tp.IsPitcher = true
-		tp.HasStats = true
-		tp.ERA = p.PitcherStats.ERA
-		tp.WHIP = p.PitcherStats.WHIP
-	} else if p.HitterStats != nil {
-		tp.HasStats = true
-		tp.OPS = p.HitterStats.OPS
-	}
-	return tp
 }
 
 // normalizeName normalizes a player name for cross-source matching.
