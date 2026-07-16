@@ -713,7 +713,13 @@ func (c *Client) ApplyLineup(period DailyPeriod, active []PlayerSlot, reserve []
 		return c.auth.ConfirmOrExecuteTeamRosterChangesRaw(int(period), c.teamID, fieldMap, false, true, false)
 	}
 
-	return applyLineupWithLockedPlayerRetry(executor, rawRoster, active, reserve)
+	// fetch re-fetches the roster for post-retry verification (only invoked
+	// when the locked-player retry excluded a player — see verifyExcludedRetry).
+	fetch := func() (*models.TeamRosterResponse, error) {
+		return c.auth.GetTeamRosterInfoRaw(fmt.Sprintf("%d", period), c.teamID)
+	}
+
+	return applyLineupWithLockedPlayerRetry(executor, fetch, rawRoster, active, reserve)
 }
 
 // PlayerSlot pairs a player ID with the active slot's position ID.
