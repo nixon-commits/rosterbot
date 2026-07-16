@@ -2,8 +2,10 @@ package fantrax
 
 import "time"
 
-// DailyPeriodFor returns the *daily* scoring-period number for a calendar date,
-// anchored on Fantrax's authoritative current daily period when known, else
+// DailyPeriodFor returns the *daily* scoring-period number for a calendar date.
+// Resolution order: (1) the authoritative periodList date map (see
+// period_date_map.go) when c has one available and it covers date, (2) anchored
+// on Fantrax's authoritative current daily period when known, else (3)
 // season-start day math.
 //
 // GetTeamGS (and its sibling GetTeamPitcherStarts) reconstruct per-day GS by
@@ -28,7 +30,24 @@ import "time"
 // dates all read/wrote the same (wrong) daily snapshot — the same day's diff
 // never resolved, so the same lineup swap re-applied and re-notified every
 // hourly run.
-func DailyPeriodFor(currentPeriod DailyPeriod, seasonStart, today, date time.Time) DailyPeriod {
+//
+// rosterbot-2ax: the anchor-only version of this function assumed
+// GetCurrentPeriod() is always exactly "today's period," which broke live on
+// 2026-07-16 — GetCurrentPeriod() lagged a full day behind the authoritative
+// periodList map (113 vs the map's 114 for that date), so lineup-apply
+// submitted changes against an already-closed period; Fantrax silently
+// rejected them as "already locked," masked as success by the locked-player
+// retry path. Consulting the map first makes this self-correcting the same
+// way the Class-B historical consumers (DailyFantasyPoints, GetTeamPitcherStarts
+// via dailyPeriodForDate) already are.
+func (c *Client) DailyPeriodFor(currentPeriod DailyPeriod, seasonStart, today, date time.Time) DailyPeriod {
+	if c != nil {
+		if m, err := c.periodDateMap(seasonStart); err == nil {
+			if p, ok := m[date.Format("2006-01-02")]; ok {
+				return p
+			}
+		}
+	}
 	if currentPeriod > 0 {
 		return AnchorPeriodForDate(today, currentPeriod, date)
 	}
@@ -39,8 +58,8 @@ func DailyPeriodFor(currentPeriod DailyPeriod, seasonStart, today, date time.Tim
 // from sp.StartDate through the last completed day (today's yesterday, capped at
 // sp.EndDate). Returns nil if the period hasn't started yet (yesterday is before
 // sp.StartDate). See DailyPeriodFor for why this is the daily numbering, not the
-// weekly one.
-func gsPeriodWalk(sp ScoringPeriod, currentPeriod DailyPeriod, seasonStart, today time.Time) []DailyPeriod {
+// weekly one, and for why c (may be nil, e.g. hermetic tests) is consulted first.
+func gsPeriodWalk(c *Client, sp ScoringPeriod, currentPeriod DailyPeriod, seasonStart, today time.Time) []DailyPeriod {
 	yesterday := today.Truncate(24*time.Hour).AddDate(0, 0, -1)
 	if yesterday.Before(sp.StartDate) {
 		return nil
@@ -50,7 +69,7 @@ func gsPeriodWalk(sp ScoringPeriod, currentPeriod DailyPeriod, seasonStart, toda
 	}
 	var out []DailyPeriod
 	for d := sp.StartDate; !d.After(yesterday); d = d.AddDate(0, 0, 1) {
-		out = append(out, DailyPeriodFor(currentPeriod, seasonStart, today, d))
+		out = append(out, c.DailyPeriodFor(currentPeriod, seasonStart, today, d))
 	}
 	return out
 }

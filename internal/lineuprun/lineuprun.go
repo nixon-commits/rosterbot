@@ -608,7 +608,7 @@ func Run(ft *fantrax.Client, cfg *config.Config, opts Options) (Result, error) {
 			// stale snapshot for all of them, so each date's optimizer never saw its
 			// own prior apply, and the same swap re-applied (and re-notified via
 			// Pushover) on every hourly run. See DailyPeriodFor's doc comment.
-			period := fantrax.DailyPeriodFor(currentPeriod, seasonStart, today, date)
+			period := ft.DailyPeriodFor(currentPeriod, seasonStart, today, date)
 
 			var warnings []string
 
