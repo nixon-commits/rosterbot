@@ -18,7 +18,7 @@ func TestGSPeriodWalk_NormalWeekDailyNumbering(t *testing.T) {
 	today := date("2026-07-13")
 	currentPeriod := DailyPeriod(111) // Fantrax's authoritative current daily period on 07-13
 
-	got := gsPeriodWalk(sp, currentPeriod, seasonStart, today)
+	got := gsPeriodWalk(nil, sp, currentPeriod, seasonStart, today)
 
 	want := []DailyPeriod{104, 105, 106, 107, 108, 109, 110}
 	if !reflect.DeepEqual(got, want) {
@@ -36,7 +36,7 @@ func TestGSPeriodWalk_MergedAllStarBreakDailyNumbering(t *testing.T) {
 	today := date("2026-07-27")       // day after the merged span ends
 	currentPeriod := DailyPeriod(125) // daily period on 07-27
 
-	got := gsPeriodWalk(sp, currentPeriod, seasonStart, today)
+	got := gsPeriodWalk(nil, sp, currentPeriod, seasonStart, today)
 
 	// 07-13..07-26 = 14 days, anchored back from 07-27=125 → 111..124.
 	want := make([]DailyPeriod, 14)
@@ -56,7 +56,7 @@ func TestGSPeriodWalk_CapsAtPeriodEndDate(t *testing.T) {
 	today := date("2026-04-25")      // yesterday would be 04-24, well past sp.EndDate
 	currentPeriod := DailyPeriod(31) // daily period on 04-25
 
-	got := gsPeriodWalk(sp, currentPeriod, seasonStart, today)
+	got := gsPeriodWalk(nil, sp, currentPeriod, seasonStart, today)
 
 	// Single-day period; anchored back from 04-25=31 → 04-20=26.
 	want := []DailyPeriod{26}
@@ -72,7 +72,7 @@ func TestGSPeriodWalk_NilWhenPeriodNotStarted(t *testing.T) {
 	seasonStart := date("2026-03-25")
 	today := date("2026-04-20") // yesterday (04-19) is before sp.StartDate
 
-	got := gsPeriodWalk(sp, 27, seasonStart, today)
+	got := gsPeriodWalk(nil, sp, 27, seasonStart, today)
 
 	if got != nil {
 		t.Fatalf("expected nil for not-yet-started period, got %v", got)
@@ -86,7 +86,7 @@ func TestGSPeriodWalk_DayMathFallback(t *testing.T) {
 	seasonStart := date("2026-03-25")
 	today := date("2026-06-24")
 
-	got := gsPeriodWalk(sp, 0, seasonStart, today) // currentPeriod unknown
+	got := gsPeriodWalk(nil, sp, 0, seasonStart, today) // currentPeriod unknown
 
 	want := []DailyPeriod{PeriodForDate(seasonStart, date("2026-06-23"))}
 	if !reflect.DeepEqual(got, want) {
