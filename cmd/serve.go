@@ -58,7 +58,7 @@ func newServeMux(token, lineupDir, webDir string) http.Handler {
 		Lineups:       lineupapi.NewFileStore(lineupDir),
 		Runs:          lineupapi.NewFileRunStore(lineupDir + "/runs"),
 		Notifications: lineupapi.NewFileNotificationStore(lineupDir + "/notifications"),
-		Output:        lineupapi.NewFileOutputStore(lineupDir + "/output"),
+		Output:        lineupapi.NewFileOutputStore(lineupDir + "/outputs"),
 		// Jobs is nil locally: triggering real ECS tasks only makes sense on AWS.
 		// POST /v1/jobs/* returns 501 from `serve`.
 	})

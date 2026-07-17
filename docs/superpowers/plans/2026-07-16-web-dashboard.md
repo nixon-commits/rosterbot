@@ -190,7 +190,7 @@ func newServeMux(token, lineupDir, webDir string) http.Handler {
 		Lineups:       lineupapi.NewFileStore(lineupDir),
 		Runs:          lineupapi.NewFileRunStore(lineupDir + "/runs"),
 		Notifications: lineupapi.NewFileNotificationStore(lineupDir + "/notifications"),
-		Output:        lineupapi.NewFileOutputStore(lineupDir + "/output"),
+		Output:        lineupapi.NewFileOutputStore(lineupDir + "/outputs"),
 		// Jobs is nil locally: triggering real ECS tasks only makes sense on AWS.
 		// POST /v1/jobs/* returns 501 from `serve`.
 	})
@@ -455,7 +455,7 @@ export async function renderLineup(root) {
   header.className = "card";
   header.innerHTML = `
     <h2>${escapeHtml(data.date)}</h2>
-    <p>Projected: <strong>${data.projected_points.toFixed(1)}</strong> pts</p>
+    <p>Expected Points: <strong>${data.projected_points.toFixed(1)}</strong></p>
   `;
   root.appendChild(header);
 
@@ -493,7 +493,7 @@ function slotCard(slot) {
     <div class="muted">${escapeHtml(slot.slot)}</div>
     <div><strong>${escapeHtml(p.name)}</strong> <span class="badge badge-${p.status.toLowerCase()}">${escapeHtml(p.status)}</span></div>
     <div class="muted">${escapeHtml(p.team)} · ${escapeHtml(p.pos.join("/"))}</div>
-    <div>${p.proj.toFixed(1)} proj pts</div>
+    <div>${p.proj.toFixed(1)} Expected Points</div>
   `;
   return card;
 }
@@ -1098,12 +1098,17 @@ export async function renderRuns(root) {
   notifSection.appendChild(notifList);
   root.appendChild(notifSection);
 
-  await Promise.all([
+  const [runs] = await Promise.all([
     loadRuns(runsList, detailSection),
     loadNotifications(notifList),
   ]);
 
-  pollTimer = setInterval(() => loadRuns(runsList, detailSection, /* silent */ true), POLL_MS);
+  if (hasRunningRun(runs)) {
+    pollTimer = setInterval(async () => {
+      const nextRuns = await loadRuns(runsList, detailSection, /* silent */ true);
+      if (nextRuns && !hasRunningRun(nextRuns)) stopPolling();
+    }, POLL_MS);
+  }
   // Stop polling once the user navigates away from this view.
   window.addEventListener("hashchange", stopPolling, { once: true });
 }
@@ -1122,12 +1127,12 @@ async function loadRuns(container, detailSection, silent) {
     runs = resp.runs;
   } catch (err) {
     if (!silent) container.innerHTML = `<p class="error">Failed to load runs: ${escapeHtml(err.message)}</p>`;
-    return;
+    return null;
   }
   container.innerHTML = "";
   if (runs.length === 0) {
     container.innerHTML = "<p class=\"muted\">No runs yet.</p>";
-    return;
+    return runs;
   }
   const table = document.createElement("table");
   table.className = "data-table";
@@ -1147,6 +1152,11 @@ async function loadRuns(container, detailSection, silent) {
   }
   table.appendChild(tbody);
   container.appendChild(table);
+  return runs;
+}
+
+function hasRunningRun(runs) {
+  return Array.isArray(runs) && runs.some((run) => run.status === "RUNNING");
 }
 
 async function showDetail(section, id) {
@@ -1278,11 +1288,11 @@ Open `http://localhost:8080/`, log in, click "Runs". Expected with an empty `.li
 Now seed one fake run + output to exercise the detail/output path end-to-end:
 
 ```bash
-mkdir -p .lineup/runs .lineup/output
+mkdir -p .lineup/runs .lineup/outputs
 cat > .lineup/runs/run-0000000001-test123.json <<'EOF'
 {"id":"test123","command":"waivers","status":"SUCCESS","started_at":"2026-07-16T12:00:00Z","ended_at":"2026-07-16T12:00:05Z","trigger":"manual","log_tail":"waivers: 3 picks found"}
 EOF
-cat > .lineup/output/test123.json <<'EOF'
+cat > .lineup/outputs/test123.json <<'EOF'
 {"type":"waivers","data":{"total":1,"picks":[{"name":"Test Player","team":"NYY","pos":"OF","is_pitcher":false,"projected_pts_per_game":4.2,"rank":1}]}}
 EOF
 ```
@@ -1290,7 +1300,7 @@ EOF
 Reload the Runs view. Expected:
 - One row appears: command `waivers`, a green `SUCCESS` badge, the started timestamp, trigger `manual`.
 - Clicking the row shows the detail card (command, status, trigger, started/ended, the `log_tail` in a `<pre>`) plus an "Output (waivers)" card rendering a table with columns `name, team, pos, is_pitcher, projected_pts_per_game, rank` and the one seeded row.
-- Clean up: `rm -rf .lineup/runs .lineup/output`.
+- Clean up: `rm -rf .lineup/runs .lineup/outputs`.
 
 - [ ] **Step 5: Commit**
 
@@ -1365,6 +1375,7 @@ The `apiURL` variable is defined right before the `--- Phase 2: CodeBuild ---` c
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
 	})
+	awscdk.NewCfnOutput(stack, jsii.String("DashboardCdnId"), &awscdk.CfnOutputProps{Value: dashboardDist.DistributionId()})
 
 	// --- Phase 2: CodeBuild (build + push image to ECR on push to main) ---
 ```
@@ -1397,27 +1408,11 @@ git commit -m "feat(infra): add DashboardBucket + DashboardCdn, path-routed to t
 - Modify: `buildspec.yml`
 
 **Interfaces:**
-- Consumes: `dashboardBucket`, `dashboardDist`, `cfArn` (existing helper, `infra.go:120-124`) from Task 5.
+- Consumes: `dashboardBucket`, `dashboardDist`, `cfArn` (existing helper, `infra.go:120-124`) from Task 5, plus the `DashboardBucketName` and `DashboardCdnId` stack outputs.
 
-- [ ] **Step 1: Add `DASHBOARD_BUCKET`/`DASHBOARD_CF_DIST_ID` to the CodeBuild project's env vars**
+- [ ] **Step 1: Do not use dashboard CodeBuild environment variables**
 
-Inside the `if v, ok := stack.Node().TryGetContext(jsii.String("enableBuild"))...` block, find the `EnvironmentVariables` map on the `Project`:
-
-```go
-			EnvironmentVariables: &map[string]*awscodebuild.BuildEnvironmentVariable{
-				"ECR_URI": {Value: repo.RepositoryUri()},
-				// Launch coordinates for the post-build projection-site render so a
-				// push to main re-renders the dashboard immediately instead of
-				// waiting for the daily ProjectionSite schedule. Reuses the same
-				// egress-only SG + public subnets the API uses to launch tasks.
-				"CLUSTER":         {Value: cluster.ClusterArn()},
-				"TASK_DEF":        {Value: taskDef.TaskDefinitionArn()},
-				"SUBNETS":         {Value: awscdk.Fn_Join(jsii.String(","), publicSubnets.SubnetIds)},
-				"SECURITY_GROUPS": {Value: taskSg.SecurityGroupId()},
-			},
-```
-
-Change it to:
+Keep the existing `EnvironmentVariables` map unchanged. A build that first creates the dashboard resources starts with the *previous* project's environment, so `DASHBOARD_BUCKET`/`DASHBOARD_CF_DIST_ID` would be unavailable until the next build. The buildspec instead deploys first and reads the stack outputs produced by that deploy.
 
 ```go
 			EnvironmentVariables: &map[string]*awscodebuild.BuildEnvironmentVariable{
@@ -1430,9 +1425,6 @@ Change it to:
 				"TASK_DEF":        {Value: taskDef.TaskDefinitionArn()},
 				"SUBNETS":         {Value: awscdk.Fn_Join(jsii.String(","), publicSubnets.SubnetIds)},
 				"SECURITY_GROUPS": {Value: taskSg.SecurityGroupId()},
-				// Where the static dashboard build step (buildspec.yml) publishes.
-				"DASHBOARD_BUCKET":     {Value: dashboardBucket.BucketName()},
-				"DASHBOARD_CF_DIST_ID": {Value: dashboardDist.DistributionId()},
 			},
 ```
 
@@ -1456,24 +1448,27 @@ Right after the existing `taskDef.GrantRun(project)` line, add:
 
 (The `repo.GrantPullPush(project)` and `taskDef.GrantRun(project)` lines already exist — shown only for placement; add just the two new statements after them.)
 
-- [ ] **Step 3: Add the sync step to `buildspec.yml`**
+- [ ] **Step 3: Deploy before publishing in `buildspec.yml`**
 
-In `buildspec.yml`'s `post_build.commands`, insert a new step right after `docker push "$ECR_URI:$TAG"` and before the "Re-render the projection dashboard" step:
+In `buildspec.yml`'s `post_build.commands`, insert the deploy and publish steps right after `docker push "$ECR_URI:$TAG"` and before the "Re-render the projection dashboard" step:
 
 ```yaml
   post_build:
     commands:
       - docker push "$ECR_URI:latest"
       - docker push "$ECR_URI:$TAG"
-      # Publish the static dashboard on every build so a push to main updates
-      # it immediately (same pattern as the projection-site re-render below).
+      # Apply infra first. Outputs from this deploy exist even on the build
+      # that creates DashboardBucket/DashboardCdn.
       - |
-        if [ -n "${DASHBOARD_BUCKET:-}" ]; then
-          aws s3 sync web/dashboard "s3://$DASHBOARD_BUCKET" --delete
-          aws cloudfront create-invalidation --distribution-id "$DASHBOARD_CF_DIST_ID" --paths '/*'
-        else
-          echo "DASHBOARD_BUCKET not set (project env not yet deployed via cdk); skipping dashboard sync"
-        fi
+        export PATH="/usr/local/go/bin:${PATH}"
+        cd infra && cdk deploy -c enableBuild=true --require-approval never --outputs-file ../cdk-outputs.json
+      # Publish the static dashboard after deployment, including the first build.
+      - |
+        set -eu
+        DASHBOARD_BUCKET="$(python3 -c 'import json; print(json.load(open("cdk-outputs.json"))["InfraStack"]["DashboardBucketName"])')"
+        DASHBOARD_CF_DIST_ID="$(python3 -c 'import json; print(json.load(open("cdk-outputs.json"))["InfraStack"]["DashboardCdnId"])')"
+        aws s3 sync web/dashboard "s3://$DASHBOARD_BUCKET" --delete
+        aws cloudfront create-invalidation --distribution-id "$DASHBOARD_CF_DIST_ID" --paths '/*'
       # Re-render the projection dashboard with the image just pushed, so a push
       # to main updates the site immediately instead of waiting for the daily
       # ProjectionSite schedule. Fargate pulls :latest fresh on each RunTask, so
@@ -1482,7 +1477,7 @@ In `buildspec.yml`'s `post_build.commands`, insert a new step right after `docke
         if [ -n "${CLUSTER:-}" ]; then
 ```
 
-(Only the new `if [ -n "${DASHBOARD_BUCKET:-}" ]; then ... fi` block is new; the surrounding lines already exist and are shown for placement only.)
+(Only the deploy-and-publish blocks are new; the surrounding lines are shown for placement.)
 
 - [ ] **Step 4: Verify the stack still synthesizes and the YAML is valid**
 
@@ -1546,7 +1541,7 @@ feed) works against real local files under `.lineup/`.
 Find the bullet describing `ReportCdn` (search for `ReportCdn` in the file) and add a new bullet immediately after it:
 
 ```markdown
-- **S3 dashboard bucket** (`DashboardBucket`) + **CloudFront** (`DashboardCdn`, URL in `DashboardUrl` stack output) — the private control-panel web UI (`web/dashboard/`, static, no build step). One distribution serves both surfaces: its default behavior serves the static files from `DashboardBucket`; an additional `/v1/*` behavior proxies straight to the `LineupApi` Function URL (`CachePolicy.CACHING_DISABLED`, `OriginRequestPolicy.ALL_VIEWER` so the `Authorization` header passes through), making the browser's calls same-origin with zero CORS configuration anywhere. CodeBuild's buildspec syncs `web/dashboard/` to `DASHBOARD_BUCKET` and invalidates `DASHBOARD_CF_DIST_ID` on every push to `main`, alongside the existing image build and `projection-site` re-render.
+- **S3 dashboard bucket** (`DashboardBucket`) + **CloudFront** (`DashboardCdn`, URL in `DashboardUrl` stack output) — the private control-panel web UI (`web/dashboard/`, static, no build step). One distribution serves both surfaces: its default behavior serves the static files from `DashboardBucket`; an additional `/v1/*` behavior proxies straight to the `LineupApi` Function URL (`CachePolicy.CACHING_DISABLED`, `OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER` so the `Authorization` header passes through), making the browser's calls same-origin with zero CORS configuration anywhere. CodeBuild deploys first, reads `DashboardBucketName` and `DashboardCdnId` from its outputs, then syncs `web/dashboard/` and invalidates the distribution on every push to `main`, including the first build.
 ```
 
 - [ ] **Step 3: Commit**

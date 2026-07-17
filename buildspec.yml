@@ -6,8 +6,9 @@ version: 0.2
 # infra change was never applied until someone ran `cdk deploy` by hand.
 #
 # ECR_URI / CLUSTER / TASK_DEF / SUBNETS / SECURITY_GROUPS are injected by the
-# CodeBuild project (CDK). The build host is ARM64 so the image matches the
-# Fargate ARM64 (Graviton) task definition.
+# CodeBuild project (CDK). The dashboard publish step reads its bucket and
+# distribution ID from the outputs of the CDK deploy in this same build, so the
+# first build that creates those resources also publishes the static site.
 env:
   variables:
     # infra/go.mod requires Go 1.25; the AL2 standard build image ships 1.20
@@ -37,15 +38,21 @@ phases:
     commands:
       - docker push "$ECR_URI:latest"
       - docker push "$ECR_URI:$TAG"
-      # Publish the static dashboard on every build so a push to main updates
-      # it immediately (same pattern as the projection-site re-render below).
+      # Apply infra before publishing the dashboard. The outputs file makes the
+      # newly-created bucket/distribution available to this very first build;
+      # CodeBuild environment variables would not update until the next build.
       - |
-        if [ -n "${DASHBOARD_BUCKET:-}" ]; then
-          aws s3 sync web/dashboard "s3://$DASHBOARD_BUCKET" --delete
-          aws cloudfront create-invalidation --distribution-id "$DASHBOARD_CF_DIST_ID" --paths '/*'
-        else
-          echo "DASHBOARD_BUCKET not set (project env not yet deployed via cdk); skipping dashboard sync"
-        fi
+        export PATH="/usr/local/go/bin:${PATH}"
+        cd infra && cdk deploy -c enableBuild=true --require-approval never --outputs-file ../cdk-outputs.json
+        cd ..
+      # Publish the static dashboard on every build, including the first build
+      # that created its bucket and distribution above.
+      - |
+        set -eu
+        DASHBOARD_BUCKET="$(python3 -c 'import json; print(json.load(open("cdk-outputs.json"))["InfraStack"]["DashboardBucketName"])')"
+        DASHBOARD_CF_DIST_ID="$(python3 -c 'import json; print(json.load(open("cdk-outputs.json"))["InfraStack"]["DashboardCdnId"])')"
+        aws s3 sync web/dashboard "s3://$DASHBOARD_BUCKET" --delete
+        aws cloudfront create-invalidation --distribution-id "$DASHBOARD_CF_DIST_ID" --paths '/*'
       # Re-render the projection dashboard with the image just pushed, so a push
       # to main updates the site immediately instead of waiting for the daily
       # ProjectionSite schedule. Fargate pulls :latest fresh on each RunTask, so
@@ -62,11 +69,3 @@ phases:
         else
           echo "CLUSTER not set (project env not yet deployed via cdk); skipping projection-site render"
         fi
-      # Apply infra changes so a merge deploys infra, not just the image. The
-      # image is already pushed above, so a deploy failure shows up as a red
-      # build without blocking the image rollout. `-c enableBuild=true` is
-      # REQUIRED: without it cdk would delete this very CodeBuild project
-      # mid-build. cdk assumes the bootstrap roles, so the build role only needs
-      # sts:AssumeRole on cdk-hnb659fds-* (granted in infra.go).
-      - export PATH="/usr/local/go/bin:${PATH}"
-      - cd infra && cdk deploy -c enableBuild=true --require-approval never

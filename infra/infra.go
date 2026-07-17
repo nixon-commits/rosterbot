@@ -282,6 +282,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
 	})
+	awscdk.NewCfnOutput(stack, jsii.String("DashboardCdnId"), &awscdk.CfnOutputProps{Value: dashboardDist.DistributionId()})
 
 	// --- Phase 2: CodeBuild (build + push image to ECR on push to main) ---
 	// Gated: only instantiated with `-c enableBuild=true`, because the GitHub
@@ -313,9 +314,6 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				"TASK_DEF":        {Value: taskDef.TaskDefinitionArn()},
 				"SUBNETS":         {Value: awscdk.Fn_Join(jsii.String(","), publicSubnets.SubnetIds)},
 				"SECURITY_GROUPS": {Value: taskSg.SecurityGroupId()},
-				// Where the static dashboard build step (buildspec.yml) publishes.
-				"DASHBOARD_BUCKET":     {Value: dashboardBucket.BucketName()},
-				"DASHBOARD_CF_DIST_ID": {Value: dashboardDist.DistributionId()},
 			},
 		})
 		repo.GrantPullPush(project)

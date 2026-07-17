@@ -18,7 +18,7 @@ export async function renderLineup(root) {
   header.className = "card";
   header.innerHTML = `
     <h2>${escapeHtml(data.date)}</h2>
-    <p>Projected: <strong>${data.projected_points.toFixed(1)}</strong> pts</p>
+    <p>Expected Points: <strong>${data.projected_points.toFixed(1)}</strong></p>
   `;
   root.appendChild(header);
 
@@ -56,7 +56,7 @@ function slotCard(slot) {
     <div class="muted">${escapeHtml(slot.slot)}</div>
     <div><strong>${escapeHtml(p.name)}</strong> <span class="badge badge-${escapeHtml(p.status.toLowerCase())}">${escapeHtml(p.status)}</span></div>
     <div class="muted">${escapeHtml(p.team)} · ${escapeHtml(p.pos.join("/"))}</div>
-    <div>${p.proj.toFixed(1)} proj pts</div>
+    <div>${p.proj.toFixed(1)} Expected Points</div>
   `;
   return card;
 }

@@ -15,7 +15,15 @@ func TestServeMux_RoutesAPIAndStatic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mux := newServeMux("test-token", t.TempDir(), webDir)
+	lineupDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(lineupDir, "outputs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lineupDir, "outputs", "test-run.json"), []byte(`{"type":"waivers","data":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := newServeMux("test-token", lineupDir, webDir)
 
 	// Static file at "/" needs no auth — CloudFront's default behavior doesn't
 	// touch the Lambda either.
@@ -43,6 +51,18 @@ func TestServeMux_RoutesAPIAndStatic(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /v1/jobs (authed) = %d, want 200", rec.Code)
+	}
+
+	// Real local job runs write output under .lineup/outputs.
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/test-run/output", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /v1/runs/test-run/output = %d, want 200", rec.Code)
+	}
+	if got := rec.Body.String(); got != `{"type":"waivers","data":{}}` {
+		t.Fatalf("GET /v1/runs/test-run/output body = %q, want the seeded fixture verbatim", got)
 	}
 }
 

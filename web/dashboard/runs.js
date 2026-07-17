@@ -1,9 +1,10 @@
-// runs.js — run history (polls while anything is RUNNING), a per-run detail +
-// output viewer, and the notifications activity feed.
+// runs.js — run history (polls faster while anything is RUNNING, slower while
+// idle), a per-run detail + output viewer, and the notifications activity feed.
 import { api, ApiError } from "./api.js";
 import { renderAuto, escapeHtml } from "./render.js";
 
 const POLL_MS = 5000;
+const IDLE_POLL_MS = 30000;
 let pollTimer = null;
 
 export async function renderRuns(root) {
@@ -34,13 +35,26 @@ export async function renderRuns(root) {
   // Stop polling once the user navigates away from this view.
   window.addEventListener("hashchange", onNavigateAway, { once: true });
 
-  await Promise.all([
+  const [runs] = await Promise.all([
     loadRuns(runsList, detailSection),
     loadNotifications(notifList),
   ]);
 
   if (!active) return; // user navigated away during the initial load; don't start polling
-  pollTimer = setInterval(() => loadRuns(runsList, detailSection, /* silent */ true), POLL_MS);
+  schedulePoll(runsList, detailSection, runs);
+}
+
+// Polls fast (POLL_MS) while a run is active or the last load failed (so a
+// transient error self-heals instead of freezing), and slow (IDLE_POLL_MS)
+// otherwise so a run started elsewhere is still picked up without hammering
+// the API while idle.
+function schedulePoll(runsList, detailSection, runs) {
+  stopPolling();
+  const intervalMs = runs === null || hasRunningRun(runs) ? POLL_MS : IDLE_POLL_MS;
+  pollTimer = setInterval(async () => {
+    const nextRuns = await loadRuns(runsList, detailSection, /* silent */ true);
+    schedulePoll(runsList, detailSection, nextRuns);
+  }, intervalMs);
 }
 
 function stopPolling() {
@@ -57,12 +71,12 @@ async function loadRuns(container, detailSection, silent) {
     runs = resp.runs;
   } catch (err) {
     if (!silent) container.innerHTML = `<p class="error">Failed to load runs: ${escapeHtml(err.message)}</p>`;
-    return;
+    return null;
   }
   container.innerHTML = "";
   if (runs.length === 0) {
     container.innerHTML = "<p class=\"muted\">No runs yet.</p>";
-    return;
+    return runs;
   }
   const table = document.createElement("table");
   table.className = "data-table";
@@ -82,6 +96,11 @@ async function loadRuns(container, detailSection, silent) {
   }
   table.appendChild(tbody);
   container.appendChild(table);
+  return runs;
+}
+
+function hasRunningRun(runs) {
+  return Array.isArray(runs) && runs.some((run) => run.status === "RUNNING");
 }
 
 async function showDetail(section, id) {
