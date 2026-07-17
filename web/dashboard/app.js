@@ -2,9 +2,11 @@
 // view's render(root) function; later tasks add entries here.
 import { isLoggedIn, setToken, clearToken, api, ApiError } from "./api.js";
 import { renderLineup } from "./lineup.js";
+import { renderJobs } from "./jobs.js";
 
 const ROUTES = {
   "#lineup": renderLineup,
+  "#jobs": renderJobs,
 };
 const DEFAULT_ROUTE = "#lineup";
 
