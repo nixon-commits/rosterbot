@@ -3,6 +3,7 @@
 package lineupapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -152,4 +153,113 @@ func (cfg Config) handleAuthRegisterFinish(w http.ResponseWriter, r *http.Reques
 	}
 	clearCeremonyCookie(w)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "registered"})
+}
+
+func (cfg Config) handleAuthLoginBegin(w http.ResponseWriter, r *http.Request) {
+	identity, ok, err := cfg.Identities.GetIdentity(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "identity store unavailable")
+		return
+	}
+	if !ok || len(identity.Credentials) == 0 {
+		writeErr(w, http.StatusNotFound, "no passkeys registered yet")
+		return
+	}
+	assertion, session, err := cfg.WebAuthn.BeginLogin(identityUser{id: identity})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not begin login")
+		return
+	}
+	if err := setCeremonyCookie(w, session); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not start ceremony")
+		return
+	}
+	writeJSON(w, http.StatusOK, assertion)
+}
+
+func (cfg Config) handleAuthLoginFinish(w http.ResponseWriter, r *http.Request) {
+	session, err := ceremonySessionFromRequest(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "login session expired, try again")
+		return
+	}
+	identity, ok, err := cfg.Identities.GetIdentity(r.Context())
+	if err != nil || !ok {
+		writeErr(w, http.StatusUnauthorized, "login failed")
+		return
+	}
+	cred, err := cfg.WebAuthn.FinishLogin(identityUser{id: identity}, *session, r)
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "login failed")
+		return
+	}
+	// Persist the updated sign counter / clone-warning flag. Best-effort: a
+	// store failure here shouldn't fail a login that already verified.
+	for i := range identity.Credentials {
+		if bytes.Equal(identity.Credentials[i].ID, cred.ID) {
+			identity.Credentials[i] = *cred
+		}
+	}
+	_ = cfg.Identities.PutIdentity(r.Context(), identity)
+
+	clearCeremonyCookie(w)
+	setSessionCookie(w, cfg.SessionSecret, time.Now())
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+type passkeyOut struct {
+	ID string `json:"id"`
+}
+
+func (cfg Config) handleListPasskeys(w http.ResponseWriter, r *http.Request) {
+	if !hasValidSession(r, cfg.SessionSecret) {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	identity, ok, err := cfg.Identities.GetIdentity(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "identity store unavailable")
+		return
+	}
+	out := []passkeyOut{}
+	if ok {
+		for _, c := range identity.Credentials {
+			out = append(out, passkeyOut{ID: base64.RawURLEncoding.EncodeToString(c.ID)})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"passkeys": out})
+}
+
+func (cfg Config) handleRevokePasskey(w http.ResponseWriter, r *http.Request) {
+	if !hasValidSession(r, cfg.SessionSecret) {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	targetID, err := base64.RawURLEncoding.DecodeString(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid passkey id")
+		return
+	}
+	identity, ok, err := cfg.Identities.GetIdentity(r.Context())
+	if err != nil || !ok {
+		writeErr(w, http.StatusNotFound, "no passkeys registered")
+		return
+	}
+	kept := identity.Credentials[:0]
+	for _, c := range identity.Credentials {
+		if !bytes.Equal(c.ID, targetID) {
+			kept = append(kept, c)
+		}
+	}
+	identity.Credentials = kept
+	if err := cfg.Identities.PutIdentity(r.Context(), identity); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not revoke passkey")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg Config) handleLogout(w http.ResponseWriter, r *http.Request) {
+	clearSessionCookie(w)
+	w.WriteHeader(http.StatusNoContent)
 }

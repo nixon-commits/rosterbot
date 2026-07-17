@@ -65,6 +65,11 @@ func Handler(cfg Config) http.Handler {
 	// isAuthed check below.
 	mux.HandleFunc("POST /v1/auth/register/begin", cfg.handleAuthRegisterBegin)
 	mux.HandleFunc("POST /v1/auth/register/finish", cfg.handleAuthRegisterFinish)
+	mux.HandleFunc("POST /v1/auth/login/begin", cfg.handleAuthLoginBegin)
+	mux.HandleFunc("POST /v1/auth/login/finish", cfg.handleAuthLoginFinish)
+	mux.HandleFunc("GET /v1/auth/passkeys", cfg.handleListPasskeys)
+	mux.HandleFunc("DELETE /v1/auth/passkeys/{id}", cfg.handleRevokePasskey)
+	mux.HandleFunc("POST /v1/auth/logout", cfg.handleLogout)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/v1/auth/") {
