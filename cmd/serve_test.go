@@ -97,4 +97,15 @@ func TestServeMux_AuthRoutesWork(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST /v1/auth/register/begin = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
+	// Verify ceremony cookie is set (must match internal/lineupapi/webauthn.go ceremonyCookieName).
+	var foundCeremony bool
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "rosterbot_ceremony" {
+			foundCeremony = true
+			break
+		}
+	}
+	if !foundCeremony {
+		t.Fatalf("POST /v1/auth/register/begin did not set rosterbot_ceremony cookie")
+	}
 }
