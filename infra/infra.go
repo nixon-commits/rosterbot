@@ -215,13 +215,14 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		Architecture: awslambda.Architecture_ARM_64(),
 		Timeout:      awscdk.Duration_Seconds(jsii.Number(10)),
 		Environment: &map[string]*string{
-			"STATE_BUCKET":    stateBucket.BucketName(),
-			"API_TOKEN_PARAM": jsii.String("/rosterbot/ROSTERBOT_API_TOKEN"),
-			"CLUSTER":         cluster.ClusterArn(),
-			"TASK_DEF":        taskDef.TaskDefinitionArn(),
-			"SUBNETS":         awscdk.Fn_Join(jsii.String(","), publicSubnets.SubnetIds),
-			"SECURITY_GROUPS": taskSg.SecurityGroupId(),
-			"CONTAINER_NAME":  jsii.String("bot"),
+			"STATE_BUCKET":         stateBucket.BucketName(),
+			"API_TOKEN_PARAM":      jsii.String("/rosterbot/ROSTERBOT_API_TOKEN"),
+			"SESSION_SECRET_PARAM": jsii.String("/rosterbot/DASHBOARD_SESSION_SECRET"),
+			"CLUSTER":              cluster.ClusterArn(),
+			"TASK_DEF":             taskDef.TaskDefinitionArn(),
+			"SUBNETS":              awscdk.Fn_Join(jsii.String(","), publicSubnets.SubnetIds),
+			"SECURITY_GROUPS":      taskSg.SecurityGroupId(),
+			"CONTAINER_NAME":       jsii.String("bot"),
 		},
 	})
 	// Least privilege: read lineup/ + the run ledger/output objects + the one
@@ -231,9 +232,15 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	stateBucket.GrantRead(apiFn, jsii.String("runledger/*"))
 	stateBucket.GrantRead(apiFn, jsii.String("runs/*"))
 	stateBucket.GrantRead(apiFn, jsii.String("notifications/*"))
+	// webauthn/ holds the single Identity record and is read-modify-written
+	// on every registration and login (sign-counter update).
+	stateBucket.GrantReadWrite(apiFn, jsii.String("webauthn/*"))
 	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
-		Actions:   jsii.Strings("ssm:GetParameter"),
-		Resources: jsii.Strings("arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/ROSTERBOT_API_TOKEN"),
+		Actions: jsii.Strings("ssm:GetParameter"),
+		Resources: jsii.Strings(
+			"arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/ROSTERBOT_API_TOKEN",
+			"arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/DASHBOARD_SESSION_SECRET",
+		),
 	}))
 	// Launch the existing task definition on demand (POST /v1/jobs/{name}).
 	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
@@ -283,6 +290,17 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardCdnId"), &awscdk.CfnOutputProps{Value: dashboardDist.DistributionId()})
+
+	// The Lambda's WebAuthn RP config needs the dashboard's own origin, which
+	// only exists once this distribution is created — added here rather than
+	// in apiFn's initial Environment map above to break the circular
+	// dependency (dashboardDist's origin is apiFn's Function URL).
+	apiFn.AddEnvironment(jsii.String("RP_ID"), dashboardDist.DistributionDomainName(), nil)
+	apiFn.AddEnvironment(
+		jsii.String("RP_ORIGIN"),
+		awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
+		nil,
+	)
 
 	// --- Phase 2: CodeBuild (build + push image to ECR on push to main) ---
 	// Gated: only instantiated with `-c enableBuild=true`, because the GitHub
