@@ -1,6 +1,7 @@
 package lineupapi
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -114,5 +115,31 @@ func TestRegisterFinish_RejectsWithoutSessionOrToken(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+// TestLoadOrCreateIdentity_StableAcrossCalls guards against a regression
+// where the very-first-passkey bootstrap flow always failed: begin and
+// finish each call loadOrCreateIdentity independently, and if the freshly
+// generated identity isn't persisted immediately, each call draws its own
+// independent random WebAuthnUserID. go-webauthn bakes the identity's
+// WebAuthnUserID from the begin call into the ceremony session, then
+// requires it to match the identity's WebAuthnUserID on finish — two
+// independent 64-byte crypto/rand draws are equal with probability ~0, so
+// an unpersisted identity fails the ceremony deterministically.
+func TestLoadOrCreateIdentity_StableAcrossCalls(t *testing.T) {
+	cfg := Config{Identities: &fakeIdentities{}}
+
+	first, err := cfg.loadOrCreateIdentity(context.Background())
+	if err != nil {
+		t.Fatalf("first loadOrCreateIdentity: %v", err)
+	}
+	second, err := cfg.loadOrCreateIdentity(context.Background())
+	if err != nil {
+		t.Fatalf("second loadOrCreateIdentity: %v", err)
+	}
+
+	if !bytes.Equal(first.WebAuthnUserID, second.WebAuthnUserID) {
+		t.Fatalf("WebAuthnUserID changed across calls: first=%x second=%x", first.WebAuthnUserID, second.WebAuthnUserID)
 	}
 }

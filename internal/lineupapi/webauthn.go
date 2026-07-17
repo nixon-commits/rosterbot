@@ -77,9 +77,12 @@ func (cfg Config) canRegister(r *http.Request) bool {
 	return hasValidSession(r, cfg.SessionSecret) || authorized(r, cfg.Token)
 }
 
-// loadOrCreateIdentity returns the existing Identity, or a brand new one (not
-// yet persisted — the caller persists it after a credential is attached) if
-// none exists yet.
+// loadOrCreateIdentity returns the existing Identity, or creates and
+// immediately persists a brand new one if none exists yet. Persisting before
+// returning is required: register/begin and register/finish each call this
+// independently, and the WebAuthnUserID must be identical across both calls
+// (it's baked into the ceremony's session data) or go-webauthn's
+// CreateCredential rejects the finish with an "ID mismatch" error.
 func (cfg Config) loadOrCreateIdentity(ctx context.Context) (*Identity, error) {
 	id, ok, err := cfg.Identities.GetIdentity(ctx)
 	if err != nil {
@@ -92,7 +95,11 @@ func (cfg Config) loadOrCreateIdentity(ctx context.Context) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Identity{WebAuthnUserID: handle}, nil
+	id = &Identity{WebAuthnUserID: handle}
+	if err := cfg.Identities.PutIdentity(ctx, id); err != nil {
+		return nil, err
+	}
+	return id, nil
 }
 
 func (cfg Config) handleAuthRegisterBegin(w http.ResponseWriter, r *http.Request) {
