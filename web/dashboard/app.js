@@ -5,11 +5,13 @@ import { registerPasskey, loginWithPasskey } from "./webauthn.js";
 import { renderLineup } from "./lineup.js";
 import { renderJobs } from "./jobs.js";
 import { renderRuns } from "./runs.js";
+import { renderPasskeys } from "./passkeys.js";
 
 const ROUTES = {
   "#lineup": renderLineup,
   "#jobs": renderJobs,
   "#runs": renderRuns,
+  "#passkeys": renderPasskeys,
 };
 const DEFAULT_ROUTE = "#lineup";
 
