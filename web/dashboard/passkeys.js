@@ -1,6 +1,6 @@
 // passkeys.js — lists registered passkeys and lets you add another device or
 // revoke one you've lost. Mirrors jobs.js's card-per-item + error-card style.
-import { api, ApiError } from "./api.js";
+import { api } from "./api.js";
 import { registerPasskey } from "./webauthn.js";
 import { escapeHtml } from "./render.js";
 
@@ -28,20 +28,20 @@ function addButton(root) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.textContent = "Add another passkey";
+  const error = document.createElement("p");
+  error.className = "error";
   btn.addEventListener("click", async () => {
     btn.disabled = true;
+    error.textContent = "";
     try {
       await registerPasskey();
-      await renderPasskeys(root.parentElement || root);
+      await renderPasskeys(root);
     } catch (err) {
       btn.disabled = false;
-      const p = document.createElement("p");
-      p.className = "error";
-      p.textContent = "Could not add a passkey — try again.";
-      wrapper.appendChild(p);
+      error.textContent = "Could not add a passkey — try again.";
     }
   });
-  wrapper.appendChild(btn);
+  wrapper.append(btn, error);
   return wrapper;
 }
 
@@ -76,7 +76,7 @@ function errorCard(err) {
   card.className = "card";
   const p = document.createElement("p");
   p.className = "error";
-  p.textContent = err instanceof ApiError ? err.message : "Could not load passkeys.";
+  p.textContent = "Failed to load passkeys: " + err.message;
   card.appendChild(p);
   return card;
 }
