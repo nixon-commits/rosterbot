@@ -1,28 +1,14 @@
 // api.js — thin fetch wrapper around the rosterbot control API. Every request
 // is a same-origin relative path (CloudFront path-routes /v1/* to the Lambda
 // in production; `rosterbot serve --web` does the same locally), so no CORS
-// handling is needed anywhere in this app.
-const TOKEN_KEY = "rosterbot_token";
+// handling is needed anywhere in this app. Auth rides a same-origin,
+// httpOnly session cookie set by the passkey login ceremony — there is no
+// client-readable token to store.
 
-export function getToken() {
-  return localStorage.getItem(TOKEN_KEY) || "";
-}
-
-export function setToken(token) {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
-}
-
-export function isLoggedIn() {
-  return getToken() !== "";
-}
-
-// ApiError carries the HTTP status so callers can special-case 401 (bad
-// token), 404 (nothing published yet), 409 (job already running), and 501
-// (job triggering unavailable locally) without parsing message strings.
+// ApiError carries the HTTP status so callers can special-case 401
+// (unauthenticated), 404 (nothing published yet / no passkeys registered),
+// 409 (job already running), and 501 (job triggering unavailable locally)
+// without parsing message strings.
 export class ApiError extends Error {
   constructor(status, message) {
     super(message);
@@ -30,19 +16,15 @@ export class ApiError extends Error {
   }
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, bootstrapToken) {
+  const headers = body ? { "Content-Type": "application/json" } : {};
+  if (bootstrapToken) headers["Authorization"] = "Bearer " + bootstrapToken;
   const res = await fetch(path, {
     method,
-    headers: {
-      "Authorization": "Bearer " + getToken(),
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
+    credentials: "same-origin",
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (res.status === 401) {
-    clearToken();
-    throw new ApiError(401, "unauthorized");
-  }
   if (!res.ok) {
     let msg = res.statusText;
     try {
@@ -65,4 +47,13 @@ export const api = {
   notifications: (limit = 25) => request("GET", `/v1/notifications?limit=${limit}`),
   jobs: () => request("GET", "/v1/jobs"),
   triggerJob: (name, params) => request("POST", `/v1/jobs/${encodeURIComponent(name)}`, { params }),
+
+  authLoginBegin: () => request("POST", "/v1/auth/login/begin"),
+  authLoginFinish: (assertion) => request("POST", "/v1/auth/login/finish", assertion),
+  authRegisterBegin: (bootstrapToken) => request("POST", "/v1/auth/register/begin", undefined, bootstrapToken),
+  authRegisterFinish: (attestation, bootstrapToken) =>
+    request("POST", "/v1/auth/register/finish", attestation, bootstrapToken),
+  authPasskeys: () => request("GET", "/v1/auth/passkeys"),
+  authRevokePasskey: (id) => request("DELETE", `/v1/auth/passkeys/${encodeURIComponent(id)}`),
+  authLogout: () => request("POST", "/v1/auth/logout"),
 };
