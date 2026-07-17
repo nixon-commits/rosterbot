@@ -3,10 +3,12 @@
 import { isLoggedIn, setToken, clearToken, api, ApiError } from "./api.js";
 import { renderLineup } from "./lineup.js";
 import { renderJobs } from "./jobs.js";
+import { renderRuns } from "./runs.js";
 
 const ROUTES = {
   "#lineup": renderLineup,
   "#jobs": renderJobs,
+  "#runs": renderRuns,
 };
 const DEFAULT_ROUTE = "#lineup";
 
