@@ -72,6 +72,12 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		AutoDeleteObjects: jsii.Bool(true),
 	})
 
+	// Dashboard bucket (static web UI; private, served via its own CDN below).
+	dashboardBucket := awss3.NewBucket(stack, jsii.String("DashboardBucket"), &awss3.BucketProps{
+		RemovalPolicy:     awscdk.RemovalPolicy_DESTROY,
+		AutoDeleteObjects: jsii.Bool(true),
+	})
+
 	// Shared log group for all task runs.
 	logGroup := awslogs.NewLogGroup(stack, jsii.String("Logs"), &awslogs.LogGroupProps{
 		Retention:     awslogs.RetentionDays_ONE_MONTH,
@@ -82,6 +88,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	awscdk.NewCfnOutput(stack, jsii.String("StateBucketName"), &awscdk.CfnOutputProps{Value: stateBucket.BucketName()})
 	awscdk.NewCfnOutput(stack, jsii.String("SiteBucketName"), &awscdk.CfnOutputProps{Value: siteBucket.BucketName()})
 	awscdk.NewCfnOutput(stack, jsii.String("ReportBucketName"), &awscdk.CfnOutputProps{Value: reportBucket.BucketName()})
+	awscdk.NewCfnOutput(stack, jsii.String("DashboardBucketName"), &awscdk.CfnOutputProps{Value: dashboardBucket.BucketName()})
 
 	// --- Phase 3: compute (VPC, cluster, ARM64 Fargate task definition) ---
 
@@ -249,6 +256,34 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("LineupApiUrl"), &awscdk.CfnOutputProps{Value: apiURL.Url()})
 
+	// --- Dashboard: static UI + the same Lambda API, one distribution ---
+	// "/v1/*" proxies straight to the Function URL so the browser sees a single
+	// same-origin app — no CORS handling needed anywhere. CachePolicy is
+	// disabled and OriginRequestPolicy forwards everything (including the
+	// Authorization header) except the Host header — the Function URL origin
+	// doesn't need CloudFront's own Host and forwarding it risks the origin
+	// rejecting the request.
+	dashboardDist := awscloudfront.NewDistribution(stack, jsii.String("DashboardCdn"), &awscloudfront.DistributionProps{
+		DefaultRootObject: jsii.String("index.html"),
+		DefaultBehavior: &awscloudfront.BehaviorOptions{
+			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(dashboardBucket, nil),
+			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
+		},
+		AdditionalBehaviors: &map[string]*awscloudfront.BehaviorOptions{
+			"/v1/*": {
+				Origin:               awscloudfrontorigins.NewFunctionUrlOrigin(apiURL, nil),
+				ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
+				AllowedMethods:       awscloudfront.AllowedMethods_ALLOW_ALL(),
+				CachePolicy:          awscloudfront.CachePolicy_CACHING_DISABLED(),
+				OriginRequestPolicy:  awscloudfront.OriginRequestPolicy_ALL_VIEWER_EXCEPT_HOST_HEADER(),
+			},
+		},
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("DashboardUrl"), &awscdk.CfnOutputProps{
+		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("DashboardCdnId"), &awscdk.CfnOutputProps{Value: dashboardDist.DistributionId()})
+
 	// --- Phase 2: CodeBuild (build + push image to ECR on push to main) ---
 	// Gated: only instantiated with `-c enableBuild=true`, because the GitHub
 	// webhook source requires a one-time source credential (GitHub OAuth/PAT) to
@@ -285,6 +320,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// Let the build launch the projection-site task (ecs:RunTask + the
 		// iam:PassRole on the task's execution/task roles that RunTask requires).
 		taskDef.GrantRun(project)
+		// Let the build publish the static dashboard: write its bucket, then
+		// invalidate its distribution so the new build is served immediately.
+		dashboardBucket.GrantReadWrite(project, nil)
+		project.Role().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Actions:   jsii.Strings("cloudfront:CreateInvalidation"),
+			Resources: &[]*string{cfArn(dashboardDist)},
+		}))
 		// Let a push-to-main build run `cdk deploy` (buildspec post_build) so
 		// infra changes ship on merge, not just the image. cdk v2 performs all
 		// CloudFormation/IAM work through the bootstrap roles, so the build role

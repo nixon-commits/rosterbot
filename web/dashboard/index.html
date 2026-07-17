@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rosterbot</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="login-screen">
+  <form id="login-form">
+    <h1>rosterbot</h1>
+    <label for="token-input">API token</label>
+    <input id="token-input" type="password" autocomplete="off" placeholder="Paste ROSTERBOT_API_TOKEN">
+    <button type="submit">Log in</button>
+    <p id="login-error" class="error"></p>
+  </form>
+</div>
+
+<div id="shell" hidden>
+  <header>
+    <h1>rosterbot</h1>
+    <nav>
+      <a href="#lineup">Lineup</a>
+      <a href="#jobs">Jobs</a>
+      <a href="#runs">Runs</a>
+      <a href="https://d3g6t1hhf4o9r6.cloudfront.net" target="_blank" rel="noopener">Recap ↗</a>
+      <a href="https://d3lfzksum77fj7.cloudfront.net" target="_blank" rel="noopener">Projections ↗</a>
+    </nav>
+    <button id="logout-btn" type="button">Log out</button>
+  </header>
+  <main id="view-root"></main>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
