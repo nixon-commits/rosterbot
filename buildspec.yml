@@ -37,6 +37,15 @@ phases:
     commands:
       - docker push "$ECR_URI:latest"
       - docker push "$ECR_URI:$TAG"
+      # Publish the static dashboard on every build so a push to main updates
+      # it immediately (same pattern as the projection-site re-render below).
+      - |
+        if [ -n "${DASHBOARD_BUCKET:-}" ]; then
+          aws s3 sync web/dashboard "s3://$DASHBOARD_BUCKET" --delete
+          aws cloudfront create-invalidation --distribution-id "$DASHBOARD_CF_DIST_ID" --paths '/*'
+        else
+          echo "DASHBOARD_BUCKET not set (project env not yet deployed via cdk); skipping dashboard sync"
+        fi
       # Re-render the projection dashboard with the image just pushed, so a push
       # to main updates the site immediately instead of waiting for the daily
       # ProjectionSite schedule. Fargate pulls :latest fresh on each RunTask, so

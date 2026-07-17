@@ -312,12 +312,22 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				"TASK_DEF":        {Value: taskDef.TaskDefinitionArn()},
 				"SUBNETS":         {Value: awscdk.Fn_Join(jsii.String(","), publicSubnets.SubnetIds)},
 				"SECURITY_GROUPS": {Value: taskSg.SecurityGroupId()},
+				// Where the static dashboard build step (buildspec.yml) publishes.
+				"DASHBOARD_BUCKET":     {Value: dashboardBucket.BucketName()},
+				"DASHBOARD_CF_DIST_ID": {Value: dashboardDist.DistributionId()},
 			},
 		})
 		repo.GrantPullPush(project)
 		// Let the build launch the projection-site task (ecs:RunTask + the
 		// iam:PassRole on the task's execution/task roles that RunTask requires).
 		taskDef.GrantRun(project)
+		// Let the build publish the static dashboard: write its bucket, then
+		// invalidate its distribution so the new build is served immediately.
+		dashboardBucket.GrantReadWrite(project, nil)
+		project.Role().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Actions:   jsii.Strings("cloudfront:CreateInvalidation"),
+			Resources: &[]*string{cfArn(dashboardDist)},
+		}))
 		// Let a push-to-main build run `cdk deploy` (buildspec post_build) so
 		// infra changes ship on merge, not just the image. cdk v2 performs all
 		// CloudFormation/IAM work through the bootstrap roles, so the build role
