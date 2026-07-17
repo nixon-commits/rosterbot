@@ -1,6 +1,7 @@
-// app.js — login gate + hash router + nav wiring. ROUTES maps a URL hash to a
-// view's render(root) function; later tasks add entries here.
-import { isLoggedIn, setToken, clearToken, api, ApiError } from "./api.js";
+// app.js — login/bootstrap gate + hash router + nav wiring. ROUTES maps a URL
+// hash to a view's render(root) function; later tasks add entries here.
+import { api, ApiError } from "./api.js";
+import { registerPasskey, loginWithPasskey } from "./webauthn.js";
 import { renderLineup } from "./lineup.js";
 import { renderJobs } from "./jobs.js";
 import { renderRuns } from "./runs.js";
@@ -14,63 +15,101 @@ const DEFAULT_ROUTE = "#lineup";
 
 const root = document.getElementById("view-root");
 const loginScreen = document.getElementById("login-screen");
+const bootstrapScreen = document.getElementById("bootstrap-screen");
 const shell = document.getElementById("shell");
-const loginForm = document.getElementById("login-form");
-const tokenInput = document.getElementById("token-input");
+const passkeyLoginBtn = document.getElementById("passkey-login-btn");
 const loginError = document.getElementById("login-error");
+const bootstrapForm = document.getElementById("bootstrap-form");
+const bootstrapTokenInput = document.getElementById("bootstrap-token-input");
+const bootstrapError = document.getElementById("bootstrap-error");
 const logoutBtn = document.getElementById("logout-btn");
 
 async function boot() {
-  if (!isLoggedIn()) {
-    showLogin();
-    return;
-  }
-  // Verify the stored token still works before showing the shell — GET
-  // /v1/jobs is always 200 for any valid token (it never touches ECS).
   try {
     await api.jobs();
     showShell();
+    return;
   } catch (err) {
-    if (err instanceof ApiError && err.status === 401) {
-      showLogin("Saved token was rejected — please log in again.");
-    } else {
+    if (!(err instanceof ApiError) || err.status !== 401) {
       // Non-auth failure (e.g. a network hiccup): don't lock the user out on
       // a transient error. Individual views handle their own load failures.
       showShell();
+      return;
+    }
+  }
+  await showLoginOrBootstrap();
+}
+
+// showLoginOrBootstrap decides which pre-login screen to show by probing
+// login/begin: a 404 means no identity has ever been registered (first run,
+// or every passkey was revoked/lost), so the token-bootstrap screen is the
+// only way forward; any other outcome means a real login attempt is possible.
+async function showLoginOrBootstrap() {
+  try {
+    await api.authLoginBegin();
+    showLogin();
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      showBootstrap();
+    } else {
+      showLogin("Could not reach the login API.");
     }
   }
 }
 
 function showLogin(message) {
   loginScreen.hidden = false;
+  bootstrapScreen.hidden = true;
   shell.hidden = true;
   loginError.textContent = message || "";
 }
 
+function showBootstrap(message) {
+  loginScreen.hidden = true;
+  bootstrapScreen.hidden = false;
+  shell.hidden = true;
+  bootstrapError.textContent = message || "";
+}
+
 function showShell() {
   loginScreen.hidden = true;
+  bootstrapScreen.hidden = true;
   shell.hidden = false;
   window.addEventListener("hashchange", route);
   route();
 }
 
-loginForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const token = tokenInput.value.trim();
-  if (!token) return;
-  setToken(token);
+passkeyLoginBtn.addEventListener("click", async () => {
+  loginError.textContent = "";
   try {
-    await api.jobs();
-    tokenInput.value = "";
+    await loginWithPasskey();
     showShell();
   } catch (err) {
-    clearToken();
-    loginError.textContent = "That token was rejected.";
+    loginError.textContent = "Passkey sign-in failed or was cancelled.";
   }
 });
 
-logoutBtn.addEventListener("click", () => {
-  clearToken();
+bootstrapForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const token = bootstrapTokenInput.value.trim();
+  if (!token) return;
+  bootstrapError.textContent = "";
+  try {
+    await registerPasskey(token);
+    bootstrapTokenInput.value = "";
+    showShell();
+  } catch (err) {
+    bootstrapError.textContent = "Setup failed — check the token and try again.";
+  }
+});
+
+logoutBtn.addEventListener("click", async () => {
+  try {
+    await api.authLogout();
+  } catch {
+    // Logging out is best-effort client-side too — clearing local UI state
+    // shouldn't hang on a failed network call.
+  }
   window.location.hash = "";
   showLogin();
 });

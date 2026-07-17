@@ -38,7 +38,16 @@ body {
 }
 #login-screen[hidden] { display: none; }
 
-#login-form {
+#bootstrap-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 1rem;
+}
+#bootstrap-screen[hidden] { display: none; }
+
+#login-screen .login-card, #bootstrap-screen .login-card {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -46,7 +55,7 @@ body {
   max-width: 320px;
 }
 
-#login-form input {
+#login-screen .login-card input, #bootstrap-screen .login-card input {
   padding: 0.5rem;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -54,7 +63,7 @@ body {
   color: var(--fg);
 }
 
-#login-form button {
+#login-screen .login-card button, #bootstrap-screen .login-card button {
   padding: 0.5rem;
   border: none;
   border-radius: 6px;
