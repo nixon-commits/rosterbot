@@ -23,7 +23,7 @@ func TestServeMux_RoutesAPIAndStatic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mux := newServeMux("test-token", lineupDir, webDir)
+	mux := newServeMux("test-token", []byte("test-session-secret"), lineupDir, webDir)
 
 	// Static file at "/" needs no auth — CloudFront's default behavior doesn't
 	// touch the Lambda either.
@@ -67,12 +67,45 @@ func TestServeMux_RoutesAPIAndStatic(t *testing.T) {
 }
 
 func TestServeMux_NoWebDirConfigured(t *testing.T) {
-	mux := newServeMux("test-token", t.TempDir(), "")
+	mux := newServeMux("test-token", []byte("test-session-secret"), t.TempDir(), "")
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("GET / with no web dir = %d, want 404", rec.Code)
+	}
+}
+
+func TestServeMux_AuthRoutesWork(t *testing.T) {
+	lineupDir := t.TempDir()
+	mux := newServeMux("test-token", []byte("test-session-secret"), lineupDir, "")
+
+	// No identity registered yet: login/begin is 404, not 401/500.
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login/begin", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("POST /v1/auth/login/begin (no identity) = %d, want 404", rec.Code)
+	}
+
+	// register/begin with the bootstrap token succeeds and sets a ceremony cookie.
+	req = httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/auth/register/begin = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	// Verify ceremony cookie is set (must match internal/lineupapi/webauthn.go ceremonyCookieName).
+	var foundCeremony bool
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "rosterbot_ceremony" {
+			foundCeremony = true
+			break
+		}
+	}
+	if !foundCeremony {
+		t.Fatalf("POST /v1/auth/register/begin did not set rosterbot_ceremony cookie")
 	}
 }

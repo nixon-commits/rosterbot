@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-webauthn/webauthn/webauthn"
 )
 
 // TodayKey is the object key (storage-adapter relative) for the most recent
@@ -34,15 +36,24 @@ type Config struct {
 	Jobs          JobRunner
 	Notifications NotificationStore
 	Output        OutputStore
+
+	// WebAuthn passkey auth (see webauthn.go).
+	Identities    IdentityStore
+	WebAuthn      *webauthn.WebAuthn
+	SessionSecret []byte
 }
 
-// Handler builds the full read/trigger API router. Every route requires the
-// bearer token. Routes:
+// Handler builds the full read/trigger API router. Every route requires
+// either a valid session cookie (the everyday passkey-login path) or the
+// legacy bearer token (break-glass / CLI use) — except /v1/auth/*, where each
+// handler gates itself: login is open, register accepts session-or-token,
+// and passkey management (list/revoke) requires a session only. Routes:
 //
 //	GET  /v1/lineup/today   -> precomputed lineup JSON
 //	GET  /v1/runs           -> run ledger (newest first)
 //	GET  /v1/runs/{id}      -> one run + log tail
 //	POST /v1/jobs/{name}    -> launch a job (async), 202
+//	POST /v1/auth/*         -> passkey login/register/logout, session mgmt
 func Handler(cfg Config) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/lineup/today", cfg.handleLineup)
@@ -53,13 +64,35 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/jobs", cfg.handleJobs)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
 
+	// Auth routes gate themselves (open login, session-or-token register,
+	// session-only passkey management in Task 5) instead of the blanket
+	// isAuthed check below.
+	mux.HandleFunc("POST /v1/auth/register/begin", cfg.handleAuthRegisterBegin)
+	mux.HandleFunc("POST /v1/auth/register/finish", cfg.handleAuthRegisterFinish)
+	mux.HandleFunc("POST /v1/auth/login/begin", cfg.handleAuthLoginBegin)
+	mux.HandleFunc("POST /v1/auth/login/finish", cfg.handleAuthLoginFinish)
+	mux.HandleFunc("GET /v1/auth/passkeys", cfg.handleListPasskeys)
+	mux.HandleFunc("DELETE /v1/auth/passkeys/{id}", cfg.handleRevokePasskey)
+	mux.HandleFunc("POST /v1/auth/logout", cfg.handleLogout)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !authorized(r, cfg.Token) {
+		if strings.HasPrefix(r.URL.Path, "/v1/auth/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		if !isAuthed(r, cfg) {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// isAuthed reports whether the request is authenticated by either a valid
+// session cookie (the everyday passkey-login path) or the legacy bearer
+// token (break-glass / CLI use).
+func isAuthed(r *http.Request, cfg Config) bool {
+	return hasValidSession(r, cfg.SessionSecret) || authorized(r, cfg.Token)
 }
 
 func (cfg Config) handleLineup(w http.ResponseWriter, r *http.Request) {

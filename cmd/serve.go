@@ -22,18 +22,23 @@ var serveCmd = &cobra.Command{
 
 It reads the precomputed JSON written by ` + "`optimize --publish-lineup`" + ` (the
 same bytes the deployed Lambda serves) — it does NOT run the optimizer or touch
-Fantrax. Requires ROSTERBOT_API_TOKEN; requests need an "Authorization: Bearer
-<token>" header.
+Fantrax. Requires ROSTERBOT_API_TOKEN (bootstrap/break-glass auth) and
+ROSTERBOT_SESSION_SECRET (signs passkey login sessions); requests need either
+a valid "rosterbot_session" cookie (set by a passkey login) or an
+"Authorization: Bearer <token>" header.
 
 It also serves the dashboard's static files (web/dashboard by default) at "/",
 same-origin with the API — the same split CloudFront does in production between
 its default behavior (static files) and its "/v1/*" behavior (the Lambda API),
 so the dashboard's relative "/v1/..." fetches behave identically in both places.
+WebAuthn is configured for RPID "localhost" — passkeys work against
+http://localhost:8080 in real browsers (Chrome/Safari treat localhost as a
+secure context), no HTTPS or mocking required for local testing.
 
 Typical local flow:
   go run . optimize --dry-run --publish-lineup   # writes .lineup/lineup-today.json
-  ROSTERBOT_API_TOKEN=test go run . serve
-  open http://localhost:8080/                    # dashboard, same-origin API calls
+  ROSTERBOT_API_TOKEN=test ROSTERBOT_SESSION_SECRET=test-secret go run . serve
+  open http://localhost:8080/                    # dashboard: set up a passkey, then log in with it
   curl -H "Authorization: Bearer test" localhost:8080/v1/lineup/today`,
 	RunE: runServe,
 }
@@ -52,13 +57,24 @@ func init() {
 // empty or missing webDir disables static serving (unmatched paths 404),
 // which keeps the pre-dashboard `serve` workflow (curl-only lineup testing)
 // working unchanged.
-func newServeMux(token, lineupDir, webDir string) http.Handler {
+func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) http.Handler {
+	wa, err := lineupapi.NewWebAuthn("localhost", "http://localhost:8080", "rosterbot (local)")
+	if err != nil {
+		// Config is static (RPID/origin are compile-time constants for local
+		// dev); a validation failure here means a coding mistake, not a
+		// runtime condition callers should handle.
+		panic("newServeMux: invalid local WebAuthn config: " + err.Error())
+	}
+
 	apiHandler := lineupapi.Handler(lineupapi.Config{
 		Token:         token,
 		Lineups:       lineupapi.NewFileStore(lineupDir),
 		Runs:          lineupapi.NewFileRunStore(lineupDir + "/runs"),
 		Notifications: lineupapi.NewFileNotificationStore(lineupDir + "/notifications"),
 		Output:        lineupapi.NewFileOutputStore(lineupDir + "/outputs"),
+		Identities:    lineupapi.NewFileIdentityStore(lineupDir),
+		WebAuthn:      wa,
+		SessionSecret: sessionSecret,
 		// Jobs is nil locally: triggering real ECS tasks only makes sense on AWS.
 		// POST /v1/jobs/* returns 501 from `serve`.
 	})
@@ -78,10 +94,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if token == "" {
 		return fmt.Errorf("ROSTERBOT_API_TOKEN is not set — the server needs a bearer token to authenticate requests")
 	}
+	sessionSecret := os.Getenv("ROSTERBOT_SESSION_SECRET")
+	if sessionSecret == "" {
+		return fmt.Errorf("ROSTERBOT_SESSION_SECRET is not set — the server needs a secret to sign passkey login sessions")
+	}
 	if _, err := os.Stat(serveWebDir); err != nil {
 		fmt.Printf("serving lineup API on %s (reading %s; jobs disabled locally; dashboard not served: %s not found)\n", serveAddr, serveDir, serveWebDir)
 	} else {
 		fmt.Printf("serving lineup API + dashboard on %s (reading %s; jobs disabled locally)\n", serveAddr, serveDir)
 	}
-	return http.ListenAndServe(serveAddr, newServeMux(token, serveDir, serveWebDir))
+	return http.ListenAndServe(serveAddr, newServeMux(token, []byte(sessionSecret), serveDir, serveWebDir))
 }

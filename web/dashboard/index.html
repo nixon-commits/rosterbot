@@ -8,12 +8,21 @@
 </head>
 <body>
 <div id="login-screen">
-  <form id="login-form">
+  <div class="login-card">
     <h1>rosterbot</h1>
-    <label for="token-input">API token</label>
-    <input id="token-input" type="password" autocomplete="off" placeholder="Paste ROSTERBOT_API_TOKEN">
-    <button type="submit">Log in</button>
+    <button id="passkey-login-btn" type="button">Sign in with passkey</button>
     <p id="login-error" class="error"></p>
+  </div>
+</div>
+
+<div id="bootstrap-screen" hidden>
+  <form id="bootstrap-form" class="login-card">
+    <h1>rosterbot</h1>
+    <p class="muted">No passkey is registered yet. Paste the API token once to set one up.</p>
+    <label for="bootstrap-token-input">API token</label>
+    <input id="bootstrap-token-input" type="password" autocomplete="off" placeholder="Paste ROSTERBOT_API_TOKEN">
+    <button type="submit">Set up passkey</button>
+    <p id="bootstrap-error" class="error"></p>
   </form>
 </div>
 
@@ -24,6 +33,7 @@
       <a href="#lineup">Lineup</a>
       <a href="#jobs">Jobs</a>
       <a href="#runs">Runs</a>
+      <a href="#passkeys">Passkeys</a>
       <a href="https://d3g6t1hhf4o9r6.cloudfront.net" target="_blank" rel="noopener">Recap ↗</a>
       <a href="https://d3lfzksum77fj7.cloudfront.net" target="_blank" rel="noopener">Projections ↗</a>
     </nav>

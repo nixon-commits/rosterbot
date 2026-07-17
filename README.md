@@ -178,8 +178,8 @@ Requests must carry `Authorization: Bearer <ROSTERBOT_API_TOKEN>`.
 #    (--publish-lineup makes dry-run write .lineup/; non-dry-run always publishes.)
 go run . optimize --dry-run --publish-lineup
 
-# 2. Start the server (needs a token; any string works locally).
-ROSTERBOT_API_TOKEN=test go run . serve   # listens on :8080, reads .lineup/
+# 2. Start the server (needs a token + a session secret; any strings work locally).
+ROSTERBOT_API_TOKEN=test ROSTERBOT_SESSION_SECRET=test-secret go run . serve   # listens on :8080, reads .lineup/
 
 # 3. In another shell:
 curl -H "Authorization: Bearer test" localhost:8080/v1/lineup/today   # 200 + JSON
@@ -216,24 +216,38 @@ projection-accuracy sites. Static files live in `web/dashboard/` (no build
 step — plain ES modules) and deploy via the existing CodeBuild pipeline to
 its own CloudFront distribution (`DashboardUrl` in the CDK stack outputs).
 
-Auth is the same `ROSTERBOT_API_TOKEN` as the API above: paste it into the
-dashboard's login screen once; it's stored in the browser and sent as the
-`Authorization` header on every call. There's no separate login system.
+Auth is a **passkey** (WebAuthn), not the token. The first time the dashboard
+has zero passkeys registered, it shows a bootstrap screen instead of a login
+form: paste `ROSTERBOT_API_TOKEN` there once to register your first passkey
+(Face ID / Touch ID / a hardware key), and every visit after that is a normal
+passkey login — no token involved. A signed, stateless session cookie (HMAC,
+`ROSTERBOT_SESSION_SECRET` locally / SSM `/rosterbot/DASHBOARD_SESSION_SECRET`
+on AWS) is what the browser actually carries on every `/v1/*` call after
+login; there's no server-side session store. The token still works as a
+Bearer header on direct API calls (CLI/scripting) and doubles as the
+break-glass/recovery credential — paste it into the bootstrap screen again if
+every passkey is ever lost, and it reappears since "zero passkeys
+registered" is the only thing that triggers it. The Passkeys panel in the
+dashboard lets you register additional devices or revoke old ones once
+logged in.
 
 **Run it locally before deploying:**
 
 ```bash
 go run . optimize --dry-run --publish-lineup   # writes .lineup/lineup-today.json
-ROSTERBOT_API_TOKEN=test go run . serve
-open http://localhost:8080/                    # log in with "test"
+ROSTERBOT_API_TOKEN=test ROSTERBOT_SESSION_SECRET=test-secret go run . serve
+open http://localhost:8080/                    # bootstrap screen: paste "test", register a passkey
 ```
 
 `rosterbot serve --web <dir>` serves the dashboard's static files at `/` and
 the API at `/v1/*` from the same local server — the same split CloudFront
 does in production — so the dashboard needs no environment-specific
-configuration and no CORS handling anywhere. Job triggering returns `501`
-locally (no ECS); everything else (lineup, run history, output, activity
-feed) works against real local files under `.lineup/`.
+configuration and no CORS handling anywhere. WebAuthn is configured for RPID
+`localhost`, so passkeys work against `http://localhost:8080` in real
+browsers (treated as a secure context) with no HTTPS or mocking required.
+Job triggering returns `501` locally (no ECS); everything else (lineup, run
+history, output, activity feed, passkey registration/login) works against
+real local files under `.lineup/`.
 
 ## How the Optimizer Works
 
