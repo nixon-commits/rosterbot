@@ -207,6 +207,34 @@ scheduled and API-triggered runs. **Triggered jobs run for real** — `POST
 /v1/jobs/optimize` applies your lineup and sends Pushover; gate it behind a
 confirmation in any client.
 
+### Web Dashboard
+
+A private, single-user web UI for the API above: today's lineup, a form to
+trigger any of the 9 allowlisted jobs, run history with live status, and a
+generic viewer for each job's typed output — plus links out to the recap and
+projection-accuracy sites. Static files live in `web/dashboard/` (no build
+step — plain ES modules) and deploy via the existing CodeBuild pipeline to
+its own CloudFront distribution (`DashboardUrl` in the CDK stack outputs).
+
+Auth is the same `ROSTERBOT_API_TOKEN` as the API above: paste it into the
+dashboard's login screen once; it's stored in the browser and sent as the
+`Authorization` header on every call. There's no separate login system.
+
+**Run it locally before deploying:**
+
+```bash
+go run . optimize --dry-run --publish-lineup   # writes .lineup/lineup-today.json
+ROSTERBOT_API_TOKEN=test go run . serve
+open http://localhost:8080/                    # log in with "test"
+```
+
+`rosterbot serve --web <dir>` serves the dashboard's static files at `/` and
+the API at `/v1/*` from the same local server — the same split CloudFront
+does in production — so the dashboard needs no environment-specific
+configuration and no CORS handling anywhere. Job triggering returns `501`
+locally (no ECS); everything else (lineup, run history, output, activity
+feed) works against real local files under `.lineup/`.
+
 ## How the Optimizer Works
 
 ### Hitter Optimization
