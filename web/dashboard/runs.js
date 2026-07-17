@@ -26,14 +26,21 @@ export async function renderRuns(root) {
   notifSection.appendChild(notifList);
   root.appendChild(notifSection);
 
+  let active = true;
+  const onNavigateAway = () => {
+    active = false;
+    stopPolling();
+  };
+  // Stop polling once the user navigates away from this view.
+  window.addEventListener("hashchange", onNavigateAway, { once: true });
+
   await Promise.all([
     loadRuns(runsList, detailSection),
     loadNotifications(notifList),
   ]);
 
+  if (!active) return; // user navigated away during the initial load; don't start polling
   pollTimer = setInterval(() => loadRuns(runsList, detailSection, /* silent */ true), POLL_MS);
-  // Stop polling once the user navigates away from this view.
-  window.addEventListener("hashchange", stopPolling, { once: true });
 }
 
 function stopPolling() {
@@ -66,7 +73,7 @@ async function loadRuns(container, detailSection, silent) {
     tr.style.cursor = "pointer";
     tr.innerHTML = `
       <td>${escapeHtml(run.command)}</td>
-      <td><span class="badge badge-${run.status.toLowerCase()}">${escapeHtml(run.status)}</span></td>
+      <td><span class="badge badge-${escapeHtml(run.status.toLowerCase())}">${escapeHtml(run.status)}</span></td>
       <td>${escapeHtml(run.started_at)}</td>
       <td>${escapeHtml(run.trigger)}</td>
     `;
@@ -91,7 +98,7 @@ async function showDetail(section, id) {
   card.className = "card";
   card.innerHTML = `
     <h3>${escapeHtml(detail.command)}</h3>
-    <p>Status: <span class="badge badge-${detail.status.toLowerCase()}">${escapeHtml(detail.status)}</span> · Trigger: ${escapeHtml(detail.trigger)}</p>
+    <p>Status: <span class="badge badge-${escapeHtml(detail.status.toLowerCase())}">${escapeHtml(detail.status)}</span> · Trigger: ${escapeHtml(detail.trigger)}</p>
     <p class="muted">Started ${escapeHtml(detail.started_at)}${detail.ended_at ? " · Ended " + escapeHtml(detail.ended_at) : ""}</p>
   `;
   if (detail.log_tail) {
@@ -138,7 +145,7 @@ async function loadNotifications(container) {
     const card = document.createElement("div");
     card.className = "card";
     card.innerHTML = `
-      <div><span class="badge badge-${n.status}">${escapeHtml(n.status)}</span> <span class="muted">${escapeHtml(n.kind)}</span> <strong>${escapeHtml(n.title)}</strong></div>
+      <div><span class="badge badge-${escapeHtml(n.status)}">${escapeHtml(n.status)}</span> <span class="muted">${escapeHtml(n.kind)}</span> <strong>${escapeHtml(n.title)}</strong></div>
       <p>${escapeHtml(n.message)}</p>
       <p class="muted">${escapeHtml(n.created_at)}</p>
     `;
