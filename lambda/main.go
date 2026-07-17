@@ -154,6 +154,13 @@ func adapt(h http.Handler) func(context.Context, events.LambdaFunctionURLRequest
 		for k, v := range evt.Headers {
 			req.Header.Set(k, v)
 		}
+		// Function URL payload format 2.0 delivers incoming cookies in the
+		// dedicated Cookies field, not Headers — join them into a single
+		// Cookie header (the standard wire format) so r.Cookie(...) in the
+		// handler can see them.
+		if len(evt.Cookies) > 0 {
+			req.Header.Set("Cookie", strings.Join(evt.Cookies, "; "))
+		}
 
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -165,7 +172,13 @@ func adapt(h http.Handler) func(context.Context, events.LambdaFunctionURLRequest
 		return events.LambdaFunctionURLResponse{
 			StatusCode: rec.Code,
 			Headers:    headers,
-			Body:       rec.Body.String(),
+			// Set-Cookie headers must go on the dedicated Cookies field, not
+			// Headers — the response Headers map can only hold one value per
+			// key, which would silently drop every cookie the handler sets
+			// (ceremony cookie on begin, session cookie on finish, clears on
+			// logout).
+			Cookies: rec.Header()["Set-Cookie"],
+			Body:    rec.Body.String(),
 		}, nil
 	}
 }

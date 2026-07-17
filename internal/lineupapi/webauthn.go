@@ -152,6 +152,7 @@ func (cfg Config) handleAuthRegisterFinish(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	clearCeremonyCookie(w)
+	setSessionCookie(w, cfg.SessionSecret, time.Now())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "registered"})
 }
 

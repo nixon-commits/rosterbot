@@ -43,13 +43,17 @@ type Config struct {
 	SessionSecret []byte
 }
 
-// Handler builds the full read/trigger API router. Every route requires the
-// bearer token. Routes:
+// Handler builds the full read/trigger API router. Every route requires
+// either a valid session cookie (the everyday passkey-login path) or the
+// legacy bearer token (break-glass / CLI use) — except /v1/auth/*, where each
+// handler gates itself: login is open, register accepts session-or-token,
+// and passkey management (list/revoke) requires a session only. Routes:
 //
 //	GET  /v1/lineup/today   -> precomputed lineup JSON
 //	GET  /v1/runs           -> run ledger (newest first)
 //	GET  /v1/runs/{id}      -> one run + log tail
 //	POST /v1/jobs/{name}    -> launch a job (async), 202
+//	POST /v1/auth/*         -> passkey login/register/logout, session mgmt
 func Handler(cfg Config) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/lineup/today", cfg.handleLineup)
