@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-webauthn/webauthn/webauthn"
 )
 
 // TodayKey is the object key (storage-adapter relative) for the most recent
@@ -34,6 +36,11 @@ type Config struct {
 	Jobs          JobRunner
 	Notifications NotificationStore
 	Output        OutputStore
+
+	// WebAuthn passkey auth (see webauthn.go).
+	Identities    IdentityStore
+	WebAuthn      *webauthn.WebAuthn
+	SessionSecret []byte
 }
 
 // Handler builds the full read/trigger API router. Every route requires the
@@ -53,13 +60,30 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/jobs", cfg.handleJobs)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
 
+	// Auth routes gate themselves (open login, session-or-token register,
+	// session-only passkey management in Task 5) instead of the blanket
+	// isAuthed check below.
+	mux.HandleFunc("POST /v1/auth/register/begin", cfg.handleAuthRegisterBegin)
+	mux.HandleFunc("POST /v1/auth/register/finish", cfg.handleAuthRegisterFinish)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !authorized(r, cfg.Token) {
+		if strings.HasPrefix(r.URL.Path, "/v1/auth/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		if !isAuthed(r, cfg) {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// isAuthed reports whether the request is authenticated by either a valid
+// session cookie (the everyday passkey-login path) or the legacy bearer
+// token (break-glass / CLI use).
+func isAuthed(r *http.Request, cfg Config) bool {
+	return hasValidSession(r, cfg.SessionSecret) || authorized(r, cfg.Token)
 }
 
 func (cfg Config) handleLineup(w http.ResponseWriter, r *http.Request) {
