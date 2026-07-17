@@ -54,7 +54,7 @@ function slotCard(slot) {
   const p = slot.player;
   card.innerHTML = `
     <div class="muted">${escapeHtml(slot.slot)}</div>
-    <div><strong>${escapeHtml(p.name)}</strong> <span class="badge badge-${p.status.toLowerCase()}">${escapeHtml(p.status)}</span></div>
+    <div><strong>${escapeHtml(p.name)}</strong> <span class="badge badge-${escapeHtml(p.status.toLowerCase())}">${escapeHtml(p.status)}</span></div>
     <div class="muted">${escapeHtml(p.team)} · ${escapeHtml(p.pos.join("/"))}</div>
     <div>${p.proj.toFixed(1)} proj pts</div>
   `;
