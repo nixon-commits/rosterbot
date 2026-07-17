@@ -260,8 +260,9 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// "/v1/*" proxies straight to the Function URL so the browser sees a single
 	// same-origin app — no CORS handling needed anywhere. CachePolicy is
 	// disabled and OriginRequestPolicy forwards everything (including the
-	// Authorization header) since every /v1/* response is a dynamic,
-	// per-request authenticated call.
+	// Authorization header) except the Host header — the Function URL origin
+	// doesn't need CloudFront's own Host and forwarding it risks the origin
+	// rejecting the request.
 	dashboardDist := awscloudfront.NewDistribution(stack, jsii.String("DashboardCdn"), &awscloudfront.DistributionProps{
 		DefaultRootObject: jsii.String("index.html"),
 		DefaultBehavior: &awscloudfront.BehaviorOptions{
@@ -274,7 +275,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
 				AllowedMethods:       awscloudfront.AllowedMethods_ALLOW_ALL(),
 				CachePolicy:          awscloudfront.CachePolicy_CACHING_DISABLED(),
-				OriginRequestPolicy:  awscloudfront.OriginRequestPolicy_ALL_VIEWER(),
+				OriginRequestPolicy:  awscloudfront.OriginRequestPolicy_ALL_VIEWER_EXCEPT_HOST_HEADER(),
 			},
 		},
 	})
