@@ -292,15 +292,36 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardCdnId"), &awscdk.CfnOutputProps{Value: dashboardDist.DistributionId()})
 
 	// The Lambda's WebAuthn RP config needs the dashboard's own origin, which
-	// only exists once this distribution is created — added here rather than
-	// in apiFn's initial Environment map above to break the circular
-	// dependency (dashboardDist's origin is apiFn's Function URL).
-	apiFn.AddEnvironment(jsii.String("RP_ID"), dashboardDist.DistributionDomainName(), nil)
-	apiFn.AddEnvironment(
-		jsii.String("RP_ORIGIN"),
-		awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
-		nil,
-	)
+	// only exists once this distribution is created. Deferring apiFn's env-var
+	// wiring to after dashboardDist's construction (as a prior version of this
+	// code did) does NOT break the circular dependency — it only defers when
+	// the Go code runs, not the CloudFormation resource graph: an env var set
+	// to dashboardDist.DistributionDomainName() is still a Fn::GetAtt on the
+	// Distribution, and the Distribution's own origin config references
+	// apiFn's Function URL (Distribution -> FunctionUrl -> apiFn), so a direct
+	// GetAtt the other way (apiFn -> Distribution) is a genuine cycle that CDK
+	// synth rejects at deploy time. Instead, publish the domain into SSM
+	// (mirroring API_TOKEN_PARAM/SESSION_SECRET_PARAM) and hand apiFn only the
+	// literal parameter *names* — a plain string, not a resource reference —
+	// so apiFn has zero CloudFormation dependency on dashboardDist. The Lambda
+	// fetches the actual values from SSM at cold start (see lambda/main.go).
+	awsssm.NewStringParameter(stack, jsii.String("RpIdParam"), &awsssm.StringParameterProps{
+		ParameterName: jsii.String("/rosterbot/DASHBOARD_RP_ID"),
+		StringValue:   dashboardDist.DistributionDomainName(),
+	})
+	awsssm.NewStringParameter(stack, jsii.String("RpOriginParam"), &awsssm.StringParameterProps{
+		ParameterName: jsii.String("/rosterbot/DASHBOARD_RP_ORIGIN"),
+		StringValue:   awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
+	})
+	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions: jsii.Strings("ssm:GetParameter"),
+		Resources: jsii.Strings(
+			"arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/DASHBOARD_RP_ID",
+			"arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/DASHBOARD_RP_ORIGIN",
+		),
+	}))
+	apiFn.AddEnvironment(jsii.String("RP_ID_PARAM"), jsii.String("/rosterbot/DASHBOARD_RP_ID"), nil)
+	apiFn.AddEnvironment(jsii.String("RP_ORIGIN_PARAM"), jsii.String("/rosterbot/DASHBOARD_RP_ORIGIN"), nil)
 
 	// --- Phase 2: CodeBuild (build + push image to ECR on push to main) ---
 	// Gated: only instantiated with `-c enableBuild=true`, because the GitHub
