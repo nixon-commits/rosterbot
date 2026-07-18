@@ -65,18 +65,28 @@ func main() {
 		log.Fatalf("init job runner: %v", err)
 	}
 
-	token, err := loadToken(ctx)
+	token, err := loadSSMParam(ctx, "API_TOKEN_PARAM", "/rosterbot/ROSTERBOT_API_TOKEN")
 	if err != nil {
 		log.Fatalf("load API token: %v", err)
 	}
-	sessionSecret, err := loadSessionSecret(ctx)
+	sessionSecret, err := loadSSMParam(ctx, "SESSION_SECRET_PARAM", "/rosterbot/DASHBOARD_SESSION_SECRET")
 	if err != nil {
 		log.Fatalf("load session secret: %v", err)
 	}
-	rpID := os.Getenv("RP_ID")
-	rpOrigin := os.Getenv("RP_ORIGIN")
-	if rpID == "" || rpOrigin == "" {
-		log.Fatal("RP_ID and RP_ORIGIN must be set")
+	// RP_ID/RP_ORIGIN can't be plain env vars set from the CloudFront
+	// distribution's own domain name: the distribution's origin is this
+	// function's Function URL, so a direct env-var reference to the
+	// distribution's DomainName attribute creates a circular CloudFormation
+	// dependency (Lambda -> Distribution -> FunctionUrl -> Lambda). Instead
+	// infra.go publishes the domain into SSM params after the distribution is
+	// created, and hands this function only the (static) param names.
+	rpID, err := loadSSMParam(ctx, "RP_ID_PARAM", "/rosterbot/DASHBOARD_RP_ID")
+	if err != nil {
+		log.Fatalf("load RP_ID: %v", err)
+	}
+	rpOrigin, err := loadSSMParam(ctx, "RP_ORIGIN_PARAM", "/rosterbot/DASHBOARD_RP_ORIGIN")
+	if err != nil {
+		log.Fatalf("load RP_ORIGIN: %v", err)
 	}
 	wa, err := lineupapi.NewWebAuthn(rpID, rpOrigin, "rosterbot")
 	if err != nil {
@@ -97,13 +107,15 @@ func main() {
 	lambda.Start(adapt(handler))
 }
 
-// loadToken reads the bearer token from SSM Parameter Store (SecureString) named
-// by API_TOKEN_PARAM. Fetched once at cold start so the secret never lives in
-// the function's plaintext configuration.
-func loadToken(ctx context.Context) (string, error) {
-	name := os.Getenv("API_TOKEN_PARAM")
+// loadSSMParam reads a value from SSM Parameter Store. The parameter's name
+// is taken from the env var envVar, falling back to fallbackName when unset
+// (matching a bare `rosterbot serve` run against a manually-populated
+// parameter). Fetched fresh on every call; callers that want cold-start-only
+// caching call this once during init.
+func loadSSMParam(ctx context.Context, envVar, fallbackName string) (string, error) {
+	name := os.Getenv(envVar)
 	if name == "" {
-		name = "/rosterbot/ROSTERBOT_API_TOKEN"
+		name = fallbackName
 	}
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
