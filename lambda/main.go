@@ -131,6 +131,28 @@ func loadSSMParam(ctx context.Context, envVar, fallbackName string) (string, err
 	return *out.Parameter.Value, nil
 }
 
+// loadSessionSecret reads the session-cookie HMAC secret from SSM Parameter
+// Store (SecureString) named by SESSION_SECRET_PARAM. Fetched once at cold
+// start, mirroring loadToken.
+func loadSessionSecret(ctx context.Context) (string, error) {
+	name := os.Getenv("SESSION_SECRET_PARAM")
+	if name == "" {
+		name = "/rosterbot/DASHBOARD_SESSION_SECRET"
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	out, err := ssm.NewFromConfig(cfg).GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           &name,
+		WithDecryption: boolPtr(true),
+	})
+	if err != nil {
+		return "", err
+	}
+	return *out.Parameter.Value, nil
+}
+
 // adapt bridges a Lambda Function URL event to the standard http.Handler by
 // replaying it through an in-memory recorder. Keeps the handler a plain
 // net/http handler shared with the local `serve` command.
