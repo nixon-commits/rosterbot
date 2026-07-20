@@ -57,11 +57,23 @@ phases:
       # to main updates the site immediately instead of waiting for the daily
       # ProjectionSite schedule. Fargate pulls :latest fresh on each RunTask, so
       # this uses the new build. Reuses the API's egress-only SG + public subnets.
+      #
+      # $TASK_DEF is a CodeBuild project env var baked in as of the *previous*
+      # deploy, so it still names the pre-deploy revision after a build that
+      # changes the task/container definition (which bumps the revision) --
+      # meanwhile GrantRun's IAM policy is scoped to the task definition
+      # resource's current ARN, which cdk deploy above just updated to the new
+      # revision. Calling RunTask with the stale revision then fails
+      # AccessDeniedException (confirmed live, build #101, revision :4 stale
+      # vs :5 current). Stripping the ":N" suffix passes the bare family ARN,
+      # which ECS resolves to whatever revision is ACTIVE right now -- always
+      # in sync with the IAM policy, which is scoped the same way.
       - |
         if [ -n "${CLUSTER:-}" ]; then
+          TASK_DEF_FAMILY="${TASK_DEF%:*}"
           aws ecs run-task \
             --cluster "$CLUSTER" \
-            --task-definition "$TASK_DEF" \
+            --task-definition "$TASK_DEF_FAMILY" \
             --launch-type FARGATE \
             --count 1 \
             --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SECURITY_GROUPS],assignPublicIp=ENABLED}" \
