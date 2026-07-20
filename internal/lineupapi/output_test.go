@@ -3,6 +3,8 @@ package lineupapi
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -53,5 +55,63 @@ func TestFileOutputStoreRoundTrip(t *testing.T) {
 	}
 	if string(got) != string(body) {
 		t.Fatalf("bytes mismatch")
+	}
+}
+
+func TestFileOutputStore_PathTraversal(t *testing.T) {
+	traversalIDs := []string{"../evil", "..", "a/b", "a\\b", "../../etc/foo"}
+
+	for _, id := range traversalIDs {
+		t.Run("get_"+id, func(t *testing.T) {
+			dir := t.TempDir()
+			s := NewFileOutputStore(dir)
+			ctx := context.Background()
+
+			data, ok, err := s.GetOutput(ctx, id)
+			if err != nil || ok || data != nil {
+				t.Fatalf("GetOutput(%q) = %v, %v, %v; want nil, false, nil", id, data, ok, err)
+			}
+		})
+
+		t.Run("put_"+id, func(t *testing.T) {
+			// Use a parent directory whose sibling we can inspect, so a traversal
+			// id like "../evil" would (if unguarded) write outside dir.
+			parent := t.TempDir()
+			dir := filepath.Join(parent, "store")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			s := NewFileOutputStore(dir)
+			ctx := context.Background()
+
+			if err := s.PutOutput(ctx, id, []byte("data")); err == nil {
+				t.Fatalf("PutOutput(%q) = nil error, want non-nil", id)
+			}
+
+			entries, err := os.ReadDir(parent)
+			if err != nil {
+				t.Fatalf("readdir parent: %v", err)
+			}
+			for _, e := range entries {
+				if e.Name() != "store" {
+					t.Fatalf("PutOutput(%q) wrote stray entry %q outside dir", id, e.Name())
+				}
+			}
+		})
+	}
+}
+
+func TestFileOutputStore_NormalIDStillRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	s := NewFileOutputStore(dir)
+	ctx := context.Background()
+
+	body, _ := MarshalOutput("waivers", WaiversResult{Total: 0})
+	if err := s.PutOutput(ctx, "run123", body); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	got, ok, err := s.GetOutput(ctx, "run123")
+	if err != nil || !ok || string(got) != string(body) {
+		t.Fatalf("get: got=%q ok=%v err=%v", got, ok, err)
 	}
 }

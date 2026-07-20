@@ -3,9 +3,11 @@ package lineupapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ProgressStore is the read side for live run progress (GET /v1/runs/{id}/progress).
@@ -28,7 +30,18 @@ func (s *FileProgressStore) path(runID string) string {
 	return filepath.Join(s.dir, runID+".json")
 }
 
+// safeRunID reports whether id is a single clean path component (no separators,
+// not "." / ".."), so <dir>/<id>.json cannot escape dir. Run ids are opaque
+// tokens; a value that isn't a clean component can only be malformed or hostile.
+func safeRunID(id string) bool {
+	return id != "" && id != "." && id != ".." &&
+		!strings.ContainsAny(id, `/\`) && id == filepath.Clean(id)
+}
+
 func (s *FileProgressStore) GetProgress(_ context.Context, runID string) ([]byte, bool, error) {
+	if !safeRunID(runID) {
+		return nil, false, nil
+	}
 	data, err := os.ReadFile(s.path(runID))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil
@@ -40,6 +53,9 @@ func (s *FileProgressStore) GetProgress(_ context.Context, runID string) ([]byte
 }
 
 func (s *FileProgressStore) PutProgress(_ context.Context, runID string, data []byte) error {
+	if !safeRunID(runID) {
+		return fmt.Errorf("invalid run id %q", runID)
+	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return err
 	}
