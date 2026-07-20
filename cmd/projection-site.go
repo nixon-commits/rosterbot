@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,15 +26,15 @@ var projectionSiteCmd = &cobra.Command{
 	Use:   "projection-site",
 	Short: "Render the projection-accuracy dashboard from the Analysis Store",
 	Long: `Reads the Graded Snapshots written by the grade command (analysis/grades/
-on S3 when STATE_BUCKET is set, else local .analysis/) and renders a single
-self-contained HTML dashboard to <out>/index.html. Intended for daily
-deployment to its own S3+CloudFront, mirroring the recap site.`,
+on S3 when STATE_BUCKET is set, else local .analysis/) and writes the
+aggregated model as JSON to <out>/model.json (fed to the dashboard SPA).
+Intended for daily deployment to its own S3+CloudFront, mirroring the recap site.`,
 	RunE: runProjectionSite,
 }
 
 func init() {
 	projectionSiteCmd.Flags().StringVar(&projSiteOut, "out", "report", "output directory for the rendered dashboard")
-	projectionSiteCmd.Flags().BoolVar(&projSiteOpen, "open", false, "open the rendered index.html in the default browser")
+	projectionSiteCmd.Flags().BoolVar(&projSiteOpen, "open", false, "open the rendered model.json in the default handler")
 	rootCmd.AddCommand(projectionSiteCmd)
 }
 
@@ -69,22 +70,24 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 	if err := os.MkdirAll(projSiteOut, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", projSiteOut, err)
 	}
-	outPath := filepath.Join(projSiteOut, "index.html")
+	outPath := filepath.Join(projSiteOut, "model.json")
 	f, err := os.Create(outPath)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", outPath, err)
 	}
 	defer f.Close()
-	if err := report.Render(f, m); err != nil {
-		return fmt.Errorf("render: %w", err)
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(m); err != nil {
+		return fmt.Errorf("encode model: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Wrote %s (%d graded rows, latest %s)\n", outPath, len(rows), m.LatestDate)
 
-	// Emit value.html (team HKB value tracker) alongside the accuracy dashboard.
+	// Emit value.json (team HKB value tracker) alongside the accuracy model.
 	// It reads its own store and is additive, so a team-value hiccup soft-fails
 	// rather than blocking the accuracy dashboard deploy.
 	if err := renderValueSite(projSiteOut); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: value.html not rendered: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: value.json not written: %v\n", err)
 	}
 
 	if projSiteOpen {
@@ -96,8 +99,8 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 }
 
 // renderValueSite reads the Team Value Store (S3 when STATE_BUCKET is set, else
-// local .teamvalue/) and writes <outDir>/value.html. An empty store renders a
-// graceful collecting-data page rather than erroring.
+// local .teamvalue/) and writes <outDir>/value.json. An empty store still
+// writes a valid (empty) model rather than erroring.
 func renderValueSite(outDir string) error {
 	var reader teamvalue.Reader
 	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
@@ -113,14 +116,17 @@ func renderValueSite(outDir string) error {
 	if err != nil {
 		return fmt.Errorf("read team values: %w", err)
 	}
-	outPath := filepath.Join(outDir, "value.html")
+	vm := valuereport.BuildModel(rows)
+	outPath := filepath.Join(outDir, "value.json")
 	f, err := os.Create(outPath)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", outPath, err)
 	}
 	defer f.Close()
-	if err := valuereport.Render(f, valuereport.BuildModel(rows)); err != nil {
-		return fmt.Errorf("render value: %w", err)
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(vm); err != nil {
+		return fmt.Errorf("encode value model: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Wrote %s (%d team-value rows)\n", outPath, len(rows))
 	return nil

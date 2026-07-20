@@ -1,8 +1,6 @@
 package valuereport
 
 import (
-	"bytes"
-	"strings"
 	"testing"
 
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
@@ -68,64 +66,5 @@ func TestBuildModel_LatestSortedByTotalDesc(t *testing.T) {
 	// Coverage carried through: Beta on day 2 matched 8/10.
 	if m.Latest[1].MatchedCount != 8 || m.Latest[1].RosteredCount != 10 {
 		t.Fatalf("coverage not carried: %+v", m.Latest[1])
-	}
-}
-
-func TestRender_SelfContainedHTML(t *testing.T) {
-	var buf bytes.Buffer
-	if err := Render(&buf, BuildModel(fixtureRows())); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	out := buf.String()
-	for _, want := range []string{
-		"<canvas id=\"valueChart\"",
-		"const DATA =",
-		"\"Alpha\"", "\"Beta\"",
-		"chart.js@4.4.7", // pinned CDN + SRI
-		"index.html",     // cross-link to accuracy dashboard
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("rendered HTML missing %q", want)
-		}
-	}
-}
-
-// A malicious team name must not break out of the <script> data blob (Go's
-// json.Marshal escapes <>&), and the runtime innerHTML build must route
-// DATA-derived strings through esc(). Team names are league-member-controlled.
-func TestRender_XSSTeamNameNeutralized(t *testing.T) {
-	rows := []teamvalue.Row{{
-		Dt: "2026-07-12", TeamID: "t1",
-		TeamName:       `<img src=x onerror=alert(1)>`,
-		HitterMLBValue: 100, RosteredCount: 1, MatchedCount: 1,
-	}}
-	var buf bytes.Buffer
-	if err := Render(&buf, BuildModel(rows)); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	out := buf.String()
-	// The raw payload must not appear verbatim (it is <-escaped in the blob).
-	if strings.Contains(out, "<img src=x onerror=alert(1)>") {
-		t.Error("raw <img> payload leaked into rendered HTML — script-context escaping failed")
-	}
-	if !strings.Contains(out, "\\u003cimg src=x onerror=alert(1)\\u003e") {
-		t.Error("expected the team name to be unicode-escaped inside the JSON data blob")
-	}
-	// The runtime guard must be present and applied to the team-name cell.
-	if !strings.Contains(out, "function esc(") {
-		t.Error("esc() helper missing from template")
-	}
-	if !strings.Contains(out, "esc(r.name || r.team)") {
-		t.Error("team-name cell is not routed through esc()")
-	}
-}
-
-func TestRender_EmptyState(t *testing.T) {
-	var buf bytes.Buffer
-	if err := Render(&buf, BuildModel(nil)); err != nil {
-		t.Fatalf("render empty: %v", err)
-	}
-	if !strings.Contains(buf.String(), "Team Value Store is empty") {
-		t.Error("empty-state note missing")
 	}
 }
