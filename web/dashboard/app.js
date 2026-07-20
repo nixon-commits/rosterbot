@@ -6,12 +6,15 @@ import { renderLineup } from "./lineup.js";
 import { renderJobs } from "./jobs.js";
 import { renderRuns } from "./runs.js";
 import { renderPasskeys } from "./passkeys.js";
+import { renderProjections, renderValue } from "./reportview.js";
 
 const ROUTES = {
   "#lineup": renderLineup,
   "#jobs": renderJobs,
   "#runs": renderRuns,
   "#passkeys": renderPasskeys,
+  "#projections": renderProjections,
+  "#value": renderValue,
 };
 const DEFAULT_ROUTE = "#lineup";
 
