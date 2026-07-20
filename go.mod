@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.28
 	github.com/aws/aws-sdk-go-v2/service/cloudfront v1.66.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.0
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.72.0
 	github.com/go-webauthn/webauthn v0.17.4
 	github.com/joho/godotenv v1.5.1
 	github.com/pmurley/go-fantrax v0.1.16

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/nixon-commits/rosterbot/internal/statesync"
 	"github.com/spf13/cobra"
 )
@@ -88,8 +90,39 @@ func runSyncUp(cmd *cobra.Command, args []string) error {
 	// --delete pass) — followed by a CloudFront invalidation so the new
 	// pages aren't masked by the distribution's cache TTL.
 	publishSite(ctx, s, "./dist", os.Getenv("SITE_BUCKET"), os.Getenv("SITE_CF_DIST_ID"), "")
-	publishSite(ctx, s, "./report", os.Getenv("DASHBOARD_BUCKET"), os.Getenv("DASHBOARD_CF_DIST_ID"), "report/")
+	publishSite(ctx, s, "./report", os.Getenv("DASHBOARD_BUCKET"), dashboardCFDistID(ctx), "report/")
 	return nil
+}
+
+// dashboardCFDistID resolves DashboardCdn's distribution ID for the
+// projection-site publish's post-upload invalidation. It can't be injected as
+// a direct env var (DASHBOARD_CF_DIST_ID) the way SITE_CF_DIST_ID is: a
+// CloudFormation reference from the bot's task definition to DashboardCdn
+// creates a circular dependency (Task -> DashboardCdn -> LineupApiFunctionUrl
+// -> LineupApi -> Task, the Lambda's TASK_DEF env var closing the loop) —
+// confirmed live via a rejected CloudFormation changeset. infra.go instead
+// publishes the ID into SSM after the distribution exists and hands the task
+// only the (static) parameter name via DASHBOARD_CF_DIST_ID_PARAM, mirroring
+// lambda/main.go's RP_ID_PARAM/RP_ORIGIN_PARAM fix for the identical cycle
+// shape. Soft-fails to "" (no invalidation, matching publishSite's existing
+// behavior for an unset distID) on any error — a stale CloudFront cache is a
+// self-healing annoyance, not a reason to fail the run.
+func dashboardCFDistID(ctx context.Context) string {
+	name := os.Getenv("DASHBOARD_CF_DIST_ID_PARAM")
+	if name == "" {
+		return ""
+	}
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		warn("dashboard dist id: load aws config: %v", err)
+		return ""
+	}
+	out, err := ssm.NewFromConfig(cfg).GetParameter(ctx, &ssm.GetParameterInput{Name: &name})
+	if err != nil {
+		warn("dashboard dist id: fetch %s: %v", name, err)
+		return ""
+	}
+	return *out.Parameter.Value
 }
 
 // publishSite mirrors a local site dir into a bucket under prefix (with

@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	github.com/aws/aws-lambda-go v1.49.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.29
-	github.com/aws/aws-sdk-go-v2/service/ssm v1.71.0
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.72.0
 	github.com/nixon-commits/rosterbot v0.0.0-00010101000000-000000000000
 )
 

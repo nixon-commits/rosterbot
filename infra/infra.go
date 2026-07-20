@@ -277,7 +277,25 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		Actions:   jsii.Strings("cloudfront:CreateInvalidation"),
 		Resources: &[]*string{cfArn(dashboardDist)},
 	}))
-	botContainer.AddEnvironment(jsii.String("DASHBOARD_CF_DIST_ID"), dashboardDist.DistributionId())
+	// A direct AddEnvironment(DASHBOARD_CF_DIST_ID, dashboardDist.DistributionId())
+	// here is the same circular dependency the RP_ID/RP_ORIGIN comment below
+	// documents: Task -> DashboardCdn (this GetAtt) while DashboardCdn ->
+	// LineupApiFunctionUrl -> apiFn -> Task (apiFn's TASK_DEF env var) closes the
+	// loop — confirmed live: CloudFormation's changeset creation rejected the
+	// stack with "Circular dependency between resources" (cdk synth alone does
+	// not catch this). An ECS Secret backed by an imported SSM parameter doesn't
+	// help either: cdk deploy needs to read the parameter's type at synth time,
+	// which fails for a parameter this very deploy is about to create. Mirror
+	// the RP_ID/RP_ORIGIN fix instead: publish the value into SSM and hand the
+	// container only the parameter *name* (a plain string, zero CDK reference)
+	// — the bot resolves the actual value via a runtime ssm:GetParameter call
+	// (cmd/sync.go's dashboardCFDistID), the same pattern lambda/main.go uses
+	// for RP_ID_PARAM/RP_ORIGIN_PARAM.
+	awsssm.NewStringParameter(stack, jsii.String("DashboardCfDistIdParam"), &awsssm.StringParameterProps{
+		ParameterName: jsii.String("/rosterbot/DASHBOARD_CF_DIST_ID"),
+		StringValue:   dashboardDist.DistributionId(),
+	})
+	botContainer.AddEnvironment(jsii.String("DASHBOARD_CF_DIST_ID_PARAM"), jsii.String("/rosterbot/DASHBOARD_CF_DIST_ID"))
 
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
