@@ -66,12 +66,6 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		AutoDeleteObjects: jsii.Bool(true),
 	})
 
-	// Projection-accuracy dashboard bucket (private; served via its own CDN).
-	reportBucket := awss3.NewBucket(stack, jsii.String("ReportBucket"), &awss3.BucketProps{
-		RemovalPolicy:     awscdk.RemovalPolicy_DESTROY,
-		AutoDeleteObjects: jsii.Bool(true),
-	})
-
 	// Dashboard bucket (static web UI; private, served via its own CDN below).
 	dashboardBucket := awss3.NewBucket(stack, jsii.String("DashboardBucket"), &awss3.BucketProps{
 		RemovalPolicy:     awscdk.RemovalPolicy_DESTROY,
@@ -87,7 +81,6 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	awscdk.NewCfnOutput(stack, jsii.String("RepoUri"), &awscdk.CfnOutputProps{Value: repo.RepositoryUri()})
 	awscdk.NewCfnOutput(stack, jsii.String("StateBucketName"), &awscdk.CfnOutputProps{Value: stateBucket.BucketName()})
 	awscdk.NewCfnOutput(stack, jsii.String("SiteBucketName"), &awscdk.CfnOutputProps{Value: siteBucket.BucketName()})
-	awscdk.NewCfnOutput(stack, jsii.String("ReportBucketName"), &awscdk.CfnOutputProps{Value: reportBucket.BucketName()})
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardBucketName"), &awscdk.CfnOutputProps{Value: dashboardBucket.BucketName()})
 
 	// --- Phase 3: compute (VPC, cluster, ARM64 Fargate task definition) ---
@@ -117,13 +110,6 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
 		},
 	})
-	reportDist := awscloudfront.NewDistribution(stack, jsii.String("ReportCdn"), &awscloudfront.DistributionProps{
-		DefaultRootObject: jsii.String("index.html"),
-		DefaultBehavior: &awscloudfront.BehaviorOptions{
-			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(reportBucket, nil),
-			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
-		},
-	})
 	cfArn := func(d awscloudfront.Distribution) *string {
 		return awscdk.Fn_Join(jsii.String(""), &[]*string{
 			jsii.String("arn:aws:cloudfront::"), stack.Account(), jsii.String(":distribution/"), d.DistributionId(),
@@ -134,14 +120,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// invalidate the two CloudFront distributions after publishing a site.
 	stateBucket.GrantReadWrite(taskDef.TaskRole(), nil)
 	siteBucket.GrantReadWrite(taskDef.TaskRole(), nil)
-	reportBucket.GrantReadWrite(taskDef.TaskRole(), nil)
 	taskDef.TaskRole().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Actions:   jsii.Strings("ssm:GetParameters", "ssm:GetParameter"),
 		Resources: jsii.Strings("arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/*"),
 	}))
 	taskDef.TaskRole().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Actions:   jsii.Strings("cloudfront:CreateInvalidation"),
-		Resources: &[]*string{cfArn(dist), cfArn(reportDist)},
+		Resources: &[]*string{cfArn(dist)},
 	}))
 
 	secret := func(name string) awsecs.Secret {
@@ -150,7 +135,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		return awsecs.Secret_FromSsmParameter(p)
 	}
 
-	taskDef.AddContainer(jsii.String("bot"), &awsecs.ContainerDefinitionOptions{
+	botContainer := taskDef.AddContainer(jsii.String("bot"), &awsecs.ContainerDefinitionOptions{
 		Image: awsecs.ContainerImage_FromEcrRepository(repo, jsii.String("latest")),
 		Logging: awsecs.LogDriver_AwsLogs(&awsecs.AwsLogDriverProps{
 			LogGroup:     logGroup,
@@ -159,9 +144,8 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		Environment: &map[string]*string{
 			"STATE_BUCKET":        stateBucket.BucketName(),
 			"SITE_BUCKET":         siteBucket.BucketName(),
-			"REPORT_BUCKET":       reportBucket.BucketName(),
+			"DASHBOARD_BUCKET":    dashboardBucket.BucketName(),
 			"SITE_CF_DIST_ID":     dist.DistributionId(),
-			"REPORT_CF_DIST_ID":   reportDist.DistributionId(),
 			"CLAIMS_CURSOR_PATH":  jsii.String(".waivers/last-claims.json"),
 			"GS_TRACKING_ENABLED": jsii.String("true"),
 		},
@@ -185,9 +169,6 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// container, so their IDs can be injected as env vars for cache invalidation) ---
 	awscdk.NewCfnOutput(stack, jsii.String("SiteUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dist.DistributionDomainName()}),
-	})
-	awscdk.NewCfnOutput(stack, jsii.String("ReportUrl"), &awscdk.CfnOutputProps{
-		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), reportDist.DistributionDomainName()}),
 	})
 
 	// --- Lineup + control API: Go Lambda behind a Function URL ---
@@ -286,6 +267,18 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			},
 		},
 	})
+
+	// The bot task (projection-site) publishes report/index.html + report/value.html
+	// under DashboardBucket's "report/" prefix, so it needs write access here too
+	// (previously it only wrote to its own now-removed ReportBucket), plus
+	// permission to invalidate DashboardCdn after publishing.
+	dashboardBucket.GrantReadWrite(taskDef.TaskRole(), nil)
+	taskDef.TaskRole().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions:   jsii.Strings("cloudfront:CreateInvalidation"),
+		Resources: &[]*string{cfArn(dashboardDist)},
+	}))
+	botContainer.AddEnvironment(jsii.String("DASHBOARD_CF_DIST_ID"), dashboardDist.DistributionId())
+
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
 	})

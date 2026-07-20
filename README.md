@@ -14,7 +14,7 @@ Fantasy baseball roster automation for Fantrax head-to-head points leagues. Opti
 - **Roster hygiene** — Flags healthy players stuck in IL slots, called-up players still in Minors slots, and injured players occupying active slots.
 - **Backtesting** — Grades past lineup moves against the hindsight-optimal lineup and measures projection accuracy against actual fantasy points.
 - **Weekly recaps** — Sleeper-style HTML recaps with a Game of the Week win-probability chart, plus Heart Attack (most lead changes) and Comeback (winner with mid-week WP < 0.30) awards. Includes Top Single Day Performances (top 5 batters/pitchers, badged with the owning team's logo) and a League Leaders board ranking all rostered players by season-to-date wOBA (hitters) and FIP (pitchers).
-- **Projection-accuracy dashboard** — Daily-updating self-contained HTML dashboard reading from the Analysis Store grades; shows scorecard + 30-day trend, per-position MAE breakdown, calibration chart, and worst-miss table, with auto-generated insights. Live URL is the CDK `ReportUrl` output.
+- **Projection-accuracy dashboard** — Daily-updating self-contained HTML dashboard reading from the Analysis Store grades; shows scorecard + 30-day trend, per-position MAE breakdown, calibration chart, and worst-miss table, with auto-generated insights. Served as the "Projections" tab inside the private dashboard (the CDK `DashboardUrl` output), at `<dashboard-domain>/report/index.html`.
 
 ## Quick Start
 
@@ -352,7 +352,9 @@ Required repository secrets for local runs: `FANTRAX_USERNAME`, `FANTRAX_PASSWOR
 `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
 
 The recap site is published from `./dist` to `SITE_BUCKET` by `entrypoint.sh`.
-The projection dashboard is published from `./report` to `REPORT_BUCKET` by `entrypoint.sh`.
+The projection dashboard and team-value tracker are published from `./report` into `DASHBOARD_BUCKET`'s `report/` prefix by `entrypoint.sh` — same bucket/CloudFront distribution as the private dashboard SPA, at `<dashboard-domain>/report/index.html` and `/report/value.html`.
+
+For local preview, render into the dashboard's own static dir so `go run . serve` serves it too: `rosterbot projection-site --out web/dashboard/report` (delete `web/dashboard/report/` afterward so it isn't committed).
 There is no GitHub Pages workflow in the current deployment.
 
 ### Model auditing (Analysis Store)

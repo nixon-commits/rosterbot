@@ -81,24 +81,33 @@ func runSyncUp(cmd *cobra.Command, args []string) error {
 	}
 
 	// Publish the static sites when present (recap-site writes ./dist,
-	// projection-site writes ./report). Each is a full-bucket mirror with
-	// --delete, followed by a CloudFront invalidation so the new pages aren't
-	// masked by the distribution's cache TTL.
-	publishSite(ctx, s, "./dist", os.Getenv("SITE_BUCKET"), os.Getenv("SITE_CF_DIST_ID"))
-	publishSite(ctx, s, "./report", os.Getenv("REPORT_BUCKET"), os.Getenv("REPORT_CF_DIST_ID"))
+	// projection-site writes ./report). recap-site.go publishes a full
+	// bucket-root mirror with --delete; projection-site's output is
+	// published under a "report/" prefix inside the shared dashboard
+	// bucket instead (so the SPA's own files aren't touched by the
+	// --delete pass) — followed by a CloudFront invalidation so the new
+	// pages aren't masked by the distribution's cache TTL.
+	publishSite(ctx, s, "./dist", os.Getenv("SITE_BUCKET"), os.Getenv("SITE_CF_DIST_ID"), "")
+	publishSite(ctx, s, "./report", os.Getenv("DASHBOARD_BUCKET"), os.Getenv("DASHBOARD_CF_DIST_ID"), "report/")
 	return nil
 }
 
-// publishSite mirrors a local site dir into a bucket root (with --delete) and
-// invalidates its CloudFront distribution. No-op when the dir or bucket is absent.
-func publishSite(ctx context.Context, s *statesync.Syncer, dir, bucket, distID string) {
+// publishSite mirrors a local site dir into a bucket under prefix (with
+// --delete scoped to that prefix) and invalidates its CloudFront
+// distribution. No-op when the dir or bucket is absent. prefix must be ""
+// for a bucket-root site (recap's SiteBucket) and a non-empty, trailing-
+// slash prefix (e.g. "report/") for a site sharing a bucket with other
+// content (the dashboard SPA's own files) — an empty prefix against a
+// shared bucket would treat the SPA's files as orphans and delete them,
+// since Up's --delete pass only spares keys under the given prefix.
+func publishSite(ctx context.Context, s *statesync.Syncer, dir, bucket, distID, prefix string) {
 	if bucket == "" {
 		return
 	}
 	if _, err := os.Stat(dir); err != nil {
 		return // nothing rendered this run
 	}
-	if err := s.Up(ctx, bucket, "", dir, true); err != nil {
+	if err := s.Up(ctx, bucket, prefix, dir, true); err != nil {
 		warn("publish %s: %v", dir, err)
 		return
 	}
