@@ -51,7 +51,7 @@ phases:
         set -eu
         DASHBOARD_BUCKET="$(python3 -c 'import json; print(json.load(open("cdk-outputs.json"))["InfraStack"]["DashboardBucketName"])')"
         DASHBOARD_CF_DIST_ID="$(python3 -c 'import json; print(json.load(open("cdk-outputs.json"))["InfraStack"]["DashboardCdnId"])')"
-        aws s3 sync web/dashboard "s3://$DASHBOARD_BUCKET" --delete
+        aws s3 sync web/dashboard "s3://$DASHBOARD_BUCKET" --delete --exclude "report/*"
         aws cloudfront create-invalidation --distribution-id "$DASHBOARD_CF_DIST_ID" --paths '/*'
       # Re-render the projection dashboard with the image just pushed, so a push
       # to main updates the site immediately instead of waiting for the daily
