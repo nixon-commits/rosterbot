@@ -80,3 +80,19 @@ type JobResponse struct {
 	Command string `json:"command"`
 	Status  string `json:"status"` // always RUNNING
 }
+
+// ProgressSnapshot is the GET /v1/runs/{id}/progress body — live phase progress
+// for a run. Mirrors internal/progress.Snapshot. Phase detail only; the run's
+// authoritative status comes from the ledger (GET /v1/runs).
+type ProgressSnapshot struct {
+	Phase     string          `json:"phase"`
+	Pct       int             `json:"pct"`
+	Phases    []ProgressPhase `json:"phases"`
+	Status    string          `json:"status"`
+	UpdatedAt string          `json:"updated_at"`
+}
+
+type ProgressPhase struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
+}

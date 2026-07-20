@@ -457,6 +457,34 @@ func TestRunsNotImplementedWhenNil(t *testing.T) {
 	}
 }
 
+func TestHandleRunProgress(t *testing.T) {
+	dir := t.TempDir()
+	ps := NewFileProgressStore(dir)
+	_ = ps.PutProgress(context.Background(), "run123", []byte(`{"phase":"Roster","pct":10,"status":"running"}`))
+
+	h := Handler(Config{Token: "t", Progress: ps})
+
+	// present
+	rec := do(h, http.MethodGet, "/v1/runs/run123/progress")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"phase":"Roster"`) {
+		t.Fatalf("present: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("present: content-type = %q, want application/json", ct)
+	}
+	// missing => 404
+	rec = do(h, http.MethodGet, "/v1/runs/nope/progress")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing: code=%d", rec.Code)
+	}
+	// not configured => 501
+	h2 := Handler(Config{Token: "t"})
+	rec = do(h2, http.MethodGet, "/v1/runs/x/progress")
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("nil store: code=%d", rec.Code)
+	}
+}
+
 // --- inFlightRun (rosterbot-744: manual-trigger race guard) ---
 
 func TestInFlightRun_MatchesRunningSameJobName(t *testing.T) {
