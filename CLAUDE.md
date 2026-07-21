@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 make build              # build binary + lambda module (or: go build -o rosterbot .)
-make build-lambda       # cross-compile the separate lambda/ module (Lambda target)
+make build-modules      # cross-compile every nested Go module (lambda/, buildnotify/, infra/)
 make install            # install to $GOPATH/bin
 make test               # run all unit tests (or: go test ./internal/...)
 go test ./internal/optimizer/...  # run a specific package's tests
@@ -41,7 +41,7 @@ make run-all            # exercise every command in dry-run / read-only mode + p
 
 After making code changes, always run `go vet ./...` and `go mod tidy` to catch issues early. Note: `gofmt` and `go vet` run automatically via PostToolUse hooks on every Edit/Write.
 
-**`lambda/` is a SEPARATE Go module** (its own `lambda/go.mod`) — the root `go build ./...` / `go vet ./...` / `go mod tidy` do **not** descend into it. After touching `lambda/main.go` (or anything it imports), run `make build-lambda` (or `cd lambda && GOOS=linux GOARCH=arm64 go build ./ && go mod tidy`). The CDK `GoFunction` bundles this module for the Lambda runtime, so a stale `lambda/go.mod` only surfaces as a failed `cdk deploy` — `make build` now cross-compiles it so the break fails locally instead.
+**`lambda/`, `buildnotify/` and `infra/` are SEPARATE Go modules** (each with its own `go.mod`) — the root `go build ./...` / `go vet ./...` / `go mod tidy` do **not** descend into them. CDK bundles `lambda/` and `buildnotify/` as `GoFunction` assets, so a stale `go.mod` in any of them only surfaces as a failed `cdk deploy`. They pull the root module via `replace ../`, so **every dependabot bump to a shared root dep re-stales them** (this broke the dashboard-v2 deploy twice — first `lambda/`, then `buildnotify/`). After touching a nested module (or after a dep bump), run `make build-modules`; fix a failure with `cd <dir> && go mod tidy`. `make build` runs it automatically so the break fails locally instead of at deploy.
 
 Tests require no credentials — all network dependencies are mocked via interfaces or test servers.
 
