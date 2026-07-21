@@ -4,6 +4,7 @@
 // hardcode which jobs are "risky" here.
 import { api, ApiError } from "./api.js";
 import { escapeHtml } from "./render.js";
+import { watchRun } from "./live.js";
 
 export async function renderJobs(root) {
   root.innerHTML = "<p class=\"muted\">Loading jobs…</p>";
@@ -115,6 +116,10 @@ function jobCard(job) {
     try {
       const resp = await api.triggerJob(job.name, params);
       status.textContent = `Started: ${resp.command} (run ${resp.id})`;
+      // Land the user on the Runs view with the live hero already tracking
+      // this run, instead of leaving them staring at a static status line.
+      watchRun(resp.id);
+      window.location.hash = "#runs";
     } catch (err) {
       status.textContent = errorMessage(err);
       status.classList.add("error");
