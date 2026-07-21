@@ -1,16 +1,21 @@
-.PHONY: build build-lambda install test run dry-run run-all clean-cache
+.PHONY: build build-modules install test run dry-run run-all clean-cache
 
-build: build-lambda
+build: build-modules
 	go build -o rosterbot .
 
-# lambda/ is a SEPARATE Go module (its own go.mod); `go build ./...` at the repo
-# root never descends into it. The CDK GoFunction bundles it for the Lambda
-# runtime at deploy time, so a stale lambda/go.mod (e.g. after editing
-# lambda/main.go) only surfaces as a failed `cdk deploy` — this broke the
-# dashboard-v2 deploy. Cross-compile it here for the real target so the break
-# fails locally instead of in CI. Fix a failure with: cd lambda && go mod tidy
-build-lambda:
-	cd lambda && GOOS=linux GOARCH=arm64 go build -o /dev/null ./
+# lambda/, buildnotify/ and infra/ are SEPARATE Go modules (each its own
+# go.mod); `go build ./...` at the repo root never descends into them. CDK
+# bundles lambda/ and buildnotify/ as GoFunction assets at deploy time, so a
+# stale go.mod in ANY of them only surfaces as a failed `cdk deploy` — this
+# broke the dashboard-v2 deploy twice (lambda/, then buildnotify/). They share
+# deps with the root module via `replace ../`, so every dependabot bump to a
+# shared root dep re-stales them. Cross-compile every nested module for the real
+# target so the break fails locally. Fix a failure with: cd <dir> && go mod tidy
+build-modules:
+	@for d in $$(find . -name go.mod -not -path './.git/*' -not -path './.claude/*' | grep -v '^\./go\.mod$$' | xargs -n1 dirname | sort); do \
+	  printf '  build %s\n' "$$d"; \
+	  ( cd "$$d" && GOOS=linux GOARCH=arm64 go build -o /dev/null ./ ) || exit 1; \
+	done
 
 install:
 	go install .
@@ -40,7 +45,7 @@ clean-cache:
 # touched. Each step continues on error so one broken command doesn't
 # abort the whole sweep — final-status check is on you.
 run-all:
-	@echo "=== build-lambda (separate module) ===";       $(MAKE) build-lambda;                                           echo
+	@echo "=== build-modules (nested Go modules) ===";    $(MAKE) build-modules;                                          echo
 	@echo "=== scoring ===";                              time go run . scoring;                                          echo
 	@echo "=== optimize --dry-run --publish-lineup ===";  time go run . optimize --dry-run --publish-lineup;              echo
 	@echo "  (serve is long-running — exercise manually: ROSTERBOT_API_TOKEN=test go run . serve)"
