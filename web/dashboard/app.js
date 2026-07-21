@@ -6,7 +6,8 @@ import { renderLineup } from "./lineup.js";
 import { renderJobs } from "./jobs.js";
 import { renderRuns } from "./runs.js";
 import { renderPasskeys } from "./passkeys.js";
-import { renderProjections, renderValue } from "./reportview.js";
+import { renderProjections } from "./projections.js";
+import { renderValue } from "./value.js";
 
 const ROUTES = {
   "#lineup": renderLineup,
