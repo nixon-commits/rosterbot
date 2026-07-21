@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-make build              # build binary (or: go build -o rosterbot .)
+make build              # build binary + lambda module (or: go build -o rosterbot .)
+make build-lambda       # cross-compile the separate lambda/ module (Lambda target)
 make install            # install to $GOPATH/bin
 make test               # run all unit tests (or: go test ./internal/...)
 go test ./internal/optimizer/...  # run a specific package's tests
@@ -39,6 +40,8 @@ make run-all            # exercise every command in dry-run / read-only mode + p
 **`make run-all` is the canonical end-to-end smoke test** — it iterates every CLI command in dry-run / read-only mode with `time` on each step and prints the final `.cache/` size. Use it for two things: (1) a single-command sanity check before pushing changes, and (2) observing cache behavior — stderr `cache hit:` / `cache miss:` lines show what each command touched. **Whenever you add a new top-level CLI command (a new `cmd/<x>.go` registered on `rootCmd`), append a corresponding line to the `run-all` recipe in the `Makefile`** so the smoke target stays comprehensive. Pair with `make clean-cache && make run-all` for a cold pass, then `make run-all` again to see warm-cache behavior.
 
 After making code changes, always run `go vet ./...` and `go mod tidy` to catch issues early. Note: `gofmt` and `go vet` run automatically via PostToolUse hooks on every Edit/Write.
+
+**`lambda/` is a SEPARATE Go module** (its own `lambda/go.mod`) — the root `go build ./...` / `go vet ./...` / `go mod tidy` do **not** descend into it. After touching `lambda/main.go` (or anything it imports), run `make build-lambda` (or `cd lambda && GOOS=linux GOARCH=arm64 go build ./ && go mod tidy`). The CDK `GoFunction` bundles this module for the Lambda runtime, so a stale `lambda/go.mod` only surfaces as a failed `cdk deploy` — `make build` now cross-compiles it so the break fails locally instead.
 
 Tests require no credentials — all network dependencies are mocked via interfaces or test servers.
 
