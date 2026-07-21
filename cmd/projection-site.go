@@ -9,10 +9,9 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/analysis"
-	"github.com/nixon-commits/rosterbot/internal/analysis/s3grades"
+	"github.com/nixon-commits/rosterbot/internal/ndjsonstore/s3ndjson"
 	"github.com/nixon-commits/rosterbot/internal/report"
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
-	"github.com/nixon-commits/rosterbot/internal/teamvalue/s3teamvalue"
 	"github.com/nixon-commits/rosterbot/internal/valuereport"
 	"github.com/spf13/cobra"
 )
@@ -43,11 +42,11 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 
 	var reader analysis.Reader
 	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		r, err := s3grades.NewReader(context.Background(), bucket, "analysis/")
+		store, err := s3ndjson.New(context.Background(), bucket, "analysis/")
 		if err != nil {
 			return fmt.Errorf("init analysis reader: %w", err)
 		}
-		reader = r
+		reader = analysis.NewReader(store)
 	} else {
 		reader = analysis.NewFileReader(".analysis")
 	}
@@ -104,11 +103,11 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 func renderValueSite(outDir string) error {
 	var reader teamvalue.Reader
 	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		r, err := s3teamvalue.NewReader(context.Background(), bucket, teamValuePrefix)
+		store, err := s3ndjson.New(context.Background(), bucket, teamValuePrefix)
 		if err != nil {
 			return fmt.Errorf("init team-value reader: %w", err)
 		}
-		reader = r
+		reader = teamvalue.NewReader(store)
 	} else {
 		reader = teamvalue.NewFileReader(teamValueLocalDir)
 	}

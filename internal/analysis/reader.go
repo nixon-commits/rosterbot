@@ -1,10 +1,7 @@
 package analysis
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
+	"github.com/nixon-commits/rosterbot/internal/ndjsonstore"
 )
 
 // Reader loads graded rows from the Analysis Store (opposite of Writer).
@@ -12,40 +9,21 @@ type Reader interface {
 	ReadAll() ([]GradeRow, error)
 }
 
-type fileReader struct{ root string }
+type reader struct{ store ndjsonstore.Store }
 
-// NewFileReader returns a Reader over grades persisted under
-// root/grades/dt=YYYY-MM-DD/system=SYSTEM/grades.ndjson (the FileWriter layout).
-// It also reads legacy root/grades/dt=YYYY-MM-DD/grades.ndjson partitions
-// (no system= segment), attributing them to LegacySystem.
-func NewFileReader(root string) Reader { return fileReader{root: root} }
+// NewReader returns a Reader over grades in store. It reads both the current
+// grades/dt=X/system=Y/ layout and legacy grades/dt=X/ partitions (no system=
+// segment), attributing the latter to LegacySystem.
+func NewReader(store ndjsonstore.Store) Reader { return reader{store: store} }
 
-func (r fileReader) ReadAll() ([]GradeRow, error) {
-	systemMatches, err := filepath.Glob(filepath.Join(r.root, "grades", "dt=*", "system=*", "grades.ndjson"))
-	if err != nil {
-		return nil, err
-	}
-	legacyMatches, err := filepath.Glob(filepath.Join(r.root, "grades", "dt=*", "grades.ndjson"))
-	if err != nil {
-		return nil, err
-	}
-	matches := append(systemMatches, legacyMatches...)
-	sort.Strings(matches)
-	var rows []GradeRow
-	for _, p := range matches {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return nil, err
+// NewFileReader returns a Reader over a local directory root.
+func NewFileReader(root string) Reader { return NewReader(ndjsonstore.NewFileStore(root)) }
+
+func (r reader) ReadAll() ([]GradeRow, error) {
+	return ndjsonstore.ReadAll[GradeRow](r.store, gradesPrefix, gradesFilename, func(key string, rows []GradeRow) {
+		system := SystemFromKey(key)
+		for i := range rows {
+			rows[i].System = system
 		}
-		rs, err := UnmarshalNDJSON(b)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
-		}
-		system := SystemFromKey(p)
-		for i := range rs {
-			rs[i].System = system
-		}
-		rows = append(rows, rs...)
-	}
-	return rows, nil
+	})
 }

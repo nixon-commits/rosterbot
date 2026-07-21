@@ -153,24 +153,5 @@ func resolveRecapRange(ft *fantrax.Client, today time.Time) (time.Time, time.Tim
 		}
 	}
 
-	yesterday := today.AddDate(0, 0, -1)
-	ws, we, err := ft.GetMatchupWeekBounds(yesterday, seasonStart)
-	if err != nil {
-		return time.Time{}, time.Time{}, err
-	}
-	if ws.IsZero() {
-		return time.Time{}, time.Time{}, fmt.Errorf("no matchup week found for %s", yesterday.Format("2006-01-02"))
-	}
-	// If today is still inside this week, step back to the previous week.
-	if !today.After(we) {
-		prior := ws.AddDate(0, 0, -1)
-		ws, we, err = ft.GetMatchupWeekBounds(prior, seasonStart)
-		if err != nil {
-			return time.Time{}, time.Time{}, err
-		}
-		if ws.IsZero() {
-			return time.Time{}, time.Time{}, fmt.Errorf("no prior matchup week found")
-		}
-	}
-	return ws, we, nil
+	return fantrax.LastCompletedMatchupWeek(ft, seasonStart, today)
 }
