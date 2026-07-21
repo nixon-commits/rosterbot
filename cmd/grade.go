@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/analysis"
-	"github.com/nixon-commits/rosterbot/internal/analysis/s3grades"
 	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/ndjsonstore/s3ndjson"
 	"github.com/spf13/cobra"
 )
 
@@ -129,11 +129,11 @@ func runGrade(cmd *cobra.Command, args []string) error {
 
 	var w analysis.Writer
 	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		sw, err := s3grades.New(context.Background(), bucket, "analysis/")
+		store, err := s3ndjson.New(context.Background(), bucket, "analysis/")
 		if err != nil {
 			return fmt.Errorf("init analysis store: %w", err)
 		}
-		w = sw
+		w = analysis.NewWriter(store)
 	} else {
 		w = analysis.NewFileWriter(".analysis")
 	}

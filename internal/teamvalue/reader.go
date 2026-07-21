@@ -1,10 +1,7 @@
 package teamvalue
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
+	"github.com/nixon-commits/rosterbot/internal/ndjsonstore"
 )
 
 // Reader loads rows from the Team Value Store (opposite of Writer). The whole
@@ -13,29 +10,16 @@ type Reader interface {
 	ReadAll() ([]Row, error)
 }
 
-type fileReader struct{ root string }
+type reader struct{ store ndjsonstore.Store }
 
-// NewFileReader returns a Reader over rows persisted under
-// root/dt=YYYY-MM-DD/values.ndjson (the FileWriter layout).
-func NewFileReader(root string) Reader { return fileReader{root: root} }
+// NewReader returns a Reader over rows in store, partitioned as
+// dt=YYYY-MM-DD/values.ndjson.
+func NewReader(store ndjsonstore.Store) Reader { return reader{store: store} }
 
-func (r fileReader) ReadAll() ([]Row, error) {
-	matches, err := filepath.Glob(filepath.Join(r.root, "dt=*", "values.ndjson"))
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(matches) // chronological: dt= partitions sort lexically by date
-	var rows []Row
-	for _, p := range matches {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return nil, err
-		}
-		rs, err := UnmarshalNDJSON(b)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
-		}
-		rows = append(rows, rs...)
-	}
-	return rows, nil
+// NewFileReader returns a Reader over a local directory root.
+func NewFileReader(root string) Reader { return NewReader(ndjsonstore.NewFileStore(root)) }
+
+func (r reader) ReadAll() ([]Row, error) {
+	// Empty prefix: every dt= partition sits directly under the store root.
+	return ndjsonstore.ReadAll[Row](r.store, "", valuesFilename, nil)
 }

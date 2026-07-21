@@ -1,18 +1,19 @@
 // Package analysis writes the durable, append-only Analysis Store: the Graded
 // Snapshot fact (projected vs actual per player per day) as NDJSON, partitioned
-// by date for Athena. The S3 adapter lives in the s3grades sub-package so the
-// AWS SDK stays out of this package.
+// by date and projection system for Athena.
+//
+// The NDJSON plumbing (marshal, partition walk, storage seam) lives in
+// internal/ndjsonstore, shared with the Team Value Store. What stays here is
+// what is genuinely this store's own: the row, the partition layout, and the
+// system dimension the key carries.
 package analysis
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/ndjsonstore"
 )
 
 // LegacySystem is the projection system attributed to grade rows written
@@ -21,6 +22,13 @@ import (
 // back under this system so the detailed dashboard keeps its pre-migration
 // history across cutover.
 const LegacySystem = "depthcharts-ros"
+
+const (
+	// gradesPrefix is the store root within its bucket prefix or local dir.
+	gradesPrefix = "grades/"
+	// gradesFilename is the leaf object name in every partition.
+	gradesFilename = "grades.ndjson"
+)
 
 // GradeRow is one Graded Snapshot: a (date, player) projected-vs-actual fact.
 //
@@ -47,22 +55,16 @@ type Writer interface {
 }
 
 // MarshalNDJSON serializes rows as newline-delimited JSON (one row per line).
-func MarshalNDJSON(rows []GradeRow) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	for _, r := range rows {
-		if err := enc.Encode(r); err != nil {
-			return nil, err
-		}
-	}
-	return buf.Bytes(), nil
-}
+func MarshalNDJSON(rows []GradeRow) ([]byte, error) { return ndjsonstore.Marshal(rows) }
+
+// UnmarshalNDJSON parses newline-delimited JSON (one GradeRow per line).
+func UnmarshalNDJSON(b []byte) ([]GradeRow, error) { return ndjsonstore.Unmarshal[GradeRow](b) }
 
 func objectKey(date time.Time, system string) string {
-	return fmt.Sprintf("grades/dt=%s/system=%s/grades.ndjson", date.UTC().Format("2006-01-02"), system)
+	return fmt.Sprintf("%sdt=%s/system=%s/%s", gradesPrefix, date.UTC().Format("2006-01-02"), system, gradesFilename)
 }
 
-// ObjectKey is exported so the S3 writer reuses the same partition layout.
+// ObjectKey is the store-relative partition key for a date and system.
 func ObjectKey(date time.Time, system string) string { return objectKey(date, system) }
 
 // SystemFromKey extracts the projection system from a grades object key. Keys
@@ -77,38 +79,15 @@ func SystemFromKey(key string) string {
 	return LegacySystem
 }
 
-type fileWriter struct{ root string }
+type writer struct{ store ndjsonstore.Store }
 
-// NewFileWriter returns a Writer that persists grades to the local filesystem
-// under root, partitioned as grades/dt=YYYY-MM-DD/system=SYSTEM/grades.ndjson.
-func NewFileWriter(root string) Writer { return fileWriter{root: root} }
+// NewWriter returns a Writer persisting grades to store, partitioned as
+// grades/dt=YYYY-MM-DD/system=SYSTEM/grades.ndjson.
+func NewWriter(store ndjsonstore.Store) Writer { return writer{store: store} }
 
-func (w fileWriter) WriteGrades(date time.Time, system string, rows []GradeRow) error {
-	b, err := MarshalNDJSON(rows)
-	if err != nil {
-		return err
-	}
-	p := filepath.Join(w.root, objectKey(date, system))
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(p, b, 0o644)
-}
+// NewFileWriter returns a Writer over a local directory root.
+func NewFileWriter(root string) Writer { return NewWriter(ndjsonstore.NewFileStore(root)) }
 
-// UnmarshalNDJSON parses newline-delimited JSON (one GradeRow per line).
-func UnmarshalNDJSON(b []byte) ([]GradeRow, error) {
-	var rows []GradeRow
-	dec := json.NewDecoder(bytes.NewReader(b))
-	for {
-		var r GradeRow
-		err := dec.Decode(&r)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, r)
-	}
-	return rows, nil
+func (w writer) WriteGrades(date time.Time, system string, rows []GradeRow) error {
+	return ndjsonstore.Write(w.store, objectKey(date, system), rows)
 }

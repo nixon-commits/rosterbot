@@ -1,8 +1,11 @@
 // Package teamvalue writes the durable, append-only Team Value Store: each
 // fantasy team's aggregate HKB dynasty value for one day as NDJSON, partitioned
-// by date. It mirrors internal/analysis (the Graded-Snapshot store) — the S3
-// adapter lives in the s3teamvalue sub-package so the AWS SDK stays out of this
-// leaf.
+// by date.
+//
+// The NDJSON plumbing (marshal, partition walk, storage seam) lives in
+// internal/ndjsonstore, shared with internal/analysis (the Graded-Snapshot
+// store). This store is single-entity, so its partition key is just dt= — the
+// entity name lives in the storage prefix rather than a second dimension.
 //
 // The series accumulates forward: HKB serves only current values (no history)
 // and fantasy rosters are never archived, so past team compositions cannot be
@@ -11,14 +14,14 @@
 package teamvalue
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/ndjsonstore"
 )
+
+// valuesFilename is the leaf object name in every partition.
+const valuesFilename = "values.ndjson"
 
 // Row is one team's aggregate HKB value for one day.
 //
@@ -79,57 +82,27 @@ type Writer interface {
 }
 
 // MarshalNDJSON serializes rows as newline-delimited JSON (one row per line).
-func MarshalNDJSON(rows []Row) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	for _, r := range rows {
-		if err := enc.Encode(r); err != nil {
-			return nil, err
-		}
-	}
-	return buf.Bytes(), nil
-}
+func MarshalNDJSON(rows []Row) ([]byte, error) { return ndjsonstore.Marshal(rows) }
 
 // UnmarshalNDJSON parses newline-delimited JSON (one Row per line).
-func UnmarshalNDJSON(b []byte) ([]Row, error) {
-	var rows []Row
-	dec := json.NewDecoder(bytes.NewReader(b))
-	for {
-		var r Row
-		err := dec.Decode(&r)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, r)
-	}
-	return rows, nil
-}
+func UnmarshalNDJSON(b []byte) ([]Row, error) { return ndjsonstore.Unmarshal[Row](b) }
 
 func objectKey(date time.Time) string {
-	return fmt.Sprintf("dt=%s/values.ndjson", date.UTC().Format("2006-01-02"))
+	return fmt.Sprintf("dt=%s/%s", date.UTC().Format("2006-01-02"), valuesFilename)
 }
 
-// ObjectKey is the partition-relative key (dt=YYYY-MM-DD/values.ndjson),
-// exported so the S3 writer reuses the same layout under its own prefix.
+// ObjectKey is the store-relative partition key (dt=YYYY-MM-DD/values.ndjson).
 func ObjectKey(date time.Time) string { return objectKey(date) }
 
-type fileWriter struct{ root string }
+type writer struct{ store ndjsonstore.Store }
 
-// NewFileWriter returns a Writer that persists rows to the local filesystem
-// under root, partitioned as root/dt=YYYY-MM-DD/values.ndjson.
-func NewFileWriter(root string) Writer { return fileWriter{root: root} }
+// NewWriter returns a Writer persisting rows to store, partitioned as
+// dt=YYYY-MM-DD/values.ndjson.
+func NewWriter(store ndjsonstore.Store) Writer { return writer{store: store} }
 
-func (w fileWriter) WriteValues(date time.Time, rows []Row) error {
-	b, err := MarshalNDJSON(rows)
-	if err != nil {
-		return err
-	}
-	p := filepath.Join(w.root, objectKey(date))
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(p, b, 0o644)
+// NewFileWriter returns a Writer over a local directory root.
+func NewFileWriter(root string) Writer { return NewWriter(ndjsonstore.NewFileStore(root)) }
+
+func (w writer) WriteValues(date time.Time, rows []Row) error {
+	return ndjsonstore.Write(w.store, objectKey(date), rows)
 }

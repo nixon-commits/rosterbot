@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/hkb"
+	"github.com/nixon-commits/rosterbot/internal/ndjsonstore/s3ndjson"
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
-	"github.com/nixon-commits/rosterbot/internal/teamvalue/s3teamvalue"
 	"github.com/spf13/cobra"
 )
 
@@ -100,11 +100,11 @@ func runTeamValues(cmd *cobra.Command, args []string) error {
 // else a local-filesystem writer, mirroring how grade/projection-site choose.
 func teamValueWriter(ctx context.Context) (teamvalue.Writer, string, error) {
 	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		w, err := s3teamvalue.New(ctx, bucket, teamValuePrefix)
+		store, err := s3ndjson.New(ctx, bucket, teamValuePrefix)
 		if err != nil {
 			return nil, "", fmt.Errorf("init s3 team-value writer: %w", err)
 		}
-		return w, "s3://" + bucket + "/" + teamValuePrefix, nil
+		return teamvalue.NewWriter(store), "s3://" + bucket + "/" + teamValuePrefix, nil
 	}
 	return teamvalue.NewFileWriter(teamValueLocalDir), teamValueLocalDir, nil
 }
