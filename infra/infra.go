@@ -351,7 +351,14 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			}),
 			Environment: &awscodebuild.BuildEnvironment{
 				// ARM build host so the image matches the Graviton task definition.
-				BuildImage: awscodebuild.LinuxArmBuildImage_AMAZON_LINUX_2_STANDARD_3_0(),
+				//
+				// AL2023, not the older amazonlinux2-aarch64 image: that one carried a
+				// fixed Node 18 / Go 1.20 with no `runtime-versions` selection, so the
+				// aws-cdk CLI warned "Node 18 is end-of-life" on every install phase
+				// (rosterbot-2no). The AL2023 image exposes nodejs 18/20/22/24 and
+				// golang 1.20-1.26, so buildspec.yml pins the ones this build uses
+				// rather than inheriting a default that shifts on each EOL.
+				BuildImage: awscodebuild.LinuxArmBuildImage_AMAZON_LINUX_2023_STANDARD_3_0(),
 				Privileged: jsii.Bool(true), // docker build
 			},
 			EnvironmentVariables: &map[string]*awscodebuild.BuildEnvironmentVariable{

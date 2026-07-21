@@ -11,13 +11,24 @@ version: 0.2
 # first build that creates those resources also publishes the static site.
 env:
   variables:
-    # infra/go.mod requires Go 1.25; the AL2 standard build image ships 1.20
-    # (too old to even auto-download a toolchain), so install a matching Go.
+    # infra/go.mod requires Go 1.25; the build image's own golang runtimes top out
+    # below that historically, and pinning the exact patch here (rather than
+    # selecting an image runtime) keeps the toolchain identical across image bumps.
     GO_VERSION: "1.25.0"
     # Match the cdk library version the infra module builds against.
     CDK_VERSION: "2.1128.1"
 phases:
   install:
+    # Pin every image-provided runtime this build actually uses. Without this,
+    # CodeBuild picks the image default, which silently moves as versions reach
+    # EOL -- that is how the cdk CLI ended up running on end-of-life Node 18 and
+    # warning on every build (rosterbot-2no). node runs the aws-cdk CLI below;
+    # python3 parses cdk-outputs.json in post_build.
+    runtime-versions:
+      nodejs: "22"
+      # Quoted: YAML would read a bare 3.10 as the float 3.1 and select the wrong
+      # runtime. 3.12 happens to survive unquoted; the next edit might not.
+      python: "3.12"
     commands:
       # cdk's app command is `go run infra.go`, so the build host needs Go 1.25
       # and the cdk CLI (neither present by default on this image).
