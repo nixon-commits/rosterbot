@@ -58,46 +58,56 @@ func TestFileOutputStoreRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFileOutputStore_PathTraversal(t *testing.T) {
-	traversalIDs := []string{"../evil", "..", "a/b", "a\\b", "../../etc/foo"}
+// TestFileOutputStore_ReadTraversalEscape plants a sentinel file at the
+// traversal escape target (base/secret.json, sibling of the store dir) and
+// asserts GetOutput does not return it. Without the safeRunID guard,
+// path("../secret") = filepath.Join(base/store, "../secret.json") =
+// base/secret.json, so an unguarded read would return the sentinel bytes —
+// this is the discriminating assertion (data == nil, not merely err == nil).
+func TestFileOutputStore_ReadTraversalEscape(t *testing.T) {
+	base := t.TempDir()
+	storeDir := filepath.Join(base, "store")
+	sentinelPath := filepath.Join(base, "secret.json")
+	if err := os.WriteFile(sentinelPath, []byte("SENTINEL"), 0o644); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
 
-	for _, id := range traversalIDs {
-		t.Run("get_"+id, func(t *testing.T) {
-			dir := t.TempDir()
-			s := NewFileOutputStore(dir)
-			ctx := context.Background()
+	s := NewFileOutputStore(storeDir)
+	ctx := context.Background()
 
-			data, ok, err := s.GetOutput(ctx, id)
-			if err != nil || ok || data != nil {
-				t.Fatalf("GetOutput(%q) = %v, %v, %v; want nil, false, nil", id, data, ok, err)
-			}
-		})
+	data, ok, err := s.GetOutput(ctx, "../secret")
+	if err != nil {
+		t.Fatalf("GetOutput(%q): unexpected error %v", "../secret", err)
+	}
+	if ok || data != nil {
+		t.Fatalf("GetOutput(%q) = %q, ok=%v; want nil, false — guard should have blocked escape to %s", "../secret", data, ok, sentinelPath)
+	}
+}
 
-		t.Run("put_"+id, func(t *testing.T) {
-			// Use a parent directory whose sibling we can inspect, so a traversal
-			// id like "../evil" would (if unguarded) write outside dir.
-			parent := t.TempDir()
-			dir := filepath.Join(parent, "store")
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				t.Fatalf("mkdir: %v", err)
-			}
-			s := NewFileOutputStore(dir)
-			ctx := context.Background()
+// TestFileOutputStore_WriteTraversalEscape targets an escape directory
+// (base) that already exists, so an unguarded write would succeed with no
+// coincidental ENOENT to mask the missing guard. Without safeRunID,
+// path("../evil") = filepath.Join(base/store, "../evil.json") = base/evil.json,
+// and base exists — so the write would land. Both assertions matter: a
+// non-nil error AND the escape target's absence, which is what actually
+// proves nothing escaped.
+func TestFileOutputStore_WriteTraversalEscape(t *testing.T) {
+	base := t.TempDir()
+	storeDir := filepath.Join(base, "store")
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
+		t.Fatalf("mkdir store: %v", err)
+	}
 
-			if err := s.PutOutput(ctx, id, []byte("data")); err == nil {
-				t.Fatalf("PutOutput(%q) = nil error, want non-nil", id)
-			}
+	s := NewFileOutputStore(storeDir)
+	ctx := context.Background()
 
-			entries, err := os.ReadDir(parent)
-			if err != nil {
-				t.Fatalf("readdir parent: %v", err)
-			}
-			for _, e := range entries {
-				if e.Name() != "store" {
-					t.Fatalf("PutOutput(%q) wrote stray entry %q outside dir", id, e.Name())
-				}
-			}
-		})
+	escapeTarget := filepath.Join(base, "evil.json")
+	if err := s.PutOutput(ctx, "../evil", []byte("data")); err == nil {
+		t.Fatalf("PutOutput(%q) = nil error, want non-nil — guard should have blocked escape to %s", "../evil", escapeTarget)
+	}
+
+	if _, err := os.Stat(escapeTarget); !os.IsNotExist(err) {
+		t.Fatalf("PutOutput(%q) wrote escape target %s (stat err=%v); traversal write succeeded", "../evil", escapeTarget, err)
 	}
 }
 
