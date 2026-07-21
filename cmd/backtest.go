@@ -7,13 +7,25 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/backtest"
+	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/spf13/cobra"
 )
 
-const backtestSnapshotDir = ".backtest/snapshots"
+const (
+	backtestSnapshotDir = ".backtest/snapshots"
+
+	// experimentSystem is the base projection every recency variant blends on
+	// top of — the system the bot runs in production.
+	experimentSystem = "depthcharts-ros"
+
+	// experimentLookbackDays is how far before the grading window the recency
+	// series reaches. The trailing windows need history predating the graded
+	// days or they all collapse onto the same in-window games.
+	experimentLookbackDays = 35
+)
 
 var (
 	backtestDates             string
@@ -47,17 +59,21 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	start, end, err := resolveBacktestRange(ft, today)
+	seasonStart, _, err := ft.GetSeasonDateRange()
+	if err != nil {
+		return fmt.Errorf("get season start: %w", err)
+	}
+
+	rangeOpts, err := backtestRangeOptions(today, seasonStart)
+	if err != nil {
+		return err
+	}
+	start, end, err := backtest.ResolveRange(ft, rangeOpts)
 	if err != nil {
 		return fmt.Errorf("resolve range: %w", err)
 	}
 	if end.Before(start) {
 		return fmt.Errorf("empty backtest window (%s to %s)", start.Format("2006-01-02"), end.Format("2006-01-02"))
-	}
-
-	seasonStart, _, err := ft.GetSeasonDateRange()
-	if err != nil {
-		return fmt.Errorf("get season start: %w", err)
 	}
 
 	hitterSlots, err := ft.GetActiveSlots()
@@ -86,24 +102,7 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	}
 
 	if backtestRecencyExperiment {
-		hitterScoring, err := ft.GetScoringWeights()
-		if err != nil {
-			return fmt.Errorf("get scoring weights: %w", err)
-		}
-		// The recency series needs ~30 days of history before the grading window,
-		// or the trailing windows have nothing to differentiate on.
-		seriesStart := start.AddDate(0, 0, -35)
-		if seriesStart.Before(seasonStart) {
-			seriesStart = seasonStart
-		}
-		seriesDays, err := ft.DailyFantasyPoints(cfg.TeamID, seriesStart, end, seasonStart, cacheDir, snapTTL)
-		if err != nil {
-			return fmt.Errorf("recency series fetch: %w", err)
-		}
-		if err := ft.BackfillDailyFPts(seriesDays); err != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: recency series backfill: %v\n", err)
-		}
-		return runRecencyExperiment(ft, days, seriesDays, hitterSlots, pitcherSlots, hitterScoring, cfg.BlendMinGP)
+		return runRecencyExperiment(ft, cfg, days, start, end, seasonStart, snapTTL, hitterSlots, pitcherSlots)
 	}
 
 	lineup := backtest.RunLineupAnalysis(days, hitterSlots, pitcherSlots)
@@ -127,255 +126,69 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// resolveBacktestRange picks a date window based on flags. Priority:
-// explicit --dates, then --weeks, then --matchup, then default (last completed
-// matchup week).
-func resolveBacktestRange(ft *fantrax.Client, today time.Time) (time.Time, time.Time, error) {
-	yesterday := today.AddDate(0, 0, -1)
-
+// backtestRangeOptions turns the CLI flags into a backtest.RangeOptions. Only
+// --dates parsing lives here (it is CLI syntax); which matchup weeks a window
+// covers is resolved by internal/backtest.
+func backtestRangeOptions(today, seasonStart time.Time) (backtest.RangeOptions, error) {
+	opts := backtest.RangeOptions{
+		Today:       today,
+		SeasonStart: seasonStart,
+		Weeks:       backtestWeeks,
+	}
 	if backtestDates != "" {
 		dates, err := parseDates(backtestDates, today)
 		if err != nil {
-			return time.Time{}, time.Time{}, fmt.Errorf("invalid --dates: %w", err)
+			return opts, fmt.Errorf("invalid --dates: %w", err)
 		}
 		if len(dates) == 0 {
-			return time.Time{}, time.Time{}, fmt.Errorf("--dates produced no dates")
+			return opts, fmt.Errorf("--dates produced no dates")
 		}
-		return dates[0], dates[len(dates)-1], nil
+		opts.ExplicitStart = dates[0]
+		opts.ExplicitEnd = dates[len(dates)-1]
 	}
-
-	seasonStart, _, err := ft.GetSeasonDateRange()
-	if err != nil {
-		return time.Time{}, time.Time{}, err
-	}
-
-	if backtestWeeks > 0 {
-		// Walk back `backtestWeeks` matchup-week boundaries from yesterday.
-		curEnd := yesterday
-		var start time.Time
-		for i := 0; i < backtestWeeks; i++ {
-			weekStart, weekEnd, err := ft.GetMatchupWeekBounds(curEnd, seasonStart)
-			if err != nil {
-				return time.Time{}, time.Time{}, err
-			}
-			if weekStart.IsZero() {
-				break
-			}
-			if i == 0 {
-				// If curEnd sits inside a still-running week, clip to yesterday.
-				if weekEnd.After(yesterday) {
-					weekEnd = yesterday
-				}
-				curEnd = weekEnd
-			}
-			start = weekStart
-			// Step back one day before that week's start.
-			curEnd = weekStart.AddDate(0, 0, -1)
-		}
-		if start.IsZero() {
-			return time.Time{}, time.Time{}, fmt.Errorf("could not resolve %d matchup week(s)", backtestWeeks)
-		}
-		end := yesterday
-		return start, end, nil
-	}
-
-	// Default (and --matchup): last completed matchup week up through yesterday.
-	// Try yesterday first — if it was the final day of a matchup, we get that
-	// whole week. Otherwise step back to the day before the current week.
-	ws, we, err := ft.GetMatchupWeekBounds(yesterday, seasonStart)
-	if err != nil {
-		return time.Time{}, time.Time{}, err
-	}
-	if ws.IsZero() {
-		return time.Time{}, time.Time{}, fmt.Errorf("no matchup week found for %s", yesterday.Format("2006-01-02"))
-	}
-	// If today is inside this week, back up to the prior week.
-	if !today.After(we) {
-		prior := ws.AddDate(0, 0, -1)
-		ws, we, err = ft.GetMatchupWeekBounds(prior, seasonStart)
-		if err != nil {
-			return time.Time{}, time.Time{}, err
-		}
-		if ws.IsZero() {
-			return time.Time{}, time.Time{}, fmt.Errorf("no prior matchup week found")
-		}
-	}
-	return ws, we, nil
+	return opts, nil
 }
 
-// runRecencyExperiment compares recency-weighting strategies (YTD vs 14d/30d/decay)
-// by replaying the hitter optimizer over the backtest window under each strategy
-// and reporting realized points, mean Gap to hindsight-optimal, and projection
-// MAE/Bias. The FanGraphs base projection is shared across variants (identical
-// across modes, so it's a fair isolation of the recency effect); only the recency
-// blend differs. Production lineups are unaffected — this is backtest-only.
-// runRecencyExperiment replays over gradeDays (the grading window) but builds the
-// recency signal from seriesDays, an extended range reaching back before the
-// window — the trailing-window strategies need history predating the days being
-// graded, or every window collapses to the same in-window games.
+// runRecencyExperiment fetches the extended recency series the trailing-window
+// strategies need, then hands both it and the grading window to
+// internal/backtest for the comparison.
 func runRecencyExperiment(
 	ft *fantrax.Client,
+	cfg *config.Config,
 	gradeDays []fantrax.DayRoster,
-	seriesDays []fantrax.DayRoster,
-	hitterSlots []fantrax.Slot,
-	pitcherSlots []fantrax.Slot,
-	hitterScoring fantrax.ScoringWeights,
-	blendMinGP int,
+	start, end, seasonStart time.Time,
+	snapTTL time.Duration,
+	hitterSlots, pitcherSlots []fantrax.Slot,
 ) error {
-	// Base hitter projection source (depthcharts-ros), shared across all variants.
-	// Mirrors cmd/optimize.go base-source construction.
-	projTTL := cacheTTL(projections.ProjectionCacheTTL)
-	fgSrc, _, err := projections.LoadBattingProjections("depthcharts-ros", cacheDir, projTTL)
+	hitterScoring, err := ft.GetScoringWeights()
 	if err != nil {
-		return fmt.Errorf("load base projections: %w", err)
+		return fmt.Errorf("get scoring weights: %w", err)
 	}
-	rolling := projections.NewRollingSource()
-	baseSrc := projections.NewChainedSource(fgSrc, rolling)
 
-	// Roster name→ID map for the blend (hitters only).
-	hitterRoster, err := ft.GetHitterRoster()
+	seriesStart := start.AddDate(0, 0, -experimentLookbackDays)
+	if seriesStart.Before(seasonStart) {
+		seriesStart = seasonStart
+	}
+	seriesDays, err := ft.DailyFantasyPoints(cfg.TeamID, seriesStart, end, seasonStart, cacheDir, snapTTL)
 	if err != nil {
-		return fmt.Errorf("hitter roster: %w", err)
+		return fmt.Errorf("recency series fetch: %w", err)
 	}
-	nameToID := make(map[string]string)
-	for _, p := range hitterRoster {
-		nameToID[projections.NormalizeName(p.Name)] = p.ID
-	}
-
-	series := backtest.BuildHitterSeries(seriesDays)
-	hitterBaseline := fgSrc.AverageFPG(hitterScoring)
-
-	mkVariant := func(name string, w projections.WeightFunc) backtest.StrategyVariant {
-		return backtest.StrategyVariant{
-			Name: name,
-			Build: func(asOf time.Time) (projections.Source, error) {
-				recent := make(map[string]fantrax.RecentStat, len(series))
-				for id, s := range series {
-					recent[id] = projections.WeightedRecent(s, asOf, w)
-				}
-				return projections.NewBlendedSource(baseSrc, recent, hitterScoring, nameToID, blendMinGP, hitterBaseline), nil
-			},
-		}
+	if err := ft.BackfillDailyFPts(seriesDays); err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: recency series backfill: %v\n", err)
 	}
 
-	variants := []backtest.StrategyVariant{
-		{
-			Name: "base",
-			Build: func(asOf time.Time) (projections.Source, error) {
-				return baseSrc, nil
-			},
-		},
-		mkVariant("ytd", projections.YTDWeight),
-		mkVariant("w14", projections.WindowWeight(14)),
-		mkVariant("w30", projections.WindowWeight(30)),
-		mkVariant("decay21", projections.DecayWeight(21)),
-	}
-
-	results, err := backtest.RunStrategyComparison(variants, gradeDays, hitterSlots, hitterScoring)
+	report, err := backtest.RunRecencyExperiment(ft, gradeDays, seriesDays, backtest.ExperimentOptions{
+		ProjectionSystem: experimentSystem,
+		CacheDir:         cacheDir,
+		ProjectionTTL:    cacheTTL(projections.ProjectionCacheTTL),
+		HitterSlots:      hitterSlots,
+		PitcherSlots:     pitcherSlots,
+		HitterScoring:    hitterScoring,
+		BlendMinGP:       cfg.BlendMinGP,
+	})
 	if err != nil {
 		return err
 	}
-
-	fmt.Printf("\nRecency strategy comparison (hitters, %d days)\n", len(gradeDays))
-	fmt.Printf("  base = depthcharts-ros with no YTD blend at all, isolating whether blending recent form on top of an\n")
-	fmt.Printf("  already-in-season-updated RoS projection helps or hurts (MAE/bias are n/a for base: ChainedSource doesn't\n")
-	fmt.Printf("  implement PtsPerGameSource, so only realized/mean-gap are comparable for that row).\n")
-	printVariantTable(results)
-
-	return runPitcherRecencyExperiment(ft, gradeDays, seriesDays, pitcherSlots, blendMinGP)
-}
-
-// runPitcherRecencyExperiment is the pitcher analogue of the hitter comparison
-// above: it replays the pitcher optimizer under each recency strategy over the
-// same window and prints realized/mean-gap/MAE/bias. The recency signal is
-// built from the per-appearance pitcher FPts series; the base pitcher projection
-// (depthcharts-ros + rolling fallback) is shared across variants so only the
-// recency blend differs. Production is unaffected — backtest-only.
-func runPitcherRecencyExperiment(
-	ft *fantrax.Client,
-	gradeDays []fantrax.DayRoster,
-	seriesDays []fantrax.DayRoster,
-	pitcherSlots []fantrax.Slot,
-	blendMinGP int,
-) error {
-	projTTL := cacheTTL(projections.ProjectionCacheTTL)
-	fgPitSrc, _, err := projections.LoadPitcherProjections("depthcharts-ros", cacheDir, projTTL)
-	if err != nil {
-		return fmt.Errorf("load base pitcher projections: %w", err)
-	}
-	pitRolling := projections.NewPitcherRollingSource()
-	pitBaseSrc := projections.NewPitcherChainedSource(fgPitSrc, pitRolling)
-
-	pitcherScoring, err := ft.GetPitcherScoringWeights()
-	if err != nil {
-		return fmt.Errorf("get pitcher scoring weights: %w", err)
-	}
-
-	// Roster name→ID and ID→positions maps for role-aware pitcher blending.
-	pitcherRoster, err := ft.GetPitcherRoster()
-	if err != nil {
-		return fmt.Errorf("pitcher roster: %w", err)
-	}
-	pitNameToID := make(map[string]string)
-	pitPlayerPos := make(map[string][]string)
-	for _, p := range pitcherRoster {
-		pitNameToID[projections.NormalizeName(p.Name)] = p.ID
-		pitPlayerPos[p.ID] = p.Positions
-	}
-
-	series := backtest.BuildPitcherSeries(seriesDays)
-	pitcherBaseline := fgPitSrc.AverageFPG(pitcherScoring)
-
-	mkVariant := func(name string, w projections.WeightFunc) backtest.PitcherStrategyVariant {
-		return backtest.PitcherStrategyVariant{
-			Name: name,
-			Build: func(asOf time.Time) (projections.PitcherSource, error) {
-				recent := make(map[string]fantrax.RecentStat, len(series))
-				for id, s := range series {
-					recent[id] = projections.WeightedRecent(s, asOf, w)
-				}
-				return projections.NewPitcherBlendedSource(pitBaseSrc, recent, pitcherScoring, pitNameToID, pitPlayerPos, blendMinGP, pitcherBaseline), nil
-			},
-		}
-	}
-
-	variants := []backtest.PitcherStrategyVariant{
-		{
-			Name: "base",
-			Build: func(asOf time.Time) (projections.PitcherSource, error) {
-				return pitBaseSrc, nil
-			},
-		},
-		mkVariant("ytd", projections.YTDWeight),
-		mkVariant("w14", projections.WindowWeight(14)),
-		mkVariant("w30", projections.WindowWeight(30)),
-		mkVariant("decay21", projections.DecayWeight(21)),
-	}
-
-	results, err := backtest.RunPitcherStrategyComparison(variants, gradeDays, pitcherSlots, pitcherScoring)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("\nRecency strategy comparison (pitchers, %d days)\n", len(gradeDays))
-	fmt.Printf("  base = depthcharts-ros with no recent blend at all. Recency signal is per-appearance pitcher FPts\n")
-	fmt.Printf("  (SP per-start, RP per-outing); role-aware stabilization applies (SP 15 GP, RP 25 GP). MAE/bias are\n")
-	fmt.Printf("  n/a for base: PitcherChainedSource doesn't implement PitcherPtsPerGameSource.\n")
-	printVariantTable(results)
+	fmt.Print(backtest.FormatExperiment(report))
 	return nil
-}
-
-// printVariantTable renders a VariantResult table (shared by hitter + pitcher
-// comparisons), showing "n/a" for MAE/bias when the variant's source doesn't
-// expose per-game projections.
-func printVariantTable(results []backtest.VariantResult) {
-	fmt.Printf("%-10s %12s %10s %8s %8s\n", "mode", "realized", "mean gap", "MAE", "bias")
-	for _, r := range results {
-		mae, bias := "n/a", "n/a"
-		if r.HasProjDiag {
-			mae = fmt.Sprintf("%.2f", r.MAE)
-			bias = fmt.Sprintf("%.2f", r.Bias)
-		}
-		fmt.Printf("%-10s %12.1f %10.2f %8s %8s\n", r.Name, r.RealizedPts, r.MeanGap, mae, bias)
-	}
 }
