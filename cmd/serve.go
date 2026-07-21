@@ -72,6 +72,7 @@ func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) h
 		Runs:          lineupapi.NewFileRunStore(lineupDir + "/runs"),
 		Notifications: lineupapi.NewFileNotificationStore(lineupDir + "/notifications"),
 		Output:        lineupapi.NewFileOutputStore(lineupDir + "/outputs"),
+		Progress:      lineupapi.NewFileProgressStore(lineupDir + "/progress"),
 		Identities:    lineupapi.NewFileIdentityStore(lineupDir),
 		WebAuthn:      wa,
 		SessionSecret: sessionSecret,
