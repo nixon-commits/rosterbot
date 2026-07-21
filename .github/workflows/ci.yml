@@ -1,0 +1,40 @@
+name: CI
+
+# PR gate. NOTE: the scheduled bot jobs do NOT run on GitHub Actions (they run
+# as ECS Fargate tasks launched by EventBridge — see docs/aws-deployment.md).
+# Actions is used only for this build/test gate and for CodeQL.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build + vet root module
+        run: |
+          go build ./...
+          go vet ./...
+
+      # lambda/, buildnotify/ and infra/ are separate Go modules that the root
+      # build never descends into. They pull the root via `replace ../`, so a
+      # bump to a shared root dep re-stales them — and that only surfaced as a
+      # failed production `cdk deploy` (it broke the deploy three times).
+      # This is the gate that makes a stale nested module block the PR instead.
+      - name: Build nested Go modules (lambda/, buildnotify/, infra/)
+        run: make build-modules
+
+      - name: Test
+        run: go test ./internal/...
