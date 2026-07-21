@@ -160,7 +160,7 @@
   </div>
   {{- if .Nav}}
   <div class="week-picker">
-    <select onchange="if(this.value)location.href=this.value" aria-label="Switch week">
+    <select onchange="var v=this.value;if(v&&/^[A-Za-z0-9._-]+\.html$/.test(v))location.assign(v)" aria-label="Switch week">
       {{- range .Nav}}
       <option value="{{.Filename}}"{{if .IsCurrent}} selected{{end}}>{{.WeekLabel}}</option>
       {{- end}}

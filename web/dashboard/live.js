@@ -11,6 +11,7 @@ const MAX_RUN_MS = 2 * 60 * 60 * 1000; // mirrors backend maxJobDuration (2h)
 let runsTimer = null;
 let progTimer = null;
 let watchedId = null;
+let started = false; // guards startLive against double-invocation (e.g. re-login)
 const lastStatus = new Map(); // run id -> last seen status, for completion toasts
 
 const heroEl = () => document.getElementById("live-hero");
@@ -37,8 +38,16 @@ async function pollRuns() {
   try {
     const res = await api.runs(25);
     runs = res.runs || [];
-  } catch {
-    schedule();
+  } catch (err) {
+    // A 401 means the session expired or was revoked — every /v1/* call now
+    // fails, so stop the 5s poll storm and reload to re-gate at the login
+    // screen instead of looping errors in the console.
+    if (err instanceof ApiError && err.status === 401) {
+      stopLive();
+      window.location.reload();
+      return;
+    }
+    schedule(); // transient error — retry next tick
     return;
   }
   // Completion detection: any id that was RUNNING last tick and is now terminal.
@@ -48,6 +57,12 @@ async function pollRuns() {
       toast(`${r.command.split(" ")[0]} ${r.status === "SUCCESS" ? "finished" : "failed"}`, r.status === "SUCCESS" ? "ok" : "fail");
     }
     lastStatus.set(r.id, r.status);
+  }
+  // Prune ids that fell out of the runs window so lastStatus can't grow
+  // unbounded over a long-lived session.
+  const seen = new Set(runs.map((r) => r.id));
+  for (const id of lastStatus.keys()) {
+    if (!seen.has(id)) lastStatus.delete(id);
   }
   const live = runs.filter(isLive);
   const badge = badgeEl();
@@ -139,4 +154,19 @@ function clearHero() {
 }
 
 export function watchRun(id) { watchedId = id; pollRuns(); }
-export function startLive() { pollRuns(); }
+
+export function startLive() {
+  if (started) return; // idempotent: a re-login (showShell again) won't double-poll
+  started = true;
+  pollRuns();
+}
+
+// stopLive halts all polling and clears the hero — called on logout and on a
+// 401 (expired session) so nothing keeps hitting /v1/* after auth is gone.
+export function stopLive() {
+  started = false;
+  clearTimeout(runsTimer);
+  clearHero(); // also clears progTimer, elapsedTimer, hero DOM, watchedId
+  const badge = badgeEl();
+  if (badge) badge.classList.remove("has-live");
+}
