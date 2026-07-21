@@ -5,7 +5,24 @@
 
 version: 2
 updates:
-  - package-ecosystem: "gomod" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  # This repo has FOUR Go modules: the root plus lambda/, buildnotify/ and
+  # infra/. The nested ones pull the root in via `replace ../`, so they share
+  # its dependency graph — bumping only the root leaves them stale, and a stale
+  # nested go.mod does not fail any root build. It only surfaces as a failed
+  # production `cdk deploy` when CDK bundles the GoFunction assets (this broke
+  # the deploy three times running).
+  #
+  # So: watch every module, and GROUP them into a single PR so root and nested
+  # modules move together and never drift apart mid-merge.
+  - package-ecosystem: "gomod"
+    directories:
+      - "/"
+      - "/lambda"
+      - "/buildnotify"
+      - "/infra"
     schedule:
       interval: "weekly"
+    groups:
+      go-modules:
+        patterns:
+          - "*"
