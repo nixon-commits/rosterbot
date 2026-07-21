@@ -177,6 +177,10 @@ func (cfg Config) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+// handleRunProgress serves the raw stored progress bytes for a run — an
+// internal/progress.Snapshot (phase/pct/phases) written by the progress
+// recorder. The bytes are passed through untouched (never decoded here), so
+// progress.Snapshot is the single source of truth for the wire shape.
 func (cfg Config) handleRunProgress(w http.ResponseWriter, r *http.Request) {
 	if cfg.Progress == nil {
 		writeErr(w, http.StatusNotImplemented, "run progress not configured")

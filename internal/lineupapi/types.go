@@ -81,18 +81,9 @@ type JobResponse struct {
 	Status  string `json:"status"` // always RUNNING
 }
 
-// ProgressSnapshot is the GET /v1/runs/{id}/progress body — live phase progress
-// for a run. Mirrors internal/progress.Snapshot. Phase detail only; the run's
-// authoritative status comes from the ledger (GET /v1/runs).
-type ProgressSnapshot struct {
-	Phase     string          `json:"phase"`
-	Pct       int             `json:"pct"`
-	Phases    []ProgressPhase `json:"phases"`
-	Status    string          `json:"status"`
-	UpdatedAt string          `json:"updated_at"`
-}
-
-type ProgressPhase struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
-}
+// The GET /v1/runs/{id}/progress body is served as the raw stored bytes of an
+// internal/progress.Snapshot (see handleRunProgress) — phase detail only; the
+// run's authoritative status comes from the ledger (GET /v1/runs). There is no
+// separate wire type here on purpose: a hand-mirrored struct nothing
+// marshals/unmarshals would only drift from progress.Snapshot, the single
+// source of truth for that shape.
