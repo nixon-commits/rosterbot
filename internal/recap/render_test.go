@@ -48,13 +48,24 @@ func TestRenderSiteWithNav(t *testing.T) {
 	got := buf.String()
 	for _, want := range []string{
 		`class="week-picker"`,
-		`value="week-04.html" selected`,
-		`value="week-05.html"`,
-		`value="week-03.html"`,
-		`>Week 4<`,
+		`id="week-select"`,
+		`selected>Week 4<`, // current week's option is preselected
+		`>Week 5<`,
+		`>Week 3<`,
+		// Navigation targets are a server-rendered trusted literal, indexed by
+		// the option position — no DOM value flows to location (CodeQL
+		// js/xss-through-dom). html/template JS-escapes each filename.
+		`var files = ["week-05.html", "week-04.html", "week-03.html", ]`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("RenderSite output missing %q", want)
+		}
+	}
+	// The old DOM-value navigation must be gone — a javascript: option value
+	// could otherwise reach location.
+	for _, unwanted := range []string{"this.value", "onchange", `value="week-`} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("RenderSite output should not contain %q (DOM-value navigation removed)", unwanted)
 		}
 	}
 }
