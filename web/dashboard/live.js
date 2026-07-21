@@ -2,6 +2,7 @@
 // with a phased progress bar (or an indeterminate bar for jobs that emit no
 // progress.json), fires a toast when a run finishes, and badges the Runs nav.
 import { api, ApiError } from "./api.js";
+import { escapeHtml } from "./render.js";
 
 const RUNS_POLL_MS = 5000;
 const PROG_POLL_MS = 2000;
@@ -73,8 +74,11 @@ async function pollProgress(id) {
   try {
     snap = await api.runProgress(id);
   } catch (err) {
-    // 404 => job emits no phases; leave hero indeterminate.
-    if (!(err instanceof ApiError) || err.status !== 404) { /* transient */ }
+    // 404 => job emits no phases; leave hero indeterminate. Anything else is a
+    // real backend/network problem worth surfacing to the console.
+    if (!(err instanceof ApiError) || err.status !== 404) {
+      console.warn("progress poll failed", err);
+    }
   }
   updateHeroProgress(id, snap);
   progTimer = setTimeout(() => pollProgress(id), PROG_POLL_MS);
@@ -88,7 +92,7 @@ function renderHero(run) {
   host.innerHTML = `
     <div class="hero card">
       <div class="hero-head"><span class="badge badge-running">RUNNING</span>
-        <strong>${run.command}</strong><span class="muted hero-elapsed"></span></div>
+        <strong>${escapeHtml(run.command)}</strong><span class="muted hero-elapsed"></span></div>
       <div class="progress"><div class="progress-fill" style="width:0%"></div></div>
       <ol class="phases"></ol>
     </div>`;
@@ -108,7 +112,7 @@ function updateHeroProgress(id, snap) {
   if (fill) fill.style.width = `${snap.pct}%`;
   if (phases) {
     phases.innerHTML = (snap.phases || [])
-      .map((p) => `<li class="phase phase-${p.state}">${p.name}</li>`)
+      .map((p) => `<li class="phase phase-${p.state}">${escapeHtml(p.name)}</li>`)
       .join("");
   }
 }
