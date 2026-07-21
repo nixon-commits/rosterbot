@@ -8,6 +8,7 @@ import { renderRuns } from "./runs.js";
 import { renderPasskeys } from "./passkeys.js";
 import { renderProjections } from "./projections.js";
 import { renderValue } from "./value.js";
+import { startLive } from "./live.js";
 
 const ROUTES = {
   "#lineup": renderLineup,
@@ -83,6 +84,7 @@ function showShell() {
   shell.hidden = false;
   window.addEventListener("hashchange", route);
   route();
+  startLive();
 }
 
 passkeyLoginBtn.addEventListener("click", async () => {
