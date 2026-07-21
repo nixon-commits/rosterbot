@@ -160,12 +160,26 @@
   </div>
   {{- if .Nav}}
   <div class="week-picker">
-    <select onchange="if(this.value)location.href=this.value" aria-label="Switch week">
+    <select id="week-select" aria-label="Switch week">
       {{- range .Nav}}
-      <option value="{{.Filename}}"{{if .IsCurrent}} selected{{end}}>{{.WeekLabel}}</option>
+      <option{{if .IsCurrent}} selected{{end}}>{{.WeekLabel}}</option>
       {{- end}}
     </select>
   </div>
+  <script>
+    // Navigate by the option's INDEX into a server-rendered list of trusted
+    // filenames — never from the option's own DOM text — so no DOM value flows
+    // into location (avoids CodeQL js/xss-through-dom; a javascript: value can
+    // never reach the navigation here). html/template JS-escapes each filename.
+    (function () {
+      var files = [{{range .Nav}}{{.Filename}}, {{end}}];
+      var sel = document.getElementById("week-select");
+      if (sel) sel.addEventListener("change", function () {
+        var f = files[sel.selectedIndex];
+        if (f) location.assign(f);
+      });
+    })();
+  </script>
   {{- end}}
 </header>
 

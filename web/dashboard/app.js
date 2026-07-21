@@ -8,7 +8,7 @@ import { renderRuns } from "./runs.js";
 import { renderPasskeys } from "./passkeys.js";
 import { renderProjections } from "./projections.js";
 import { renderValue } from "./value.js";
-import { startLive } from "./live.js";
+import { startLive, stopLive } from "./live.js";
 
 const ROUTES = {
   "#lineup": renderLineup,
@@ -118,13 +118,17 @@ logoutBtn.addEventListener("click", async () => {
     // Logging out is best-effort client-side too — clearing local UI state
     // shouldn't hang on a failed network call.
   }
+  stopLive(); // halt the run poller so it doesn't 401-loop after auth is gone
   window.location.hash = "";
   showLogin();
 });
 
 function route() {
   const hash = window.location.hash || DEFAULT_ROUTE;
-  const render = ROUTES[hash] || ROUTES[DEFAULT_ROUTE];
+  // Only ever dispatch to an own-property of ROUTES: a URL fragment like
+  // "#constructor"/"#__proto__" must not resolve to an inherited Object method
+  // and get invoked as a view renderer (CodeQL js/unvalidated-dynamic-method-call).
+  const render = Object.hasOwn(ROUTES, hash) ? ROUTES[hash] : ROUTES[DEFAULT_ROUTE];
   document.querySelectorAll("nav a").forEach((a) => {
     a.classList.toggle("active", a.getAttribute("href") === hash);
   });
