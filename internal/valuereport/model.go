@@ -1,8 +1,7 @@
-// Package valuereport builds the view model and renders value.html — the
-// multi-team time plot of aggregate HKB dynasty value — from the Team Value
-// Store (internal/teamvalue). It mirrors internal/report (which renders the
-// projection-accuracy dashboard from the Analysis Store): pure aggregation +
-// self-contained HTML, no I/O beyond the io.Writer.
+// Package valuereport builds the view model for value.json — the multi-team
+// time series of aggregate HKB dynasty value — from the Team Value Store
+// (internal/teamvalue). It mirrors internal/report (which aggregates the
+// Analysis Store into the projection-accuracy model): pure aggregation, no I/O.
 package valuereport
 
 import (
@@ -11,9 +10,10 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
 )
 
-// Model is the JSON blob embedded in value.html and consumed by its client-side
-// JS. The four value leaves are shipped per point so the page derives every
-// metric (Total / MLB / Minors / Hitter / Pitcher) without a server round-trip.
+// Model is the value.json payload consumed by the dashboard SPA. The four
+// value leaves are shipped per point so the page derives every metric
+// (Total / MLB / Minors / Hitter / Pitcher) client-side without a server
+// round-trip.
 type Model struct {
 	Empty     bool        `json:"empty"`
 	Dates     []string    `json:"dates"`      // sorted unique dt, chronological

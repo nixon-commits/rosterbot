@@ -2,6 +2,7 @@ package progress_test
 
 import (
 	"bytes"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -250,4 +251,49 @@ func TestNonVerboseLogfIsNoOp(t *testing.T) {
 	if logBuf.Len() > 0 {
 		t.Errorf("expected Logf to be no-op in non-verbose mode, got: %s", logBuf.String())
 	}
+}
+
+// --- Recorder hook tests ---
+
+func TestRecorder_EmitsPhasesNonInteractive(t *testing.T) {
+	var got []progress.Snapshot
+	old := progress.Recorder
+	progress.Recorder = func(s progress.Snapshot) { got = append(got, s) }
+	defer func() { progress.Recorder = old }()
+
+	// Non-interactive, discard terminal output — recorder must still fire.
+	p := progress.New(false, io.Discard)
+	p.Start("Roster")
+	p.Done("Roster", "ok")
+	p.Start("Projections")
+	p.Warn("Projections", "degraded")
+
+	if len(got) != 4 {
+		t.Fatalf("want 4 emissions, got %d", len(got))
+	}
+	// After Start("Roster"): Roster active, current phase Roster.
+	if got[0].Phase != "Roster" || phaseState(got[0], "Roster") != "active" {
+		t.Errorf("emission 0 = %+v", got[0])
+	}
+	// After Done("Roster"): Roster done, pct = 10.
+	if phaseState(got[1], "Roster") != "done" || got[1].Pct != 10 {
+		t.Errorf("emission 1 = %+v", got[1])
+	}
+	// After Warn("Projections"): Projections warn.
+	if phaseState(got[3], "Projections") != "warn" {
+		t.Errorf("emission 3 = %+v", got[3])
+	}
+	// Unreached phase stays pending.
+	if phaseState(got[3], "GS budget") != "pending" {
+		t.Errorf("GS budget should be pending: %+v", got[3])
+	}
+}
+
+func phaseState(s progress.Snapshot, name string) string {
+	for _, ph := range s.Phases {
+		if ph.Name == name {
+			return ph.State
+		}
+	}
+	return "MISSING"
 }

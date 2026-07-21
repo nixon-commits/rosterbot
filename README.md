@@ -14,7 +14,7 @@ Fantasy baseball roster automation for Fantrax head-to-head points leagues. Opti
 - **Roster hygiene** — Flags healthy players stuck in IL slots, called-up players still in Minors slots, and injured players occupying active slots.
 - **Backtesting** — Grades past lineup moves against the hindsight-optimal lineup and measures projection accuracy against actual fantasy points.
 - **Weekly recaps** — Sleeper-style HTML recaps with a Game of the Week win-probability chart, plus Heart Attack (most lead changes) and Comeback (winner with mid-week WP < 0.30) awards. Includes Top Single Day Performances (top 5 batters/pitchers, badged with the owning team's logo) and a League Leaders board ranking all rostered players by season-to-date wOBA (hitters) and FIP (pitchers).
-- **Projection-accuracy dashboard** — Daily-updating self-contained HTML dashboard reading from the Analysis Store grades; shows scorecard + 30-day trend, per-position MAE breakdown, calibration chart, and worst-miss table, with auto-generated insights. Served as the "Projections" tab inside the private dashboard (the CDK `DashboardUrl` output), at `<dashboard-domain>/report/index.html`.
+- **Projection-accuracy dashboard** — Daily-updating dashboard reading from the Analysis Store grades; shows scorecard + 30-day trend, per-position MAE breakdown, calibration chart, and worst-miss table, with auto-generated insights. `projection-site` writes the aggregated data as `report/model.json`; the private dashboard SPA's native "Projections" tab (the CDK `DashboardUrl` output) fetches that JSON and renders it client-side (no server-side HTML render, no iframe).
 
 ## Quick Start
 
@@ -127,13 +127,16 @@ rosterbot archive --date 2026-06-30   # capture a specific date
 rosterbot team-values --dry-run       # compute + print table, write nothing
 rosterbot team-values --date 2026-07-12  # write today's data into a specific partition
 
-# Render projection-accuracy dashboard from the grades store (reads S3 when STATE_BUCKET is set, else .analysis/); renders to <out>/index.html (--out defaults to report)
-# Also emits value.html: a multi-team time plot of aggregate HKB value with team
-# and metric (Total/MLB/Minors/Hitter/Pitcher) selectors, read from the Team Value Store.
-# Headlines with a system-comparison panel (4 RoS systems ranked by MAE + overlaid
-# trend lines); the detail dashboard below is the production system's slice.
+# Render the projection-accuracy data from the grades store (reads S3 when STATE_BUCKET is set, else .analysis/); writes <out>/model.json (--out defaults to report)
+# Also writes <out>/value.json: per-team time series of aggregate HKB value broken
+# out into Total/MLB/Minors/Hitter/Pitcher, read from the Team Value Store.
+# Both JSON sidecars are fetched and rendered natively by the dashboard SPA's
+# "Projections"/"Value" tabs (client-side Chart.js) — projection-site itself no
+# longer renders HTML. model.json headlines a system-comparison panel (4 RoS
+# systems ranked by MAE + overlaid trend lines); the detail view below it is the
+# production system's slice.
 rosterbot projection-site --out report
-rosterbot projection-site --out report --open   # render and auto-open in default browser
+rosterbot projection-site --out report --open   # open the rendered model.json in the default handler
 
 # Print league scoring weights
 rosterbot scoring
@@ -199,7 +202,17 @@ return `501` from local `serve`, which has no ECS):
 |---|---|
 | `GET /v1/runs` | Recent job runs (scheduled + manual), newest first: `{id, command, status, exit_code, started_at, ended_at, trigger}`. `status` ∈ `RUNNING`/`SUCCESS`/`FAILED`. |
 | `GET /v1/runs/{id}` | One run plus `log_tail` (captured output, populated on failures). |
+| `GET /v1/runs/{id}/progress` | Live phase progress for an in-flight run: `{phase, pct, phases:[{name,state}], status, updated_at}`. `404` when the run has no progress recorded (see below) — the dashboard falls back to an indeterminate bar. |
 | `POST /v1/jobs/{name}` | Launch a job as a Fargate task (async). Returns `202 {id, command, status:"RUNNING"}`; poll `/v1/runs` for completion. Allowlist: `optimize, waivers, prospects, claims, gs-check, transactions, recap-site, backtest, grade`. |
+
+Run *status* (`RUNNING`/`SUCCESS`/`FAILED`) always comes from the run ledger
+above — `/v1/runs/{id}/progress` only adds phase detail on top of it, it never
+replaces it. Today only `optimize` emits phases (`internal/progress`'s
+`Recorder` hook persists each phase transition to `runs/<id>/progress.json` —
+S3 via `s3lineup.NewProgress` when `STATE_BUCKET` is set, else a local file
+under `.lineup/progress/`); the other 8 allowlisted jobs have no progress file,
+so their run shows as a plain "RUNNING" hero with an indeterminate bar instead
+of a phased one.
 
 The run ledger is written by `entrypoint.sh` (one S3 object per run under the
 `runledger/` prefix, via the internal `run-ledger` command) so it covers both
@@ -211,10 +224,24 @@ confirmation in any client.
 
 A private, single-user web UI for the API above: today's lineup, a form to
 trigger any of the 9 allowlisted jobs, run history with live status, and a
-generic viewer for each job's typed output — plus links out to the recap and
-projection-accuracy sites. Static files live in `web/dashboard/` (no build
-step — plain ES modules) and deploy via the existing CodeBuild pipeline to
-its own CloudFront distribution (`DashboardUrl` in the CDK stack outputs).
+generic viewer for each job's typed output. The "Projections" and "Value" tabs
+render natively from `projection-site`'s `model.json`/`value.json` sidecars
+(client-side Chart.js, no iframe, no server-rendered HTML); the recap site
+stays a plain external link since it's still its own self-contained static
+site. Static files live in `web/dashboard/` (no build step — plain ES modules)
+and deploy via the existing CodeBuild pipeline to its own CloudFront
+distribution (`DashboardUrl` in the CDK stack outputs).
+
+Triggering a job from the dashboard hands you straight into a **live "Now
+Running" hero**: a phased progress bar (polling `GET
+/v1/runs/{id}/progress`) for `optimize`, an indeterminate bar for any of the
+other 8 jobs (they emit no progress file), plus an elapsed-time clock. The
+Runs nav item gets a live dot while anything is in flight, and finishing a
+watched run — or any run you didn't trigger yourself this session — fires a
+completion toast (success/failure) once its ledger status leaves `RUNNING`.
+Job status itself is always read from the run ledger (`GET /v1/runs`); the
+progress endpoint only supplies phase detail on top of it, and a 404 there
+just means "no phase detail available," not "not running."
 
 Auth is a **passkey** (WebAuthn), not the token. The first time the dashboard
 has zero passkeys registered, it shows a bootstrap screen instead of a login
@@ -352,7 +379,7 @@ Required repository secrets for local runs: `FANTRAX_USERNAME`, `FANTRAX_PASSWOR
 `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
 
 The recap site is published from `./dist` to `SITE_BUCKET` by `entrypoint.sh`.
-The projection dashboard and team-value tracker are published from `./report` into `DASHBOARD_BUCKET`'s `report/` prefix by `entrypoint.sh` — same bucket/CloudFront distribution as the private dashboard SPA, at `<dashboard-domain>/report/index.html` and `/report/value.html`.
+The projection dashboard and team-value tracker are published from `./report` into `DASHBOARD_BUCKET`'s `report/` prefix by `entrypoint.sh` — same bucket/CloudFront distribution as the private dashboard SPA, as `report/model.json` and `report/value.json`, fetched and rendered natively by the SPA's "Projections"/"Value" tabs (no HTML is written to that prefix anymore).
 
 For local preview, render into the dashboard's own static dir so `go run . serve` serves it too: `rosterbot projection-site --out web/dashboard/report` (delete `web/dashboard/report/` afterward so it isn't committed).
 There is no GitHub Pages workflow in the current deployment.

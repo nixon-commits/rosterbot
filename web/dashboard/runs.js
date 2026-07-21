@@ -80,7 +80,7 @@ async function loadRuns(container, detailSection, silent) {
   }
   const table = document.createElement("table");
   table.className = "data-table";
-  table.innerHTML = "<thead><tr><th>Command</th><th>Status</th><th>Started</th><th>Trigger</th></tr></thead>";
+  table.innerHTML = "<thead><tr><th>Command</th><th>Status</th><th>Started</th><th>Duration</th><th>Trigger</th></tr></thead>";
   const tbody = document.createElement("tbody");
   for (const run of runs) {
     const tr = document.createElement("tr");
@@ -88,7 +88,8 @@ async function loadRuns(container, detailSection, silent) {
     tr.innerHTML = `
       <td>${escapeHtml(run.command)}</td>
       <td><span class="badge badge-${escapeHtml(run.status.toLowerCase())}">${escapeHtml(run.status)}</span></td>
-      <td>${escapeHtml(run.started_at)}</td>
+      <td>${escapeHtml(relativeTime(run.started_at))}</td>
+      <td>${escapeHtml(runDuration(run))}</td>
       <td>${escapeHtml(run.trigger)}</td>
     `;
     tr.addEventListener("click", () => showDetail(detailSection, run.id));
@@ -101,6 +102,45 @@ async function loadRuns(container, detailSection, silent) {
 
 function hasRunningRun(runs) {
   return Array.isArray(runs) && runs.some((run) => run.status === "RUNNING");
+}
+
+// m:ss for anything a minute or over, else "Xs" — mirrors the compact style
+// used elsewhere in the dashboard (e.g. live.js's hero elapsed counter).
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+// Duration column: terminal runs get a fixed ended_at - started_at; a still
+// RUNNING run gets elapsed-so-far computed at render time (not ticking — the
+// live hero already covers a real-time counter for the currently-watched run).
+function runDuration(run) {
+  const started = Date.parse(run.started_at);
+  if (Number.isNaN(started)) return "";
+  if (run.status === "RUNNING") {
+    return formatDuration(Date.now() - started);
+  }
+  const ended = Date.parse(run.ended_at);
+  if (Number.isNaN(ended)) return "";
+  return formatDuration(ended - started);
+}
+
+// Coarse relative time for the "Started" column ("just now" / "N min ago" /
+// "N hr ago" / "N days ago").
+function relativeTime(iso) {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return String(iso ?? "");
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 async function showDetail(section, id) {

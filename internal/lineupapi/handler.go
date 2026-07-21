@@ -36,6 +36,7 @@ type Config struct {
 	Jobs          JobRunner
 	Notifications NotificationStore
 	Output        OutputStore
+	Progress      ProgressStore
 
 	// WebAuthn passkey auth (see webauthn.go).
 	Identities    IdentityStore
@@ -52,6 +53,7 @@ type Config struct {
 //	GET  /v1/lineup/today   -> precomputed lineup JSON
 //	GET  /v1/runs           -> run ledger (newest first)
 //	GET  /v1/runs/{id}      -> one run + log tail
+//	GET  /v1/runs/{id}/progress -> live phase progress for a run
 //	POST /v1/jobs/{name}    -> launch a job (async), 202
 //	POST /v1/auth/*         -> passkey login/register/logout, session mgmt
 func Handler(cfg Config) http.Handler {
@@ -60,6 +62,7 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/runs", cfg.handleRuns)
 	mux.HandleFunc("GET /v1/runs/{id}", cfg.handleRunDetail)
 	mux.HandleFunc("GET /v1/runs/{id}/output", cfg.handleRunOutput)
+	mux.HandleFunc("GET /v1/runs/{id}/progress", cfg.handleRunProgress)
 	mux.HandleFunc("GET /v1/notifications", cfg.handleNotifications)
 	mux.HandleFunc("GET /v1/jobs", cfg.handleJobs)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
@@ -167,6 +170,26 @@ func (cfg Config) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no output for run")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+func (cfg Config) handleRunProgress(w http.ResponseWriter, r *http.Request) {
+	if cfg.Progress == nil {
+		writeErr(w, http.StatusNotImplemented, "run progress not configured")
+		return
+	}
+	id := r.PathValue("id")
+	data, ok, err := cfg.Progress.GetProgress(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "run progress unavailable")
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no progress for run")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

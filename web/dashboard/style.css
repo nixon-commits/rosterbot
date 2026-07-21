@@ -7,6 +7,29 @@
   --accent: #2563eb;
   --danger: #dc2626;
   --success: #16a34a;
+
+  /* Spacing scale — used for padding/margin/gap everywhere below instead of
+     one-off rem values, so density stays consistent across views. */
+  --s1: .25rem;
+  --s2: .5rem;
+  --s3: .75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+
+  --radius: 8px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.04);
+
+  /* Chart palette — read by chart.js:themeColors() via --c1..--c8. Same 8
+     hex values in light and dark (colorblind-conscious categorical set;
+     reads fine on both backgrounds so it isn't re-themed below). */
+  --c1: #4e79a7;
+  --c2: #f28e2b;
+  --c3: #59a14f;
+  --c4: #e15759;
+  --c5: #76b7b2;
+  --c6: #edc948;
+  --c7: #b07aa1;
+  --c8: #ff9da7;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -17,6 +40,8 @@
     --accent: #60a5fa;
     --danger: #f87171;
     --success: #4ade80;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.3);
   }
 }
 
@@ -50,23 +75,23 @@ body {
 #login-screen .login-card, #bootstrap-screen .login-card {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: var(--s3);
   width: 100%;
   max-width: 320px;
 }
 
 #login-screen .login-card input, #bootstrap-screen .login-card input {
-  padding: 0.5rem;
+  padding: var(--s2);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);
 }
 
 #login-screen .login-card button, #bootstrap-screen .login-card button {
-  padding: 0.5rem;
+  padding: var(--s2);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--accent);
   color: white;
   cursor: pointer;
@@ -79,53 +104,103 @@ body {
 header {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  padding: 0.75rem 1rem;
+  gap: var(--s4);
+  padding: var(--s3) var(--s4);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
 
-header h1 { font-size: 1.1rem; margin: 0; }
+header h1 { font-size: 1.1rem; margin: 0; font-weight: 700; letter-spacing: -.01em; }
 
-nav { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+nav { display: flex; gap: var(--s3); flex-wrap: wrap; }
 
 nav a {
+  position: relative;
   color: var(--muted);
   text-decoration: none;
-  padding: 0.25rem 0.5rem;
-  border-radius: 6px;
+  padding: var(--s1) var(--s2);
+  border-radius: var(--radius);
+  font-size: .9rem;
+  transition: color .15s ease, background-color .15s ease;
 }
 
-nav a.active, nav a:hover { color: var(--fg); background: var(--border); }
+nav a:hover { color: var(--fg); background: var(--border); }
+
+nav a.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  font-weight: 600;
+}
+
+/* Runs nav item badges itself with a dot while a run is live (live.js). */
+nav a.has-live::after {
+  content: "●";
+  color: var(--accent);
+  font-size: .6rem;
+  margin-left: .25rem;
+  vertical-align: middle;
+}
 
 #logout-btn {
   margin-left: auto;
-  padding: 0.25rem 0.75rem;
+  padding: var(--s1) var(--s3);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--fg);
   cursor: pointer;
 }
 
-main { padding: 1rem; max-width: 960px; margin: 0 auto; }
+main { padding: var(--s4); max-width: 960px; margin: 0 auto; }
 
-table { border-collapse: collapse; width: 100%; margin: 0.5rem 0; }
-th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+main h2 { font-size: 1.05rem; font-weight: 650; margin: var(--s5) 0 var(--s3); }
+main h2:first-child { margin-top: 0; }
+main h3 { font-size: .95rem; font-weight: 650; margin: 0 0 var(--s2); }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: var(--s2) 0;
+  font-size: .88rem;
+}
+th, td { text-align: left; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--border); }
+thead th {
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  border-bottom: 2px solid var(--border);
+}
 .kv-table th { color: var(--muted); width: 12rem; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+table.data-table tbody tr:hover { background: color-mix(in srgb, var(--border) 40%, transparent); }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--fg); }
+tr.best { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+tr.best td { font-weight: 600; }
+tr.lead { background: color-mix(in srgb, var(--success) 12%, transparent); }
+tr.lead td { font-weight: 600; }
+td.over { color: var(--danger); }
+td.under { color: var(--success); }
+td.cov.warn { color: var(--danger); }
 
 .muted { color: var(--muted); }
+.sub { font-size: .85rem; margin: var(--s2) 0; }
 
 .card {
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.75rem 1rem;
-  margin-bottom: 0.75rem;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--s4);
+  margin-bottom: var(--s4);
+  background: var(--bg);
 }
 
 .badge {
   display: inline-block;
-  padding: 0.1rem 0.5rem;
+  padding: .15rem var(--s2);
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 600;
@@ -135,21 +210,116 @@ th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(
 .badge-benched, .badge-failed, .badge-failure { background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
 .badge-info { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--muted); }
 
+.swatch {
+  display: inline-block;
+  width: .65rem;
+  height: .65rem;
+  border-radius: 2px;
+  margin-right: .35rem;
+  vertical-align: middle;
+}
+
+/* ---- Toggle groups (window/role/system/metric segmented controls) ------ */
+/* projections.js / value.js build these as <div class="toggle-group"><button
+   data-*="..."></button>...</div> and mark the selected button by toggling a
+   plain `active` class (not aria-pressed) — see buildSeg/paintSegActive and
+   wireMetricSeg/wireLegend. */
+
+.controls { display: flex; flex-wrap: wrap; gap: var(--s3); margin: var(--s3) 0; }
+
+.toggle-group { display: flex; flex-wrap: wrap; gap: var(--s1); }
+
+.toggle-group button {
+  padding: .3rem var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: .82rem;
+  cursor: pointer;
+  transition: color .15s ease, background-color .15s ease, border-color .15s ease;
+}
+.toggle-group button:hover { color: var(--fg); border-color: var(--accent); }
+.toggle-group button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ---- Stat tiles (scorecard MAE/Bias/RMSE/N, standings-adjacent stats) --- */
+/* projections.js's tile() emits <div class="stat-tile"><div class="label">…
+   </div><div class="value">…</div><div class="delta good|bad|flat">…</div>
+   </div>, grouped in a <div class="stat-row">. */
+
+.stat-row { display: flex; flex-wrap: wrap; gap: var(--s3); margin: var(--s3) 0; }
+
+.stat-tile {
+  flex: 1 1 140px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--s3);
+  background: color-mix(in srgb, var(--border) 18%, transparent);
+}
+.stat-tile .label {
+  font-size: .72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.stat-tile .value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin: .1rem 0;
+  font-variant-numeric: tabular-nums;
+}
+.stat-tile .delta { font-size: .78rem; }
+.stat-tile .delta.good { color: var(--success); }
+.stat-tile .delta.bad { color: var(--danger); }
+.stat-tile .delta.flat { color: var(--muted); }
+
+/* ---- Chart canvases ----------------------------------------------------- */
+/* chart.js wrappers set responsive:true + maintainAspectRatio:false, which
+   need an explicitly-sized, positioned parent or the canvas collapses/grows
+   unbounded. */
+.chart-box { position: relative; height: 220px; margin: var(--s3) 0; }
+
+/* ---- Insights list ------------------------------------------------------- */
+.insights { list-style: none; padding: 0; margin: var(--s2) 0; display: flex; flex-direction: column; gap: var(--s2); }
+.insights li {
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--border) 25%, transparent);
+  font-size: .85rem;
+}
+.insights li.warn { border-left: 3px solid var(--danger); }
+.insights li.flat { color: var(--muted); background: transparent; }
+
+/* ---- Team badges (value.js standings) ----------------------------------- */
+.team { display: flex; align-items: center; gap: var(--s2); }
+.logo { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+
 .slot-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 0.75rem;
+  gap: var(--s3);
 }
 
-form.job-form { display: flex; flex-direction: column; gap: 0.6rem; max-width: 420px; }
-form.job-form > div { display: flex; flex-direction: column; gap: 0.2rem; }
+form.job-form { display: flex; flex-direction: column; gap: var(--s3); max-width: 420px; }
+form.job-form > div { display: flex; flex-direction: column; gap: var(--s1); }
 form.job-form label { font-size: 0.85rem; color: var(--muted); }
-form.job-form input, form.job-form select { padding: 0.4rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+form.job-form input, form.job-form select {
+  padding: var(--s2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+}
 
 button.primary {
-  padding: 0.5rem 1rem;
+  padding: var(--s2) var(--s4);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--accent);
   color: white;
   cursor: pointer;
@@ -157,15 +327,47 @@ button.primary {
 }
 button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+button.danger {
+  padding: var(--s2) var(--s4);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+}
+button.danger:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); }
+button.danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
 pre {
   white-space: pre-wrap;
   word-break: break-word;
   background: color-mix(in srgb, var(--border) 40%, transparent);
-  padding: 0.5rem;
-  border-radius: 6px;
+  padding: var(--s2);
+  border-radius: var(--radius);
   max-height: 300px;
   overflow-y: auto;
 }
+
+/* ---- Live run hero + progress (live.js) ---------------------------------- */
+
+.hero { display: flex; flex-direction: column; gap: var(--s2); }
+.hero-head { display: flex; align-items: center; gap: var(--s2); }
+.progress { height: 8px; background: var(--border); border-radius: 999px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent); transition: width .3s ease; }
+.progress.indeterminate .progress-fill { width: 40% !important; animation: indet 1.2s ease-in-out infinite; }
+@keyframes indet { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+.phases { list-style: none; display: flex; flex-wrap: wrap; gap: var(--s2); padding: 0; margin: 0; }
+.phase { font-size: .8rem; color: var(--muted); }
+.phase-active { color: var(--accent); font-weight: 600; }
+.phase-done { color: var(--success); }
+.phase-warn { color: var(--danger); }
+
+/* ---- Toasts (live.js) ---------------------------------------------------- */
+
+#toasts { position: fixed; bottom: 1rem; right: 1rem; display: flex; flex-direction: column; gap: .5rem; z-index: 50; }
+.toast { padding: .5rem .9rem; border-radius: var(--radius); box-shadow: var(--shadow); background: var(--bg); border: 1px solid var(--border); }
+.toast-ok { border-left: 3px solid var(--success); }
+.toast-fail { border-left: 3px solid var(--danger); }
 
 @media (max-width: 600px) {
   header { flex-direction: column; align-items: flex-start; }

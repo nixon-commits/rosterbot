@@ -27,7 +27,7 @@ type View struct {
 	Insights  []Insight     `json:"insights"`
 }
 
-// Model is the complete payload embedded into the dashboard HTML.
+// Model is the complete payload written to model.json for the dashboard SPA.
 //
 // Views/Trends span every captured system (keyed "system|window|role") so the
 // Detail panel's system picker can switch between them client-side without a

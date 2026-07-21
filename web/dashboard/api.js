@@ -56,4 +56,9 @@ export const api = {
   authPasskeys: () => request("GET", "/v1/auth/passkeys"),
   authRevokePasskey: (id) => request("DELETE", `/v1/auth/passkeys/${encodeURIComponent(id)}`),
   authLogout: () => request("POST", "/v1/auth/logout"),
+
+  // Report JSON is served from the CloudFront root, not /v1.
+  reportModel: () => request("GET", "/report/model.json"),
+  reportValue: () => request("GET", "/report/value.json"),
+  runProgress: (id) => request("GET", `/v1/runs/${encodeURIComponent(id)}/progress`),
 };

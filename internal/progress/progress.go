@@ -5,7 +5,31 @@ import (
 	"io"
 	"log"
 	"strings"
+	"time"
 )
+
+// PhaseState is one pipeline phase's status in a Snapshot.
+type PhaseState struct {
+	Name  string `json:"name"`
+	State string `json:"state"` // pending | active | done | warn
+}
+
+// Snapshot is the persisted live-progress record (runs/<id>/progress.json).
+type Snapshot struct {
+	Phase     string       `json:"phase"`
+	Pct       int          `json:"pct"`
+	Phases    []PhaseState `json:"phases"`
+	Status    string       `json:"status"` // running
+	UpdatedAt string       `json:"updated_at"`
+}
+
+// PipelinePhases is the ordered phase list emit reports. Matches the optimize
+// pipeline's Start/Done sequence and the phaseWeight keys.
+var PipelinePhases = []string{"Roster", "Projections", "Recent stats", "Pitcher info", "Handedness", "GS budget", "Optimize"}
+
+// Recorder is a nil-safe global hook (mirrors lineupapi.OutputRecorder). cmd
+// installs it to write runs/<RUN_ID>/progress.json. Unset => no-op.
+var Recorder func(Snapshot)
 
 // phaseWeight maps phase names to their completion percentage.
 var phaseWeight = map[string]int{
@@ -24,17 +48,42 @@ type Progress struct {
 	verbose     bool
 	w           io.Writer
 	pct         int
+	state       map[string]string // phase name -> pending/active/done/warn
+	current     string
 }
 
 // New creates a progress display. If interactive is false, falls back to log-style output.
 func New(interactive bool, w io.Writer) *Progress {
-	return &Progress{interactive: interactive, w: w}
+	return &Progress{interactive: interactive, w: w, state: map[string]string{}}
 }
 
 // NewVerbose creates a progress display where only Logf produces output.
 // Header/Start/Done/Warn/Finish are all no-ops.
 func NewVerbose() *Progress {
-	return &Progress{verbose: true}
+	return &Progress{verbose: true, state: map[string]string{}}
+}
+
+// emit builds the current snapshot and hands it to Recorder (if installed).
+// Fires in every mode — terminal drawing is gated on interactive, emission is not.
+func (p *Progress) emit() {
+	if Recorder == nil {
+		return
+	}
+	phases := make([]PhaseState, len(PipelinePhases))
+	for i, name := range PipelinePhases {
+		st := p.state[name]
+		if st == "" {
+			st = "pending"
+		}
+		phases[i] = PhaseState{Name: name, State: st}
+	}
+	Recorder(Snapshot{
+		Phase:     p.current,
+		Pct:       p.pct,
+		Phases:    phases,
+		Status:    "running",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 // Header prints the persistent header line.
@@ -55,6 +104,9 @@ func (p *Progress) Header(projSystem string, dates string, dryRun bool) {
 
 // Start begins a phase (shows loading indicator in interactive mode).
 func (p *Progress) Start(phase string) {
+	p.current = phase
+	p.state[phase] = "active"
+	p.emit()
 	if p.verbose || !p.interactive {
 		return
 	}
@@ -63,6 +115,12 @@ func (p *Progress) Start(phase string) {
 
 // Done completes a phase with success detail.
 func (p *Progress) Done(phase string, detail string) {
+	p.state[phase] = "done"
+	if w, ok := phaseWeight[phase]; ok {
+		p.pct = w
+	}
+	p.current = ""
+	p.emit()
 	if p.verbose {
 		return
 	}
@@ -75,6 +133,11 @@ func (p *Progress) Done(phase string, detail string) {
 
 // Warn completes a phase with a warning.
 func (p *Progress) Warn(phase string, detail string) {
+	p.state[phase] = "warn"
+	if w, ok := phaseWeight[phase]; ok {
+		p.pct = w
+	}
+	p.emit()
 	if p.verbose {
 		return
 	}
@@ -121,9 +184,6 @@ func (p *Progress) doneInteractive(phase string, detail string) {
 	p.clearBar()
 	p.clearPrevLine()
 	fmt.Fprintf(p.w, "  ✓ %-15s %s\n", phase, detail)
-	if w, ok := phaseWeight[phase]; ok {
-		p.pct = w
-	}
 	p.drawBar()
 }
 
@@ -131,9 +191,6 @@ func (p *Progress) warnInteractive(phase string, detail string) {
 	p.clearBar()
 	p.clearPrevLine()
 	fmt.Fprintf(p.w, "  ⚠ %-15s %s\n", phase, detail)
-	if w, ok := phaseWeight[phase]; ok {
-		p.pct = w
-	}
 	p.drawBar()
 }
 

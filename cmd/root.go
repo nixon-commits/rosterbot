@@ -118,5 +118,8 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 	// Persist each job's typed result under RUN_ID so the app can render
 	// per-job result views (GET /v1/runs/{id}/output).
 	installOutputRecorder()
+	// Persist optimize's phase transitions under RUN_ID so the app can show a
+	// live progress bar (GET /v1/runs/{id}/progress).
+	installProgressRecorder()
 	return cfg, ft, nil
 }
