@@ -30,7 +30,8 @@ or the S3 analysis/team-values/ prefix when STATE_BUCKET is set).
 Value is summed over each team's rostered players (joined to HKB by normalized
 name) and broken out into hitter/pitcher x MLB/minors leaves. HKB serves only
 current values, so the series accumulates forward: run this once per day (before
-projection-site) and the value.html time plot grows a point per day.`,
+projection-site) and the dashboard's native Value tab (reading value.json)
+grows a point per day.`,
 	RunE: runTeamValues,
 }
 

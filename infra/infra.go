@@ -268,7 +268,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		},
 	})
 
-	// The bot task (projection-site) publishes report/index.html + report/value.html
+	// The bot task (projection-site) publishes report/model.json + report/value.json
 	// under DashboardBucket's "report/" prefix, so it needs write access here too
 	// (previously it only wrote to its own now-removed ReportBucket), plus
 	// permission to invalidate DashboardCdn after publishing.
@@ -510,7 +510,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		{"Archive", "cron(15 14 * * ? *)", jsii.Strings("archive")},
 		// Appends today's per-team aggregate HKB dynasty value to the Team Value
 		// Store. Runs 14:30 UTC (after Archive's HKB refresh, before ProjectionSite
-		// at 15:00) so value.html renders today's point same-day. Accumulates
+		// at 15:00) so value.json renders today's point same-day. Accumulates
 		// forward — HKB has no history — so one write per day is the whole record.
 		{"TeamValues", "cron(30 14 * * ? *)", jsii.Strings("team-values")},
 		// Shadow captures every projection system's lineup projection for the
