@@ -1,33 +1,81 @@
-# RosterBot
+<div align="center">
 
-Fantasy baseball roster automation for Fantrax head-to-head points leagues. Optimizes daily lineups, monitors minor league prospects, and tracks league-wide game start violations.
+# ⚾ RosterBot
 
-## What It Does
+**An autonomous manager for Fantrax head-to-head points leagues.**
+It sets the lineup every hour, works the waiver wire, watches the league, and grades its own decisions — no human at the keyboard.
 
-- **Daily lineup optimization** — Backtracking optimizer finds the globally optimal hitter slot assignment. Pitcher optimizer accounts for probable starters and weekly GS budgets. Blends FanGraphs projections with recent rolling stats so hot/cold streaks factor into decisions.
-- **Real-life lineup awareness** — Checks MLB starting lineups so players sitting out (rest days, etc.) get benched in favor of active hitters.
-- **Prospect monitoring** — Scans MLB transactions, MiLB performance breakouts, and prospect rankings (MLB Pipeline / FanGraphs) to surface call-up alerts, hot streaks, and upgrade recommendations.
-- **Trade monitoring** — Fetches recent league trades, values each side using HKB player rankings, and sends a Pushover notification with the trade report.
-- **Statcast-driven waiver picks** — Cross-references league free agents against Baseball Savant data to surface buy-low candidates (xStats outpacing surface stats) and confirmed hot streaks (recent production backed by barrel/hard-hit quality). Ranks by various Fangraph projection systems fantasy points per game.
-- **Daily claims recap** — League-wide recap of processed waiver/FA claims with HKB value gained per move, a daily value leaderboard by team, notable-drops watch, and Statcast signal tie-in for picked-up players. Writes an audit ledger to `.waivers/claims/<date>.json` and uses a cursor to avoid duplicate alerts across runs.
-- **GS violation detection** — Tallies game starts across all league teams and sends Pushover notifications when a team exceeds the cap.
-- **Roster hygiene** — Flags healthy players stuck in IL slots, called-up players still in Minors slots, and injured players occupying active slots.
-- **Backtesting** — Grades past lineup moves against the hindsight-optimal lineup and measures projection accuracy against actual fantasy points.
-- **Weekly recaps** — Sleeper-style HTML recaps with a Game of the Week win-probability chart, plus Heart Attack (most lead changes) and Comeback (winner with mid-week WP < 0.30) awards. Includes Top Single Day Performances (top 5 batters/pitchers, badged with the owning team's logo) and a League Leaders board ranking all rostered players by season-to-date wOBA (hitters) and FIP (pitchers).
-- **Projection-accuracy dashboard** — Daily-updating dashboard reading from the Analysis Store grades; shows scorecard + 30-day trend, per-position MAE breakdown, calibration chart, and worst-miss table, with auto-generated insights. `projection-site` writes the aggregated data as `report/model.json`; the private dashboard SPA's native "Projections" tab (the CDK `DashboardUrl` output) fetches that JSON and renders it client-side (no server-side HTML render, no iframe).
+<img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white&labelColor=1A2B4A" alt="Go 1.26">
+<img src="https://img.shields.io/badge/deploy-AWS_Fargate-FF9900?style=flat-square&logo=amazonwebservices&logoColor=white&labelColor=1A2B4A" alt="Deploy: AWS Fargate">
+<img src="https://img.shields.io/badge/league-Fantrax_H2H-2E7D32?style=flat-square&labelColor=1A2B4A" alt="League: Fantrax H2H">
+<img src="https://img.shields.io/badge/CI-CodeQL_+_modules-8957e5?style=flat-square&logo=github&logoColor=white&labelColor=1A2B4A" alt="CI: CodeQL + modules">
 
-## Quick Start
+</div>
 
-### Prerequisites
+---
 
-- Go 1.26+
-- Chrome (for Fantrax authentication via headless browser)
+RosterBot is a single Go binary of Cobra subcommands that pulls from five live data feeds, makes a lineup decision, and writes it straight back to Fantrax — then keeps a running record of how good that decision turned out to be. It runs unattended on AWS, but every command works locally in a read-only `--dry-run` mode so you can watch it think before it touches a roster.
 
-### Setup
+## How it thinks
 
-1. Clone the repo and create a `.env` file (gitignored):
+```mermaid
+flowchart LR
+    FT["Fantrax<br/>roster · scoring · lineups"]:::src
+    MLB["MLB Stats API<br/>schedule · probables · logs"]:::src
+    FG["FanGraphs<br/>projections"]:::src
+    SV["Baseball Savant<br/>Statcast"]:::src
+    HKB["HKB<br/>dynasty values"]:::src
 
+    FT --> OPT
+    MLB --> OPT
+    FG --> OPT
+    SV --> OPT
+
+    OPT{{"Optimizer<br/>hitters + pitchers"}}:::eng
+
+    OPT --> APPLY["Apply lineup<br/>→ Fantrax"]:::act
+    OPT --> PUSH[("Pushover<br/>alerts")]:::note
+    OPT --> SNAP["Projection<br/>snapshots"]:::data
+
+    FT --> WIRE
+    SV --> WIRE
+    HKB --> WIRE
+    WIRE["Waivers · Claims · Trades"]:::eng
+    WIRE --> PUSH
+
+    SNAP --> GRADE["Backtest ·<br/>Analysis Store"]:::data
+    GRADE --> DASH["Accuracy &<br/>value dashboards"]:::data
+
+    classDef src fill:#1A2B4A,stroke:#0b1526,color:#fff;
+    classDef eng fill:#2E7D32,stroke:#1b4d1f,color:#fff;
+    classDef act fill:#B0603D,stroke:#7a3f27,color:#fff;
+    classDef note fill:#7B4FA3,stroke:#4f3169,color:#fff;
+    classDef data fill:#00ADD8,stroke:#0b6f8a,color:#08222b;
 ```
+
+**Statcast picks _who_ surfaces on the wire; FanGraphs scores _how much_ each player is worth under this league's own scoring weights.** That separation runs through the whole codebase — the optimizer never guesses at value it can compute.
+
+## What it does
+
+- **Sets the daily lineup** — A backtracking optimizer finds the globally optimal hitter slot assignment; a separate pitcher optimizer respects probable starters and the weekly games-started budget. Projections blend FanGraphs with recent rolling stats, so hot and cold streaks move the needle.
+- **Reads the real box score** — Checks actual MLB starting lineups, so a player getting a rest day is benched in favor of someone actually in the order.
+- **Works the waiver wire** — Cross-references free agents against Baseball Savant to surface **buy-low** candidates (expected stats outpacing surface stats) and **hot** streaks (recent production backed by barrel and hard-hit quality), ranked by projected fantasy points.
+- **Recaps the wire** — A league-wide daily recap of processed CLAIM/DROP moves, valued by HKB dynasty rankings, with a per-team leaderboard, a notable-drops watch, and Statcast tags on every pickup. Writes an audit ledger and uses a cursor to never alert twice.
+- **Monitors prospects** — Scans MLB transactions, MiLB breakouts, and prospect boards (MLB Pipeline → FanGraphs) for call-up alerts, hot streaks, and upgrade recommendations.
+- **Watches the league** — Trade monitor (valued by HKB), roster-hygiene alerts (players stuck in the wrong slot), and a league-wide games-started violation checker.
+- **Grades the tape** — Backtests past lineups against the hindsight-optimal lineup, and grades every projection against the fantasy points that actually scored — sliced by position and by projection system.
+- **Tells the story** — Sleeper-style weekly HTML recaps with a Game-of-the-Week win-probability chart, League Leaders board, and comeback/lead-change awards.
+- **Publishes dashboards** — A daily projection-accuracy dashboard (scorecard, trend, per-position MAE, calibration, worst misses, model comparison) and a per-team dynasty-value tracker, both served as a private SPA behind a passkey.
+
+---
+
+## Quick start
+
+**Prerequisites:** Go 1.26+ and Chrome (headless, for Fantrax's browser-based auth).
+
+**1 — Configure.** Create a gitignored `.env`:
+
+```dotenv
 FANTRAX_USERNAME=your_username
 FANTRAX_PASSWORD=your_password
 FANTRAX_LEAGUE_ID=your_league_id
@@ -36,126 +84,260 @@ FANTRAX_IL_SLOTS=3
 FANTRAX_MINORS_SLOTS=5
 ```
 
-2. Build:
+**2 — Build.**
 
 ```bash
-make build    # produces ./rosterbot
-make install  # installs to $GOPATH/bin
+make build      # produces ./rosterbot
+make install    # installs to $GOPATH/bin
 ```
 
-### Usage
+**3 — Watch it work (read-only).**
 
 ```bash
-# Optimize today's lineup (dry run)
+rosterbot optimize --dry-run          # today's optimal lineup, applies nothing
+rosterbot waivers  --dry-run          # Statcast-driven free-agent picks
+rosterbot scoring                     # print the league's scoring weights
+```
+
+> [!TIP]
+> Every command that changes state supports `--dry-run`. Drop the flag to apply for real. `make run-all` sweeps every command in dry-run / read-only mode — the fastest end-to-end sanity check.
+
+---
+
+## Command reference
+
+The manager's day, grouped by job. Each group folds open.
+
+<details>
+<summary><b>Set the lineup</b> — <code>optimize</code></summary>
+
+```bash
+# Today (dry run)
 rosterbot optimize --dry-run
 
-# Optimize a specific date
+# A specific date, or a date range
 rosterbot optimize --dry-run --dates 2026-04-01
-
-# Optimize a date range
 rosterbot optimize --dry-run --dates 2026-03-26:2026-03-28
 
-# Optimize remaining days in current matchup period
+# All remaining days in the current matchup period (what the hourly job runs)
 rosterbot optimize --dry-run --matchup
 
-# Show full hitter adjustment pipeline (base → blend → park → platoon → opp SP → final)
+# Show the full hitter adjustment pipeline: base → blend → park → platoon → opp SP → final
 rosterbot optimize --dry-run --pipeline
 
-# Switch projection system (steamer, depthcharts, thebatx, atc, steamer-ros, depthcharts-ros, thebatx-ros, atc-ros)
-rosterbot optimize --dry-run --projections steamer
+# Swap projection system (default: depthcharts; in-season: depthcharts-ros)
+#   steamer · depthcharts · thebatx · atc  (+ each system's -ros rest-of-season variant)
 rosterbot optimize --dry-run --projections atc
-rosterbot optimize --dry-run --projections steamer-ros   # Rest-of-Season variant
+rosterbot optimize --dry-run --projections steamer-ros
 
-# Bypass API cache (force fresh data)
+# Force fresh data (bypass every cache layer)
 rosterbot optimize --dry-run --no-cache
 
-# Run prospect report
-rosterbot prospects --dry-run
-
-# Check recent trades with HKB valuations
-rosterbot transactions --dry-run
-
-# Identify Statcast-driven waiver wire pickups
-rosterbot waivers --dry-run
-rosterbot waivers --dry-run --top 25            # bigger list
-rosterbot waivers --dry-run --positions OF,SP   # filter to specific slots
-
-# Daily recap of processed waiver/FA claims
-rosterbot claims --dry-run
-rosterbot claims --dry-run --no-signals         # skip Statcast signal enrichment
-rosterbot claims --dry-run --drops-min 3000     # only flag drops above HKB value threshold
-rosterbot claims --dry-run --since 2026-06-01   # recap claims since a specific date
-
-# Check GS violations (most recently completed period)
-rosterbot gs-check --dry-run
-
-# Backtest last completed matchup week (lineup + projection accuracy)
-rosterbot backtest
-
-# Backtest a specific window
-rosterbot backtest --dates 2026-04-13:2026-04-19
-
-# Compare recency-weighting strategies (YTD vs 14d/30d/decay) by lineup Gap (hitters + pitchers)
-rosterbot backtest --recency-experiment --dates 2026-05-01:2026-05-14
-
-# Archive today's projections so a future backtest can grade them exactly
-rosterbot optimize --dry-run --archive-projections
-
-# Render Sleeper-style HTML recap of the most recently completed matchup week
-rosterbot recap --out /tmp/recap.html
-
-# Recap a specific window
-rosterbot recap --dates 2026-04-20:2026-04-26 --out /tmp/recap.html
-
-# Build a multi-week static site (one HTML per completed week + index.html)
-rosterbot recap-site --out dist
-
-# Capture every projection system's lineup projections (read-only) for model comparison.
-# Runs the optimize pipeline once per RoS system in dry-run, writing a per-system
-# snapshot the next day's `grade` run scores. No lineup applied, no notification.
-rosterbot shadow                 # capture today
-rosterbot shadow --dates 2026-06-30
-
-# Archive today's ephemeral upstream data (HKB, projections, Savant, prospects) as a durable daily snapshot
-rosterbot archive --dry-run           # fetch + print sizes, write nothing
-rosterbot archive --date 2026-06-30   # capture a specific date
-
-# Append today's per-team aggregate HKB dynasty value to the Team Value Store
-# (local .teamvalue/, or S3 analysis/team-values/ when STATE_BUCKET is set).
-# Value is summed per team and broken out into hitter/pitcher x MLB/minors; the
-# series accumulates forward (HKB has no history), one point per day.
-rosterbot team-values --dry-run       # compute + print table, write nothing
-rosterbot team-values --date 2026-07-12  # write today's data into a specific partition
-
-# Render the projection-accuracy data from the grades store (reads S3 when STATE_BUCKET is set, else .analysis/); writes <out>/model.json (--out defaults to report)
-# Also writes <out>/value.json: per-team time series of aggregate HKB value broken
-# out into Total/MLB/Minors/Hitter/Pitcher, read from the Team Value Store.
-# Both JSON sidecars are fetched and rendered natively by the dashboard SPA's
-# "Projections"/"Value" tabs (client-side Chart.js) — projection-site itself no
-# longer renders HTML. model.json headlines a system-comparison panel (4 RoS
-# systems ranked by MAE + overlaid trend lines); the detail view below it is the
-# production system's slice.
-rosterbot projection-site --out report
-rosterbot projection-site --out report --open   # open the rendered model.json in the default handler
-
-# Print league scoring weights
-rosterbot scoring
-
-# Serve the read-only lineup HTTP API locally (for the iOS thin client)
-rosterbot serve
+# Archive today's projections so a later backtest can grade them exactly
+rosterbot optimize --dry-run --snapshot
 ```
 
-Remove `--dry-run` to apply changes.
+Remove `--dry-run` to apply. The optimizer is idempotent: a second run with the same inputs reports "No changes needed."
 
-### Lineup HTTP API (read-only)
+</details>
 
-`GET /v1/lineup/today` returns today's optimized lineup as JSON for the iOS thin
-client. It's **precompute-then-serve**: the hourly `optimize` run publishes the
-JSON to object storage (S3 `lineup/` prefix on AWS, `.lineup/` locally), and the
-endpoint just authenticates and returns those bytes — it never re-runs the
-optimizer or logs into Fantrax, so it's fast and cheap.
+<details>
+<summary><b>Work the wire</b> — <code>waivers</code> · <code>claims</code> · <code>prospects</code> · <code>transactions</code></summary>
 
-Requests must carry `Authorization: Bearer <ROSTERBOT_API_TOKEN>`.
+```bash
+# Statcast-driven free-agent picks (buy-low + confirmed hot streaks)
+rosterbot waivers --dry-run
+rosterbot waivers --dry-run --top 25              # bigger list
+rosterbot waivers --dry-run --positions OF,SP     # filter to slots
+
+# Daily recap of processed CLAIM/DROP moves, valued by HKB
+rosterbot claims --dry-run
+rosterbot claims --dry-run --no-signals           # skip Statcast enrichment
+rosterbot claims --dry-run --drops-min 3000       # only flag drops above an HKB value
+rosterbot claims --dry-run --since 2026-06-01     # one-off historical recap
+
+# Prospect report (call-ups, MiLB breakouts, ranking upgrades)
+rosterbot prospects --dry-run
+
+# Recent league trades, each side valued by HKB
+rosterbot transactions --dry-run
+```
+
+</details>
+
+<details>
+<summary><b>Mind the rules</b> — <code>gs-check</code> · <code>scoring</code></summary>
+
+```bash
+# League-wide games-started violation check (most recently completed period)
+rosterbot gs-check --dry-run
+
+# Print the league's stat → fantasy-point weights
+rosterbot scoring
+```
+
+`gs-check` needs `GS_TRACKING_ENABLED=true` plus Pushover credentials; it's a clean no-op when tracking is off.
+
+</details>
+
+<details>
+<summary><b>Grade the tape</b> — <code>backtest</code> · <code>shadow</code> · <code>grade</code></summary>
+
+```bash
+# Grade last completed matchup week: lineup Gap + projection accuracy
+rosterbot backtest
+rosterbot backtest --dates 2026-04-13:2026-04-19
+rosterbot backtest --skip-projections               # lineup-only, faster
+
+# Compare recency-weighting strategies (YTD vs 14d/30d/decay) by lineup Gap
+rosterbot backtest --recency-experiment --dates 2026-05-01:2026-05-14
+
+# Capture every projection system's lineup projections (read-only) for model comparison.
+# Runs the optimize pipeline once per RoS system in dry-run; the next day's `grade` scores it.
+rosterbot shadow
+rosterbot shadow --dates 2026-06-30
+
+# Materialize projected-vs-actual rows into the Analysis Store (feeds the dashboard + Athena)
+rosterbot grade
+```
+
+</details>
+
+<details>
+<summary><b>Tell the story</b> — <code>recap</code> · <code>recap-site</code></summary>
+
+```bash
+# Sleeper-style HTML recap of the most recently completed matchup week
+rosterbot recap --out /tmp/recap.html
+rosterbot recap --dates 2026-04-20:2026-04-26 --out /tmp/recap.html
+rosterbot recap --out /tmp/recap.html --open        # render + open in browser
+
+# Build the multi-week static site (one HTML per completed week + index.html)
+rosterbot recap-site --out dist
+```
+
+</details>
+
+<details>
+<summary><b>Keep the books</b> — <code>archive</code> · <code>team-values</code> · <code>projection-site</code></summary>
+
+```bash
+# Durable daily snapshot of ephemeral upstream data (HKB, projections, Savant, prospects)
+rosterbot archive --dry-run                         # fetch + print sizes, write nothing
+rosterbot archive --date 2026-06-30
+
+# Append today's per-team aggregate HKB dynasty value to the Team Value Store
+# (broken out hitter/pitcher × MLB/minors; the series accumulates forward, one point per day)
+rosterbot team-values --dry-run
+rosterbot team-values --date 2026-07-12
+
+# Render dashboard data from the stores: writes <out>/model.json (accuracy) + <out>/value.json (dynasty value).
+# The dashboard SPA fetches both and renders them client-side — projection-site writes no HTML.
+rosterbot projection-site --out report
+rosterbot projection-site --out report --open
+```
+
+</details>
+
+<details>
+<summary><b>Serve</b> — <code>serve</code> (read-only lineup API + web dashboard)</summary>
+
+```bash
+# Publish today's lineup JSON without touching your roster, then serve it
+rosterbot optimize --dry-run --publish-lineup       # writes .lineup/lineup-today.json
+ROSTERBOT_API_TOKEN=test ROSTERBOT_SESSION_SECRET=test-secret rosterbot serve
+open http://localhost:8080/                          # dashboard bootstrap screen
+```
+
+See [Lineup API & dashboard](#lineup-api--dashboard) below for the full contract.
+
+</details>
+
+> [!NOTE]
+> A handful of internal plumbing commands (`run-ledger`, `migrate-run-ledger`, `sync-up`, `sync-down`) are invoked by `entrypoint.sh` on AWS and aren't meant for interactive use.
+
+---
+
+## How the optimizer works
+
+### Hitters
+
+Backtracking with pruning finds the slot assignment that maximizes total expected points, respecting position eligibility (`C · 1B · 2B · 3B · SS · INF · OF · UT`) and preferring fewer roster moves when assignments tie. A player whose team isn't playing, who's confirmed out of the real MLB lineup, or who's injured / in the minors contributes 0 points and gets benched.
+
+### Pitchers
+
+Pitchers are scored off probable-starter data. A confirmed SP start gets full value; an SP not listed as probable gets a `0.10×` discount so relievers are preferred for scarce P slots. With `GS_TRACKING_ENABLED=true`, a games-started budget gate fetches the real GS limit live from Fantrax's own per-period config (which scales it whenever a period spans more than one calendar week, e.g. the All-Star break) and keeps only the highest-value starts across the matchup period.
+
+### Projection blending
+
+Projections blend FanGraphs season numbers with recent Fantrax scoring, weighted **dynamically** by sample size. The recent signal is a **trailing 30-day window** for hitters and **season-to-date** for pitchers:
+
+| Games in recent signal | Projection weight | Recent weight |
+|---|--:|--:|
+| Few (≈4)               | 94% | 6%  |
+| Many (≈66)             | 50% | 50% |
+| Stabilized (150+)      | 30% (floor) | 70% |
+
+For **hitters**, only games inside the trailing 30 days count (caps around 26), so recent weight tops out near ~28% while reflecting current form only. The 30-day window replaced unbounded season-to-date after a full-season backtest showed it earns ~1 more realized point per game each day (`backtest --recency-experiment`). For **pitchers**, it's season-to-date games with role-aware stabilization (SP reaches 50/50 at 15 GP, RP at 25 GP, floor 35%) — recency was measured immaterial for pitchers, so they stay on season-to-date. Both require `BLEND_MIN_GP` (default 2) games before recent stats factor in, and fall back to 100% projection when there's no recent data.
+
+Matchup adjustments (opposing-pitcher FIP + platoon splits) layer on top.
+
+---
+
+## Automation
+
+> [!IMPORTANT]
+> As of **2026-06-16**, scheduled jobs run as **ECS Fargate tasks** launched by **EventBridge** (account `476646938644`, `us-west-1`), defined in AWS CDK (Go) under [`infra/`](infra/). There are no GitHub Actions cron workflows. Full operations, schedule mapping, image builds, and the cutover/rollback procedure live in **[`docs/aws-deployment.md`](docs/aws-deployment.md)**.
+
+The bot's game day, ordered by clock (times shown in ET for reading; the authoritative schedule expression is in the last column):
+
+| When (ET) | Job | Command | Schedule (as configured) |
+|---|---|---|---|
+| Hourly, 11a–10p | Set the lineup | `optimize --matchup` | every hour 8am–7pm **PT** |
+| 7:00a | Prospects | `prospects` | 7am ET daily |
+| 8:00a | GS check | `gs-check` | 8am ET daily |
+| 9:00a | Waivers | `waivers` | 9am ET daily |
+| 9:30a | Grade projections | `grade` | 13:30 UTC daily |
+| 10:00a | Claims recap | `claims` | 10am ET daily |
+| 10:00a | Trades | `transactions` | 10am ET daily |
+| 10:00a | Archive | `archive` | 14:00 UTC daily |
+| 10:30a | Team values | `team-values` | 14:30 UTC daily |
+| 11:00a | Dashboard data | `projection-site --out report` | 15:00 UTC daily |
+| 7:00a Mon | Weekly recap site | `recap-site --out dist` | 7am ET Mondays |
+| 7:40p | Shadow capture | `shadow` | 23:40 UTC daily |
+
+`entrypoint.sh` publishes the recap site from `./dist` to `SITE_BUCKET`, and the dashboard data (`report/model.json` + `report/value.json`) into `DASHBOARD_BUCKET`'s `report/` prefix — the same CloudFront distribution as the dashboard SPA. Any job can also be launched on demand as a one-off Fargate task (or via `POST /v1/jobs/{name}` — see below).
+
+For a local dashboard preview, render into the dashboard's own static dir so `serve` picks it up: `rosterbot projection-site --out web/dashboard/report` (delete that dir afterward — it isn't committed).
+
+<details>
+<summary><b>Model auditing (Analysis Store + Athena)</b></summary>
+
+The daily `grade` job materializes projected-vs-actual rows to S3 as NDJSON, queryable in Athena (workgroup `rosterbot`, table `rosterbot_analysis.grades`), partitioned by `dt` and by `system` (the projection system that produced each projection — captured daily by `shadow`).
+
+```sql
+-- Projection accuracy by position since June, for the production system
+SELECT bucket, count(*) n, avg(abs(diff)) mae, avg(diff) bias
+FROM rosterbot_analysis.grades
+WHERE dt >= '2026-06-01' AND system = 'depthcharts-ros'
+GROUP BY bucket ORDER BY mae DESC;
+
+-- Head-to-head: which base projection system is most accurate?
+SELECT system, count(*) n, avg(abs(diff)) mae, avg(diff) bias
+FROM rosterbot_analysis.grades
+WHERE dt >= '2026-06-01'
+GROUP BY system ORDER BY mae ASC;
+```
+
+</details>
+
+---
+
+## Lineup API & dashboard
+
+### Read-only lineup API
+
+`GET /v1/lineup/today` returns today's optimized lineup as JSON for the iOS thin client. It's **precompute-then-serve**: the hourly `optimize` run publishes the JSON to object storage (S3 `lineup/` prefix on AWS, `.lineup/` locally), and the endpoint just authenticates and returns those bytes — it never re-runs the optimizer or logs into Fantrax.
 
 ```jsonc
 {
@@ -164,297 +346,170 @@ Requests must carry `Authorization: Bearer <ROSTERBOT_API_TOKEN>`.
   "slots": [
     { "slot": "C",  "player": { "id": "...", "name": "...", "team": "NYY",
                                 "pos": ["C"], "proj": 3.4, "status": "OK" } },
-    { "slot": "BN", "player": null }       // empty/open slots are null
+    { "slot": "BN", "player": null }        // empty/open slots are null
   ],
   "projected_points": 41.7,
   "warnings": ["Vlad Guerrero benched in real lineup"]
 }
 ```
 
-`player.status` is one of `OK`, `LOCKED` (game in progress/final), or `BENCHED`
-(out of the real MLB starting lineup).
+`player.status` is `OK`, `LOCKED` (game in progress/final), or `BENCHED` (out of the real MLB lineup). Requests carry `Authorization: Bearer <ROSTERBOT_API_TOKEN>`. On AWS it's a Go Lambda behind a Function URL (`LineupApiUrl` stack output; token at SSM `/rosterbot/ROSTERBOT_API_TOKEN`).
 
-**Run it locally and curl it before deploying:**
+<details>
+<summary><b>Control endpoints (AWS only)</b> — run ledger + on-demand job triggering</summary>
 
-```bash
-# 1. Publish today's lineup JSON without touching your real roster.
-#    (--publish-lineup makes dry-run write .lineup/; non-dry-run always publishes.)
-go run . optimize --dry-run --publish-lineup
-
-# 2. Start the server (needs a token + a session secret; any strings work locally).
-ROSTERBOT_API_TOKEN=test ROSTERBOT_SESSION_SECRET=test-secret go run . serve   # listens on :8080, reads .lineup/
-
-# 3. In another shell:
-curl -H "Authorization: Bearer test" localhost:8080/v1/lineup/today   # 200 + JSON
-curl localhost:8080/v1/lineup/today                                   # 401
-```
-
-On AWS it's deployed as a Go Lambda behind a Function URL (see
-[`docs/aws-deployment.md`](docs/aws-deployment.md)); the URL is a stack output
-(`LineupApiUrl`) and the token lives in SSM at `/rosterbot/ROSTERBOT_API_TOKEN`.
-
-#### Control endpoints (AWS only)
-
-The same Lambda also exposes a run ledger and on-demand job triggering (these
-return `501` from local `serve`, which has no ECS):
+The same Lambda exposes a run ledger and job triggering (these return `501` from local `serve`, which has no ECS):
 
 | Method & path | Purpose |
 |---|---|
-| `GET /v1/runs` | Recent job runs (scheduled + manual), newest first: `{id, command, status, exit_code, started_at, ended_at, trigger}`. `status` ∈ `RUNNING`/`SUCCESS`/`FAILED`. |
+| `GET /v1/runs` | Recent runs (scheduled + manual), newest first: `{id, command, status, exit_code, started_at, ended_at, trigger}`. `status` ∈ `RUNNING`/`SUCCESS`/`FAILED`. |
 | `GET /v1/runs/{id}` | One run plus `log_tail` (captured output, populated on failures). |
-| `GET /v1/runs/{id}/progress` | Live phase progress for an in-flight run: `{phase, pct, phases:[{name,state}], status, updated_at}`. `404` when the run has no progress recorded (see below) — the dashboard falls back to an indeterminate bar. |
-| `POST /v1/jobs/{name}` | Launch a job as a Fargate task (async). Returns `202 {id, command, status:"RUNNING"}`; poll `/v1/runs` for completion. Allowlist: `optimize, waivers, prospects, claims, gs-check, transactions, recap-site, backtest, grade`. |
+| `GET /v1/runs/{id}/progress` | Live phase progress for an in-flight run: `{phase, pct, phases:[…], status, updated_at}`. `404` when a run has no progress recorded. |
+| `POST /v1/jobs/{name}` | Launch a job as a Fargate task (async). Returns `202`; poll `/v1/runs`. Allowlist: `optimize, waivers, prospects, claims, gs-check, transactions, recap-site, backtest, grade`. |
 
-Run *status* (`RUNNING`/`SUCCESS`/`FAILED`) always comes from the run ledger
-above — `/v1/runs/{id}/progress` only adds phase detail on top of it, it never
-replaces it. Today only `optimize` emits phases (`internal/progress`'s
-`Recorder` hook persists each phase transition to `runs/<id>/progress.json` —
-S3 via `s3lineup.NewProgress` when `STATE_BUCKET` is set, else a local file
-under `.lineup/progress/`); the other 8 allowlisted jobs have no progress file,
-so their run shows as a plain "RUNNING" hero with an indeterminate bar instead
-of a phased one.
+Run **status** always comes from the run ledger; `/progress` only adds phase detail on top of it. Today only `optimize` emits phases — the other 8 allowlisted jobs show an indeterminate bar.
 
-The run ledger is written by `entrypoint.sh` (one S3 object per run under the
-`runledger/` prefix, via the internal `run-ledger` command) so it covers both
-scheduled and API-triggered runs. **Triggered jobs run for real** — `POST
-/v1/jobs/optimize` applies your lineup and sends Pushover; gate it behind a
-confirmation in any client.
+> [!WARNING]
+> Triggered jobs run **for real** — `POST /v1/jobs/optimize` applies your lineup and sends Pushover. Gate it behind a confirmation in any client.
 
-### Web Dashboard
+</details>
 
-A private, single-user web UI for the API above: today's lineup, a form to
-trigger any of the 9 allowlisted jobs, run history with live status, and a
-generic viewer for each job's typed output. The "Projections" and "Value" tabs
-render natively from `projection-site`'s `model.json`/`value.json` sidecars
-(client-side Chart.js, no iframe, no server-rendered HTML); the recap site
-stays a plain external link since it's still its own self-contained static
-site. Static files live in `web/dashboard/` (no build step — plain ES modules)
-and deploy via the existing CodeBuild pipeline to its own CloudFront
-distribution (`DashboardUrl` in the CDK stack outputs).
+<details>
+<summary><b>Web dashboard</b> — private SPA, passkey auth, live run status</summary>
 
-Triggering a job from the dashboard hands you straight into a **live "Now
-Running" hero**: a phased progress bar (polling `GET
-/v1/runs/{id}/progress`) for `optimize`, an indeterminate bar for any of the
-other 8 jobs (they emit no progress file), plus an elapsed-time clock. The
-Runs nav item gets a live dot while anything is in flight, and finishing a
-watched run — or any run you didn't trigger yourself this session — fires a
-completion toast (success/failure) once its ledger status leaves `RUNNING`.
-Job status itself is always read from the run ledger (`GET /v1/runs`); the
-progress endpoint only supplies phase detail on top of it, and a 404 there
-just means "no phase detail available," not "not running."
+A private, single-user web UI over the API: today's lineup, a form to trigger any of the 9 allowlisted jobs, run history with live status, and a viewer for each job's typed output. The **Projections** and **Value** tabs render natively from `projection-site`'s `model.json` / `value.json` (client-side Chart.js, no iframe). Static files live in [`web/dashboard/`](web/dashboard/) (no build step — plain ES modules) and deploy to their own CloudFront distribution (`DashboardUrl` stack output).
 
-Auth is a **passkey** (WebAuthn), not the token. The first time the dashboard
-has zero passkeys registered, it shows a bootstrap screen instead of a login
-form: paste `ROSTERBOT_API_TOKEN` there once to register your first passkey
-(Face ID / Touch ID / a hardware key), and every visit after that is a normal
-passkey login — no token involved. A signed, stateless session cookie (HMAC,
-`ROSTERBOT_SESSION_SECRET` locally / SSM `/rosterbot/DASHBOARD_SESSION_SECRET`
-on AWS) is what the browser actually carries on every `/v1/*` call after
-login; there's no server-side session store. The token still works as a
-Bearer header on direct API calls (CLI/scripting) and doubles as the
-break-glass/recovery credential — paste it into the bootstrap screen again if
-every passkey is ever lost, and it reappears since "zero passkeys
-registered" is the only thing that triggers it. The Passkeys panel in the
-dashboard lets you register additional devices or revoke old ones once
-logged in.
+Triggering a job hands you into a live **"Now Running" hero**: a phased progress bar for `optimize`, an indeterminate bar for the other jobs, and an elapsed clock. Finishing a watched run fires a success/failure toast.
 
-**Run it locally before deploying:**
+**Auth is a passkey (WebAuthn), not the token.** On first visit with zero passkeys registered, a bootstrap screen asks for `ROSTERBOT_API_TOKEN` once to register your first passkey (Face ID / Touch ID / hardware key); every visit after is a normal passkey login. A signed, stateless session cookie (HMAC; `ROSTERBOT_SESSION_SECRET` locally, SSM `/rosterbot/DASHBOARD_SESSION_SECRET` on AWS) carries each `/v1/*` call — no server-side session store. The token still works as a Bearer header for CLI/scripting and doubles as the break-glass credential.
 
 ```bash
-go run . optimize --dry-run --publish-lineup   # writes .lineup/lineup-today.json
-ROSTERBOT_API_TOKEN=test ROSTERBOT_SESSION_SECRET=test-secret go run . serve
-open http://localhost:8080/                    # bootstrap screen: paste "test", register a passkey
+# Run the dashboard + API from one local server (the same split CloudFront does in prod)
+rosterbot optimize --dry-run --publish-lineup
+ROSTERBOT_API_TOKEN=test ROSTERBOT_SESSION_SECRET=test-secret rosterbot serve
+open http://localhost:8080/        # bootstrap: paste "test", register a passkey
 ```
 
-`rosterbot serve --web <dir>` serves the dashboard's static files at `/` and
-the API at `/v1/*` from the same local server — the same split CloudFront
-does in production — so the dashboard needs no environment-specific
-configuration and no CORS handling anywhere. WebAuthn is configured for RPID
-`localhost`, so passkeys work against `http://localhost:8080` in real
-browsers (treated as a secure context) with no HTTPS or mocking required.
-Job triggering returns `501` locally (no ECS); everything else (lineup, run
-history, output, activity feed, passkey registration/login) works against
-real local files under `.lineup/`.
+`serve --web <dir>` serves the static files at `/` and the API at `/v1/*`. WebAuthn is configured for RPID `localhost`, so passkeys work against `http://localhost:8080` with no HTTPS. Job triggering returns `501` locally (no ECS); everything else works against real local files under `.lineup/`.
 
-## How the Optimizer Works
+</details>
 
-### Hitter Optimization
+---
 
-The hitter optimizer uses backtracking with pruning to find the slot assignment that maximizes total expected points. It respects position eligibility (C, 1B, 2B, 3B, SS, INF, OF, UT) and prefers fewer roster moves when assignments tie.
+## Configuration
 
-Players whose team isn't playing, who are confirmed out of the real-life MLB starting lineup, or who are injured/in the minors contribute 0 points and get benched.
+Required (via `.env` locally, SSM `/rosterbot/*` on AWS): `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
 
-### Pitcher Optimization
+Optional:
 
-Pitchers are scored based on probable starter data. SPs confirmed as starters get full value. SPs not listed as probable starters get a 0.10x discount so RPs are preferred for limited P slots. When GS tracking is enabled (`GS_TRACKING_ENABLED=true`), the GS budget gate fetches the real games-started limit directly from Fantrax's own per-period configuration (which scales the limit whenever a period spans more than one calendar week, e.g. the All-Star break) and allocates starts proportionally across the matchup period, keeping the highest-value starters.
-
-### Projection Blending
-
-Projections blend FanGraphs season projections with recent Fantrax scoring data using games-based dynamic weights. The recent signal is a **trailing 30-day window** for hitters and **season-to-date** for pitchers:
-
-| Games in recent signal | Proj. Weight | Recent Weight |
+| Env var | Default | Description |
 |---|---|---|
-| Few (4) | 94% | 6% |
-| Many (66) | 50% | 50% |
-| Stabilized (150+) | 30% (floor) | 70% |
+| `GS_TRACKING_ENABLED` | `false` | Enables games-started tracking (optimizer budget + `gs-check`). Real min/max are always fetched live from Fantrax — never a fixed number. |
+| `BLEND_MIN_GP` | `2` | Minimum games played before recent stats blend into a projection. |
+| `PROSPECT_ROLLING_DAYS` | `14` | Days of MiLB stats used for breakout detection. |
+| `PROSPECT_MIN_GAMES` | `8` | Minimum games for prospect breakout eligibility. |
+| `PROSPECT_RANK_CACHE_HOURS` | `168` | Hours to cache prospect rankings. |
+| `PROSPECT_UPGRADE_RANK_THRESHOLD` | `20` | Prospect rank threshold for upgrade alerts. |
+| `PUSHOVER_USER_KEY` | — | Personal channel (trades, lineup, ops alerts). |
+| `PUSHOVER_GROUP_KEY` | — | Group channel (GS violation alerts). |
+| `PUSHOVER_API_TOKEN` | — | Pushover application token. |
 
-For **hitters**, "games in recent signal" counts only games within the trailing 30 days (caps around 26), so the recent weight in practice tops out near ~28% while reflecting recent form only. The 30-day window replaced unbounded season-to-date after a full-season backtest showed it produces ~1 more realized point per game each day (`backtest --recency-experiment`). For **pitchers**, it is season-to-date games with role-aware stabilization (SP reaches 50/50 at 15 GP, RP at 25 GP, base floor 35%); the recency choice was measured to be immaterial for pitchers, so they stay on season-to-date. Both require a minimum games-played (`BLEND_MIN_GP`, default 2) before recent stats factor in, and fall back to 100% projection when no recent data is available.
-
-Matchup adjustments (opposing pitcher FIP + platoon splits) are layered on top.
-
-## Optional Configuration
-
-| Env Var | Default | Description |
-|---|---|---|
-| `GS_TRACKING_ENABLED` | false (disabled) | Enables games-started tracking — used by optimizer (weekly GS budget) and gs-check (violation detection). The actual min/max are always fetched live from Fantrax's own per-period configuration, never a fixed number |
-| `PROSPECT_ROLLING_DAYS` | 14 | Days of MiLB stats for breakout detection |
-| `PROSPECT_MIN_GAMES` | 8 | Minimum games for prospect breakout eligibility |
-| `PROSPECT_RANK_CACHE_HOURS` | 168 | Hours to cache prospect rankings |
-| `PROSPECT_UPGRADE_RANK_THRESHOLD` | 20 | Prospect rank threshold for upgrade alerts |
-| `PUSHOVER_USER_KEY` | — | Pushover user key for notifications (trades, lineup) |
-| `PUSHOVER_GROUP_KEY` | — | Pushover group key for GS violation alerts |
-| `PUSHOVER_API_TOKEN` | — | Pushover API token for notifications |
-| `BACKTEST_ARCHIVE` | — | Set to `1` to archive every `optimize` run's projections to `.backtest/snapshots/` for later grading (same as `--archive-projections`) |
+---
 
 ## Caching
 
-Network calls (Fantrax, MLB statsapi, FanGraphs, Baseball Savant, HKB,
-MLB Pipeline) are cached on disk under `.cache/` as JSON files. File
-names follow `<source>-<entity>-<scope>.json` — for example
-`fantrax-pitcher-gs-<teamID>-<period>.json` or
-`mlb-schedule-<YYYY-MM-DD>.json`. Three TTL tiers cover most data:
+Network calls (Fantrax, MLB statsapi, FanGraphs, Baseball Savant, HKB, MLB Pipeline) are cached on disk under `.cache/` as JSON, named `<source>-<entity>-<scope>.json` (e.g. `fantrax-pitcher-gs-<teamID>-<period>.json`). On AWS the same cache is backed live by S3 under the `cache/` prefix. Three TTL tiers cover most data:
 
-- **30 days** for past-period data that's immutable once a scoring
-  period closes (per-period roster snapshots, recent stats, pitcher
-  game starts, MLB schedules for past dates, MLB player IDs).
-- **15 minutes** for "today, drifts during the day" data (current
-  roster, FA pool, current period, pending/recent trades). Long
-  enough to make hourly GHA reruns and local-dev iteration cheap;
-  short enough that intra-day waiver pickups show up promptly.
-- **7 days** for season-invariant config (slot counts, scoring
-  weights, season date range).
-
-Provider-specific caches use their own TTLs: FanGraphs Projections (12 h),
-MLB handedness (7 d), Baseball Savant CSVs (12 h), HKB rankings (8 h),
-prospect rankings (`PROSPECT_RANK_CACHE_HOURS`, default 168 h),
-in-season MiLB game logs (1 h).
-
-`--no-cache` bypasses every layer for that command run, refetching
-fresh data from each upstream. Useful if you suspect stale data or
-want to validate that a cache key is being populated correctly.
-
-The cache is just a directory — `rm -rf .cache/` is a safe reset.
-The next run repopulates everything on demand. Don't delete `.fantrax-cache/` (that's the auth session cookie, not
-the data cache; deleting it triggers a chromedp browser login on the
-next run). On AWS, `.fantrax-cache/` is synced to S3 under `session/` by
-`entrypoint.sh`, so the first task run after a stale cookie may still
-need a browser login.
-
-## Automation
-
-> **Now runs on AWS.** As of 2026-06-16 the scheduled jobs run as **ECS Fargate tasks**
-> launched by **EventBridge** schedules (account `476646938644`, `us-west-1`), not GitHub
-> Actions. Infra is AWS CDK (Go) under `infra/`; operations, schedules, and the cutover/
-> rollback procedure live in **[`docs/aws-deployment.md`](docs/aws-deployment.md)**. The
-> recap site is served from CloudFront. The table below documents the current job cadence
-> in the AWS deployment.
-
-| Job | Schedule | Command |
+| Tier | TTL | For |
 |---|---|---|
-| `optimize --matchup` | Every hour 8am-7pm PT | `optimize --matchup` |
-| `gs-check` | 8am ET daily | `gs-check` |
-| `transactions` | 10am ET daily | `transactions` |
-| `prospects` | 7am ET daily | `prospects` |
-| `waivers` | 9am ET daily | `waivers` |
-| `claims` | 10am ET daily | `claims` |
-| `recap-site` | 7am ET Mondays | `recap-site --out dist` |
-| `shadow` | daily 23:40 UTC | `shadow` |
-| `grade` | daily 13:30 UTC | `grade` |
-| `projection-site` | daily 15:00 UTC | `projection-site --out report` |
-| `archive` | daily 14:00 UTC | `archive` |
-| `team-values` | daily 14:30 UTC | `team-values` |
+| Past-period | **30 days** | Immutable once a scoring period closes — per-period roster snapshots, recent stats, pitcher GS, past-date MLB schedules, MLB player IDs. |
+| Today | **15 minutes** | Drifts during the day but fine to reuse hourly — current roster, FA pool, current period, pending/recent trades. |
+| Stable | **7 days** | Season-invariant config — slot counts, scoring weights, season date range. |
 
-Scheduled jobs can also be started manually by running the same command in a Fargate task.
-Required repository secrets for local runs: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`,
-`FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
+Provider-specific TTLs sit outside the tiers: **FanGraphs projections 24 h**, **Baseball Savant CSVs 24 h** (both single exported constants matching the once-daily upstream cadence), MLB handedness 7 d, HKB rankings 8 h, prospect rankings 168 h (`PROSPECT_RANK_CACHE_HOURS`), in-season MiLB game logs 1 h.
 
-The recap site is published from `./dist` to `SITE_BUCKET` by `entrypoint.sh`.
-The projection dashboard and team-value tracker are published from `./report` into `DASHBOARD_BUCKET`'s `report/` prefix by `entrypoint.sh` — same bucket/CloudFront distribution as the private dashboard SPA, as `report/model.json` and `report/value.json`, fetched and rendered natively by the SPA's "Projections"/"Value" tabs (no HTML is written to that prefix anymore).
+`--no-cache` bypasses every layer for that run. The cache is just a directory — `rm -rf .cache/` (or `make clean-cache`) is a safe reset that repopulates on demand.
 
-For local preview, render into the dashboard's own static dir so `go run . serve` serves it too: `rosterbot projection-site --out web/dashboard/report` (delete `web/dashboard/report/` afterward so it isn't committed).
-There is no GitHub Pages workflow in the current deployment.
+> [!CAUTION]
+> Don't delete `.fantrax-cache/` — that's the auth **session cookie**, not the data cache. Deleting it triggers a full chromedp browser login on the next run. On AWS it's synced to S3 under `session/`.
 
-### Model auditing (Analysis Store)
-
-The daily `grade` job materializes projected-vs-actual rows to S3 as NDJSON, queryable in Athena (workgroup `rosterbot`, table `rosterbot_analysis.grades`). Rows are partitioned by `dt` and `system` (the projection system that produced the projection — captured daily by `shadow`). Example — projection accuracy by position since June, for the production system:
-
-```sql
-SELECT bucket, count(*) n, avg(abs(diff)) mae, avg(diff) bias
-FROM rosterbot_analysis.grades
-WHERE dt >= '2026-06-01' AND system = 'depthcharts-ros'
-GROUP BY bucket ORDER BY mae DESC;
-```
-
-Compare projection systems head-to-head (which base source is most accurate):
-
-```sql
-SELECT system, count(*) n, avg(abs(diff)) mae, avg(diff) bias
-FROM rosterbot_analysis.grades
-WHERE dt >= '2026-06-01'
-GROUP BY system ORDER BY mae ASC;
-```
-
-All workflows support `workflow_dispatch` for manual triggering. Required repository secrets: `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
-
-The recap workflow uses `actions/deploy-pages` and needs `permissions: pages: write, id-token: write` (already in the file). No HTML is committed to the repo. To enable Pages: repo Settings → Pages → Source = **"GitHub Actions"**. The site root (`https://<owner>.github.io/<repo>/`) serves the latest matchup week, and the dropdown in the header switches between past weeks (`week-01.html`, `week-02.html`, …).
+---
 
 ## Development
 
 ```bash
-make test         # run all unit tests
-make dry-run      # quick local test run (optimize --dry-run only)
-make clean-cache  # rm -rf .cache/  (cold-pass baseline before make run-all)
-make run-all      # exercise every CLI command in dry-run / read-only mode
+make test         # all unit tests — no credentials needed (everything is mocked)
+make dry-run      # quick local optimize --dry-run
+make clean-cache  # rm -rf .cache/ (cold-pass baseline)
+make run-all      # exercise every command in dry-run / read-only, with timings + cache size
 ```
 
-Tests require no credentials — all network dependencies are mocked via interfaces or test servers.
-
-`make run-all` iterates every command (scoring, optimize, prospects,
-gs-check, transactions, waivers, backtest, recap, recap-site) with
-`time` on each step, prints the final `.cache/` size, and continues
-on errors so one broken step doesn't abort the sweep. It's the
-single-command end-to-end smoke test and the easiest way to observe
-cache behavior — stderr `cache hit:` / `cache miss:` lines tell you
-what each command touched. Run cold-then-warm to see the speedup:
+`make run-all` is the canonical end-to-end smoke test: it iterates every command with `time` on each step, prints the final `.cache/` size, and continues on errors so one broken step doesn't abort the sweep. Run cold-then-warm to see the cache speedup:
 
 ```bash
 make clean-cache && make run-all 2>&1 | tee /tmp/cold.log
 make run-all 2>&1 | tee /tmp/warm.log
 ```
 
-**When adding a new CLI command, append a corresponding line to the
-`run-all` recipe in the `Makefile`** so the smoke test stays
-comprehensive. The convention is: dry-run mode if the command has
-side effects, plain invocation otherwise; output written to
-`/tmp/<name>` for anything that produces files.
+> [!NOTE]
+> `lambda/`, `buildnotify/`, and `infra/` are **separate Go modules** — the root `go build ./...` doesn't descend into them. Run `make build-modules` after touching any of them (or after a dependency bump); `make build` runs it automatically. When you add a new top-level command, append a line to the `run-all` recipe so the smoke test stays complete.
+
+---
 
 ## Architecture
 
+One binary (`main.go`), Cobra subcommands (`cmd/`), and a set of focused internal packages. Leaf/data packages have no dependencies on the domain logic above them, which keeps the import graph acyclic and the pieces individually testable.
+
 ```
-cmd/              CLI commands (Cobra)
+cmd/                    CLI commands (Cobra) + AWS entrypoint plumbing
 internal/
-  config/         env var loading + validation
-  fantrax/        Fantrax API client (public + authenticated)
-  projections/    FanGraphs projections, blending, park/matchup adjustments
-  optimizer/      pure-function lineup optimization (hitters + pitchers)
-  schedule/       MLB Stats API (schedule, lineups, probable pitchers)
-  prospects/      minor league prospect monitoring
-  waivers/        Statcast-driven MLB free-agent picks (buy-low + hot streaks)
-  claims/         daily league-wide waiver/FA claims recap with HKB valuation + audit ledger
-  gscheck/        league-wide GS violation checker
-  roster/         roster hygiene alerts
-  notify/         Pushover push notifications
-  backtest/       grade past lineup moves + projection accuracy
-  analysis/       Analysis Store: GradeRow, Writer/Reader, NDJSON helpers
-  report/         pure aggregation of grades → Model + HTML dashboard render
+  config/               env-var loading + validation
+  positions/            Fantrax position-ID semantics (single source of truth)
+  scoring/              stat → fantasy-point algebra (pure, zero-dep leaf)
+  playername/           name → MLBAM ID resolution
+  cache/                generic TTL FileCache[T] over a pluggable Store seam
+  cachestore/s3store/   S3 adapter for the cache Store
+  ndjsonstore/          shared NDJSON date-partitioned store plumbing (+ s3ndjson)
+
+  fantrax/              Fantrax API client (public read + authenticated writes)
+  schedule/             MLB Stats API (schedule, lineups, probable pitchers)
+  projections/          FanGraphs projections, blending, park/matchup adjustments
+  statcast/             Baseball Savant data + buy-low / hot signal engine
+  hkb/                  HKB dynasty rankings
+  optimizer/            pure-function lineup optimization (hitters + pitchers)
+  lineuprun/            shared orchestration engine behind optimize + shadow
+  progress/             live run-progress recording (phased dashboard hero)
+
+  waivers/              Statcast-driven free-agent picks
+  claims/               league-wide CLAIM/DROP recap + HKB valuation + ledger
+  transactions/         trade monitor with HKB valuations
+  prospects/            minor-league prospect monitoring
+  gscheck/              league-wide games-started violation checker
+  roster/               roster-hygiene alerts
+
+  backtest/             grade past lineups + projection accuracy
+  analysis/             Analysis Store: GradeRow, Writer/Reader (NDJSON)
+  report/               pure aggregation of grades → dashboard Model (JSON)
+  teamvalue/            Team Value Store: per-team dynasty value over time
+  valuereport/          pure aggregation of team values → dashboard Model (JSON)
+  recap/                Sleeper-style weekly HTML recaps + WP model
+  archive/              durable daily snapshots of ephemeral upstream data
+
+  lineupapi/            read-only lineup + control HTTP handlers (+ s3lineup)
+  statesync/            S3 ⇄ local state sync helpers
+  teams/                team metadata (names, logos)
+  notify/               Pushover push notifications
 ```
+
+---
+
+## Docs
+
+| Doc | What's inside |
+|---|---|
+| [`CONTEXT.md`](CONTEXT.md) | Domain glossary — the project's canonical vocabulary. |
+| [`docs/aws-architecture.md`](docs/aws-architecture.md) | The AWS deployment at a glance (CDK, EventBridge, S3, CloudFront). |
+| [`docs/aws-deployment.md`](docs/aws-deployment.md) | Operations runbook — schedules, image builds, cutover/rollback. |
+| [`docs/ios-api-contract.md`](docs/ios-api-contract.md) | The thin-client HTTP contract served by the Lambda. |
+| [`docs/adr/`](docs/adr/) | Architecture decisions — [S3-not-DB for the cache](docs/adr/0001-s3-not-db-for-cache.md), [Team Value Store accumulates forward](docs/adr/0002-team-value-store-accumulates-forward.md). |
+| [`CLAUDE.md`](CLAUDE.md) · [`AGENTS.md`](AGENTS.md) | Contributor / agent guides (build commands, conventions, issue tracking). |
