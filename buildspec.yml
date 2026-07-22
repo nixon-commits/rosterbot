@@ -11,11 +11,8 @@ version: 0.2
 # first build that creates those resources also publishes the static site.
 env:
   variables:
-    # infra/go.mod requires Go 1.25; the build image's own golang runtimes top out
-    # below that historically, and pinning the exact patch here (rather than
-    # selecting an image runtime) keeps the toolchain identical across image bumps.
-    GO_VERSION: "1.25.0"
-    # Match the cdk library version the infra module builds against.
+    # Go is selected via runtime-versions below, not downloaded here. Match the cdk
+    # library version the infra module builds against.
     CDK_VERSION: "2.1128.1"
 phases:
   install:
@@ -29,12 +26,15 @@ phases:
       # Quoted: YAML would read a bare 3.10 as the float 3.1 and select the wrong
       # runtime. 3.12 happens to survive unquoted; the next edit might not.
       python: "3.12"
+      # 1.26, not infra/go.mod's 1.25 floor: cdk deploy locally bundles the lambda/
+      # + buildnotify/ GoFunctions with this host go, and both require go 1.26.1 --
+      # 1.26 satisfies every module the host builds (infra too) without a toolchain
+      # auto-download. The AL2023 image exposes golang 1.20-1.26 (see infra.go), so
+      # pin it like nodejs/python instead of inheriting a default that shifts on EOL.
+      golang: "1.26"
     commands:
-      # cdk's app command is `go run infra.go`, so the build host needs Go 1.25
-      # and the cdk CLI (neither present by default on this image).
-      - curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz" -o /tmp/go.tgz
-      - rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tgz
-      - export PATH="/usr/local/go/bin:${PATH}"
+      # cdk's app command is `go run infra.go`; the golang runtime above provides Go.
+      # The cdk CLI is not on the image, so install it here.
       - go version
       - npm install -g "aws-cdk@${CDK_VERSION}"
       - cdk --version
@@ -53,7 +53,6 @@ phases:
       # newly-created bucket/distribution available to this very first build;
       # CodeBuild environment variables would not update until the next build.
       - |
-        export PATH="/usr/local/go/bin:${PATH}"
         cd infra && cdk deploy -c enableBuild=true --require-approval never --outputs-file ../cdk-outputs.json
         cd ..
       # Publish the static dashboard on every build, including the first build
