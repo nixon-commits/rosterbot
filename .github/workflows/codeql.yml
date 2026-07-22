@@ -46,7 +46,12 @@ jobs:
         - language: actions
           build-mode: none
         - language: go
-          build-mode: autobuild
+          # manual (not autobuild) so we can build the nested Go modules too:
+          # lambda/, buildnotify/ and infra/ each have their own go.mod, so a
+          # root `go build ./...` (what autobuild runs) never descends into them
+          # and CodeQL scanned 0 of their files (rosterbot-fjd). See the build
+          # step below, which mirrors `make build-modules`.
+          build-mode: manual
         - language: javascript-typescript
           build-mode: none
         # CodeQL supports the following values keywords for 'language': 'actions', 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'rust', 'swift'
@@ -61,11 +66,18 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # Add any setup steps before running the `github/codeql-action/init` action.
-    # This includes steps like installing compilers or runtimes (`actions/setup-node`
-    # or others). This is typically only required for manual builds.
-    # - name: Setup runtime (example)
-    #   uses: actions/setup-example@v1
+    # Setup steps must run BEFORE `github/codeql-action/init` (which installs the
+    # build tracer). The Go matrix entry uses build-mode: manual, so we install
+    # the toolchain ourselves. cache: false is deliberate — a warm actions/setup-go
+    # build cache can leave `go build` a no-op, starving the CodeQL tracer of the
+    # compiler invocations it extracts from. go-version-file reads the root go.mod
+    # (1.26.x); that toolchain also builds infra/ (go 1.25) fine.
+    - name: Set up Go
+      if: matrix.language == 'go'
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: false
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
@@ -94,16 +106,26 @@ jobs:
     # to build your code.
     # ℹ️ Command-line programs to run using the OS shell.
     # 📚 See https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepsrun
-    - name: Run manual build steps
+    # Build the root module plus every nested Go module so the CodeQL tracer
+    # extracts all four. Nested modules (lambda/, buildnotify/, infra/) each carry
+    # their own go.mod, so a root `go build ./...` never descends into them — the
+    # same blind spot CLAUDE.md documents for `go vet ./...` / `go mod tidy`. The
+    # nested-module loop mirrors `make build-modules` (discovers go.mod dirs
+    # dynamically so a future 4th module is covered automatically) but builds
+    # natively rather than cross-compiling. Tests are excluded (go build ./...),
+    # matching what autobuild scanned before.
+    - name: Build Go modules (root + nested) for CodeQL tracing
       if: matrix.build-mode == 'manual'
       shell: bash
       run: |
-        echo 'If you are using a "manual" build mode for one or more of the' \
-          'languages you are analyzing, replace this with the commands to build' \
-          'your code, for example:'
-        echo '  make bootstrap'
-        echo '  make release'
-        exit 1
+        set -euo pipefail
+        echo "=== building root ==="
+        go build ./...
+        for d in $(find . -name go.mod -not -path './.git/*' -not -path './.claude/*' \
+            | grep -v '^\./go\.mod$' | xargs -n1 dirname | sort); do
+          echo "=== building $d ==="
+          ( cd "$d" && go build ./... )
+        done
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4
