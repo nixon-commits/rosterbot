@@ -26,7 +26,7 @@ const (
 // the blended value AND the blend weight (driven by games-in-window) track
 // recent form rather than the whole season. Past periods are cached at 30d TTL,
 // so warm runs only refetch the last day or two.
-func windowedHitterRecent(ft *fantrax.Client, teamID string, today, seasonStart time.Time, noCache bool) (map[string]fantrax.RecentStat, error) {
+func windowedHitterRecent(ft recentStatsClient, teamID string, today, seasonStart time.Time, noCache bool) (map[string]fantrax.RecentStat, error) {
 	if seasonStart.IsZero() {
 		s, _, err := ft.GetSeasonDateRange()
 		if err != nil {
