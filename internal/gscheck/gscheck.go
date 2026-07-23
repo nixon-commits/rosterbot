@@ -80,7 +80,16 @@ type teamGS struct {
 }
 
 // RunGSCheck checks all teams for GS violations in the most recent scoring period.
-func RunGSCheck(ft *fantrax.Client, cfg config.Config) error {
+// GSCheckClient is the narrow subset of *fantrax.Client that RunGSCheck needs,
+// isolated for testability (mirrors waivers.FantraxClient). *fantrax.Client
+// satisfies it implicitly — internal/fantrax is not modified.
+type GSCheckClient interface {
+	GetScoringPeriodsAndTeams() ([]fantrax.ScoringPeriod, map[string]string, map[string]string, error)
+	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
+	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
+}
+
+func RunGSCheck(ft GSCheckClient, cfg config.Config) error {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	fmt.Printf("Running GS check for date: %s\n", today.Format("2006-01-02"))
 
