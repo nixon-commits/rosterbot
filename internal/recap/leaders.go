@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/positions"
 	"github.com/nixon-commits/rosterbot/internal/statcast"
@@ -38,11 +37,17 @@ type pitchSeason struct {
 	ER  float64
 }
 
+// leadersClient is the fantrax subset buildLeaders needs (the rest of the
+// leaderboard data comes from statcast + statsapi, not fantrax).
+type leadersClient interface {
+	GetFullPlayerPool() ([]models.PoolPlayer, error)
+}
+
 // buildLeaders produces the league wOBA (hitters) and FIP (pitchers)
 // leaderboards across all rostered players. Soft-fails to nil on any data
 // error — the leaderboards are nice-to-have, the rest of the recap still
 // renders.
-func buildLeaders(ft *fantrax.Client, year int, today time.Time, cacheDir string, cacheTTL time.Duration, n int) (wobaLeaders, fipLeaders []LeaderLine) {
+func buildLeaders(ft leadersClient, year int, today time.Time, cacheDir string, cacheTTL time.Duration, n int) (wobaLeaders, fipLeaders []LeaderLine) {
 	pool, err := ft.GetFullPlayerPool()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: league leaders (player pool): %v\n", err)

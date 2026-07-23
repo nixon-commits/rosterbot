@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/schedule"
 )
 
@@ -28,7 +27,7 @@ type SiteOptions struct {
 // `week-NN.html`, plus duplicates the latest week as `index.html` so the
 // site root serves the most recent recap. Each rendered page includes a
 // dropdown navigation linking to all other completed weeks.
-func RunSite(ft *fantrax.Client, sopts SiteOptions) error {
+func RunSite(ft SiteClient, sopts SiteOptions) error {
 	if sopts.OutDir == "" {
 		return fmt.Errorf("OutDir is required")
 	}
@@ -141,6 +140,14 @@ type dayCompletionChecker interface {
 // narrowed to an interface so completedMatchupWeeks is testable without network.
 type matchupWeekProvider interface {
 	GetMatchupWeekByNumber(n int) (weekStart, weekEnd time.Time, err error)
+}
+
+// SiteClient is the fantrax subset RunSite needs: everything Run needs, plus
+// the per-number matchup-week lookup used to enumerate completed weeks.
+// *fantrax.Client satisfies it implicitly — internal/fantrax is not modified.
+type SiteClient interface {
+	RecapClient
+	matchupWeekProvider
 }
 
 // completedMatchupWeeks enumerates weeks 1..N for the configured team and
