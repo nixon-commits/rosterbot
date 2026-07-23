@@ -103,6 +103,39 @@ type Result struct {
 	PitchersNoData bool
 }
 
+// recentStatsClient is the fantrax subset windowedHitterRecent uses.
+type recentStatsClient interface {
+	GetSeasonDateRange() (time.Time, time.Time, error)
+	DailyFantasyPoints(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.DayRoster, error)
+	BackfillDailyFPts(days []fantrax.DayRoster) error
+}
+
+// LineupClient is the narrow subset of *fantrax.Client that Run needs. It
+// embeds recentStatsClient so Run can hand its ft to windowedHitterRecent.
+// *fantrax.Client satisfies it implicitly — internal/fantrax is not modified.
+// Landing this seam is what lets rosterbot-6rv's phase-level tests inject a fake.
+type LineupClient interface {
+	recentStatsClient
+	GetHitterRoster() ([]fantrax.Player, error)
+	GetPitcherRoster() ([]fantrax.Player, error)
+	GetFullHitterRoster() ([]fantrax.Player, fantrax.SlotCounts, error)
+	GetActiveSlots() ([]fantrax.Slot, error)
+	GetPitcherSlots() ([]fantrax.Slot, error)
+	GetScoringWeights() (fantrax.ScoringWeights, error)
+	GetPitcherScoringWeights() (fantrax.ScoringWeights, error)
+	GetCurrentPeriod() (fantrax.DailyPeriod, error)
+	GetMatchupWeekBounds(date, seasonStart time.Time) (weekStart, weekEnd time.Time, err error)
+	GetScoringPeriodsAndTeams() ([]fantrax.ScoringPeriod, map[string]string, map[string]string, error)
+	DailyPeriodFor(currentPeriod fantrax.DailyPeriod, seasonStart, today, date time.Time) fantrax.DailyPeriod
+	GetHitterRosterForPeriod(period fantrax.DailyPeriod) ([]fantrax.Player, error)
+	GetPitcherRosterForPeriod(period fantrax.DailyPeriod) ([]fantrax.Player, error)
+	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
+	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
+	GetRecentPitcherStats(currentPeriod fantrax.DailyPeriod, n int) (map[string]fantrax.RecentStat, error)
+	ApplyLineup(period fantrax.DailyPeriod, active []fantrax.PlayerSlot, reserve []string) error
+	InvalidatePeriodRosterCache(period fantrax.DailyPeriod)
+}
+
 // projDisplayName maps projection system flag values to display-friendly names.
 var projDisplayName = map[string]string{
 	"steamer":         "Steamer",
@@ -127,7 +160,7 @@ func cacheTTL(noCache bool, d time.Duration) time.Duration {
 // publish today's lineup for the read-only API, print the plan, and apply it
 // (unless cfg.DryRun). ft and cfg are wired up by the caller (cmd.initApp);
 // Run owns everything downstream of that.
-func Run(ft *fantrax.Client, cfg *config.Config, opts Options) (Result, error) {
+func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	if err := projections.SetProjectionSystem(opts.ProjectionSystem); err != nil {
 		return Result{}, err
 	}
