@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/nixon-commits/rosterbot/internal/statesync"
 	"github.com/spf13/cobra"
 )
@@ -50,7 +51,9 @@ func init() {
 }
 
 func runSyncDown(cmd *cobra.Command, args []string) error {
-	bucket := os.Getenv("STATE_BUCKET")
+	// Bulk dir<->prefix sync (statePairs), not a per-key store — intentionally
+	// distinct from statestore's typed constructors, but the env read is shared.
+	bucket := statestore.Bucket()
 	if bucket == "" {
 		return nil
 	}
@@ -74,7 +77,7 @@ func runSyncUp(cmd *cobra.Command, args []string) error {
 	}
 	ctx := context.Background()
 
-	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
+	if bucket := statestore.Bucket(); bucket != "" {
 		for _, p := range statePairs {
 			if err := s.Up(ctx, bucket, p.prefix, p.dir, false); err != nil {
 				warn("sync-up %s: %v", p.prefix, err)

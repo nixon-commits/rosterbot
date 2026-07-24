@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -11,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 )
 
 const (
@@ -39,7 +39,10 @@ func init() {
 }
 
 func runMigrateRunLedger(cmd *cobra.Command, args []string) error {
-	bucket := os.Getenv("STATE_BUCKET")
+	// One-time S3-only migration: require the bucket (no local fallback), so
+	// this intentionally differs from statestore's typed constructors while
+	// sharing the single env read.
+	bucket := statestore.Bucket()
 	if bucket == "" {
 		return fmt.Errorf("migrate-run-ledger: STATE_BUCKET must be set")
 	}
