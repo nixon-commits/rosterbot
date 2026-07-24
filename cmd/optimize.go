@@ -6,6 +6,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/lineuprun"
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/spf13/cobra"
 )
 
@@ -89,6 +90,11 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	pub, err := statestore.FromEnv().LineupPublisher()
+	if err != nil {
+		return fmt.Errorf("init lineup publisher: %w", err)
+	}
+
 	opts := lineuprun.Options{
 		Today:              today,
 		NeedsSeasonLookup:  needsSeasonLookup,
@@ -100,6 +106,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		ArchiveProjections: archiveProjections,
 		SnapshotRoot:       backtestSnapshotDir,
 		PublishLineupFlag:  publishLineupFlag,
+		Publisher:          pub,
 		NoCache:            noCache,
 		Verbose:            verbose,
 	}

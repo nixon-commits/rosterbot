@@ -18,6 +18,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 	"github.com/nixon-commits/rosterbot/internal/progress"
@@ -84,6 +85,11 @@ type Options struct {
 	// PublishLineupFlag force-publishes today's read-only API lineup JSON
 	// even in dry-run (mirrors --publish-lineup).
 	PublishLineupFlag bool
+
+	// Publisher is the destination for the read-only API lineup JSON, selected
+	// by the caller (cmd, via internal/statestore) so this package no longer
+	// reads STATE_BUCKET. Nil means "do not publish" (the shadow command).
+	Publisher lineupapi.Publisher
 
 	// NoCache bypasses the file cache (mirrors the persistent --no-cache flag).
 	NoCache bool
@@ -956,7 +962,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 			if !dr.isToday {
 				continue
 			}
-			if err := publishLineup(dr, cfg, hitterSlots, pitcherSlots); err != nil {
+			if err := publishLineup(dr, cfg, hitterSlots, pitcherSlots, opts.Publisher); err != nil {
 				fmt.Printf("  ⚠ lineup publish failed: %v\n", err)
 			}
 			break
