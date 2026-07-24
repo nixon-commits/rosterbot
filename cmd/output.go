@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 )
 
 // installOutputRecorder wires lineupapi.RecordOutput so each job persists its
@@ -18,15 +18,9 @@ func installOutputRecorder() {
 		return // no id to key on (local non-task run); leave the hook unset (no-op)
 	}
 
-	var w lineupapi.OutputWriter
-	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		s, err := s3lineup.NewOutput(context.Background(), bucket, "runs/")
-		if err != nil {
-			return
-		}
-		w = s
-	} else {
-		w = lineupapi.NewFileOutputStore(".lineup/outputs")
+	w, err := statestore.FromEnv().Output()
+	if err != nil {
+		return
 	}
 
 	lineupapi.OutputRecorder = func(jobType string, data any) {
