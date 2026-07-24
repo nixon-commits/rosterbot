@@ -68,17 +68,20 @@ type mlbGameLogDay struct {
 	HasGame bool    `json:"has_game"`
 }
 
-// BackfillDailyFPts walks every DayRoster and resolves NeedsBackfill rows
+// backfillDailyFPts walks every DayRoster and resolves needsBackfill rows
 // by fetching the player's MLB game log for that date and re-computing FPts
 // from the raw stat line via league scoring weights. Mutates `days` in place.
 //
+// It is called internally by DailyFantasyPoints so callers never see the
+// needsBackfill placeholder — see that method's doc for the soft-fail contract.
+//
 // Soft-failing: any individual row that can't be resolved (no MLBAM ID, MLB
 // API unreachable, no game on the date) keeps its current value. If the row
-// is resolved to "no game that day", NeedsBackfill is cleared (genuine zero).
+// is resolved to "no game that day", needsBackfill is cleared (genuine zero).
 // Hard errors (e.g., ResolveMLBAMIDs returns an error) cause the function
-// to return early with the error; the caller should log and proceed —
+// to return early with the error; DailyFantasyPoints logs and proceeds —
 // the un-backfilled rows are the same defensive zero the recap had before.
-func (c *Client) BackfillDailyFPts(days []DayRoster) error {
+func (c *Client) backfillDailyFPts(days []DayRoster) error {
 	targets := collectBackfillTargets(days)
 	if len(targets) == 0 {
 		return nil
@@ -127,7 +130,7 @@ func (c *Client) BackfillDailyFPts(days []DayRoster) error {
 		fpts, hadGame := computeFPtsFromGameLog(log, t.Date, t.IsPitcher, hitterWeights, pitcherWeights)
 		days[t.DayIdx].Players[t.PlayerIdx].FPts = fpts
 		days[t.DayIdx].Players[t.PlayerIdx].HadGame = hadGame
-		days[t.DayIdx].Players[t.PlayerIdx].NeedsBackfill = false
+		days[t.DayIdx].Players[t.PlayerIdx].needsBackfill = false
 		if hadGame {
 			resolvedCount++
 		} else {
@@ -155,7 +158,7 @@ func collectBackfillTargets(days []DayRoster) []backfillTarget {
 	var out []backfillTarget
 	for di, d := range days {
 		for pi, p := range d.Players {
-			if !p.NeedsBackfill {
+			if !p.needsBackfill {
 				continue
 			}
 			out = append(out, backfillTarget{

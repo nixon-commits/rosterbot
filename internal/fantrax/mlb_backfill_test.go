@@ -2,6 +2,7 @@ package fantrax
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -162,7 +163,7 @@ func TestComputeFPtsFromGameLog_OffDay(t *testing.T) {
 }
 
 // gameLogServer stubs the MLB statsapi gameLog endpoint with a static JSON
-// response. Used by the BackfillDailyFPts integration tests below.
+// response. Used by the backfillDailyFPts integration tests below.
 func gameLogServer(t *testing.T, dateToStat map[string]map[string]any) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -295,12 +296,12 @@ func TestBackfillDailyFPts_NewPlayerHitter(t *testing.T) {
 	date, _ := time.Parse("2006-01-02", "2026-05-21")
 	days := []DayRoster{
 		{Date: date, Players: []DayPlayerFP{
-			{PlayerID: "p1", Name: "Gabriel Moreno", FPts: 0, Active: true, IsPitcher: false, NeedsBackfill: true},
+			{PlayerID: "p1", Name: "Gabriel Moreno", FPts: 0, Active: true, IsPitcher: false, needsBackfill: true},
 		}},
 	}
 
-	if err := c.BackfillDailyFPts(days); err != nil {
-		t.Fatalf("BackfillDailyFPts: %v", err)
+	if err := c.backfillDailyFPts(days); err != nil {
+		t.Fatalf("backfillDailyFPts: %v", err)
 	}
 
 	got := days[0].Players[0]
@@ -311,8 +312,8 @@ func TestBackfillDailyFPts_NewPlayerHitter(t *testing.T) {
 	if !got.HadGame {
 		t.Error("HadGame should be true after backfill")
 	}
-	if got.NeedsBackfill {
-		t.Error("NeedsBackfill should be cleared after successful backfill")
+	if got.needsBackfill {
+		t.Error("needsBackfill should be cleared after successful backfill")
 	}
 }
 
@@ -348,20 +349,20 @@ func TestBackfillDailyFPts_TwoWayPitchingCross(t *testing.T) {
 	date, _ := time.Parse("2006-01-02", "2026-05-20")
 	days := []DayRoster{
 		{Date: date, Players: []DayPlayerFP{
-			{PlayerID: "ohtani", Name: "Shohei Ohtani", FPts: 0, Active: true, IsPitcher: true, NeedsBackfill: true},
+			{PlayerID: "ohtani", Name: "Shohei Ohtani", FPts: 0, Active: true, IsPitcher: true, needsBackfill: true},
 		}},
 	}
 
-	if err := c.BackfillDailyFPts(days); err != nil {
-		t.Fatalf("BackfillDailyFPts: %v", err)
+	if err := c.backfillDailyFPts(days); err != nil {
+		t.Fatalf("backfillDailyFPts: %v", err)
 	}
 
 	got := days[0].Players[0]
 	if got.FPts != 19 {
 		t.Errorf("FPts = %v, want 19 (Ohtani pitching May 20)", got.FPts)
 	}
-	if got.NeedsBackfill {
-		t.Error("NeedsBackfill should be cleared")
+	if got.needsBackfill {
+		t.Error("needsBackfill should be cleared")
 	}
 }
 
@@ -391,12 +392,12 @@ func TestBackfillDailyFPts_OffDay(t *testing.T) {
 	date, _ := time.Parse("2006-01-02", "2026-05-21")
 	days := []DayRoster{
 		{Date: date, Players: []DayPlayerFP{
-			{PlayerID: "x", Name: "OffDay Joe", FPts: 0, Active: true, NeedsBackfill: true},
+			{PlayerID: "x", Name: "OffDay Joe", FPts: 0, Active: true, needsBackfill: true},
 		}},
 	}
 
-	if err := c.BackfillDailyFPts(days); err != nil {
-		t.Fatalf("BackfillDailyFPts: %v", err)
+	if err := c.backfillDailyFPts(days); err != nil {
+		t.Fatalf("backfillDailyFPts: %v", err)
 	}
 
 	got := days[0].Players[0]
@@ -406,8 +407,8 @@ func TestBackfillDailyFPts_OffDay(t *testing.T) {
 	if got.HadGame {
 		t.Error("HadGame should be false on a legitimate off day")
 	}
-	if got.NeedsBackfill {
-		t.Error("NeedsBackfill should be cleared (backfill succeeded — answer is genuinely zero)")
+	if got.needsBackfill {
+		t.Error("needsBackfill should be cleared (backfill succeeded — answer is genuinely zero)")
 	}
 }
 
@@ -427,20 +428,152 @@ func TestBackfillDailyFPts_NameResolveMiss(t *testing.T) {
 	date, _ := time.Parse("2006-01-02", "2026-05-21")
 	days := []DayRoster{
 		{Date: date, Players: []DayPlayerFP{
-			{PlayerID: "x", Name: "Unknown Player", FPts: 0, Active: true, NeedsBackfill: true},
+			{PlayerID: "x", Name: "Unknown Player", FPts: 0, Active: true, needsBackfill: true},
 		}},
 	}
 
-	if err := c.BackfillDailyFPts(days); err != nil {
-		t.Fatalf("BackfillDailyFPts should soft-fail, got error: %v", err)
+	if err := c.backfillDailyFPts(days); err != nil {
+		t.Fatalf("backfillDailyFPts should soft-fail, got error: %v", err)
 	}
 
 	got := days[0].Players[0]
 	if got.FPts != 0 {
 		t.Errorf("unresolved row FPts should stay 0, got %v", got.FPts)
 	}
-	if !got.NeedsBackfill {
-		t.Error("NeedsBackfill should remain true on hard failure (resolver miss)")
+	if !got.needsBackfill {
+		t.Error("needsBackfill should remain true on hard failure (resolver miss)")
+	}
+}
+
+// TestDailyFantasyPoints_ResolvesBackfillInternally exercises the folded-in
+// backfill through the public DailyFantasyPoints entry point (not the unexported
+// backfillDailyFPts). It injects two canned period snapshots via the
+// fetchPeriodSnapshotFn seam so no live Fantrax auth client is needed:
+//
+//   - a mid-window first appearance (Moreno present on the window day, absent
+//     from the baseline day) — diffYTD zeroes+flags it, and the fold-in must
+//     resolve the real same-day FPts from the MLB game log; and
+//   - a two-way role crossing (Ohtani a hitter on the baseline day, a pitcher on
+//     the window day) — the prevOther fallback zeroes+flags it, and the fold-in
+//     must resolve the pitching FPts.
+//
+// Before the fold-in, DailyFantasyPoints returned both rows as placeholder zeros.
+func TestDailyFantasyPoints_ResolvesBackfillInternally(t *testing.T) {
+	dir := t.TempDir()
+	leagueID := "TESTLG"
+	hitterW := ScoringWeights{
+		"1B": 1, "2B": 2, "TB": 1, "XBH": 2,
+		"R": 1, "RBI": 1, "BB": 1, "SB": 4, "SO": -1, "GIDP": -1, "HBP": 1,
+	}
+	pitcherW := ScoringWeights{"IP": 3, "K": 1, "BB": -1, "H": -1, "ER": -2, "W": 5}
+	writeScoringCache(t, dir, leagueID, hitterW, pitcherW)
+
+	seasonStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	baseDate := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC) // day before the window
+	dayDate := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)  // the single window day
+	basePeriod := PeriodForDate(seasonStart, baseDate)
+	dayPeriod := PeriodForDate(seasonStart, dayDate)
+
+	// Baseline day: Ohtani is a hitter; Moreno isn't on the roster yet.
+	baselineSnap := periodSnapshot{
+		Hitters: map[string]playerYTD{
+			"ohtani": {PlayerID: "ohtani", Name: "Shohei Ohtani", FPts: 250, GP: 30, StatusID: "1"},
+		},
+		Pitchers: map[string]playerYTD{},
+	}
+	// Window day: Moreno first appears (big pre-team YTD); Ohtani has crossed to
+	// the pitcher table (role-specific YTD can't be diffed against his hitter YTD).
+	daySnap := periodSnapshot{
+		Hitters: map[string]playerYTD{
+			"moreno": {PlayerID: "moreno", Name: "Gabriel Moreno", FPts: 120, GP: 40, StatusID: "1"},
+		},
+		Pitchers: map[string]playerYTD{
+			"ohtani": {PlayerID: "ohtani", Name: "Shohei Ohtani", FPts: 275, GP: 31, StatusID: "1", IsPitcher: true},
+		},
+	}
+	prevFetch := fetchPeriodSnapshotFn
+	fetchPeriodSnapshotFn = func(_ *Client, _ string, period DailyPeriod) (periodSnapshot, error) {
+		switch period {
+		case basePeriod:
+			return baselineSnap, nil
+		case dayPeriod:
+			return daySnap, nil
+		default:
+			return periodSnapshot{}, fmt.Errorf("unexpected period %d", period)
+		}
+	}
+	defer func() { fetchPeriodSnapshotFn = prevFetch }()
+
+	// MLB game-log stub: branch on the `group` query param so the shared JSON
+	// keys ("hits" = batter hits vs. hits allowed) never collide. Moreno is
+	// fetched with group=hitting, Ohtani with group=pitching.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("group") {
+		case "hitting": // Moreno's actual May 21 line → 7 FPts
+			_, _ = w.Write([]byte(`{"stats":[{"splits":[{"date":"2026-05-21","stat":{"hits":1,"runs":1,"baseOnBalls":1,"stolenBases":1,"strikeOuts":1}}]}]}`))
+		case "pitching": // Ohtani's actual May 20 pitching line, dated to the window day → 19 FPts
+			_, _ = w.Write([]byte(`{"stats":[{"splits":[{"date":"2026-05-21","stat":{"inningsPitched":"5.0","earnedRuns":0,"strikeOuts":4,"baseOnBalls":2,"hits":3,"wins":1}}]}]}`))
+		default:
+			t.Errorf("unexpected group %q", r.URL.Query().Get("group"))
+		}
+	}))
+	defer srv.Close()
+
+	prevURL := mlbBackfillGameLogURL
+	mlbBackfillGameLogURL = srv.URL + "/people/%d/stats?stats=gameLog&group=%s&season=%d&sportId=1"
+	defer func() { mlbBackfillGameLogURL = prevURL }()
+
+	prevResolver := resolveBackfillNames
+	resolveBackfillNames = func(_ []string, _ string) (*playername.ResolvedPlayers, error) {
+		return &playername.ResolvedPlayers{ByName: map[string]int{
+			playername.Normalize("Gabriel Moreno"): 672515,
+			playername.Normalize("Shohei Ohtani"):  660271,
+		}}, nil
+	}
+	defer func() { resolveBackfillNames = prevResolver }()
+
+	c := newTestBackfillClient(t, dir, leagueID)
+	// Pre-seed an empty period-date map so periodDateMap never reaches the (nil)
+	// auth client — dailyPeriodForDate then falls back to naive PeriodForDate,
+	// matching the periods our seam is keyed on.
+	c.periodMapMemo = map[string]DailyPeriod{}
+
+	// cacheTTL=0 bypasses the snapshot file cache so the seam is always consulted.
+	days, err := c.DailyFantasyPoints("TEAM", dayDate, dayDate, seasonStart, dir, 0)
+	if err != nil {
+		t.Fatalf("DailyFantasyPoints: %v", err)
+	}
+	if len(days) != 1 {
+		t.Fatalf("want 1 day, got %d", len(days))
+	}
+
+	byID := map[string]DayPlayerFP{}
+	for _, p := range days[0].Players {
+		byID[p.PlayerID] = p
+	}
+	moreno, ok := byID["moreno"]
+	if !ok {
+		t.Fatal("moreno row missing")
+	}
+	if moreno.FPts != 7 {
+		t.Errorf("first-appearance hitter FPts = %v, want 7 (backfilled, not placeholder 0)", moreno.FPts)
+	}
+	if moreno.needsBackfill {
+		t.Error("moreno needsBackfill should be cleared after the internal backfill")
+	}
+	if !moreno.HadGame {
+		t.Error("moreno HadGame should be true after backfill")
+	}
+	ohtani, ok := byID["ohtani"]
+	if !ok {
+		t.Fatal("ohtani row missing")
+	}
+	if ohtani.FPts != 19 {
+		t.Errorf("two-way-crossing pitcher FPts = %v, want 19 (backfilled, not placeholder 0)", ohtani.FPts)
+	}
+	if ohtani.needsBackfill {
+		t.Error("ohtani needsBackfill should be cleared after the internal backfill")
 	}
 }
 
@@ -449,11 +582,11 @@ func TestBackfillDailyFPts_NoTargets(t *testing.T) {
 	date, _ := time.Parse("2006-01-02", "2026-05-21")
 	days := []DayRoster{
 		{Date: date, Players: []DayPlayerFP{
-			{PlayerID: "x", Name: "Healthy", FPts: 10, Active: true, NeedsBackfill: false},
+			{PlayerID: "x", Name: "Healthy", FPts: 10, Active: true, needsBackfill: false},
 		}},
 	}
-	if err := c.BackfillDailyFPts(days); err != nil {
-		t.Fatalf("BackfillDailyFPts with no targets should be a no-op, got: %v", err)
+	if err := c.backfillDailyFPts(days); err != nil {
+		t.Fatalf("backfillDailyFPts with no targets should be a no-op, got: %v", err)
 	}
 	if days[0].Players[0].FPts != 10 {
 		t.Error("non-flagged rows should be untouched")

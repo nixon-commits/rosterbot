@@ -44,7 +44,6 @@ type RecapClient interface {
 	GetPitcherSlots() ([]fantrax.Slot, error)
 	GetAllMatchupEntries() ([]fantrax.MatchupEntry, error)
 	GetMatchupWeekNumberForDate(date time.Time) (int, error)
-	BackfillDailyFPts(days []fantrax.DayRoster) error
 	GetTeamPitcherStarts(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.DatedPitcherStart, error)
 }
 
@@ -264,12 +263,11 @@ func collectTeam(
 	cacheDir string,
 	cacheTTL time.Duration,
 ) (*teamData, error) {
+	// DailyFantasyPoints resolves the MLB-statsapi backfill internally (soft-fail),
+	// so mid-window first appearances and two-way crossings carry real FPts.
 	days, err := ft.DailyFantasyPoints(teamID, weekStart, weekEnd, seasonStart, cacheDir, cacheTTL)
 	if err != nil {
 		return nil, fmt.Errorf("daily fpts: %w", err)
-	}
-	if err := ft.BackfillDailyFPts(days); err != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: MLB backfill for %s: %v\n", teamName, err)
 	}
 
 	lineup := backtest.RunLineupAnalysis(days, hitterSlots, pitcherSlots)
