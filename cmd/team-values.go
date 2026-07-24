@@ -1,14 +1,12 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"sort"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/hkb"
-	"github.com/nixon-commits/rosterbot/internal/ndjsonstore/s3ndjson"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
 	"github.com/spf13/cobra"
 )
@@ -85,7 +83,7 @@ func runTeamValues(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	w, dest, err := teamValueWriter(context.Background())
+	w, dest, err := teamValueWriter()
 	if err != nil {
 		return err
 	}
@@ -98,15 +96,16 @@ func runTeamValues(cmd *cobra.Command, args []string) error {
 
 // teamValueWriter returns the S3-backed writer when STATE_BUCKET is set (Fargate),
 // else a local-filesystem writer, mirroring how grade/projection-site choose.
-func teamValueWriter(ctx context.Context) (teamvalue.Writer, string, error) {
-	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		store, err := s3ndjson.New(ctx, bucket, teamValuePrefix)
-		if err != nil {
-			return nil, "", fmt.Errorf("init s3 team-value writer: %w", err)
-		}
-		return teamvalue.NewWriter(store), "s3://" + bucket + "/" + teamValuePrefix, nil
+func teamValueWriter() (teamvalue.Writer, string, error) {
+	w, err := statestore.FromEnv().TeamValueWriter()
+	if err != nil {
+		return nil, "", fmt.Errorf("init team-value writer: %w", err)
 	}
-	return teamvalue.NewFileWriter(teamValueLocalDir), teamValueLocalDir, nil
+	dest := teamValueLocalDir
+	if b := statestore.Bucket(); b != "" {
+		dest = "s3://" + b + "/" + teamValuePrefix
+	}
+	return w, dest, nil
 }
 
 // printTeamValueSummary prints a total-descending table with a join-coverage
