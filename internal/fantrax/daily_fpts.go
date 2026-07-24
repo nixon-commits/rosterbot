@@ -2,6 +2,7 @@ package fantrax
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -25,13 +26,14 @@ type DayPlayerFP struct {
 	HadGame       bool     `json:"had_game"`
 	IsPitcher     bool     `json:"is_pitcher"`
 	Positions     []string `json:"positions,omitempty"`
-	// NeedsBackfill is set when diffYTD couldn't compute a reliable delta —
+	// needsBackfill is set when diffYTD couldn't compute a reliable delta —
 	// either because the player first appeared on the team's snapshot mid-window
 	// (delta zeroed to avoid leaking pre-team YTD) or because they crossed
 	// between the hitter and pitcher tables (role-specific YTDs can't be
-	// subtracted). BackfillDailyFPts uses this flag to fix the FPts value
-	// from the MLB statsapi game log.
-	NeedsBackfill bool `json:"needs_backfill,omitempty"`
+	// subtracted). It is an internal implementation detail: DailyFantasyPoints
+	// resolves every flagged row (via backfillDailyFPts) before returning, so
+	// the field is unexported and never leaks to callers.
+	needsBackfill bool
 }
 
 // DayRoster bundles every player's per-day FPts snapshot for a single date.
@@ -67,6 +69,17 @@ type periodSnapshot struct {
 // (StatsType=1) so that bench-day production is visible to hindsight callers.
 // Players seen for the first time in the window have their delta zeroed so the
 // cumulative pre-window YTD doesn't leak in as same-day production.
+//
+// Those first-appearance rows (and two-way role crossings) can't be diffed from
+// the YTD snapshots, so before returning, DailyFantasyPoints resolves them
+// internally from each player's MLB statsapi game log (via backfillDailyFPts).
+// Callers therefore never receive placeholder zeros and never need a second
+// call. This is a SOFT-FAIL step by design: any statsapi/name-resolution error
+// is logged and swallowed, leaving the affected rows at their defensive zero —
+// a transient upstream hiccup must never break a recap, backtest, or lineup run.
+// The backfill is bounded to a handful of game-log fetches per window and is a
+// no-op when no rows are flagged, so it doesn't change the network profile of a
+// window with no mid-period first appearances.
 func (c *Client) DailyFantasyPoints(
 	teamID string,
 	start, end time.Time,
@@ -151,6 +164,15 @@ func (c *Client) DailyFantasyPoints(
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
+
+	// Resolve the placeholder zeros diffYTD left behind (mid-window first
+	// appearances and two-way role crossings) from the MLB statsapi game log,
+	// so the returned rows never leak needsBackfill to callers. Soft-fail: a
+	// statsapi/name-resolution hiccup must never break a recap or backtest — the
+	// un-backfilled rows keep the same defensive zero they had before.
+	if err := c.backfillDailyFPts(days); err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: MLB backfill: %v\n", err)
+	}
 	return days, nil
 }
 
@@ -159,7 +181,7 @@ func (c *Client) DailyFantasyPoints(
 // other kind. When a player isn't in prevSame the code falls back to prevOther,
 // but a fallback hit means the player crossed between hitter/pitcher tables —
 // the prior YTD is for a different role and subtracting it produces a phantom
-// delta. In that case the delta is zeroed and NeedsBackfill is set so the
+// delta. In that case the delta is zeroed and needsBackfill is set so the
 // MLB-statsapi backfill step can compute the real same-day points.
 //
 // Genuinely new players (waiver pickup or roster addition) are also zeroed +
@@ -200,7 +222,7 @@ func diffYTD(cur, prevSame, prevOther map[string]playerYTD, isPitcher bool) []Da
 			Active:        now.StatusID == "1",
 			HadGame:       had,
 			IsPitcher:     isPitcher,
-			NeedsBackfill: needsBackfill,
+			needsBackfill: needsBackfill,
 		})
 	}
 	return out
@@ -234,6 +256,12 @@ func cappedTTL(callerTTL, periodTTL time.Duration) time.Duration {
 	return callerTTL
 }
 
+// fetchPeriodSnapshotFn is the seam that resolves one period's YTD snapshot.
+// Production points it at (*Client).fetchPeriodSnapshot (the live Fantrax auth
+// call); tests override it to inject canned snapshots so DailyFantasyPoints can
+// be exercised end-to-end without a live auth client.
+var fetchPeriodSnapshotFn = (*Client).fetchPeriodSnapshot
+
 // getPeriodSnapshotCached fetches a single period's YTD snapshot via the cache.
 // The returned bool reports whether the upstream API was actually hit —
 // callers use this to skip throttle sleeps on cache hits.
@@ -245,7 +273,7 @@ func (c *Client) getPeriodSnapshotCached(
 	key := cache.Key(keyRosterStats, teamID, strconv.Itoa(int(period)))
 	snap, err = snapCache.Get(key, func() (periodSnapshot, error) {
 		hitNetwork = true
-		return c.fetchPeriodSnapshot(teamID, period)
+		return fetchPeriodSnapshotFn(c, teamID, period)
 	})
 	return snap, hitNetwork, err
 }

@@ -62,12 +62,11 @@ func runGrade(cmd *cobra.Command, args []string) error {
 	if noCache {
 		snapTTL = 0
 	}
+	// DailyFantasyPoints resolves the MLB-statsapi backfill internally (soft-fail),
+	// so the returned rows never carry placeholder zeros.
 	days, err := ft.DailyFantasyPoints(cfg.TeamID, start, end, seasonStart, cacheDir, snapTTL)
 	if err != nil {
 		return fmt.Errorf("daily fpts: %w", err)
-	}
-	if err := ft.BackfillDailyFPts(days); err != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: MLB backfill: %v\n", err)
 	}
 
 	// Grade every projection system the shadow command captured. Actuals

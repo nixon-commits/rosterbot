@@ -93,12 +93,10 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Fetching daily fantasy points for %s to %s...\n",
 		start.Format("2006-01-02"), end.Format("2006-01-02"))
+	// DailyFantasyPoints resolves the MLB-statsapi backfill internally (soft-fail).
 	days, err := ft.DailyFantasyPoints(cfg.TeamID, start, end, seasonStart, cacheDir, snapTTL)
 	if err != nil {
 		return fmt.Errorf("daily fpts: %w", err)
-	}
-	if err := ft.BackfillDailyFPts(days); err != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: MLB backfill: %v\n", err)
 	}
 
 	if backtestRecencyExperiment {
@@ -172,9 +170,6 @@ func runRecencyExperiment(
 	seriesDays, err := ft.DailyFantasyPoints(cfg.TeamID, seriesStart, end, seasonStart, cacheDir, snapTTL)
 	if err != nil {
 		return fmt.Errorf("recency series fetch: %w", err)
-	}
-	if err := ft.BackfillDailyFPts(seriesDays); err != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: recency series backfill: %v\n", err)
 	}
 
 	report, err := backtest.RunRecencyExperiment(ft, gradeDays, seriesDays, backtest.ExperimentOptions{

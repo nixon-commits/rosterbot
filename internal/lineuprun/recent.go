@@ -44,12 +44,12 @@ func windowedHitterRecent(ft recentStatsClient, teamID string, today, seasonStar
 	if yesterday.Before(start) {
 		return nil, fmt.Errorf("no completed days before %s", today.Format("2006-01-02"))
 	}
+	// DailyFantasyPoints resolves the MLB-statsapi backfill internally
+	// (best-effort, soft-fails per player), so the window sees real same-day
+	// FPts for mid-window first appearances instead of placeholder zeros.
 	days, err := ft.DailyFantasyPoints(teamID, start, yesterday, seasonStart, cacheDir, cacheTTL(noCache, 30*24*time.Hour))
 	if err != nil {
 		return nil, err
 	}
-	// Backfill is best-effort (soft-fails per player); a window value from
-	// un-backfilled data is still better than dropping the whole signal.
-	_ = ft.BackfillDailyFPts(days)
 	return projections.WindowedRecent(days, today, projections.WindowWeight(recencyWindowDays), false), nil
 }

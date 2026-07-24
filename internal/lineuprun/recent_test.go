@@ -22,7 +22,6 @@ func (f *fakeRecentClient) GetSeasonDateRange() (time.Time, time.Time, error) {
 func (f *fakeRecentClient) DailyFantasyPoints(_ string, _, _, _ time.Time, _ string, _ time.Duration) ([]fantrax.DayRoster, error) {
 	return f.days, nil
 }
-func (f *fakeRecentClient) BackfillDailyFPts([]fantrax.DayRoster) error { return nil }
 
 func hitterDay(d time.Time, playerID string, fp float64) fantrax.DayRoster {
 	return fantrax.DayRoster{Date: d, Players: []fantrax.DayPlayerFP{
