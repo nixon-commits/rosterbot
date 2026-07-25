@@ -3,10 +3,26 @@ package fantrax
 import "time"
 
 // DailyPeriodFor returns the *daily* scoring-period number for a calendar date.
-// Resolution order: (1) the authoritative periodList date map (see
-// period_date_map.go) when c has one available and it covers date, (2) anchored
-// on Fantrax's authoritative current daily period when known, else (3)
-// season-start day math.
+// This is the single resolver for the daily axis — see the Period Map section
+// in CONTEXT.md. Resolution order: (1) the authoritative periodList date map
+// (see period_date_map.go) when c has one available and it covers date, else
+// (2) season-start day math.
+//
+// rosterbot-xyk collapsed what used to be two near-twin resolvers (this one and
+// the unexported dailyPeriodForDate) that differed only in whether a middle
+// "anchor on GetCurrentPeriod" tier was consulted. Measured 2026-07-25 against
+// the live periodList map — 187 entries covering the whole 2026 season — the
+// daily axis is strictly 1:1 with calendar days: zero merged or inserted
+// periods across 122 elapsed days, and day math agrees with the authoritative
+// map on all 187 dates. The anchor tier therefore never once supplied an answer
+// day math wouldn't have, while its own input (GetCurrentPeriod) lagged a full
+// calendar day on 2026-07-16 and produced the rosterbot-48z silent apply
+// failure. It was deleted rather than demoted: a tier that has only ever been
+// wrong is not a safety net.
+//
+// Note the merging Fantrax *does* do — the All-Star break, where weekly period
+// 16 spans 2026-07-13..07-26 — happens on the WEEKLY axis only. See
+// ScoringPeriod / MatchupWeek in CONTEXT.md.
 //
 // GetTeamGS (and its sibling GetTeamPitcherStarts) reconstruct per-day GS by
 // diffing consecutive *daily* YTD roster snapshots — getPlayerGSSnapshotForPeriod
@@ -37,19 +53,17 @@ import "time"
 // periodList map (113 vs the map's 114 for that date), so lineup-apply
 // submitted changes against an already-closed period; Fantrax silently
 // rejected them as "already locked," masked as success by the locked-player
-// retry path. Consulting the map first makes this self-correcting the same
-// way the Class-B historical consumers (DailyFantasyPoints, GetTeamPitcherStarts
-// via dailyPeriodForDate) already are.
-func (c *Client) DailyPeriodFor(currentPeriod DailyPeriod, seasonStart, today, date time.Time) DailyPeriod {
+// retry path. Consulting the map first made that self-correcting; rosterbot-xyk
+// then removed the lagging anchor from the fallback chain entirely.
+//
+// c may be nil (hermetic tests), in which case the map is skipped.
+func (c *Client) DailyPeriodFor(seasonStart, date time.Time) DailyPeriod {
 	if c != nil {
 		if m, err := c.periodDateMap(seasonStart); err == nil {
 			if p, ok := m[date.Format("2006-01-02")]; ok {
 				return p
 			}
 		}
-	}
-	if currentPeriod > 0 {
-		return AnchorPeriodForDate(today, currentPeriod, date)
 	}
 	return PeriodForDate(seasonStart, date)
 }
@@ -59,7 +73,7 @@ func (c *Client) DailyPeriodFor(currentPeriod DailyPeriod, seasonStart, today, d
 // sp.EndDate). Returns nil if the period hasn't started yet (yesterday is before
 // sp.StartDate). See DailyPeriodFor for why this is the daily numbering, not the
 // weekly one, and for why c (may be nil, e.g. hermetic tests) is consulted first.
-func gsPeriodWalk(c *Client, sp ScoringPeriod, currentPeriod DailyPeriod, seasonStart, today time.Time) []DailyPeriod {
+func gsPeriodWalk(c *Client, sp ScoringPeriod, seasonStart, today time.Time) []DailyPeriod {
 	yesterday := today.Truncate(24*time.Hour).AddDate(0, 0, -1)
 	if yesterday.Before(sp.StartDate) {
 		return nil
@@ -69,7 +83,7 @@ func gsPeriodWalk(c *Client, sp ScoringPeriod, currentPeriod DailyPeriod, season
 	}
 	var out []DailyPeriod
 	for d := sp.StartDate; !d.After(yesterday); d = d.AddDate(0, 0, 1) {
-		out = append(out, c.DailyPeriodFor(currentPeriod, seasonStart, today, d))
+		out = append(out, c.DailyPeriodFor(seasonStart, d))
 	}
 	return out
 }

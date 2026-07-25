@@ -40,12 +40,12 @@ func TestDailyPeriodForDate(t *testing.T) {
 		return time.Date(y, m, day, 0, 0, 0, 0, time.UTC)
 	}
 	// hit → authoritative period from the map
-	if got := c.dailyPeriodForDate(seasonStart, d(2026, 7, 6)); got != 104 {
+	if got := c.DailyPeriodFor(seasonStart, d(2026, 7, 6)); got != 104 {
 		t.Errorf("hit: got %d, want 104", got)
 	}
 	// miss → soft-fallback to naive PeriodForDate
 	miss := d(2026, 4, 1)
-	if got := c.dailyPeriodForDate(seasonStart, miss); got != PeriodForDate(seasonStart, miss) {
+	if got := c.DailyPeriodFor(seasonStart, miss); got != PeriodForDate(seasonStart, miss) {
 		t.Errorf("miss: got %d, want naive %d", got, PeriodForDate(seasonStart, miss))
 	}
 }

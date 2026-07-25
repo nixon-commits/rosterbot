@@ -103,30 +103,25 @@ func parseMatchupDate(s string) (time.Time, error) {
 	return time.Parse("Mon Jan 2, 2006", s)
 }
 
-// AnchorPeriodForDate maps a calendar date to its daily scoring period using an
-// authoritative (anchorPeriod @ anchorDate) pair: period(date) = anchorPeriod +
-// whole calendar days from anchorDate to date.
-//
-// Prefer this over PeriodForDate for dates near "today", anchored on Fantrax's
-// authoritative current period (GetCurrentPeriod). Fantrax inserts extra daily
-// scoring periods mid-season (doubleheaders / postponed-game makeups), so naive
-// season-start day counting drifts behind by the number of inserted periods.
-// Anchoring on the current period is exact for any date in an insertion-free
-// span containing anchorDate; for dates separated from anchorDate by an
-// insertion it drifts by that insertion count (acceptable for the near-today
-// callers — deep-historical mapping is out of scope here).
-func AnchorPeriodForDate(anchorDate time.Time, anchorPeriod DailyPeriod, date time.Time) DailyPeriod {
-	days := int(date.Truncate(24*time.Hour).Sub(anchorDate.Truncate(24*time.Hour)).Hours() / 24)
-	return anchorPeriod + DailyPeriod(days)
-}
-
 // PeriodForDate returns the daily scoring period number for the given date,
-// anchored on the season start (period 1 = seasonStart). This assumes exactly
-// one scoring period per calendar day, which Fantrax violates when it inserts
-// extra daily periods mid-season — see AnchorPeriodForDate. Retained as the
-// fallback anchor when the authoritative current period is unavailable.
+// counting one period per calendar day from the season start (period 1 =
+// seasonStart).
+//
+// This is the fallback tier of fantrax.DailyPeriodFor, used when the
+// authoritative periodList map is unavailable (no credentials, fetch failure,
+// hermetic tests) or doesn't cover the date. Verified 2026-07-25 to agree with
+// that map on all 187 dates of the 2026 season — the daily axis carries no
+// merged or inserted periods, so the arithmetic is exact rather than
+// approximate. Prefer DailyPeriodFor at call sites; this is its implementation
+// detail, exported only because tests and cached.go's tierForPeriod use it.
+//
+// (rosterbot-xyk deleted the former AnchorPeriodForDate, which offset from
+// Fantrax's reported current period instead of the season start. It existed to
+// absorb mid-season period insertions that have never occurred, and its input
+// lagged a day on 2026-07-16 — see DailyPeriodFor.)
 func PeriodForDate(seasonStart, date time.Time) DailyPeriod {
-	return AnchorPeriodForDate(seasonStart, 1, date)
+	days := int(date.Truncate(24*time.Hour).Sub(seasonStart.Truncate(24*time.Hour)).Hours() / 24)
+	return 1 + DailyPeriod(days)
 }
 
 // Note: the former GetRecentStats (unbounded season-to-date hitter FP/G from a
