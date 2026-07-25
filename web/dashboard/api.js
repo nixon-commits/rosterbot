@@ -46,6 +46,7 @@ export const api = {
   runOutput: (id) => request("GET", `/v1/runs/${encodeURIComponent(id)}/output`),
   notifications: (limit = 25) => request("GET", `/v1/notifications?limit=${limit}`),
   jobs: () => request("GET", "/v1/jobs"),
+  infra: () => request("GET", "/v1/infra"),
   triggerJob: (name, params) => request("POST", `/v1/jobs/${encodeURIComponent(name)}`, { params }),
 
   authLoginBegin: () => request("POST", "/v1/auth/login/begin"),
