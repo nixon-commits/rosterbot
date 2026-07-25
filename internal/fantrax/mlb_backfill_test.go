@@ -535,7 +535,7 @@ func TestDailyFantasyPoints_ResolvesBackfillInternally(t *testing.T) {
 
 	c := newTestBackfillClient(t, dir, leagueID)
 	// Pre-seed an empty period-date map so periodDateMap never reaches the (nil)
-	// auth client — dailyPeriodForDate then falls back to naive PeriodForDate,
+	// auth client — DailyPeriodFor then falls back to naive PeriodForDate,
 	// matching the periods our seam is keyed on.
 	c.periodMapMemo = map[string]DailyPeriod{}
 

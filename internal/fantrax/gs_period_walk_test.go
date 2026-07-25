@@ -9,16 +9,15 @@ import (
 // rosterbot-uv6 mis-fix: GetTeamGS diffs consecutive *daily* YTD snapshots, so
 // the walk must return the daily period number for each calendar day (distinct
 // per day), NOT the weekly matchup "Scoring Period" number. A normal week
-// (period 15, 2026-07-06..07-12) anchored on today=07-13 / currentPeriod=111
-// resolves to 104..110 — one number per day. Returning [15,15,…] made every day
-// fetch the same snapshot and collapsed the tally to ~one day's worth.
+// (period 15, 2026-07-06..07-12) resolves to daily periods 104..110 — one
+// number per day, matching the live periodList map. Returning [15,15,…] made
+// every day fetch the same snapshot and collapsed the tally to ~one day's worth.
 func TestGSPeriodWalk_NormalWeekDailyNumbering(t *testing.T) {
 	sp := ScoringPeriod{Number: 15, StartDate: date("2026-07-06"), EndDate: date("2026-07-12")}
 	seasonStart := date("2026-03-25")
 	today := date("2026-07-13")
-	currentPeriod := DailyPeriod(111) // Fantrax's authoritative current daily period on 07-13
 
-	got := gsPeriodWalk(nil, sp, currentPeriod, seasonStart, today)
+	got := gsPeriodWalk(nil, sp, seasonStart, today)
 
 	want := []DailyPeriod{104, 105, 106, 107, 108, 109, 110}
 	if !reflect.DeepEqual(got, want) {
@@ -33,12 +32,11 @@ func TestGSPeriodWalk_NormalWeekDailyNumbering(t *testing.T) {
 func TestGSPeriodWalk_MergedAllStarBreakDailyNumbering(t *testing.T) {
 	sp := ScoringPeriod{Number: 16, StartDate: date("2026-07-13"), EndDate: date("2026-07-26")}
 	seasonStart := date("2026-03-25")
-	today := date("2026-07-27")       // day after the merged span ends
-	currentPeriod := DailyPeriod(125) // daily period on 07-27
+	today := date("2026-07-27") // day after the merged span ends
 
-	got := gsPeriodWalk(nil, sp, currentPeriod, seasonStart, today)
+	got := gsPeriodWalk(nil, sp, seasonStart, today)
 
-	// 07-13..07-26 = 14 days, anchored back from 07-27=125 → 111..124.
+	// 07-13..07-26 = 14 days → daily periods 111..124 (per the live map).
 	want := make([]DailyPeriod, 14)
 	for i := range want {
 		want[i] = DailyPeriod(111 + i)
@@ -50,16 +48,20 @@ func TestGSPeriodWalk_MergedAllStarBreakDailyNumbering(t *testing.T) {
 
 // TestGSPeriodWalk_CapsAtPeriodEndDate verifies the walk never reads past
 // sp.EndDate even if "yesterday" (today-1) would otherwise extend further.
+//
+// The expected 27 is the value the live periodList map carries for 2026-04-20
+// (verified 2026-07-25). This fixture previously expected 26, derived from a
+// synthetic currentPeriod=31 @ 04-25 that was itself off by one against the
+// real map — an artifact of the deleted anchor tier, not a real observation.
 func TestGSPeriodWalk_CapsAtPeriodEndDate(t *testing.T) {
 	sp := ScoringPeriod{Number: 5, StartDate: date("2026-04-20"), EndDate: date("2026-04-20")}
 	seasonStart := date("2026-03-25")
-	today := date("2026-04-25")      // yesterday would be 04-24, well past sp.EndDate
-	currentPeriod := DailyPeriod(31) // daily period on 04-25
+	today := date("2026-04-25") // yesterday would be 04-24, well past sp.EndDate
 
-	got := gsPeriodWalk(nil, sp, currentPeriod, seasonStart, today)
+	got := gsPeriodWalk(nil, sp, seasonStart, today)
 
-	// Single-day period; anchored back from 04-25=31 → 04-20=26.
-	want := []DailyPeriod{26}
+	// Single-day period; 2026-04-20 is day 27 of a season starting 2026-03-25.
+	want := []DailyPeriod{27}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("walk should cap at sp.EndDate (one day), got %v want %v", got, want)
 	}
@@ -72,7 +74,7 @@ func TestGSPeriodWalk_NilWhenPeriodNotStarted(t *testing.T) {
 	seasonStart := date("2026-03-25")
 	today := date("2026-04-20") // yesterday (04-19) is before sp.StartDate
 
-	got := gsPeriodWalk(nil, sp, 27, seasonStart, today)
+	got := gsPeriodWalk(nil, sp, seasonStart, today)
 
 	if got != nil {
 		t.Fatalf("expected nil for not-yet-started period, got %v", got)
@@ -80,13 +82,13 @@ func TestGSPeriodWalk_NilWhenPeriodNotStarted(t *testing.T) {
 }
 
 // TestGSPeriodWalk_DayMathFallback verifies the season-start day-math fallback
-// when Fantrax's current period isn't available (currentPeriod == 0).
+// tier, reached here because the nil client has no authoritative period map.
 func TestGSPeriodWalk_DayMathFallback(t *testing.T) {
 	sp := ScoringPeriod{Number: 91, StartDate: date("2026-06-23"), EndDate: date("2026-06-23")}
 	seasonStart := date("2026-03-25")
 	today := date("2026-06-24")
 
-	got := gsPeriodWalk(nil, sp, 0, seasonStart, today) // currentPeriod unknown
+	got := gsPeriodWalk(nil, sp, seasonStart, today)
 
 	want := []DailyPeriod{PeriodForDate(seasonStart, date("2026-06-23"))}
 	if !reflect.DeepEqual(got, want) {

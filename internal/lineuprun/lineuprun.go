@@ -131,7 +131,7 @@ type LineupClient interface {
 	GetCurrentPeriod() (fantrax.DailyPeriod, error)
 	GetMatchupWeekBounds(date, seasonStart time.Time) (weekStart, weekEnd time.Time, err error)
 	GetScoringPeriodsAndTeams() ([]fantrax.ScoringPeriod, map[string]string, map[string]string, error)
-	DailyPeriodFor(currentPeriod fantrax.DailyPeriod, seasonStart, today, date time.Time) fantrax.DailyPeriod
+	DailyPeriodFor(seasonStart, date time.Time) fantrax.DailyPeriod
 	GetHitterRosterForPeriod(period fantrax.DailyPeriod) ([]fantrax.Player, error)
 	GetPitcherRosterForPeriod(period fantrax.DailyPeriod) ([]fantrax.Player, error)
 	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
@@ -326,7 +326,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	// decision.
 	periods, _, _, periodsErr := ft.GetScoringPeriodsAndTeams()
 	if periodsErr != nil {
-		prog.Logf("WARNING: could not fetch authoritative scoring periods (%v) — date→period resolution falls back to anchor/day-math", periodsErr)
+		prog.Logf("WARNING: could not fetch weekly scoring periods (%v) — GS-budget gate disabled", periodsErr)
 	}
 
 	// --- Hitter projections (shared across dates) ---
@@ -634,19 +634,18 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		i, date := i, date
 		g.Go(func() error {
 			isToday := date.Equal(today)
-			// DailyPeriodFor, not ResolvePeriod: ApplyLineup/GetHitterRosterForPeriod
-			// are keyed by Fantrax's *daily* scoring period. ResolvePeriod's tier 1
-			// trusts periods (from GetScoringPeriodsAndTeams), which is the weekly
-			// matchup "Scoring Period" list — every date in a --matchup window falls
-			// inside some weekly period's date range, so tier 1 wins for nearly every
-			// call and hands back one weekly number for the whole span. During a
-			// merged week (e.g. the All-Star break, period 16 spanning 2026-07-13..26)
-			// that collapsed 11 distinct calendar dates onto the same period 16:
-			// GetHitterRosterForPeriod/GetPitcherRosterForPeriod fetched the identical
-			// stale snapshot for all of them, so each date's optimizer never saw its
-			// own prior apply, and the same swap re-applied (and re-notified via
-			// Pushover) on every hourly run. See DailyPeriodFor's doc comment.
-			period := ft.DailyPeriodFor(currentPeriod, seasonStart, today, date)
+			// DailyPeriodFor is the ONLY correct resolver here: ApplyLineup and
+			// GetHitterRosterForPeriod are keyed by Fantrax's *daily* scoring
+			// period. Never resolve this from the weekly `periods` list above —
+			// every date in a --matchup window falls inside some weekly period's
+			// range, so a weekly-keyed lookup hands back one number for the whole
+			// span. During a merged week (the All-Star break, weekly period 16
+			// spanning 2026-07-13..26) that collapsed 11 distinct calendar dates
+			// onto period 16: the roster fetches returned the identical stale
+			// snapshot for all of them, so each date's optimizer never saw its own
+			// prior apply, and the same swap re-applied (and re-notified via
+			// Pushover) on every hourly run — the rosterbot-z3b flood.
+			period := ft.DailyPeriodFor(seasonStart, date)
 
 			var warnings []string
 

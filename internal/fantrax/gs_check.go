@@ -174,11 +174,10 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStar
 	}
 
 	// The per-day snapshot diff is keyed by the *daily* scoring period (one
-	// number per calendar day), anchored on Fantrax's authoritative current
-	// daily period. See DailyPeriodFor / gsPeriodWalk for why this must not be
-	// the weekly matchup number.
-	currentPeriod, _ := c.GetCurrentPeriod()
-	walkPeriods := gsPeriodWalk(c, sp, currentPeriod, seasonStart, today)
+	// number per calendar day), resolved via the authoritative periodList map.
+	// See DailyPeriodFor / gsPeriodWalk for why this must not be the weekly
+	// matchup number.
+	walkPeriods := gsPeriodWalk(c, sp, seasonStart, today)
 
 	// Get baseline YTD GS and FPts per player as of the day before the period started.
 	// For the first period of the season, baseline is zero (no prior data).
@@ -186,7 +185,7 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStar
 	prevGS := map[string]int{}
 	prevFPts := map[string]float64{}
 	if !dayBeforePeriod.Before(seasonStart) {
-		baselinePeriod := c.DailyPeriodFor(currentPeriod, seasonStart, today, dayBeforePeriod)
+		baselinePeriod := c.DailyPeriodFor(seasonStart, dayBeforePeriod)
 		info, err := c.getPlayerGSSnapshotForPeriod(teamID, baselinePeriod)
 		if err != nil {
 			return 0, nil, fmt.Errorf("get baseline GS: %w", err)

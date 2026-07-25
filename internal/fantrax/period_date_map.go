@@ -84,15 +84,8 @@ func (c *Client) periodDateMap(seasonStart time.Time) (map[string]DailyPeriod, e
 	return m, nil
 }
 
-// dailyPeriodForDate resolves a calendar date to its authoritative DailyPeriod via
-// the periodList map, soft-falling back to naive season-start day math on any
-// miss/fetch error. This is the rosterbot-ren fix for the historical FP/GS walks;
-// the fallback keeps hermetic tests and credential-less renders working as before.
-func (c *Client) dailyPeriodForDate(seasonStart, date time.Time) DailyPeriod {
-	if m, err := c.periodDateMap(seasonStart); err == nil {
-		if p, ok := m[date.Format("2006-01-02")]; ok {
-			return p
-		}
-	}
-	return PeriodForDate(seasonStart, date)
-}
+// (rosterbot-xyk) dailyPeriodForDate used to live here as a near-twin of
+// DailyPeriodFor, differing only in that it skipped the anchor tier. With the
+// anchor tier deleted the two were byte-identical, so the historical FP/GS
+// walks (DailyFantasyPoints, GetTeamPitcherStarts — the rosterbot-ren callers)
+// now call DailyPeriodFor in gs_period_walk.go directly. One daily resolver.
