@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -63,16 +62,14 @@ type Options struct {
 	// tables (base → blend → matchup/gate → final).
 	ShowPipeline bool
 
-	// SnapshotFlag force-writes snapshots even in dry-run (mirrors --snapshot).
-	// ArchiveProjections is the deprecated alias (--archive-projections /
-	// BACKTEST_ARCHIVE=1).
-	SnapshotFlag       bool
-	ArchiveProjections bool
-
-	// ForceSnapshot unconditionally writes snapshots regardless of dry-run or
-	// the two flags above — the shadow command sets this since a capture run
-	// only exists to produce snapshots.
-	ForceSnapshot bool
+	// WriteSnapshots is the single resolved decision on whether this run
+	// archives projection snapshots. The caller owns the policy: cmd's
+	// resolveWriteSnapshots folds --snapshot, the deprecated
+	// --archive-projections / BACKTEST_ARCHIVE=1 aliases and the dry-run
+	// default into this one bool, and shadow simply passes true (a capture run
+	// exists only to produce snapshots). This replaced three Options fields
+	// encoding one behaviour plus an inline os.Getenv in Run (rosterbot-6rv).
+	WriteSnapshots bool
 
 	// SnapshotRoot is the exact directory snapshots are written into. A
 	// normal optimize run passes the flat .backtest/snapshots/ path; shadow
@@ -165,6 +162,11 @@ func cacheTTL(noCache bool, d time.Duration) time.Duration {
 // publish today's lineup for the read-only API, print the plan, and apply it
 // (unless cfg.DryRun). ft and cfg are wired up by the caller (cmd.initApp);
 // Run owns everything downstream of that.
+//
+// cfg is read-only. Run used to append the resolved `--dates all` / `--matchup`
+// expansion straight back into cfg.Dates — an undocumented output parameter;
+// that now happens in the ResolveDates phase, which returns a value
+// (rosterbot-6rv).
 func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	if err := projections.SetProjectionSystem(opts.ProjectionSystem); err != nil {
 		return Result{}, err
@@ -184,42 +186,11 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 
 	today := opts.Today
 
-	// Resolve "all" or "--matchup" now that the client is available.
-	var seasonStart time.Time // used later for period calculation
-	if opts.NeedsSeasonLookup || opts.NeedsMatchupLookup {
-		start, end, err := ft.GetSeasonDateRange()
-		if err != nil {
-			return Result{}, fmt.Errorf("get season date range: %w", err)
-		}
-		seasonStart = start
-
-		if opts.NeedsMatchupLookup {
-			weekStart, weekEnd, err := ft.GetMatchupWeekBounds(today, seasonStart)
-			if err != nil {
-				return Result{}, fmt.Errorf("get matchup week: %w", err)
-			}
-			if weekStart.IsZero() {
-				return Result{}, fmt.Errorf("no matchup week found for today")
-			}
-			// Start from today (skip past days in the matchup).
-			mStart := weekStart
-			if mStart.Before(today) {
-				mStart = today
-			}
-			for d := mStart; !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
-				cfg.Dates = append(cfg.Dates, d)
-			}
-			prog.Logf("matchup period: %s to %s (%d days remaining)",
-				weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"), len(cfg.Dates))
-		} else {
-			if start.Before(today) {
-				start = today
-			}
-			for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-				cfg.Dates = append(cfg.Dates, d)
-			}
-			prog.Logf("season range: %s to %s", start.Format("2006-01-02"), end.Format("2006-01-02"))
-		}
+	// Resolve "all" / "--matchup" now that the client is available. dates is a
+	// local value — Run does not write back into cfg (rosterbot-6rv).
+	dates, seasonStart, err := ResolveDates(ft, cfg.Dates, opts, prog.Logf)
+	if err != nil {
+		return Result{}, err
 	}
 
 	// --- Load projections early to determine system for header ---
@@ -246,7 +217,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		PitchersNoData: pitLoadResult.NoData,
 	}
 
-	prog.Header(projDisplayName[batLoadResult.System], formatDates(cfg.Dates), cfg.DryRun)
+	prog.Header(projDisplayName[batLoadResult.System], formatDates(dates), cfg.DryRun)
 
 	// --- Roster alerts (if requested) ---
 	if opts.CheckRoster {
@@ -447,7 +418,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		prog.Done("Handedness", "skipped — no MLBAM IDs")
 	}
 
-	multiDate := len(cfg.Dates) > 1
+	multiDate := len(dates) > 1
 	schedClient := schedule.NewClient()
 	schedClient.CacheDir = cacheDir
 
@@ -522,72 +493,17 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 			spNames := rosterSPNames(pitcherRoster)
 			usedGS := pastGS
 
-			// Build forecast for remaining days (today+1 through weekEnd).
-			// For confirmed probables, collect each pitcher's projected pts so
-			// the gate can rank across the week by value, not just count. Cap
-			// at active P slots since bench SPs don't consume GS.
-			numPSlots := len(pitcherSlots)
-			var forecast []optimizer.DayForecast
-			for d := today.AddDate(0, 0, 1); !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
-				playing, _ := schedClient.TeamsPlayingOn(d)
-				probs, _ := schedClient.ProbableStarters(d)
+			forecast := buildGSForecast(schedClient, spNames, len(pitcherSlots), today, weekEnd,
+				func(p fantrax.Player) float64 {
+					return pitcherProjectedPts(p, pitcherProjSrc, pitcherScoring)
+				})
 
-				df := optimizer.DayForecast{Date: d}
-				if len(probs) > 0 {
-					for normName, team := range probs {
-						p, ours := spNames[normName]
-						if !ours || p.MLBTeam != team {
-							continue
-						}
-						df.ConfirmedStarters = append(df.ConfirmedStarters, pitcherProjectedPts(p, pitcherProjSrc, pitcherScoring))
-					}
-					// Cap at active P slots, keeping the highest-value probables.
-					if len(df.ConfirmedStarters) > numPSlots {
-						sort.Slice(df.ConfirmedStarters, func(i, j int) bool {
-							return df.ConfirmedStarters[i] > df.ConfirmedStarters[j]
-						})
-						df.ConfirmedStarters = df.ConfirmedStarters[:numPSlots]
-					}
-				} else {
-					// No probables — estimate: roster SPs whose team plays / 5 (standard rotation),
-					// capped at active P slots since only active-slot SPs consume GS.
-					var spPlaying float64
-					for _, p := range spNames {
-						if playing[p.MLBTeam] {
-							spPlaying++
-						}
-					}
-					if spPlaying > float64(numPSlots) {
-						spPlaying = float64(numPSlots)
-					}
-					df.Estimated = spPlaying / 5.0
-				}
-				forecast = append(forecast, df)
-			}
-
-			// Count today's locked active SP starters toward used GS. Only count
-			// pitchers who are MLB's probable starter for their team today —
-			// otherwise an active-slot SP-eligible reliever or a non-starting
-			// SP whose team plays gets miscounted as a GS just because the team
-			// game is locked. Probables for completed games stay in the API for
-			// the day, so this captures both in-progress and final starts.
+			// Today's already-locked starts count as used, not forecast demand.
+			// Both lookups must succeed — a partial view would undercount.
 			lockedTeams, lockErr := schedClient.LockedTeams(today)
 			todayProbs, probsErr := schedClient.ProbableStarters(today)
 			if lockErr == nil && probsErr == nil {
-				for _, p := range pitcherRoster {
-					if p.Status != "Active" || p.InMinors || p.IsInjured {
-						continue
-					}
-					if !lockedTeams[p.MLBTeam] {
-						continue
-					}
-					if !strings.Contains(p.PosShortNames, "SP") {
-						continue
-					}
-					if team, ok := todayProbs[projections.NormalizeName(p.Name)]; ok && team == p.MLBTeam {
-						usedGS++
-					}
-				}
+				usedGS += countTodayStarts(pitcherRoster, lockedTeams, todayProbs)
 			}
 
 			gsBudget = &optimizer.GSBudget{
@@ -626,11 +542,11 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	}
 
 	// --- Parallel fetch + optimize for all dates ---
-	results := make([]dateResult, len(cfg.Dates))
+	results := make([]dateResult, len(dates))
 
 	prog.Start("Optimize")
 	var g errgroup.Group
-	for i, date := range cfg.Dates {
+	for i, date := range dates {
 		i, date := i, date
 		g.Go(func() error {
 			isToday := date.Equal(today)
@@ -939,12 +855,8 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	prog.Finish()
 
 	// --- Archive per-date projection snapshots ---
-	// Default-on for real (non-dry-run) optimize runs so the hourly cron
-	// accumulates backtest data automatically. In dry-run nothing is written
-	// unless explicitly requested via --snapshot (or the --archive-projections /
-	// BACKTEST_ARCHIVE aliases, kept for backward compatibility), or the caller
-	// is in shadow-capture mode (ForceSnapshot).
-	if !cfg.DryRun || opts.SnapshotFlag || opts.ArchiveProjections || opts.ForceSnapshot || os.Getenv("BACKTEST_ARCHIVE") == "1" {
+	// Whether to write is decided entirely by the caller; see Options.WriteSnapshots.
+	if opts.WriteSnapshots {
 		for _, dr := range results {
 			if err := writeProjectionSnapshot(dr, batLoadResult.System, slotName, batLoadResult.NoData, pitLoadResult.NoData, opts.SnapshotRoot); err != nil {
 				fmt.Printf("  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)
@@ -974,283 +886,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 			fmt.Printf("  ⚠ %s\n", w)
 		}
 
-		// --- Build side-by-side hitter/pitcher display ---
-		const (
-			colL = 43 // hitter column width (runes)
-			colR = 48 // pitcher column width (runes)
-		)
-
-		// Date header
-		dateLabel := dr.date.Format("Mon Jan 2")
-		if dr.isToday {
-			dateLabel += " (today)"
-		}
-		if multiDate {
-			boxW := colL + 3 + colR
-			fmt.Printf("\n  ╔%s╗\n", strings.Repeat("═", boxW))
-			fmt.Printf("  ║  %-*s║\n", boxW-2, dateLabel)
-			fmt.Printf("  ╚%s╝\n", strings.Repeat("═", boxW))
-		}
-
-		// --- Hitter lines ---
-		var hLines []string
-		var hGreen []bool // parallel: true = render line in green (minor leaguer)
-		hLines = append(hLines, "Hitters "+strings.Repeat("─", colL-8))
-		hGreen = append(hGreen, false)
-		hLines = append(hLines, "  "+padRight("Player", 19)+" "+padRight("Team", 4)+" "+fmt.Sprintf("%6s", "Pts/G")+" "+padRight("Slot", 4)+" Game")
-		hGreen = append(hGreen, false)
-		hLines = append(hLines, strings.Repeat("─", colL))
-		hGreen = append(hGreen, false)
-
-		var hitterStartingPts float64
-		var hActive, hBench []optimizer.ScoredPlayer
-		for _, sp := range dr.hitterResult.Scored {
-			if sp.Player.Status == "Active" {
-				hActive = append(hActive, sp)
-				if sp.HasGame {
-					hitterStartingPts += sp.ExpectedPts
-				}
-			} else {
-				hBench = append(hBench, sp)
-			}
-		}
-
-		for _, sp := range hActive {
-			slot := ""
-			if name, ok := slotName[sp.Player.RosterPosition]; ok {
-				slot = name
-			}
-			game := " "
-			if sp.Player.Locked {
-				game = "🔒"
-			} else if dr.benchedToday[projections.NormalizeName(sp.Player.Name)] {
-				game = "❌"
-			} else if sp.HasGame {
-				game = "✓"
-			}
-			line := padRight("▸", 1) + " " + padRight(truncName(sp.Player.Name, 19), 19) + " " +
-				padRight(sp.Player.MLBTeam, 4) + " " + fmt.Sprintf("%6.2f", sp.ExpectedPts) +
-				" " + padRight(slot, 4) + " " + game
-			hLines = append(hLines, line)
-			hGreen = append(hGreen, sp.Player.InMinors)
-		}
-		if len(hBench) > 0 {
-			hLines = append(hLines, strings.Repeat("·", colL))
-			hGreen = append(hGreen, false)
-			for _, sp := range hBench {
-				game := " "
-				if sp.Player.Locked {
-					game = "🔒"
-				} else if dr.benchedToday[projections.NormalizeName(sp.Player.Name)] {
-					game = "❌"
-				} else if sp.HasGame {
-					game = "✓"
-				}
-				line := "  " + padRight(truncName(sp.Player.Name, 19), 19) + " " +
-					padRight(sp.Player.MLBTeam, 4) + " " + fmt.Sprintf("%6.2f", sp.ExpectedPts) +
-					" " + padRight("", 4) + " " + game
-				hLines = append(hLines, line)
-				hGreen = append(hGreen, sp.Player.InMinors)
-			}
-		}
-
-		// --- Pitcher lines ---
-		var pLines []string
-		var pGreen []bool // parallel: true = render line in green (minor leaguer)
-		pLines = append(pLines, "Pitchers "+strings.Repeat("─", colR-9))
-		pGreen = append(pGreen, false)
-		pLines = append(pLines, "  "+padRight("Player", 19)+" "+padRight("Team", 4)+" "+fmt.Sprintf("%6s", "Pts/G")+" "+padRight("Slot", 4)+" "+padRight("Pos", 4)+" Game")
-		pGreen = append(pGreen, false)
-		pLines = append(pLines, strings.Repeat("─", colR))
-		pGreen = append(pGreen, false)
-
-		var pitcherStartingPts float64
-		var pActive, pBench []optimizer.ScoredPitcher
-		for _, sp := range dr.pitcherResult.Scored {
-			if sp.Player.Status == "Active" {
-				pActive = append(pActive, sp)
-				isRP := !strings.Contains(sp.Player.PosShortNames, "SP")
-				if sp.HasGame && (sp.IsStarter || isRP) {
-					pitcherStartingPts += sp.ExpectedPts
-				}
-			} else {
-				pBench = append(pBench, sp)
-			}
-		}
-		for _, sp := range pActive {
-			slot := ""
-			if name, ok := slotName[sp.Player.RosterPosition]; ok {
-				slot = name
-			}
-			role := sp.Player.PosShortNames
-			if role == "" {
-				role = "P"
-			}
-			if sp.IsStarter {
-				role += "★"
-			}
-			game := " "
-			if sp.Player.Locked {
-				game = "🔒"
-			} else if sp.HasGame {
-				game = "✓"
-			}
-			line := padRight("▸", 1) + " " + padRight(truncName(sp.Player.Name, 19), 19) + " " +
-				padRight(sp.Player.MLBTeam, 4) + " " + fmt.Sprintf("%6.2f", sp.ExpectedPts) + " " +
-				padRight(slot, 4) + " " + padRight(role, 4) + " " + game
-			pLines = append(pLines, line)
-			pGreen = append(pGreen, sp.Player.InMinors)
-		}
-		if len(pBench) > 0 {
-			pLines = append(pLines, strings.Repeat("·", colR))
-			pGreen = append(pGreen, false)
-			for _, sp := range pBench {
-				role := sp.Player.PosShortNames
-				if role == "" {
-					role = "P"
-				}
-				if sp.IsStarter {
-					role += "★"
-				}
-				game := " "
-				if sp.Player.Locked {
-					game = "🔒"
-				} else if sp.HasGame {
-					game = "✓"
-				}
-				line := "  " + padRight(truncName(sp.Player.Name, 19), 19) + " " +
-					padRight(sp.Player.MLBTeam, 4) + " " + fmt.Sprintf("%6.2f", sp.ExpectedPts) + " " +
-					padRight("", 4) + " " + padRight(role, 4) + " " + game
-				pLines = append(pLines, line)
-				pGreen = append(pGreen, sp.Player.InMinors)
-			}
-		}
-		// Pad data sections to same height so totals align.
-		for len(hLines) < len(pLines) {
-			hLines = append(hLines, "")
-			hGreen = append(hGreen, false)
-		}
-		for len(pLines) < len(hLines) {
-			pLines = append(pLines, "")
-			pGreen = append(pGreen, false)
-		}
-
-		// Append footer lines (separator + total) — now on the same row.
-		hLines = append(hLines, strings.Repeat("─", colL))
-		hGreen = append(hGreen, false)
-		hLines = append(hLines, "  "+padRight("Total", 19)+" "+padRight("", 4)+" "+fmt.Sprintf("%6.2f", hitterStartingPts))
-		hGreen = append(hGreen, false)
-
-		pLines = append(pLines, strings.Repeat("─", colR))
-		pGreen = append(pGreen, false)
-		pLines = append(pLines, "  "+padRight("Total", 19)+" "+padRight("", 4)+" "+fmt.Sprintf("%6.2f", pitcherStartingPts))
-		pGreen = append(pGreen, false)
-		if gsBudget != nil {
-			remaining := gsBudget.Remaining()
-			hLines = append(hLines, "")
-			hGreen = append(hGreen, false)
-			pLines = append(pLines, fmt.Sprintf("GS: %d/%d used (%d rem, %.1f future)",
-				gsBudget.Used, gsBudget.Limit, remaining, gsBudget.FutureDemand()))
-			pGreen = append(pGreen, false)
-		}
-
-		// Print side by side.
-		fmt.Println()
-		for i := range hLines {
-			left := padRight(hLines[i], colL)
-			right := padRight(pLines[i], colR)
-			if hGreen[i] {
-				left = "\033[32m" + left + "\033[0m"
-			}
-			if pGreen[i] {
-				right = "\033[32m" + right + "\033[0m"
-			}
-			fmt.Printf("  %s │ %s\n", left, right)
-		}
-
-		// Combined total.
-		fmt.Printf("\n  %-26s %6.2f\n", "Combined Expected", hitterStartingPts+pitcherStartingPts)
-
-		// --- Hitter pipeline detail ---
-		// Both pipeline tables share the same column geometry so they line up:
-		//   indent(2) Player(24) Base(7) Mix(4) Blend(7) Mid1(7) Mid2(7) Final(7)
-		// with 2-space gaps. Total visible width = 2 + 24 + 2 + 7 + 2 + 4 + 2 + 7
-		// + 2 + 7 + 2 + 7 + 2 + 7 + 1(│) = 78.
-		// Hitters fill Mid1 with Platoon and Mid2 with Opp SP. Pitchers leave
-		// Mid1 blank and put Gate in Mid2 so the rightmost adjustment column
-		// aligns between tables.
-		const pipelineWidth = 78
-
-		if opts.ShowPipeline && len(dr.hitterPipelines) > 0 {
-			fmt.Println()
-
-			pipelineSorted := make([]optimizer.ScoredPlayer, 0, len(dr.hitterPipelines))
-			for _, sp := range dr.hitterResult.Scored {
-				if _, ok := dr.hitterPipelines[sp.Player.ID]; ok {
-					pipelineSorted = append(pipelineSorted, sp)
-				}
-			}
-			sort.Slice(pipelineSorted, func(i, j int) bool {
-				pi := dr.hitterPipelines[pipelineSorted[i].Player.ID]
-				pj := dr.hitterPipelines[pipelineSorted[j].Player.ID]
-				return pi.FinalPtsPerGame > pj.FinalPtsPerGame
-			})
-
-			titlePrefix := "  Hitter Pipeline "
-			fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", pipelineWidth-len(titlePrefix)-1))
-			fmt.Printf("  %-24s  %7s  %4s  %7s  %7s  %7s  %7s│\n",
-				"Player", "Base", "Mix", "Blend", "Platoon", "Opp SP", "Final")
-			fmt.Printf("  %s╯\n", strings.Repeat("─", pipelineWidth-2-1))
-
-			for _, sp := range pipelineSorted {
-				pd := dr.hitterPipelines[sp.Player.ID]
-				fmt.Printf("  %-24s  %7.2f  %s  %s  %s  %s  %7.2f\n",
-					truncName(sp.Player.Name, 24),
-					pd.BasePtsPerGame,
-					formatBlendMix(pd.BaseWt, pd.HasRecent),
-					colorDelta(pd.BlendDelta),
-					colorDelta(pd.PlatoonDelta),
-					colorDelta(pd.QualityDelta),
-					pd.FinalPtsPerGame,
-				)
-			}
-		}
-
-		// --- Pitcher pipeline detail ---
-		if opts.ShowPipeline && len(dr.pitcherPipelines) > 0 {
-			fmt.Println()
-
-			pitPipelineSorted := make([]optimizer.ScoredPitcher, 0, len(dr.pitcherPipelines))
-			for _, sp := range dr.pitcherResult.Scored {
-				if _, ok := dr.pitcherPipelines[sp.Player.ID]; ok {
-					pitPipelineSorted = append(pitPipelineSorted, sp)
-				}
-			}
-			sort.Slice(pitPipelineSorted, func(i, j int) bool {
-				pi := dr.pitcherPipelines[pitPipelineSorted[i].Player.ID]
-				pj := dr.pitcherPipelines[pitPipelineSorted[j].Player.ID]
-				return pi.FinalPtsPerGame > pj.FinalPtsPerGame
-			})
-
-			titlePrefix := "  Pitcher Pipeline "
-			fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", pipelineWidth-len(titlePrefix)-1))
-			fmt.Printf("  %-24s  %7s  %4s  %7s  %7s  %7s  %7s│\n",
-				"Player", "Base", "Mix", "Blend", "", "Gate", "Final")
-			fmt.Printf("  %s╯\n", strings.Repeat("─", pipelineWidth-2-1))
-
-			for _, sp := range pitPipelineSorted {
-				pd := dr.pitcherPipelines[sp.Player.ID]
-				fmt.Printf("  %-24s  %7.2f  %s  %s  %7s  %s  %7.2f\n",
-					truncName(sp.Player.Name, 24),
-					pd.BasePtsPerGame,
-					formatBlendMix(pd.BaseWt, pd.HasRecent),
-					colorDelta(pd.BlendDelta),
-					"",
-					colorDelta(pd.GateDelta),
-					pd.FinalPtsPerGame,
-				)
-			}
-		}
+		renderDateResult(dr, multiDate, slotName, opts.ShowPipeline, gsBudget)
 
 		// --- Combine changes ---
 		allActivate := append(dr.hitterResult.ToActivate, dr.pitcherResult.ToActivate...)
