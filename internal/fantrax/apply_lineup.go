@@ -127,13 +127,26 @@ func applyLineupWithLockedPlayerRetry(
 // verify-only hiccup is logged as "outcome unconfirmed" rather than promoted to
 // a hard failure. A genuine mismatch (a change that didn't take effect) returns
 // an error naming the unmet players so the caller surfaces it (log + Pushover).
+//
+// Every outcome except the no-retry skip leaves a log line, so production can
+// tell them apart. Returning nil silently on both success and skip is what
+// rosterbot-7lo was filed about: the caller prints "Lineup applied successfully"
+// either way, so "verify ran and passed" read identically to "verify never ran"
+// — the same false-confidence shape as the rosterbot-48z incident itself. The
+// clean no-retry path stays silent by design: it runs hourly and has nothing to
+// verify, so a line there would be noise that drowns the signal.
 func verifyExcludedRetry(
 	fetch rosterFetcher,
 	active []PlayerSlot,
 	reserve []string,
 	excluded map[string]bool,
 ) error {
-	if fetch == nil || len(excluded) == 0 {
+	if len(excluded) == 0 {
+		return nil // no retry happened — nothing to verify
+	}
+	if fetch == nil {
+		log.Printf("fantrax: post-retry verify DISABLED — no roster fetcher wired, "+
+			"%d locked player(s) excluded; apply outcome unconfirmed", len(excluded))
 		return nil
 	}
 	roster, err := fetch()
@@ -144,6 +157,7 @@ func verifyExcludedRetry(
 	actual := auth_client.BuildFieldMapFromRoster(roster)
 
 	var unmet []string
+	confirmed := 0
 	for _, ps := range active {
 		if excluded[ps.PlayerID] {
 			continue
@@ -152,7 +166,9 @@ func verifyExcludedRetry(
 		if got.StID != auth_client.StatusActive || got.PosID != ps.PosID {
 			unmet = append(unmet, fmt.Sprintf("%s→active(%s) but st=%q pos=%q",
 				ps.PlayerID, ps.PosID, got.StID, got.PosID))
+			continue
 		}
+		confirmed++
 	}
 	for _, id := range reserve {
 		if excluded[id] {
@@ -160,12 +176,19 @@ func verifyExcludedRetry(
 		}
 		if actual[id].StID != auth_client.StatusReserve {
 			unmet = append(unmet, fmt.Sprintf("%s→reserve but st=%q", id, actual[id].StID))
+			continue
 		}
+		confirmed++
 	}
 	if len(unmet) > 0 {
 		return fmt.Errorf("post-retry verify failed — %d intended change(s) did not land: %s",
 			len(unmet), strings.Join(unmet, "; "))
 	}
+	// Logged unconditionally (not gated on Verbose): the whole point is that a
+	// production log can tell "verify ran and passed" apart from "verify never
+	// ran". Retries are rare, so this costs one line on the rare run.
+	log.Printf("fantrax: post-retry verify — %d change(s) confirmed landed (%d excluded as locked)",
+		confirmed, len(excluded))
 	return nil
 }
 
