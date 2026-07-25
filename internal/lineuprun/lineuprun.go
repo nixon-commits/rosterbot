@@ -496,72 +496,17 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 			spNames := rosterSPNames(pitcherRoster)
 			usedGS := pastGS
 
-			// Build forecast for remaining days (today+1 through weekEnd).
-			// For confirmed probables, collect each pitcher's projected pts so
-			// the gate can rank across the week by value, not just count. Cap
-			// at active P slots since bench SPs don't consume GS.
-			numPSlots := len(pitcherSlots)
-			var forecast []optimizer.DayForecast
-			for d := today.AddDate(0, 0, 1); !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
-				playing, _ := schedClient.TeamsPlayingOn(d)
-				probs, _ := schedClient.ProbableStarters(d)
+			forecast := buildGSForecast(schedClient, spNames, len(pitcherSlots), today, weekEnd,
+				func(p fantrax.Player) float64 {
+					return pitcherProjectedPts(p, pitcherProjSrc, pitcherScoring)
+				})
 
-				df := optimizer.DayForecast{Date: d}
-				if len(probs) > 0 {
-					for normName, team := range probs {
-						p, ours := spNames[normName]
-						if !ours || p.MLBTeam != team {
-							continue
-						}
-						df.ConfirmedStarters = append(df.ConfirmedStarters, pitcherProjectedPts(p, pitcherProjSrc, pitcherScoring))
-					}
-					// Cap at active P slots, keeping the highest-value probables.
-					if len(df.ConfirmedStarters) > numPSlots {
-						sort.Slice(df.ConfirmedStarters, func(i, j int) bool {
-							return df.ConfirmedStarters[i] > df.ConfirmedStarters[j]
-						})
-						df.ConfirmedStarters = df.ConfirmedStarters[:numPSlots]
-					}
-				} else {
-					// No probables — estimate: roster SPs whose team plays / 5 (standard rotation),
-					// capped at active P slots since only active-slot SPs consume GS.
-					var spPlaying float64
-					for _, p := range spNames {
-						if playing[p.MLBTeam] {
-							spPlaying++
-						}
-					}
-					if spPlaying > float64(numPSlots) {
-						spPlaying = float64(numPSlots)
-					}
-					df.Estimated = spPlaying / 5.0
-				}
-				forecast = append(forecast, df)
-			}
-
-			// Count today's locked active SP starters toward used GS. Only count
-			// pitchers who are MLB's probable starter for their team today —
-			// otherwise an active-slot SP-eligible reliever or a non-starting
-			// SP whose team plays gets miscounted as a GS just because the team
-			// game is locked. Probables for completed games stay in the API for
-			// the day, so this captures both in-progress and final starts.
+			// Today's already-locked starts count as used, not forecast demand.
+			// Both lookups must succeed — a partial view would undercount.
 			lockedTeams, lockErr := schedClient.LockedTeams(today)
 			todayProbs, probsErr := schedClient.ProbableStarters(today)
 			if lockErr == nil && probsErr == nil {
-				for _, p := range pitcherRoster {
-					if p.Status != "Active" || p.InMinors || p.IsInjured {
-						continue
-					}
-					if !lockedTeams[p.MLBTeam] {
-						continue
-					}
-					if !strings.Contains(p.PosShortNames, "SP") {
-						continue
-					}
-					if team, ok := todayProbs[projections.NormalizeName(p.Name)]; ok && team == p.MLBTeam {
-						usedGS++
-					}
-				}
+				usedGS += countTodayStarts(pitcherRoster, lockedTeams, todayProbs)
 			}
 
 			gsBudget = &optimizer.GSBudget{
