@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/nixon-commits/rosterbot/internal/lineupapi"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
 	"github.com/nixon-commits/rosterbot/internal/progress"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 )
 
 // installProgressRecorder wires progress.Recorder so a run's phase transitions
@@ -20,15 +19,9 @@ func installProgressRecorder() {
 		return
 	}
 
-	var w lineupapi.ProgressWriter
-	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		s, err := s3lineup.NewProgress(context.Background(), bucket, "runs/")
-		if err != nil {
-			return
-		}
-		w = s
-	} else {
-		w = lineupapi.NewFileProgressStore(".lineup/progress")
+	w, err := statestore.FromEnv().Progress()
+	if err != nil {
+		return
 	}
 
 	progress.Recorder = func(s progress.Snapshot) {

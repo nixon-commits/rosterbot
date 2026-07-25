@@ -1,17 +1,14 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/nixon-commits/rosterbot/internal/analysis"
-	"github.com/nixon-commits/rosterbot/internal/ndjsonstore/s3ndjson"
 	"github.com/nixon-commits/rosterbot/internal/report"
-	"github.com/nixon-commits/rosterbot/internal/teamvalue"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/nixon-commits/rosterbot/internal/valuereport"
 	"github.com/spf13/cobra"
 )
@@ -40,15 +37,9 @@ func init() {
 func runProjectionSite(cmd *cobra.Command, args []string) error {
 	today := todayET()
 
-	var reader analysis.Reader
-	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		store, err := s3ndjson.New(context.Background(), bucket, "analysis/")
-		if err != nil {
-			return fmt.Errorf("init analysis reader: %w", err)
-		}
-		reader = analysis.NewReader(store)
-	} else {
-		reader = analysis.NewFileReader(".analysis")
+	reader, err := statestore.FromEnv().AnalysisReader()
+	if err != nil {
+		return fmt.Errorf("init analysis reader: %w", err)
 	}
 
 	rows, err := reader.ReadAll()
@@ -101,15 +92,9 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 // local .teamvalue/) and writes <outDir>/value.json. An empty store still
 // writes a valid (empty) model rather than erroring.
 func renderValueSite(outDir string) error {
-	var reader teamvalue.Reader
-	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		store, err := s3ndjson.New(context.Background(), bucket, teamValuePrefix)
-		if err != nil {
-			return fmt.Errorf("init team-value reader: %w", err)
-		}
-		reader = teamvalue.NewReader(store)
-	} else {
-		reader = teamvalue.NewFileReader(teamValueLocalDir)
+	reader, err := statestore.FromEnv().TeamValueReader()
+	if err != nil {
+		return fmt.Errorf("init team-value reader: %w", err)
 	}
 	rows, err := reader.ReadAll()
 	if err != nil {

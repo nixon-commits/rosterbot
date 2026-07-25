@@ -1,20 +1,20 @@
 package lineuprun
 
 import (
-	"context"
-	"os"
-
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
 )
 
 // publishLineup serializes today's optimized lineup into the read-only API's
-// wire shape and writes it to object storage — S3 (lineup/ prefix) when running
-// on Fargate (STATE_BUCKET set), otherwise the local .lineup/ dir. It publishes
-// under both "today" (the alias the endpoint serves) and the date string.
-func publishLineup(dr dateResult, cfg *config.Config, hitterSlots, pitcherSlots []fantrax.Slot) error {
+// wire shape and writes it via pub — the caller supplies the destination
+// (S3 or local), selected in cmd through internal/statestore. A nil pub is a
+// no-op (the caller chose not to publish). It publishes under both "today"
+// (the alias the endpoint serves) and the date string.
+func publishLineup(dr dateResult, cfg *config.Config, hitterSlots, pitcherSlots []fantrax.Slot, pub lineupapi.Publisher) error {
+	if pub == nil {
+		return nil
+	}
 	resp := lineupapi.Build(lineupapi.Inputs{
 		Date:         dr.date.Format("2006-01-02"),
 		LeagueID:     cfg.LeagueID,
@@ -30,18 +30,6 @@ func publishLineup(dr dateResult, cfg *config.Config, hitterSlots, pitcherSlots 
 	if err != nil {
 		return err
 	}
-
-	var pub lineupapi.Publisher
-	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		p, err := s3lineup.New(context.Background(), bucket, "lineup/")
-		if err != nil {
-			return err
-		}
-		pub = p
-	} else {
-		pub = lineupapi.NewFileStore(".lineup")
-	}
-
 	if err := pub.Publish(lineupapi.TodayKey, data); err != nil {
 		return err
 	}

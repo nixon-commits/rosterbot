@@ -1,17 +1,16 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
-	"github.com/nixon-commits/rosterbot/internal/cachestore/s3store"
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/notify"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/spf13/cobra"
 )
 
@@ -90,13 +89,14 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 	}
 	if !noCache {
 		// On Fargate, back the Cache with S3 directly (per-key) instead of
-		// local files, so no bulk .cache sync is needed. STATE_BUCKET is the
-		// task's state bucket; cache entries live under the cache/ prefix.
-		if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-			st, err := s3store.New(context.Background(), bucket, "cache/")
-			if err != nil {
-				return nil, nil, fmt.Errorf("init s3 cache store: %w", err)
-			}
+		// local files, so no bulk .cache sync is needed. statestore owns the
+		// STATE_BUCKET decision + the cache/ prefix; nil means local (keep the
+		// default fsStore).
+		st, err := statestore.FromEnv().CacheStore()
+		if err != nil {
+			return nil, nil, fmt.Errorf("init cache store: %w", err)
+		}
+		if st != nil {
 			cache.SetDefaultStore(st)
 		}
 		ft.SetCache(cacheDir)

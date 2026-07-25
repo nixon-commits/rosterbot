@@ -7,15 +7,9 @@ import (
 	"strings"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/spf13/cobra"
 )
-
-// runWriter is the write side of the run ledger, satisfied by both the S3 and
-// local-file run stores.
-type runWriter interface {
-	PutRun(context.Context, lineupapi.RunDetail) error
-}
 
 var (
 	ledgerID       string
@@ -74,15 +68,9 @@ func runLedger(cmd *cobra.Command, args []string) error {
 		rec.LogTail = tailFile(ledgerLogFile, 50, 8000)
 	}
 
-	var w runWriter
-	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
-		s, err := s3lineup.NewRuns(context.Background(), bucket, "runledger/")
-		if err != nil {
-			return err
-		}
-		w = s
-	} else {
-		w = lineupapi.NewFileRunStore(".lineup/runs")
+	w, err := statestore.FromEnv().RunLedger()
+	if err != nil {
+		return err
 	}
 	return w.PutRun(context.Background(), rec)
 }
