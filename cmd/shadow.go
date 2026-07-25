@@ -89,7 +89,7 @@ func runShadow(cmd *cobra.Command, args []string) error {
 			ProjectionSystem:  sys,
 			CheckRoster:       false, // roster-alert noise is irrelevant to a capture run
 			SnapshotRoot:      systemSnapshotDir(shadowSnapshotRoot, sys),
-			ForceSnapshot:     true, // capture mode: always write, regardless of dry-run
+			WriteSnapshots:    true, // capture mode: always write, regardless of dry-run
 			NoCache:           noCache,
 			Verbose:           verbose,
 		}

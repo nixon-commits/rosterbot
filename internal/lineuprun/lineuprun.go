@@ -62,16 +62,14 @@ type Options struct {
 	// tables (base → blend → matchup/gate → final).
 	ShowPipeline bool
 
-	// SnapshotFlag force-writes snapshots even in dry-run (mirrors --snapshot).
-	// ArchiveProjections is the deprecated alias (--archive-projections /
-	// BACKTEST_ARCHIVE=1).
-	SnapshotFlag       bool
-	ArchiveProjections bool
-
-	// ForceSnapshot unconditionally writes snapshots regardless of dry-run or
-	// the two flags above — the shadow command sets this since a capture run
-	// only exists to produce snapshots.
-	ForceSnapshot bool
+	// WriteSnapshots is the single resolved decision on whether this run
+	// archives projection snapshots. The caller owns the policy: cmd's
+	// resolveWriteSnapshots folds --snapshot, the deprecated
+	// --archive-projections / BACKTEST_ARCHIVE=1 aliases and the dry-run
+	// default into this one bool, and shadow simply passes true (a capture run
+	// exists only to produce snapshots). This replaced three Options fields
+	// encoding one behaviour plus an inline os.Getenv in Run (rosterbot-6rv).
+	WriteSnapshots bool
 
 	// SnapshotRoot is the exact directory snapshots are written into. A
 	// normal optimize run passes the flat .backtest/snapshots/ path; shadow
@@ -857,12 +855,8 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	prog.Finish()
 
 	// --- Archive per-date projection snapshots ---
-	// Default-on for real (non-dry-run) optimize runs so the hourly cron
-	// accumulates backtest data automatically. In dry-run nothing is written
-	// unless explicitly requested via --snapshot (or the --archive-projections /
-	// BACKTEST_ARCHIVE aliases, kept for backward compatibility), or the caller
-	// is in shadow-capture mode (ForceSnapshot).
-	if !cfg.DryRun || opts.SnapshotFlag || opts.ArchiveProjections || opts.ForceSnapshot || os.Getenv("BACKTEST_ARCHIVE") == "1" {
+	// Whether to write is decided entirely by the caller; see Options.WriteSnapshots.
+	if opts.WriteSnapshots {
 		for _, dr := range results {
 			if err := writeProjectionSnapshot(dr, batLoadResult.System, slotName, batLoadResult.NoData, pitLoadResult.NoData, opts.SnapshotRoot); err != nil {
 				fmt.Printf("  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)

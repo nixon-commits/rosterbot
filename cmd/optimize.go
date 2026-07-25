@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/lineuprun"
@@ -102,8 +103,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		ProjectionSystem:   projectionSystem,
 		CheckRoster:        checkRoster,
 		ShowPipeline:       showPipeline,
-		SnapshotFlag:       snapshotFlag,
-		ArchiveProjections: archiveProjections,
+		WriteSnapshots:     resolveWriteSnapshots(cfg.DryRun, snapshotFlag, archiveProjections, os.Getenv("BACKTEST_ARCHIVE")),
 		SnapshotRoot:       backtestSnapshotDir,
 		PublishLineupFlag:  publishLineupFlag,
 		Publisher:          pub,
