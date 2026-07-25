@@ -25,31 +25,20 @@ func isPitcher(rp models.RosterPlayer) bool {
 // excludes IL/minors). Cached under fantrax-pitcher-roster-<teamID> with
 // todayTTL when SetCache is on.
 func (c *Client) GetPitcherRoster() ([]Player, error) {
-	if c.cacheDir == "" {
-		return c.fetchPitcherRosterForPeriod(0)
-	}
-	fc := cache.New[[]Player](c.cacheDir, c.todayTTL)
-	key := cache.Key(keyPitcherRoster, c.teamID)
-	return fc.Get(key, func() ([]Player, error) {
-		return c.fetchPitcherRosterForPeriod(0)
-	})
+	return cached(c, cache.Key(keyPitcherRoster, c.teamID), tierToday,
+		func() ([]Player, error) { return c.fetchPitcherRosterForPeriod(0) })
 }
 
 // GetPitcherRosterForPeriod returns all pitchers for the given scoring period.
 // Pass 0 to use the current period. Past-period rosters are cached at 30d
-// TTL via ttlForPeriod; current/future use todayTTL.
+// TTL via cachedForPeriod/tierForPeriod; current/future use todayTTL.
 func (c *Client) GetPitcherRosterForPeriod(period DailyPeriod) ([]Player, error) {
-	if c.cacheDir == "" || period == 0 {
-		if period == 0 {
-			return c.GetPitcherRoster()
-		}
-		return c.fetchPitcherRosterForPeriod(period)
+	// period==0 is "current" — let GetPitcherRoster handle the today-keyed cache.
+	if period == 0 {
+		return c.GetPitcherRoster()
 	}
-	fc := cache.New[[]Player](c.cacheDir, c.ttlForPeriod(period))
-	key := cache.Key(keyPitcherRoster, c.teamID, strconv.Itoa(int(period)))
-	return fc.Get(key, func() ([]Player, error) {
-		return c.fetchPitcherRosterForPeriod(period)
-	})
+	return cachedForPeriod(c, cache.Key(keyPitcherRoster, c.teamID, strconv.Itoa(int(period))), period,
+		func() ([]Player, error) { return c.fetchPitcherRosterForPeriod(period) })
 }
 
 func (c *Client) fetchPitcherRosterForPeriod(period DailyPeriod) ([]Player, error) {
@@ -77,14 +66,7 @@ func (c *Client) fetchPitcherRosterForPeriod(period DailyPeriod) ([]Player, erro
 // GetPitcherSlots returns the ordered list of active pitcher slots for the
 // league. Cached under fantrax-pitcher-slots-<leagueID> with stableTTL.
 func (c *Client) GetPitcherSlots() ([]Slot, error) {
-	if c.cacheDir == "" {
-		return c.fetchPitcherSlots()
-	}
-	fc := cache.New[[]Slot](c.cacheDir, c.stableTTL)
-	key := cache.Key(keyPitcherSlots, c.leagueID)
-	return fc.Get(key, func() ([]Slot, error) {
-		return c.fetchPitcherSlots()
-	})
+	return cached(c, cache.Key(keyPitcherSlots, c.leagueID), tierStable, c.fetchPitcherSlots)
 }
 
 func (c *Client) fetchPitcherSlots() ([]Slot, error) {
@@ -116,14 +98,7 @@ func (c *Client) fetchPitcherSlots() ([]Slot, error) {
 // GetPitcherScoringWeights returns pitching stat short-names → point values.
 // Cached under fantrax-pitcher-scoring-<leagueID> with stableTTL.
 func (c *Client) GetPitcherScoringWeights() (ScoringWeights, error) {
-	if c.cacheDir == "" {
-		return c.fetchPitcherScoringWeights()
-	}
-	fc := cache.New[ScoringWeights](c.cacheDir, c.stableTTL)
-	key := cache.Key(keyPitcherScoring, c.leagueID)
-	return fc.Get(key, func() (ScoringWeights, error) {
-		return c.fetchPitcherScoringWeights()
-	})
+	return cached(c, cache.Key(keyPitcherScoring, c.leagueID), tierStable, c.fetchPitcherScoringWeights)
 }
 
 func (c *Client) fetchPitcherScoringWeights() (ScoringWeights, error) {

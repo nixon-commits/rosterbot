@@ -76,17 +76,7 @@ func (c *Client) periodDateMap(seasonStart time.Time) (map[string]DailyPeriod, e
 		return parsePeriodList(pl, seasonStart.Year(), seasonStart.Month()), nil
 	}
 
-	var (
-		m   map[string]DailyPeriod
-		err error
-	)
-	if c.cacheDir == "" {
-		m, err = build()
-	} else {
-		fc := cache.New[map[string]DailyPeriod](c.cacheDir, c.stableTTL)
-		key := cache.Key(keyPeriodDateMap, c.leagueID, strconv.Itoa(seasonStart.Year()))
-		m, err = fc.Get(key, build)
-	}
+	m, err := cached(c, cache.Key(keyPeriodDateMap, c.leagueID, strconv.Itoa(seasonStart.Year())), tierStable, build)
 	if err != nil {
 		return nil, err
 	}

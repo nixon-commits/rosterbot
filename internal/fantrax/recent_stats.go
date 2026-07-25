@@ -48,13 +48,8 @@ func extractHitterStats(roster []models.RosterPlayer) map[string]RecentStat {
 // Cached under fantrax-current-period-<leagueID>-<YYYY-MM-DD> with a 15m
 // TTL when SetCache has been called.
 func (c *Client) GetCurrentPeriod() (DailyPeriod, error) {
-	if c.cacheDir == "" {
-		p, err := c.auth.GetCurrentPeriod()
-		return DailyPeriod(p), err
-	}
-	fc := cache.New[DailyPeriod](c.cacheDir, c.todayTTL)
 	key := cache.Key(keyCurrentPeriod, c.leagueID, time.Now().UTC().Format("2006-01-02"))
-	return fc.Get(key, func() (DailyPeriod, error) {
+	return cached(c, key, tierToday, func() (DailyPeriod, error) {
 		p, err := c.auth.GetCurrentPeriod()
 		return DailyPeriod(p), err
 	})
@@ -72,15 +67,11 @@ type seasonDateRange struct {
 // has been called — the season schedule is set at draft time and doesn't
 // shift mid-season.
 func (c *Client) GetSeasonDateRange() (time.Time, time.Time, error) {
-	if c.cacheDir == "" {
-		return c.fetchSeasonDateRange()
-	}
-	fc := cache.New[seasonDateRange](c.cacheDir, c.stableTTL)
-	key := cache.Key(keySeasonRange, c.leagueID)
-	r, err := fc.Get(key, func() (seasonDateRange, error) {
-		first, last, err := c.fetchSeasonDateRange()
-		return seasonDateRange{First: first, Last: last}, err
-	})
+	r, err := cached(c, cache.Key(keySeasonRange, c.leagueID), tierStable,
+		func() (seasonDateRange, error) {
+			first, last, err := c.fetchSeasonDateRange()
+			return seasonDateRange{First: first, Last: last}, err
+		})
 	return r.First, r.Last, err
 }
 

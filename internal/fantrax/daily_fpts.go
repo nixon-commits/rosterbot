@@ -101,7 +101,7 @@ func (c *Client) DailyFantasyPoints(
 	// caching off.
 	//
 	// The current-period boundary is computed once from seasonStart (already in
-	// scope) rather than via c.ttlForPeriod, which fetches the season range on
+	// scope) rather than via c.tierForPeriod, which fetches the season range on
 	// every call — calling it per period here added ~one network round-trip per
 	// period × team × week (a ~10x slowdown on a full site build).
 	//
@@ -116,7 +116,7 @@ func (c *Client) DailyFantasyPoints(
 	snapCacheFor := func(period DailyPeriod) *cache.FileCache[periodSnapshot] {
 		ttl := cacheTTL
 		if cacheTTL > 0 && periodIsVolatile(period, curPeriod) {
-			ttl = cappedTTL(cacheTTL, c.todayTTL)
+			ttl = cappedTTL(cacheTTL, todayTTL)
 		}
 		return cache.New[periodSnapshot](cacheDir, ttl)
 	}

@@ -31,14 +31,7 @@ type PendingTrade struct {
 // info. Cached under fantrax-pending-trades-<leagueID> with todayTTL — the
 // pending list mutates as trades resolve, so the short window is right.
 func (c *Client) GetPendingTrades() ([]PendingTrade, error) {
-	if c.cacheDir == "" {
-		return c.fetchPendingTrades()
-	}
-	fc := cache.New[[]PendingTrade](c.cacheDir, c.todayTTL)
-	key := cache.Key(keyPendingTrades, c.leagueID)
-	return fc.Get(key, func() ([]PendingTrade, error) {
-		return c.fetchPendingTrades()
-	})
+	return cached(c, cache.Key(keyPendingTrades, c.leagueID), tierToday, c.fetchPendingTrades)
 }
 
 func (c *Client) fetchPendingTrades() ([]PendingTrade, error) {
@@ -127,14 +120,7 @@ func (c *Client) GetRecentTrades(since time.Time) ([]models.Transaction, error) 
 }
 
 func (c *Client) allTrades() ([]models.Transaction, error) {
-	if c.cacheDir == "" {
-		return c.auth.GetAllTrades()
-	}
-	fc := cache.New[[]models.Transaction](c.cacheDir, c.todayTTL)
-	key := cache.Key(keyAllTrades, c.leagueID)
-	return fc.Get(key, func() ([]models.Transaction, error) {
-		return c.auth.GetAllTrades()
-	})
+	return cached(c, cache.Key(keyAllTrades, c.leagueID), tierToday, c.auth.GetAllTrades)
 }
 
 // Player is a simplified view of a rostered hitter.
@@ -210,48 +196,23 @@ type Client struct {
 
 	// File-cache config, populated by SetCache. When cacheDir is empty
 	// every cached helper falls through to the uncached upstream call —
-	// this is how --no-cache (and tests) disable persistence.
-	cacheDir  string
-	todayTTL  time.Duration // short window for "today, stable for a while" — roster, scoring, FA pool
-	stableTTL time.Duration // longer window for season-invariant data — slots, scoring weights
+	// this is how --no-cache (and tests) disable persistence. The TTLs
+	// themselves are the package-level tier constants (see cached.go), not
+	// per-Client fields, since they never vary from run to run.
+	cacheDir string
 }
 
 // SetCache enables on-disk caching for this Client. After this call, the
-// roster/scoring/recent-stats helpers persist responses under cacheDir
-// with two tiers: todayTTL (15m) for data that drifts during the day
-// (roster, FA pool, current period), and stableTTL (7d) for
-// season-invariant data (active slots, scoring weights). Past-period
-// data (recent stats, period rosters) uses 30d via ttlForPeriod.
+// cached helpers persist responses under cacheDir at one of the three tier
+// TTLs (see cacheTier / cached in cached.go): todayTTL (15m) for data that
+// drifts during the day, stableTTL (7d) for season-invariant config, and
+// pastPeriodTTL (30d) for immutable past-period snapshots.
 //
 // Pass an empty cacheDir or skip this call entirely to disable caching.
 // All cached helpers then fall back to direct upstream fetches —
 // equivalent to the pre-SetCache behavior.
 func (c *Client) SetCache(cacheDir string) {
 	c.cacheDir = cacheDir
-	c.todayTTL = 15 * time.Minute
-	c.stableTTL = 7 * 24 * time.Hour
-}
-
-// pastPeriodTTL is the on-disk lifetime for snapshots of past scoring
-// periods (recent stats, period rosters). Past periods are immutable.
-const pastPeriodTTL = 30 * 24 * time.Hour
-
-// ttlForPeriod returns the cache TTL to use for a per-period snapshot.
-// Past periods (period < current) are immutable and get pastPeriodTTL;
-// current/future periods fall back to todayTTL since they can still
-// change. The "current period" comparison uses PeriodForDate against
-// today rather than calling GetCurrentPeriod (which would itself be
-// cached and potentially circular).
-func (c *Client) ttlForPeriod(period DailyPeriod) time.Duration {
-	seasonStart, _, err := c.fetchSeasonDateRange()
-	if err != nil {
-		return c.todayTTL // pessimistic on error — short TTL is always safe
-	}
-	cur := PeriodForDate(seasonStart, time.Now().UTC())
-	if period < cur {
-		return pastPeriodTTL
-	}
-	return c.todayTTL
 }
 
 // NewClient creates both the public (read) and auth (read+write) Fantrax clients.
@@ -332,32 +293,20 @@ func (c *Client) InvalidatePeriodRosterCache(period DailyPeriod) {
 // GetHitterRoster returns all hitters on the team (active + reserve; excludes IL/minors).
 // Cached under fantrax-hitter-roster-<teamID> with todayTTL when SetCache is on.
 func (c *Client) GetHitterRoster() ([]Player, error) {
-	if c.cacheDir == "" {
-		return c.fetchHitterRosterForPeriod(0)
-	}
-	fc := cache.New[[]Player](c.cacheDir, c.todayTTL)
-	key := cache.Key(keyHitterRoster, c.teamID)
-	return fc.Get(key, func() ([]Player, error) {
-		return c.fetchHitterRosterForPeriod(0)
-	})
+	return cached(c, cache.Key(keyHitterRoster, c.teamID), tierToday,
+		func() ([]Player, error) { return c.fetchHitterRosterForPeriod(0) })
 }
 
 // GetHitterRosterForPeriod returns all hitters for the given scoring period.
 // Pass 0 to use the current period. Past-period rosters are cached at 30d
-// TTL via ttlForPeriod; current/future use todayTTL.
+// TTL via cachedForPeriod/tierForPeriod; current/future use todayTTL.
 func (c *Client) GetHitterRosterForPeriod(period DailyPeriod) ([]Player, error) {
-	if c.cacheDir == "" || period == 0 {
-		// period==0 is "current" — let GetHitterRoster handle the today-keyed cache.
-		if period == 0 {
-			return c.GetHitterRoster()
-		}
-		return c.fetchHitterRosterForPeriod(period)
+	// period==0 is "current" — let GetHitterRoster handle the today-keyed cache.
+	if period == 0 {
+		return c.GetHitterRoster()
 	}
-	fc := cache.New[[]Player](c.cacheDir, c.ttlForPeriod(period))
-	key := cache.Key(keyHitterRoster, c.teamID, strconv.Itoa(int(period)))
-	return fc.Get(key, func() ([]Player, error) {
-		return c.fetchHitterRosterForPeriod(period)
-	})
+	return cachedForPeriod(c, cache.Key(keyHitterRoster, c.teamID, strconv.Itoa(int(period))), period,
+		func() ([]Player, error) { return c.fetchHitterRosterForPeriod(period) })
 }
 
 func (c *Client) fetchHitterRosterForPeriod(period DailyPeriod) ([]Player, error) {
@@ -425,14 +374,7 @@ func (c *Client) GetFullHitterRoster() ([]Player, SlotCounts, error) {
 // in your Minors roster slot. Used by the prospect report. Cached under
 // fantrax-minors-roster-<teamID> with todayTTL.
 func (c *Client) GetMinorsRoster() ([]Player, error) {
-	if c.cacheDir == "" {
-		return c.fetchMinorsRoster()
-	}
-	fc := cache.New[[]Player](c.cacheDir, c.todayTTL)
-	key := cache.Key(keyMinorsRoster, c.teamID)
-	return fc.Get(key, func() ([]Player, error) {
-		return c.fetchMinorsRoster()
-	})
+	return cached(c, cache.Key(keyMinorsRoster, c.teamID), tierToday, c.fetchMinorsRoster)
 }
 
 func (c *Client) fetchMinorsRoster() ([]Player, error) {
@@ -460,14 +402,7 @@ type ProspectPoolPlayer struct {
 // by any team in the league. Uses the Fantrax player pool API. Cached
 // under fantrax-available-prospects with todayTTL when SetCache is on.
 func (c *Client) GetAvailableProspects() ([]Player, error) {
-	if c.cacheDir == "" {
-		return c.fetchAvailableProspects()
-	}
-	fc := cache.New[[]Player](c.cacheDir, c.todayTTL)
-	key := cache.Key(keyAvailableProspects, c.leagueID)
-	return fc.Get(key, func() ([]Player, error) {
-		return c.fetchAvailableProspects()
-	})
+	return cached(c, cache.Key(keyAvailableProspects, c.leagueID), tierToday, c.fetchAvailableProspects)
 }
 
 func (c *Client) fetchAvailableProspects() ([]Player, error) {
@@ -505,14 +440,7 @@ func (c *Client) GetPlayerPoolRaw(page int) (*models.PlayerPoolResponse, error) 
 // Cached under fantrax-player-pool-<leagueID> with todayTTL when SetCache
 // is on.
 func (c *Client) GetFullPlayerPool() ([]models.PoolPlayer, error) {
-	if c.cacheDir == "" {
-		return c.fetchFullPlayerPool()
-	}
-	fc := cache.New[[]models.PoolPlayer](c.cacheDir, c.todayTTL)
-	key := cache.Key(keyPlayerPool, c.leagueID)
-	return fc.Get(key, func() ([]models.PoolPlayer, error) {
-		return c.fetchFullPlayerPool()
-	})
+	return cached(c, cache.Key(keyPlayerPool, c.leagueID), tierToday, c.fetchFullPlayerPool)
 }
 
 func (c *Client) fetchFullPlayerPool() ([]models.PoolPlayer, error) {
@@ -618,14 +546,7 @@ func (c *Client) GetMinorsEligiblePool() ([]ProspectPoolPlayer, error) {
 // league. Cached under fantrax-hitter-slots-<leagueID> with stableTTL when
 // SetCache is on (slot configuration is set at draft and rarely changes).
 func (c *Client) GetActiveSlots() ([]Slot, error) {
-	if c.cacheDir == "" {
-		return c.fetchActiveSlots()
-	}
-	fc := cache.New[[]Slot](c.cacheDir, c.stableTTL)
-	key := cache.Key(keyHitterSlots, c.leagueID)
-	return fc.Get(key, func() ([]Slot, error) {
-		return c.fetchActiveSlots()
-	})
+	return cached(c, cache.Key(keyHitterSlots, c.leagueID), tierStable, c.fetchActiveSlots)
 }
 
 func (c *Client) fetchActiveSlots() ([]Slot, error) {
@@ -657,14 +578,7 @@ func (c *Client) fetchActiveSlots() ([]Slot, error) {
 // GetScoringWeights returns hitting stat short-names → point values.
 // Cached under fantrax-hitter-scoring-<leagueID> with stableTTL.
 func (c *Client) GetScoringWeights() (ScoringWeights, error) {
-	if c.cacheDir == "" {
-		return c.fetchScoringWeights()
-	}
-	fc := cache.New[ScoringWeights](c.cacheDir, c.stableTTL)
-	key := cache.Key(keyHitterScoring, c.leagueID)
-	return fc.Get(key, func() (ScoringWeights, error) {
-		return c.fetchScoringWeights()
-	})
+	return cached(c, cache.Key(keyHitterScoring, c.leagueID), tierStable, c.fetchScoringWeights)
 }
 
 func (c *Client) fetchScoringWeights() (ScoringWeights, error) {

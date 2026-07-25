@@ -88,21 +88,15 @@ func isPitcherByName(posShortNames string) bool {
 // GP = round(FPts / FP/G) for accurate blend weight calculation.
 //
 // Cached under fantrax-recent-stats-pitcher-<teamID>-<period> with a TTL
-// determined by ttlForPeriod (30d for past, todayTTL otherwise).
+// determined by cachedForPeriod/tierForPeriod (30d for past, todayTTL otherwise).
 func (c *Client) GetRecentPitcherStats(currentPeriod DailyPeriod, _ int) (map[string]RecentStat, error) {
 	period := currentPeriod - 1
 	if period < 1 {
 		return nil, fmt.Errorf("no completed periods (current=%d)", currentPeriod)
 	}
 
-	if c.cacheDir == "" {
-		return c.fetchRecentPitcherStats(period)
-	}
-	fc := cache.New[map[string]RecentStat](c.cacheDir, c.ttlForPeriod(period))
-	key := cache.Key(keyRecentStatsPitcher, c.teamID, strconv.Itoa(int(period)))
-	return fc.Get(key, func() (map[string]RecentStat, error) {
-		return c.fetchRecentPitcherStats(period)
-	})
+	return cachedForPeriod(c, cache.Key(keyRecentStatsPitcher, c.teamID, strconv.Itoa(int(period))), period,
+		func() (map[string]RecentStat, error) { return c.fetchRecentPitcherStats(period) })
 }
 
 func (c *Client) fetchRecentPitcherStats(period DailyPeriod) (map[string]RecentStat, error) {

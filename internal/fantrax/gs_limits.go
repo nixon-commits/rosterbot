@@ -28,21 +28,15 @@ type gsLimits struct {
 // week, which a flat env var can't express. Either return value is nil if
 // that limit isn't configured for the period.
 //
-// Cached under fantrax-gs-limits-<teamID>-<period> at pastPeriodTTL
-// unconditionally — not via ttlForPeriod, which compares against the
-// unrelated daily-period numbering (see period-drift-2026 memory). Once a
+// Cached at the fixed tierPast (30d) via cached() — deliberately not the
+// per-period cachedForPeriod/tierForPeriod path, whose past-vs-current test
+// compares against the unrelated daily-period numbering while this method
+// takes a WeeklyPeriod (see period-drift-2026 memory). Once a
 // period's min/max is set at league setup time it doesn't change again,
 // past or current.
 func (c *Client) GetGSLimits(teamID string, period WeeklyPeriod) (min, max *int, err error) {
-	if c.cacheDir == "" {
-		limits, ferr := c.fetchGSLimits(teamID, period)
-		return limits.Min, limits.Max, ferr
-	}
-	fc := cache.New[gsLimits](c.cacheDir, pastPeriodTTL)
-	key := cache.Key(keyGSLimits, teamID, strconv.Itoa(int(period)))
-	limits, ferr := fc.Get(key, func() (gsLimits, error) {
-		return c.fetchGSLimits(teamID, period)
-	})
+	limits, ferr := cached(c, cache.Key(keyGSLimits, teamID, strconv.Itoa(int(period))), tierPast,
+		func() (gsLimits, error) { return c.fetchGSLimits(teamID, period) })
 	return limits.Min, limits.Max, ferr
 }
 

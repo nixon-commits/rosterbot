@@ -33,12 +33,5 @@ func filterTransactionsSince(all []models.Transaction, since time.Time) []models
 }
 
 func (c *Client) allTransactions() ([]models.Transaction, error) {
-	if c.cacheDir == "" {
-		return c.auth.GetAllTransactions()
-	}
-	fc := cache.New[[]models.Transaction](c.cacheDir, c.todayTTL)
-	key := cache.Key(keyAllTransactions, c.leagueID)
-	return fc.Get(key, func() ([]models.Transaction, error) {
-		return c.auth.GetAllTransactions()
-	})
+	return cached(c, cache.Key(keyAllTransactions, c.leagueID), tierToday, c.auth.GetAllTransactions)
 }
