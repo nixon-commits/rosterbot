@@ -165,6 +165,11 @@ func cacheTTL(noCache bool, d time.Duration) time.Duration {
 // publish today's lineup for the read-only API, print the plan, and apply it
 // (unless cfg.DryRun). ft and cfg are wired up by the caller (cmd.initApp);
 // Run owns everything downstream of that.
+//
+// cfg is read-only. Run used to append the resolved `--dates all` / `--matchup`
+// expansion straight back into cfg.Dates — an undocumented output parameter;
+// that now happens in the ResolveDates phase, which returns a value
+// (rosterbot-6rv).
 func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	if err := projections.SetProjectionSystem(opts.ProjectionSystem); err != nil {
 		return Result{}, err
@@ -184,42 +189,11 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 
 	today := opts.Today
 
-	// Resolve "all" or "--matchup" now that the client is available.
-	var seasonStart time.Time // used later for period calculation
-	if opts.NeedsSeasonLookup || opts.NeedsMatchupLookup {
-		start, end, err := ft.GetSeasonDateRange()
-		if err != nil {
-			return Result{}, fmt.Errorf("get season date range: %w", err)
-		}
-		seasonStart = start
-
-		if opts.NeedsMatchupLookup {
-			weekStart, weekEnd, err := ft.GetMatchupWeekBounds(today, seasonStart)
-			if err != nil {
-				return Result{}, fmt.Errorf("get matchup week: %w", err)
-			}
-			if weekStart.IsZero() {
-				return Result{}, fmt.Errorf("no matchup week found for today")
-			}
-			// Start from today (skip past days in the matchup).
-			mStart := weekStart
-			if mStart.Before(today) {
-				mStart = today
-			}
-			for d := mStart; !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
-				cfg.Dates = append(cfg.Dates, d)
-			}
-			prog.Logf("matchup period: %s to %s (%d days remaining)",
-				weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"), len(cfg.Dates))
-		} else {
-			if start.Before(today) {
-				start = today
-			}
-			for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-				cfg.Dates = append(cfg.Dates, d)
-			}
-			prog.Logf("season range: %s to %s", start.Format("2006-01-02"), end.Format("2006-01-02"))
-		}
+	// Resolve "all" / "--matchup" now that the client is available. dates is a
+	// local value — Run does not write back into cfg (rosterbot-6rv).
+	dates, seasonStart, err := ResolveDates(ft, cfg.Dates, opts, prog.Logf)
+	if err != nil {
+		return Result{}, err
 	}
 
 	// --- Load projections early to determine system for header ---
@@ -246,7 +220,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		PitchersNoData: pitLoadResult.NoData,
 	}
 
-	prog.Header(projDisplayName[batLoadResult.System], formatDates(cfg.Dates), cfg.DryRun)
+	prog.Header(projDisplayName[batLoadResult.System], formatDates(dates), cfg.DryRun)
 
 	// --- Roster alerts (if requested) ---
 	if opts.CheckRoster {
@@ -447,7 +421,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		prog.Done("Handedness", "skipped — no MLBAM IDs")
 	}
 
-	multiDate := len(cfg.Dates) > 1
+	multiDate := len(dates) > 1
 	schedClient := schedule.NewClient()
 	schedClient.CacheDir = cacheDir
 
@@ -626,11 +600,11 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	}
 
 	// --- Parallel fetch + optimize for all dates ---
-	results := make([]dateResult, len(cfg.Dates))
+	results := make([]dateResult, len(dates))
 
 	prog.Start("Optimize")
 	var g errgroup.Group
-	for i, date := range cfg.Dates {
+	for i, date := range dates {
 		i, date := i, date
 		g.Go(func() error {
 			isToday := date.Equal(today)
