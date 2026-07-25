@@ -1,7 +1,10 @@
 package fantrax
 
 import (
+	"bytes"
 	"errors"
+	"log"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -389,6 +392,127 @@ func TestApplyLineup_PostRetryVerify_ChangesLanded_Success(t *testing.T) {
 
 	if err := applyLineupWithLockedPlayerRetry(executor, fetch, roster, active, nil); err != nil {
 		t.Fatalf("expected success when verify confirms changes landed, got: %v", err)
+	}
+}
+
+// captureLog redirects the standard logger for the duration of fn and returns
+// everything written to it. Flags are zeroed so assertions match on message
+// text alone, not the timestamp prefix.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	origFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(os.Stderr)
+		log.SetFlags(origFlags)
+	}()
+	fn()
+	return buf.String()
+}
+
+// A passing verify must say so. Returning nil silently makes "verify ran and
+// confirmed N changes" indistinguishable from "verify never ran" in production
+// logs — the same false-confidence shape rosterbot-48z was filed about.
+func TestApplyLineup_PostRetryVerify_Success_LogsConfirmation(t *testing.T) {
+	roster := fakeRoster(
+		struct{ id, name string }{"lock", "Locked Guy"},
+		struct{ id, name string }{"swap", "Swap Guy"},
+		struct{ id, name string }{"bench", "Bench Guy"},
+	)
+	active := []PlayerSlot{
+		{PlayerID: "lock", PosID: "003"},
+		{PlayerID: "swap", PosID: "008"},
+	}
+	reserve := []string{"bench"}
+
+	executor := func(fm map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
+		if fm["lock"].StID == auth_client.StatusActive {
+			return errResp(lockedErrFor("Locked Guy")), nil
+		}
+		return successResp(), nil
+	}
+	// Both non-excluded changes landed: swap active in 008, bench on reserve.
+	fetch := func() (*models.TeamRosterResponse, error) {
+		return rosterWith(
+			struct{ id, st, pos string }{"lock", auth_client.StatusReserve, ""},
+			struct{ id, st, pos string }{"swap", auth_client.StatusActive, "008"},
+			struct{ id, st, pos string }{"bench", auth_client.StatusReserve, ""},
+		), nil
+	}
+
+	var err error
+	out := captureLog(t, func() {
+		err = applyLineupWithLockedPlayerRetry(executor, fetch, roster, active, reserve)
+	})
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+	if !strings.Contains(out, "post-retry verify") {
+		t.Errorf("a passing verify must log that it ran, got: %q", out)
+	}
+	// 2 non-excluded changes confirmed (swap→active, bench→reserve); "lock"
+	// was excluded by the retry and is not counted.
+	if !strings.Contains(out, "2 change(s) confirmed") {
+		t.Errorf("log must name how many changes were confirmed, got: %q", out)
+	}
+}
+
+// A caller that wires no fetcher silently disables the rosterbot-48z
+// protection. That must not look identical to a clean run in production logs:
+// once a retry has excluded players, a nil fetcher gets its own warning.
+func TestApplyLineup_PostRetryVerify_NilFetch_WarnsProtectionDisabled(t *testing.T) {
+	roster := fakeRoster(
+		struct{ id, name string }{"lock", "Locked Guy"},
+		struct{ id, name string }{"swap", "Swap Guy"},
+	)
+	active := []PlayerSlot{
+		{PlayerID: "lock", PosID: "003"},
+		{PlayerID: "swap", PosID: "008"},
+	}
+
+	executor := func(fm map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
+		if fm["lock"].StID == auth_client.StatusActive {
+			return errResp(lockedErrFor("Locked Guy")), nil
+		}
+		return successResp(), nil
+	}
+
+	var err error
+	out := captureLog(t, func() {
+		err = applyLineupWithLockedPlayerRetry(executor, nil, roster, active, nil)
+	})
+	if err != nil {
+		t.Fatalf("nil fetch must degrade gracefully, not error: %v", err)
+	}
+	if !strings.Contains(out, "verify DISABLED") {
+		t.Errorf("a retry with no fetcher must warn that verify was disabled, got: %q", out)
+	}
+	if strings.Contains(out, "confirmed landed") {
+		t.Errorf("nothing was verified — must not claim confirmation, got: %q", out)
+	}
+}
+
+// The clean happy path (no locked-player retry) has nothing to verify, so it
+// must stay silent — this runs hourly and a per-run line would be pure noise.
+func TestApplyLineup_NoRetry_VerifyLogsNothing(t *testing.T) {
+	roster := fakeRoster(struct{ id, name string }{"p1", "Alpha"})
+	active := []PlayerSlot{{PlayerID: "p1", PosID: "014"}}
+
+	executor := func(_ map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
+		return successResp(), nil
+	}
+
+	var err error
+	out := captureLog(t, func() {
+		err = applyLineupWithLockedPlayerRetry(executor, nil, roster, active, nil)
+	})
+	if err != nil {
+		t.Fatalf("happy path failed: %v", err)
+	}
+	if out != "" {
+		t.Errorf("clean apply with no retry must log nothing, got: %q", out)
 	}
 }
 
