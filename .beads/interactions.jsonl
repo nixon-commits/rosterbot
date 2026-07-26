@@ -72,3 +72,5 @@
 {"id":"int-4da29923","kind":"field_change","created_at":"2026-07-26T19:56:04.012783Z","actor":"Jon Nixon","issue_id":"rosterbot-t89","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-1d38c087","kind":"field_change","created_at":"2026-07-26T19:56:04.192729Z","actor":"Jon Nixon","issue_id":"rosterbot-32a","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-5c489c66","kind":"field_change","created_at":"2026-07-26T19:56:04.37181Z","actor":"Jon Nixon","issue_id":"rosterbot-6om","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
+{"id":"int-95b63d76","kind":"field_change","created_at":"2026-07-26T20:16:15.77273Z","actor":"Jon Nixon","issue_id":"rosterbot-k0n","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
+{"id":"int-31218943","kind":"field_change","created_at":"2026-07-26T20:16:16.704749Z","actor":"Jon Nixon","issue_id":"rosterbot-6rv","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"All five follow-ups landed; Run is 309 lines, down from 1201 (-74%). All 8 criteria met."}}
