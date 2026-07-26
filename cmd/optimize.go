@@ -107,6 +107,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		SnapshotRoot:       backtestSnapshotDir,
 		PublishLineupFlag:  publishLineupFlag,
 		Publisher:          pub,
+		Out:                os.Stdout,
 		NoCache:            noCache,
 		Verbose:            verbose,
 	}

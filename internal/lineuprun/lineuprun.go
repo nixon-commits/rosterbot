@@ -10,6 +10,7 @@ package lineuprun
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -87,6 +88,13 @@ type Options struct {
 	// by the caller (cmd, via internal/statestore) so this package no longer
 	// reads STATE_BUCKET. Nil means "do not publish" (the shadow command).
 	Publisher lineupapi.Publisher
+
+	// Out is where the run's human-readable output goes — the per-date board,
+	// the planned-moves block, the warning lines and the apply log. The caller
+	// owns stdout (rosterbot-rr1): cmd passes os.Stdout, tests pass a buffer.
+	// A nil Out defaults to os.Stdout so a caller that forgets it degrades to
+	// the old behaviour rather than panicking mid-run.
+	Out io.Writer
 
 	// NoCache bypasses the file cache (mirrors the persistent --no-cache flag).
 	NoCache bool
@@ -171,13 +179,19 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	if err := projections.SetProjectionSystem(opts.ProjectionSystem); err != nil {
 		return Result{}, err
 	}
-	// Set up progress display.
+	out := opts.Out
+	if out == nil {
+		out = os.Stdout
+	}
+	// Set up progress display. The interactive check stays on the real stdout
+	// file descriptor — that is what decides whether a redraw-in-place bar is
+	// legible — while the writing itself goes to out like every other line.
 	var prog *progress.Progress
 	if opts.Verbose {
 		prog = progress.NewVerbose()
 	} else {
 		interactive := term.IsTerminal(int(os.Stdout.Fd()))
-		prog = progress.New(interactive, os.Stdout)
+		prog = progress.New(interactive, out)
 	}
 
 	// Cache TTLs (0 when --no-cache is set).
@@ -229,12 +243,12 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		counts.MinorsCapacity = cfg.MinorsSlots
 		alerts := roster.CheckRoster(fullRoster, counts)
 		if len(alerts) > 0 {
-			fmt.Println("\n=== Roster Alerts ===")
+			fmt.Fprintln(out, "\n=== Roster Alerts ===")
 			for _, a := range alerts {
 				label := alertLabel(a.Type)
-				fmt.Printf("  ⚠ %-25s (%s)  %s → %s\n", a.Player.Name, a.Player.MLBTeam, label, a.Suggestion)
+				fmt.Fprintf(out, "  ⚠ %-25s (%s)  %s → %s\n", a.Player.Name, a.Player.MLBTeam, label, a.Suggestion)
 			}
-			fmt.Println()
+			fmt.Fprintln(out)
 		}
 	}
 
@@ -436,7 +450,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	// Skip optimization if today is before the season start.
 	if !seasonStart.IsZero() && today.Before(seasonStart) && !multiDate {
 		prog.Logf("season starts %s — nothing to optimize yet", seasonStart.Format("2006-01-02"))
-		fmt.Printf("\nSeason starts %s. No games to optimize for today.\n", seasonStart.Format("2006-01-02"))
+		fmt.Fprintf(out, "\nSeason starts %s. No games to optimize for today.\n", seasonStart.Format("2006-01-02"))
 		return result, nil
 	}
 
@@ -859,7 +873,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	if opts.WriteSnapshots {
 		for _, dr := range results {
 			if err := writeProjectionSnapshot(dr, batLoadResult.System, slotName, batLoadResult.NoData, pitLoadResult.NoData, opts.SnapshotRoot); err != nil {
-				fmt.Printf("  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)
+				fmt.Fprintf(out, "  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)
 			}
 		}
 	}
@@ -874,7 +888,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 				continue
 			}
 			if err := publishLineup(dr, cfg, hitterSlots, pitcherSlots, opts.Publisher); err != nil {
-				fmt.Printf("  ⚠ lineup publish failed: %v\n", err)
+				fmt.Fprintf(out, "  ⚠ lineup publish failed: %v\n", err)
 			}
 			break
 		}
@@ -883,10 +897,10 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	// --- Sequential print + apply ---
 	for _, dr := range results {
 		for _, w := range dr.warnings {
-			fmt.Printf("  ⚠ %s\n", w)
+			fmt.Fprintf(out, "  ⚠ %s\n", w)
 		}
 
-		renderDateResult(dr, multiDate, slotName, opts.ShowPipeline, gsBudget)
+		renderDateResult(out, dr, multiDate, slotName, opts.ShowPipeline, gsBudget)
 
 		// --- Combine changes ---
 		allActivate := append(dr.hitterResult.ToActivate, dr.pitcherResult.ToActivate...)
@@ -894,7 +908,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 
 		// --- Print planned moves ---
 		if len(allActivate) == 0 && len(allBench) == 0 {
-			fmt.Println("\n  No changes needed.")
+			fmt.Fprintln(out, "\n  No changes needed.")
 			continue
 		}
 
@@ -939,43 +953,43 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		}
 		delta := combinedMovesDelta(allActivate, allBench, ptsMap)
 
-		fmt.Printf("\n  Changes (%+.2f pts) %s\n", delta, strings.Repeat("─", 35))
+		fmt.Fprintf(out, "\n  Changes (%+.2f pts) %s\n", delta, strings.Repeat("─", 35))
 		for _, ps := range allActivate {
-			fmt.Printf("    ↑ %-24s → %-4s  %+6.2f\n", dateName[ps.PlayerID], slotName[ps.PosID], ptsMap[ps.PlayerID])
+			fmt.Fprintf(out, "    ↑ %-24s → %-4s  %+6.2f\n", dateName[ps.PlayerID], slotName[ps.PosID], ptsMap[ps.PlayerID])
 		}
 		for _, id := range allBench {
-			fmt.Printf("    ↓ %-24s → BN    %+6.2f\n", dateName[id], -ptsMap[id])
+			fmt.Fprintf(out, "    ↓ %-24s → BN    %+6.2f\n", dateName[id], -ptsMap[id])
 		}
 
 		if isZeroGainDelta(delta) {
-			fmt.Println("\n  Net gain ≈ 0 — skipping apply (cosmetic swap).")
+			fmt.Fprintln(out, "\n  Net gain ≈ 0 — skipping apply (cosmetic swap).")
 			continue
 		}
 
 		if cfg.DryRun {
-			fmt.Println("\n[DRY RUN] No changes applied.")
+			fmt.Fprintln(out, "\n[DRY RUN] No changes applied.")
 			continue
 		}
 
 		// --- Resolve period for this date ---
 		dateKey := dr.date.Format("2006-01-02")
 		if dr.period == 0 && !dr.isToday {
-			fmt.Printf("\n[SKIP] No scoring period found for %s — changes not applied.\n", dateKey)
+			fmt.Fprintf(out, "\n[SKIP] No scoring period found for %s — changes not applied.\n", dateKey)
 			continue
 		}
 
 		// --- Apply combined lineup (sequential — Fantrax API is not concurrent-safe) ---
-		fmt.Printf("\nApplying lineup for %s (period %d)...\n", dateKey, dr.period)
+		fmt.Fprintf(out, "\nApplying lineup for %s (period %d)...\n", dateKey, dr.period)
 		if err := ft.ApplyLineup(dr.period, allActivate, allBench); err != nil {
 			// Log and continue. Aborting here would drop any subsequent
 			// dates' work on multi-date runs and turn a partial success
 			// into a failed run with no daily summary.
-			fmt.Printf("  ⚠ apply lineup failed for %s: %v\n", dateKey, err)
+			fmt.Fprintf(out, "  ⚠ apply lineup failed for %s: %v\n", dateKey, err)
 			sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken,
 				fmt.Sprintf("⚠ %s: apply failed — %v", dr.date.Format("Mon Jan 2"), err))
 			continue
 		}
-		fmt.Println("Lineup applied successfully.")
+		fmt.Fprintln(out, "Lineup applied successfully.")
 		ft.InvalidatePeriodRosterCache(dr.period)
 
 		// Send Pushover notification summarizing the changes.
