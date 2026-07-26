@@ -171,11 +171,18 @@ var pitcherPosNameToID = map[string]string{
 
 // Client wraps the go-fantrax libraries.
 type Client struct {
-	public     *gofantrax.Client
-	auth       *auth_client.Client
-	leagueID   string
-	teamID     string
-	leagueInfo *gofantrax.LeagueInfo // cached league info
+	public   *gofantrax.Client
+	auth     *auth_client.Client
+	leagueID string
+	teamID   string
+
+	// leagueInfoMu guards leagueInfo, an in-memory cache of the league
+	// configuration response. Four slot/scoring fetches share it, and
+	// lineuprun's LoadInputs phase now issues those four concurrently — so
+	// this needs the same guard the two memos below already carry. Without
+	// it a cold-cache run races two writers on the pointer.
+	leagueInfoMu sync.Mutex
+	leagueInfo   *gofantrax.LeagueInfo
 
 	// matchupsMu guards matchupsMemo, an in-memory cache of the
 	// season-wide matchups response. The result is reused across all
@@ -240,7 +247,11 @@ func NewClient(leagueID, teamID string) (*Client, error) {
 }
 
 // getLeagueInfo returns cached league info, fetching it on first call.
+// Safe for concurrent use: the lock spans the fetch as well as the read, so a
+// cold start issues one upstream request rather than one per caller.
 func (c *Client) getLeagueInfo() (*gofantrax.LeagueInfo, error) {
+	c.leagueInfoMu.Lock()
+	defer c.leagueInfoMu.Unlock()
 	if c.leagueInfo != nil {
 		return c.leagueInfo, nil
 	}

@@ -252,67 +252,16 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		}
 	}
 
-	// --- Fetch hitter roster, slots, scoring (shared across dates) ---
-	prog.Start("Roster")
-	hitterRoster, err := ft.GetHitterRoster()
+	// --- Load the date-invariant Fantrax inputs (six fetches + two period
+	// lookups, concurrent; see LoadInputs for the failure policy) ---
+	inputs, err := LoadInputs(ft, prog, projDisplayName[opts.ProjectionSystem])
 	if err != nil {
-		return result, fmt.Errorf("get hitter roster: %w", err)
+		return result, err
 	}
-	prog.Logf("hitter roster: %d hitters (%d active)", len(hitterRoster), countActive(hitterRoster))
-
-	hitterSlots, err := ft.GetActiveSlots()
-	if err != nil {
-		return result, fmt.Errorf("get hitter slots: %w", err)
-	}
-	prog.Logf("hitter active slots: %d", len(hitterSlots))
-
-	hitterScoring, err := ft.GetScoringWeights()
-	if err != nil {
-		return result, fmt.Errorf("get hitter scoring: %w", err)
-	}
-	prog.Logf("hitter scoring weights: %d categories", len(hitterScoring))
-
-	// --- Fetch pitcher roster, slots, scoring (shared across dates) ---
-	pitcherRoster, err := ft.GetPitcherRoster()
-	if err != nil {
-		return result, fmt.Errorf("get pitcher roster: %w", err)
-	}
-	prog.Logf("pitcher roster: %d pitchers (%d active)", len(pitcherRoster), countActive(pitcherRoster))
-
-	pitcherSlots, err := ft.GetPitcherSlots()
-	if err != nil {
-		return result, fmt.Errorf("get pitcher slots: %w", err)
-	}
-	prog.Logf("pitcher active slots: %d", len(pitcherSlots))
-
-	pitcherScoring, err := ft.GetPitcherScoringWeights()
-	if err != nil {
-		return result, fmt.Errorf("get pitcher scoring: %w", err)
-	}
-	prog.Logf("pitcher scoring weights: %d categories", len(pitcherScoring))
-	prog.Done("Roster", fmt.Sprintf("%d hitters (%d active) · %d pitchers (%d active)",
-		len(hitterRoster), countActive(hitterRoster),
-		len(pitcherRoster), countActive(pitcherRoster)))
-
-	// --- Current period (shared by hitter + pitcher blending) ---
-	currentPeriod, periodErr := ft.GetCurrentPeriod()
-	if periodErr != nil {
-		prog.Logf("WARNING: could not get current period (%v) — using %s only", periodErr, projDisplayName[opts.ProjectionSystem])
-	} else {
-		prog.Logf("current period: %d", currentPeriod)
-	}
-
-	// Weekly matchup "Scoring Period" list, used below by the GS-budget block
-	// (FindCurrentPeriod answers "which weekly period contains today," which is
-	// what GetGSLimits needs). NOT used for date→period resolution in the apply
-	// loop — that needs the *daily* period number, which this weekly-keyed list
-	// can't provide (see DailyPeriodFor's doc comment). A fetch failure just
-	// disables the GS-budget gate, since it has no safe fallback for a budget
-	// decision.
-	periods, _, _, periodsErr := ft.GetScoringPeriodsAndTeams()
-	if periodsErr != nil {
-		prog.Logf("WARNING: could not fetch weekly scoring periods (%v) — GS-budget gate disabled", periodsErr)
-	}
+	hitterRoster, hitterSlots, hitterScoring := inputs.HitterRoster, inputs.HitterSlots, inputs.HitterScoring
+	pitcherRoster, pitcherSlots, pitcherScoring := inputs.PitcherRoster, inputs.PitcherSlots, inputs.PitcherScoring
+	currentPeriod, periodErr := inputs.CurrentPeriod, inputs.PeriodErr
+	periods, periodsErr := inputs.Periods, inputs.PeriodsErr
 
 	// --- Hitter projections (shared across dates) ---
 	prog.Start("Projections")
