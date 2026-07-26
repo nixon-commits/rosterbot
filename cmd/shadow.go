@@ -90,6 +90,7 @@ func runShadow(cmd *cobra.Command, args []string) error {
 			CheckRoster:       false, // roster-alert noise is irrelevant to a capture run
 			SnapshotRoot:      systemSnapshotDir(shadowSnapshotRoot, sys),
 			WriteSnapshots:    true, // capture mode: always write, regardless of dry-run
+			Out:               os.Stdout,
 			NoCache:           noCache,
 			Verbose:           verbose,
 		}

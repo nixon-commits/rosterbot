@@ -2,6 +2,7 @@ package lineuprun
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strings"
@@ -184,9 +185,13 @@ func rosterSPNames(roster []fantrax.Player) map[string]fantrax.Player {
 // point totals) dies at the end — which is what made a mechanical extraction
 // safe. Output is byte-for-byte what Run emitted before.
 //
-// Still writes to stdout directly rather than an injected io.Writer; that is
-// the remaining half of criterion 4 ("cmd owns stdout").
-func renderDateResult(dr dateResult, multiDate bool, slotName map[string]string, showPipeline bool, gsBudget *optimizer.GSBudget) {
+// w is injected rather than assumed to be os.Stdout (rosterbot-rr1, the other
+// half of criterion 4). The tidiness is secondary; the point is that ~280 lines
+// of positional box-drawing become golden-testable. A one-space column shift
+// here is invisible to every other test in this package and obvious in a diff,
+// so TestRenderDateResult_Golden is the only thing standing between a
+// misaligned board and production.
+func renderDateResult(w io.Writer, dr dateResult, multiDate bool, slotName map[string]string, showPipeline bool, gsBudget *optimizer.GSBudget) {
 	// --- Build side-by-side hitter/pitcher display ---
 	const (
 		colL = 43 // hitter column width (runes)
@@ -200,9 +205,9 @@ func renderDateResult(dr dateResult, multiDate bool, slotName map[string]string,
 	}
 	if multiDate {
 		boxW := colL + 3 + colR
-		fmt.Printf("\n  ╔%s╗\n", strings.Repeat("═", boxW))
-		fmt.Printf("  ║  %-*s║\n", boxW-2, dateLabel)
-		fmt.Printf("  ╚%s╝\n", strings.Repeat("═", boxW))
+		fmt.Fprintf(w, "\n  ╔%s╗\n", strings.Repeat("═", boxW))
+		fmt.Fprintf(w, "  ║  %-*s║\n", boxW-2, dateLabel)
+		fmt.Fprintf(w, "  ╚%s╝\n", strings.Repeat("═", boxW))
 	}
 
 	// --- Hitter lines ---
@@ -368,7 +373,7 @@ func renderDateResult(dr dateResult, multiDate bool, slotName map[string]string,
 	}
 
 	// Print side by side.
-	fmt.Println()
+	fmt.Fprintln(w)
 	for i := range hLines {
 		left := padRight(hLines[i], colL)
 		right := padRight(pLines[i], colR)
@@ -378,11 +383,11 @@ func renderDateResult(dr dateResult, multiDate bool, slotName map[string]string,
 		if pGreen[i] {
 			right = "\033[32m" + right + "\033[0m"
 		}
-		fmt.Printf("  %s │ %s\n", left, right)
+		fmt.Fprintf(w, "  %s │ %s\n", left, right)
 	}
 
 	// Combined total.
-	fmt.Printf("\n  %-26s %6.2f\n", "Combined Expected", hitterStartingPts+pitcherStartingPts)
+	fmt.Fprintf(w, "\n  %-26s %6.2f\n", "Combined Expected", hitterStartingPts+pitcherStartingPts)
 
 	// --- Hitter pipeline detail ---
 	// Both pipeline tables share the same column geometry so they line up:
@@ -395,7 +400,7 @@ func renderDateResult(dr dateResult, multiDate bool, slotName map[string]string,
 	const pipelineWidth = 78
 
 	if showPipeline && len(dr.hitterPipelines) > 0 {
-		fmt.Println()
+		fmt.Fprintln(w)
 
 		pipelineSorted := make([]optimizer.ScoredPlayer, 0, len(dr.hitterPipelines))
 		for _, sp := range dr.hitterResult.Scored {
@@ -410,14 +415,14 @@ func renderDateResult(dr dateResult, multiDate bool, slotName map[string]string,
 		})
 
 		titlePrefix := "  Hitter Pipeline "
-		fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", pipelineWidth-len(titlePrefix)-1))
-		fmt.Printf("  %-24s  %7s  %4s  %7s  %7s  %7s  %7s│\n",
+		fmt.Fprintf(w, "%s%s╮\n", titlePrefix, strings.Repeat("─", pipelineWidth-len(titlePrefix)-1))
+		fmt.Fprintf(w, "  %-24s  %7s  %4s  %7s  %7s  %7s  %7s│\n",
 			"Player", "Base", "Mix", "Blend", "Platoon", "Opp SP", "Final")
-		fmt.Printf("  %s╯\n", strings.Repeat("─", pipelineWidth-2-1))
+		fmt.Fprintf(w, "  %s╯\n", strings.Repeat("─", pipelineWidth-2-1))
 
 		for _, sp := range pipelineSorted {
 			pd := dr.hitterPipelines[sp.Player.ID]
-			fmt.Printf("  %-24s  %7.2f  %s  %s  %s  %s  %7.2f\n",
+			fmt.Fprintf(w, "  %-24s  %7.2f  %s  %s  %s  %s  %7.2f\n",
 				truncName(sp.Player.Name, 24),
 				pd.BasePtsPerGame,
 				formatBlendMix(pd.BaseWt, pd.HasRecent),
@@ -431,7 +436,7 @@ func renderDateResult(dr dateResult, multiDate bool, slotName map[string]string,
 
 	// --- Pitcher pipeline detail ---
 	if showPipeline && len(dr.pitcherPipelines) > 0 {
-		fmt.Println()
+		fmt.Fprintln(w)
 
 		pitPipelineSorted := make([]optimizer.ScoredPitcher, 0, len(dr.pitcherPipelines))
 		for _, sp := range dr.pitcherResult.Scored {
@@ -446,14 +451,14 @@ func renderDateResult(dr dateResult, multiDate bool, slotName map[string]string,
 		})
 
 		titlePrefix := "  Pitcher Pipeline "
-		fmt.Printf("%s%s╮\n", titlePrefix, strings.Repeat("─", pipelineWidth-len(titlePrefix)-1))
-		fmt.Printf("  %-24s  %7s  %4s  %7s  %7s  %7s  %7s│\n",
+		fmt.Fprintf(w, "%s%s╮\n", titlePrefix, strings.Repeat("─", pipelineWidth-len(titlePrefix)-1))
+		fmt.Fprintf(w, "  %-24s  %7s  %4s  %7s  %7s  %7s  %7s│\n",
 			"Player", "Base", "Mix", "Blend", "", "Gate", "Final")
-		fmt.Printf("  %s╯\n", strings.Repeat("─", pipelineWidth-2-1))
+		fmt.Fprintf(w, "  %s╯\n", strings.Repeat("─", pipelineWidth-2-1))
 
 		for _, sp := range pitPipelineSorted {
 			pd := dr.pitcherPipelines[sp.Player.ID]
-			fmt.Printf("  %-24s  %7.2f  %s  %s  %7s  %s  %7.2f\n",
+			fmt.Fprintf(w, "  %-24s  %7.2f  %s  %s  %7s  %s  %7.2f\n",
 				truncName(sp.Player.Name, 24),
 				pd.BasePtsPerGame,
 				formatBlendMix(pd.BaseWt, pd.HasRecent),
