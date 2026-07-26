@@ -13,7 +13,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/config"
@@ -25,7 +24,6 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/roster"
 	"github.com/nixon-commits/rosterbot/internal/schedule"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 )
 
@@ -431,463 +429,56 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		slotName[s.PosID] = s.PosName
 	}
 
-	// --- Parallel fetch + optimize for all dates ---
-	results := make([]dateResult, len(dates))
-
+	// --- Optimize every date in parallel ---
 	prog.Start("Optimize")
-	var g errgroup.Group
-	for i, date := range dates {
-		i, date := i, date
-		g.Go(func() error {
-			isToday := date.Equal(today)
-			// DailyPeriodFor is the ONLY correct resolver here: ApplyLineup and
-			// GetHitterRosterForPeriod are keyed by Fantrax's *daily* scoring
-			// period. Never resolve this from the weekly `periods` list above —
-			// every date in a --matchup window falls inside some weekly period's
-			// range, so a weekly-keyed lookup hands back one number for the whole
-			// span. During a merged week (the All-Star break, weekly period 16
-			// spanning 2026-07-13..26) that collapsed 11 distinct calendar dates
-			// onto period 16: the roster fetches returned the identical stale
-			// snapshot for all of them, so each date's optimizer never saw its own
-			// prior apply, and the same swap re-applied (and re-notified via
-			// Pushover) on every hourly run — the rosterbot-z3b flood.
-			period := ft.DailyPeriodFor(seasonStart, date)
-
-			var warnings []string
-
-			// Fetch period-specific rosters.
-			dateHitterRoster := hitterRoster
-			datePitcherRoster := pitcherRoster
-			if !isToday && period > 0 {
-				if r, err := ft.GetHitterRosterForPeriod(period); err == nil {
-					dateHitterRoster = r
-				} else {
-					warnings = append(warnings, fmt.Sprintf("could not fetch hitter roster for period %d (%v) — using current", period, err))
-				}
-				if r, err := ft.GetPitcherRosterForPeriod(period); err == nil {
-					datePitcherRoster = r
-				} else {
-					warnings = append(warnings, fmt.Sprintf("could not fetch pitcher roster for period %d (%v) — using current", period, err))
-				}
-			}
-
-			// MLB schedule + probable pitchers.
-			playingToday, err := schedClient.TeamsPlayingOn(date)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("mlb schedule unavailable for %s (%v) — assuming all teams play", date.Format("2006-01-02"), err))
-				allPlayers := append(dateHitterRoster, datePitcherRoster...)
-				playingToday = allTeamsPlaying(allPlayers)
-			}
-
-			// Detect locked teams (game in progress or final) — only for today.
-			if isToday {
-				lockedTeams, err := schedClient.LockedTeams(date)
-				if err != nil {
-					warnings = append(warnings, fmt.Sprintf("locked teams unavailable (%v) — proceeding without lock detection", err))
-				} else if len(lockedTeams) > 0 {
-					for i := range dateHitterRoster {
-						if lockedTeams[dateHitterRoster[i].MLBTeam] && !dateHitterRoster[i].InMinors && !dateHitterRoster[i].IsInjured {
-							dateHitterRoster[i].Locked = true
-						}
-					}
-					for i := range datePitcherRoster {
-						if lockedTeams[datePitcherRoster[i].MLBTeam] && !datePitcherRoster[i].InMinors && !datePitcherRoster[i].IsInjured {
-							datePitcherRoster[i].Locked = true
-						}
-					}
-				}
-			}
-
-			probableStarters, err := schedClient.ProbableStarters(date)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("probable pitchers unavailable for %s (%v) — SPs default to start", date.Format("2006-01-02"), err))
-				probableStarters = map[string]string{} // empty = default to start
-			}
-
-			// Fetch game venues for matchup adjustments.
-			var venues map[string]string
-			v, err := schedClient.GameVenues(date)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("game venues unavailable for %s (%v)", date.Format("2006-01-02"), err))
-			} else {
-				venues = v
-			}
-
-			// Fetch benched hitters (confirmed out of real-life starting lineup).
-			// Only for today — lineups aren't posted days in advance.
-			var benchedToday map[string]bool
-			if isToday {
-				rosterNames := make(map[string]string, len(dateHitterRoster))
-				for _, p := range dateHitterRoster {
-					if !p.InMinors && !p.IsInjured {
-						rosterNames[projections.NormalizeName(p.Name)] = p.MLBTeam
-					}
-				}
-				if b, err := schedClient.BenchedPlayers(date, rosterNames); err != nil {
-					warnings = append(warnings, fmt.Sprintf("starting lineups unavailable (%v) — assuming all hitters play", err))
-				} else if len(b) > 0 {
-					benchedToday = b
-				}
-			}
-
-			// Optimize hitters (with matchup adjustment if available).
-			dateHitterSrc := hitterProjSrc
-			var matchupSrc *projections.MatchupAdjustedSource
-
-			// Build opposing pitcher map for matchup adjustments.
-			if len(probableStarters) > 0 && leagueAvgFIP > 0 && venues != nil {
-				opposingPitchers := make(map[string]projections.OpposingPitcher)
-				for pitcherName, pitcherTeam := range probableStarters {
-					pitcherHome := venues[pitcherTeam]
-					for team, homeTeam := range venues {
-						if team == pitcherTeam {
-							continue
-						}
-						if homeTeam == pitcherHome {
-							opp := projections.OpposingPitcher{
-								Name: pitcherName,
-								Team: pitcherTeam,
-							}
-							if h, ok := pitcherHandedness[pitcherName]; ok {
-								opp.Throws = h
-							}
-							if f, ok := pitcherFIP[pitcherName]; ok {
-								opp.FIP = f
-							}
-							opposingPitchers[team] = opp
-							break
-						}
-					}
-				}
-				if len(opposingPitchers) > 0 {
-					matchupSrc = projections.NewMatchupAdjustedSource(dateHitterSrc, opposingPitchers, hitterBats, leagueAvgFIP)
-					dateHitterSrc = matchupSrc
-				}
-			}
-			hitterResult := optimizer.OptimizeLineup(dateHitterRoster, playingToday, dateHitterSrc, hitterScoring, hitterSlots, benchedToday)
-
-			// Compute hitter blending breakdowns if pipeline detail is requested.
-			var hitterBreakdowns map[string]*projections.HitterBreakdown
-			if opts.ShowPipeline {
-				if blended, ok := hitterProjSrc.(*projections.BlendedSource); ok {
-					hitterBreakdowns = make(map[string]*projections.HitterBreakdown)
-					for _, sp := range hitterResult.Scored {
-						if bd := blended.GetHitterBreakdown(sp.Player.Name, sp.Player.MLBTeam, hitterScoring); bd != nil {
-							hitterBreakdowns[sp.Player.ID] = bd
-						}
-					}
-				}
-			}
-
-			// Compute full pipeline details if pipeline detail is requested.
-			var hitterPipelines map[string]*projections.HitterPipelineDetail
-			if opts.ShowPipeline {
-				hitterPipelines = make(map[string]*projections.HitterPipelineDetail)
-				for _, sp := range hitterResult.Scored {
-					if !sp.HasGame {
-						continue
-					}
-					proj, projOK := hitterProjSrc.GetProjection(sp.Player.Name, sp.Player.MLBTeam)
-					if !projOK || proj.G <= 0 {
-						continue
-					}
-					pd := &projections.HitterPipelineDetail{
-						PlayerName:     sp.Player.Name,
-						PlayerID:       sp.Player.ID,
-						MLBTeam:        sp.Player.MLBTeam,
-						BasePtsPerGame: projections.ExpectedPtsFromProj(proj, hitterScoring),
-						PlatoonMult:    1.0,
-						QualityMult:    1.0,
-					}
-
-					// Stage 2: Blend
-					if bd, ok := hitterBreakdowns[sp.Player.ID]; ok {
-						pd.BlendedPtsPerGame = bd.BlendedPts
-						pd.HasRecent = bd.HasRecent
-						pd.BaseWt = bd.BaseWt
-						pd.RecentFPG = bd.RecentFPG
-						pd.GamesPlayed = bd.GamesPlayed
-					} else {
-						pd.BlendedPtsPerGame = pd.BasePtsPerGame
-					}
-					pd.BlendDelta = pd.BlendedPtsPerGame - pd.BasePtsPerGame
-
-					// Stage 3: Matchup (platoon + quality)
-					afterPlatoon := pd.BlendedPtsPerGame
-					if matchupSrc != nil {
-						md := matchupSrc.GetMatchupDetail(sp.Player.Name, sp.Player.MLBTeam)
-						pd.PlatoonMult = md.PlatoonMult
-						pd.PlatoonFavorable = md.Favorable
-						pd.QualityMult = md.QualityMult
-						pd.OpposingPitcher = md.OpposingPitcher
-						pd.OpposingFIP = md.OpposingFIP
-						pd.LeagueAvgFIP = md.LeagueAvgFIP
-						afterPlatoon = pd.BlendedPtsPerGame * md.PlatoonMult
-						pd.FinalPtsPerGame = pd.BlendedPtsPerGame * md.CombinedMult
-					} else {
-						pd.FinalPtsPerGame = pd.BlendedPtsPerGame
-					}
-					pd.PlatoonDelta = afterPlatoon - pd.BlendedPtsPerGame
-					pd.QualityDelta = pd.FinalPtsPerGame - afterPlatoon
-
-					hitterPipelines[sp.Player.ID] = pd
-				}
-			}
-
-			// Optimize pitchers.
-			// GS budget gate only applies to today — for future dates the budget
-			// would need to be recomputed per-date, and the daily production run
-			// handles each day as it arrives.
-			dateBudget := gsBudget
-			if !isToday {
-				dateBudget = nil
-			}
-			pitcherResult := optimizer.OptimizePitcherLineup(datePitcherRoster, playingToday, probableStarters, pitcherProjSrc, pitcherScoring, pitcherSlots, dateBudget)
-
-			// Compute pitcher pipeline details if pipeline detail is requested.
-			var pitcherPipelines map[string]*projections.PitcherPipelineDetail
-			if opts.ShowPipeline {
-				pitcherPipelines = make(map[string]*projections.PitcherPipelineDetail)
-
-				// Get breakdowns from blended source if available.
-				var pitcherBreakdowns map[string]*projections.PitcherBreakdown
-				if blended, ok := pitcherProjSrc.(*projections.PitcherBlendedSource); ok {
-					pitcherBreakdowns = make(map[string]*projections.PitcherBreakdown)
-					for _, sp := range pitcherResult.Scored {
-						if bd := blended.GetPitcherBreakdown(sp.Player.Name, sp.Player.MLBTeam, pitcherScoring); bd != nil {
-							pitcherBreakdowns[sp.Player.ID] = bd
-						}
-					}
-				}
-
-				for _, sp := range pitcherResult.Scored {
-					if !sp.HasGame {
-						continue
-					}
-
-					// Determine base pts from breakdown or direct projection lookup.
-					var basePts float64
-					if bd, ok := pitcherBreakdowns[sp.Player.ID]; ok {
-						basePts = bd.BasePts
-					} else if proj, ok := pitcherProjSrc.GetPitcherProjection(sp.Player.Name, sp.Player.MLBTeam); ok && proj.G > 0 {
-						basePts = projections.PitcherExpectedPtsFromProj(proj, pitcherScoring)
-					} else {
-						continue
-					}
-
-					role := "RP"
-					spEligible := strings.Contains(sp.Player.PosShortNames, "SP")
-					if spEligible {
-						role = "SP"
-					}
-
-					pd := &projections.PitcherPipelineDetail{
-						PlayerName:     sp.Player.Name,
-						PlayerID:       sp.Player.ID,
-						MLBTeam:        sp.Player.MLBTeam,
-						Role:           role,
-						BasePtsPerGame: basePts,
-					}
-
-					// Stage 2: Blend
-					if bd, ok := pitcherBreakdowns[sp.Player.ID]; ok {
-						pd.BlendedPtsPerGame = bd.BlendedPts
-						pd.HasRecent = bd.HasRecent
-						pd.BaseWt = bd.BaseWt
-						pd.RecentFPG = bd.RecentFPG
-						pd.GamesPlayed = bd.GamesPlayed
-					} else {
-						pd.BlendedPtsPerGame = basePts
-					}
-					pd.BlendDelta = pd.BlendedPtsPerGame - pd.BasePtsPerGame
-
-					// Stage 3: GS Gate — detect if this SP was a probable starter
-					// but got suppressed by the GS budget gate.
-					if spEligible && dateBudget != nil {
-						normalizedName := projections.NormalizeName(sp.Player.Name)
-						_, wasProbable := probableStarters[normalizedName]
-						if wasProbable && !sp.IsStarter {
-							pd.WasGated = true
-							pd.FinalPtsPerGame = pd.BlendedPtsPerGame * 0.10
-							pd.GateDelta = pd.FinalPtsPerGame - pd.BlendedPtsPerGame
-						} else {
-							pd.FinalPtsPerGame = pd.BlendedPtsPerGame
-						}
-					} else {
-						pd.FinalPtsPerGame = pd.BlendedPtsPerGame
-					}
-
-					pitcherPipelines[sp.Player.ID] = pd
-				}
-			}
-
-			results[i] = dateResult{
-				date:             date,
-				period:           period,
-				isToday:          isToday,
-				hitterResult:     hitterResult,
-				pitcherResult:    pitcherResult,
-				warnings:         warnings,
-				venues:           venues,
-				benchedToday:     benchedToday,
-				hitterBreakdowns: hitterBreakdowns,
-				hitterPipelines:  hitterPipelines,
-				pitcherPipelines: pitcherPipelines,
-			}
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return result, fmt.Errorf("parallel optimize: %w", err)
+	results, err := OptimizeDates(ft, schedClient, OptimizeInputs{
+		Dates:             dates,
+		Today:             today,
+		SeasonStart:       seasonStart,
+		HitterRoster:      hitterRoster,
+		PitcherRoster:     pitcherRoster,
+		HitterSlots:       hitterSlots,
+		PitcherSlots:      pitcherSlots,
+		HitterScoring:     hitterScoring,
+		PitcherScoring:    pitcherScoring,
+		HitterSrc:         hitterProjSrc,
+		PitcherSrc:        pitcherProjSrc,
+		HitterBats:        hitterBats,
+		PitcherHandedness: pitcherHandedness,
+		PitcherFIP:        pitcherFIP,
+		LeagueAvgFIP:      leagueAvgFIP,
+		GSBudget:          gsBudget,
+		ShowPipeline:      opts.ShowPipeline,
+	})
+	if err != nil {
+		return result, err
 	}
 	prog.Done("Optimize", "done")
 	prog.Finish()
 
-	// --- Archive per-date projection snapshots ---
-	// Whether to write is decided entirely by the caller; see Options.WriteSnapshots.
-	if opts.WriteSnapshots {
-		for _, dr := range results {
-			if err := writeProjectionSnapshot(dr, batLoadResult.System, slotName, batLoadResult.NoData, pitLoadResult.NoData, opts.SnapshotRoot); err != nil {
-				fmt.Fprintf(out, "  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)
-			}
-		}
-	}
-
-	// --- Publish today's lineup for the read-only HTTP API ---
-	// The iOS thin client reads this precomputed JSON; the hourly non-dry-run
-	// run keeps it fresh. Dry-run only publishes when --publish-lineup is set
-	// (for local curl testing without mutating the real roster).
-	if !cfg.DryRun || opts.PublishLineupFlag {
-		for _, dr := range results {
-			if !dr.isToday {
-				continue
-			}
-			if err := publishLineup(dr, cfg, hitterSlots, pitcherSlots, opts.Publisher); err != nil {
-				fmt.Fprintf(out, "  ⚠ lineup publish failed: %v\n", err)
-			}
-			break
-		}
-	}
-
-	// --- Sequential print + apply ---
-	for _, dr := range results {
-		for _, w := range dr.warnings {
-			fmt.Fprintf(out, "  ⚠ %s\n", w)
-		}
-
-		renderDateResult(out, dr, multiDate, slotName, opts.ShowPipeline, gsBudget)
-
-		// --- Combine changes ---
-		allActivate := append(dr.hitterResult.ToActivate, dr.pitcherResult.ToActivate...)
-		allBench := append(dr.hitterResult.ToBench, dr.pitcherResult.ToBench...)
-
-		// --- Print planned moves ---
-		if len(allActivate) == 0 && len(allBench) == 0 {
-			fmt.Fprintln(out, "\n  No changes needed.")
-			continue
-		}
-
-		// Resolve change-line names from THIS date's rosters. The global
-		// playerName map is built from today's base roster only, but future
-		// dates optimize against period-specific rosters that can include
-		// pitchers not on today's active roster (reserve/IL SPs surfaced for a
-		// merged matchup week). Without this, activating such a pitcher renders a
-		// blank name in the notification. Seed from the global map, then overlay
-		// the date's Scored players (which carry the period-specific names).
-		dateName := make(map[string]string, len(playerName))
-		for id, n := range playerName {
-			dateName[id] = n
-		}
-		for _, sp := range dr.hitterResult.Scored {
-			dateName[sp.Player.ID] = sp.Player.Name
-		}
-		for _, sp := range dr.pitcherResult.Scored {
-			dateName[sp.Player.ID] = sp.Player.Name
-		}
-
-		// Build effective-pts lookup for optimization delta.
-		// Hitters contribute full ExpectedPts when they have a game.
-		// Pitchers: RPs and confirmed starters contribute full pts;
-		// non-starting SPs contribute 10% (the optimizer's discount).
-		ptsMap := make(map[string]float64)
-		for _, sp := range dr.hitterResult.Scored {
-			if sp.HasGame {
-				ptsMap[sp.Player.ID] = sp.ExpectedPts
-			}
-		}
-		for _, sp := range dr.pitcherResult.Scored {
-			if !sp.HasGame {
-				continue
-			}
-			isRP := !strings.Contains(sp.Player.PosShortNames, "SP")
-			if sp.IsStarter || isRP {
-				ptsMap[sp.Player.ID] = sp.ExpectedPts
-			} else {
-				ptsMap[sp.Player.ID] = sp.ExpectedPts * 0.10
-			}
-		}
-		delta := combinedMovesDelta(allActivate, allBench, ptsMap)
-
-		fmt.Fprintf(out, "\n  Changes (%+.2f pts) %s\n", delta, strings.Repeat("─", 35))
-		for _, ps := range allActivate {
-			fmt.Fprintf(out, "    ↑ %-24s → %-4s  %+6.2f\n", dateName[ps.PlayerID], slotName[ps.PosID], ptsMap[ps.PlayerID])
-		}
-		for _, id := range allBench {
-			fmt.Fprintf(out, "    ↓ %-24s → BN    %+6.2f\n", dateName[id], -ptsMap[id])
-		}
-
-		if isZeroGainDelta(delta) {
-			fmt.Fprintln(out, "\n  Net gain ≈ 0 — skipping apply (cosmetic swap).")
-			continue
-		}
-
-		if cfg.DryRun {
-			fmt.Fprintln(out, "\n[DRY RUN] No changes applied.")
-			continue
-		}
-
-		// --- Resolve period for this date ---
-		dateKey := dr.date.Format("2006-01-02")
-		if dr.period == 0 && !dr.isToday {
-			fmt.Fprintf(out, "\n[SKIP] No scoring period found for %s — changes not applied.\n", dateKey)
-			continue
-		}
-
-		// --- Apply combined lineup (sequential — Fantrax API is not concurrent-safe) ---
-		fmt.Fprintf(out, "\nApplying lineup for %s (period %d)...\n", dateKey, dr.period)
-		if err := ft.ApplyLineup(dr.period, allActivate, allBench); err != nil {
-			// Log and continue. Aborting here would drop any subsequent
-			// dates' work on multi-date runs and turn a partial success
-			// into a failed run with no daily summary.
-			fmt.Fprintf(out, "  ⚠ apply lineup failed for %s: %v\n", dateKey, err)
-			sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken,
-				fmt.Sprintf("⚠ %s: apply failed — %v", dr.date.Format("Mon Jan 2"), err))
-			continue
-		}
-		fmt.Fprintln(out, "Lineup applied successfully.")
-		ft.InvalidatePeriodRosterCache(dr.period)
-
-		// Send Pushover notification summarizing the changes.
-		nHitter := len(dr.hitterResult.ToActivate) + len(dr.hitterResult.ToBench)
-		nPitcher := len(dr.pitcherResult.ToActivate) + len(dr.pitcherResult.ToBench)
-		var parts []string
-		if nHitter > 0 {
-			parts = append(parts, fmt.Sprintf("%d hitter", nHitter))
-		}
-		if nPitcher > 0 {
-			parts = append(parts, fmt.Sprintf("%d pitcher", nPitcher))
-		}
-		summary := fmt.Sprintf("%s: %s changes (%+.2f pts)",
-			dr.date.Format("Mon Jan 2"), strings.Join(parts, " + "), delta)
-		for _, ps := range allActivate {
-			summary += fmt.Sprintf("\n  ↑ %s → %s", dateName[ps.PlayerID], slotName[ps.PosID])
-		}
-		for _, id := range allBench {
-			summary += fmt.Sprintf("\n  ↓ %s → BN", dateName[id])
-		}
-		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, summary)
-	}
+	// --- Emit: snapshot, publish, print, apply, notify ---
+	Emit(ft, EmitInputs{
+		Results:        results,
+		MultiDate:      multiDate,
+		SlotName:       slotName,
+		PlayerName:     playerName,
+		HitterSlots:    hitterSlots,
+		PitcherSlots:   pitcherSlots,
+		GSBudget:       gsBudget,
+		ShowPipeline:   opts.ShowPipeline,
+		WriteSnapshots: opts.WriteSnapshots,
+		SnapshotRoot:   opts.SnapshotRoot,
+		ProjSystem:     batLoadResult.System,
+		HittersNoData:  batLoadResult.NoData,
+		PitchersNoData: pitLoadResult.NoData,
+		PublishLineup:  opts.PublishLineupFlag,
+		Publisher:      opts.Publisher,
+		Cfg:            cfg,
+		Out:            out,
+		Notify: func(message string) {
+			sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, message)
+		},
+	})
 
 	return result, nil
 }
