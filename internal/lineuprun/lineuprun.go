@@ -404,83 +404,35 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	}
 
 	// --- GS Budget (weekly game-start limit awareness) ---
+	// The cascade itself lives in ComputeGSBudget; Run keeps only the two
+	// side effects the phase deliberately does not perform — writing to the
+	// progress display and actually sending the Pushover it asked for.
 	var gsBudget *optimizer.GSBudget
 	if cfg.GSTrackingEnabled {
 		prog.Start("GS budget")
-	}
-	if cfg.GSTrackingEnabled && !seasonStart.IsZero() {
-		weekStart, weekEnd, err := ft.GetMatchupWeekBounds(today, seasonStart)
-		if err != nil {
-			prog.Logf("WARNING: could not determine matchup week (%v) — GS limit disabled", err)
-		} else if weekStart.IsZero() {
-			prog.Logf("WARNING: no matchup week found for today — GS limit disabled")
-		} else if pastGS, _, gsErr := ft.GetTeamGS(cfg.TeamID, "", fantrax.ScoringPeriod{StartDate: weekStart, EndDate: today.AddDate(0, 0, -1)}, seasonStart, today, 0, false); gsErr != nil {
-			// Past GS uses the gs_check active-slot delta walk. The probables
-			// list is unreliable as a GS proxy: it counts current-roster SPs
-			// who were probable while sitting on bench (overcount) and misses
-			// SPs dropped after starting in an active slot (undercount). The
-			// walk fetches per-day roster snapshots and counts only active-slot
-			// YTD GS deltas — the same source of truth gs-check uses for
-			// league-wide violation detection.
-			prog.Logf("WARNING: per-day GS walk failed (%v) — GS limit disabled", gsErr)
-		} else if periodsErr != nil {
-			// Reuses the periods list already fetched once above instead of
-			// gscheck's old pattern of each call site re-fetching
-			// GetScoringPeriodsAndTeams independently. Same authoritative source
-			// either way — this just avoids firing the request twice per run.
-			prog.Logf("WARNING: could not fetch scoring periods (%v) — GS limit disabled", periodsErr)
-		} else if sp := fantrax.FindCurrentPeriod(periods, today); sp == nil {
-			prog.Logf("WARNING: could not resolve scoring period for today — GS limit disabled")
-		} else if _, liveMax, gerr := ft.GetGSLimits(cfg.TeamID, sp.Number); gerr != nil {
-			// The real GS max comes straight from Fantrax's own per-period
-			// configuration — there's no static fallback, so a fetch failure
-			// means we genuinely can't gate today. Alert (this degrades the
-			// lineup's pitcher usage silently otherwise) and skip the gate.
-			msg := fmt.Sprintf("optimize: live GS limit fetch failed for period %d (%v) — GS limit disabled", sp.Number, gerr)
-			prog.Logf("WARNING: %s", msg)
-			if cfg.PushoverUserKey != "" && cfg.PushoverAPIToken != "" {
-				if perr := notify.SendPushover(cfg.PushoverUserKey, cfg.PushoverAPIToken, "optimize: GS limit fetch failed", msg); perr != nil {
-					prog.Logf("WARNING: failed to send failure Pushover: %v", perr)
-				}
-			}
-		} else if liveMax == nil {
-			prog.Logf("No GS max configured by Fantrax for period %d — GS limit disabled", sp.Number)
-		} else {
-			gsLimit := *liveMax
 
-			prog.Logf("GS limit: %d per week (%s to %s)",
-				gsLimit,
-				weekStart.Format("2006-01-02"),
-				weekEnd.Format("2006-01-02"))
-
-			spNames := rosterSPNames(pitcherRoster)
-			usedGS := pastGS
-
-			forecast := buildGSForecast(schedClient, spNames, len(pitcherSlots), today, weekEnd,
-				func(p fantrax.Player) float64 {
-					return pitcherProjectedPts(p, pitcherProjSrc, pitcherScoring)
-				})
-
-			// Today's already-locked starts count as used, not forecast demand.
-			// Both lookups must succeed — a partial view would undercount.
-			lockedTeams, lockErr := schedClient.LockedTeams(today)
-			todayProbs, probsErr := schedClient.ProbableStarters(today)
-			if lockErr == nil && probsErr == nil {
-				usedGS += countTodayStarts(pitcherRoster, lockedTeams, todayProbs)
-			}
-
-			gsBudget = &optimizer.GSBudget{
-				Limit:    gsLimit,
-				Used:     usedGS,
-				Today:    today,
-				WeekEnd:  weekEnd,
-				Forecast: forecast,
-			}
-			prog.Logf("GS budget: %d/%d used, %.1f projected future starts",
-				usedGS, gsLimit, gsBudget.FutureDemand())
+		dec := ComputeGSBudget(ft, schedClient, GSInputs{
+			TeamID:          cfg.TeamID,
+			Today:           today,
+			SeasonStart:     seasonStart,
+			Periods:         periods,
+			PeriodsErr:      periodsErr,
+			PitcherRoster:   pitcherRoster,
+			NumPitcherSlots: len(pitcherSlots),
+			ProjPts: func(p fantrax.Player) float64 {
+				return pitcherProjectedPts(p, pitcherProjSrc, pitcherScoring)
+			},
+		})
+		for _, line := range dec.Logs {
+			prog.Logf("%s", line)
 		}
-	}
-	if cfg.GSTrackingEnabled {
+		if dec.Alert != nil && cfg.PushoverUserKey != "" && cfg.PushoverAPIToken != "" {
+			if perr := notify.SendPushover(cfg.PushoverUserKey, cfg.PushoverAPIToken, dec.Alert.Title, dec.Alert.Message); perr != nil {
+				prog.Logf("WARNING: failed to send failure Pushover: %v", perr)
+			}
+		}
+		gsBudget = dec.Budget
+
 		if gsBudget != nil {
 			prog.Done("GS budget", fmt.Sprintf("%d/%d used · %.1f projected", gsBudget.Used, gsBudget.Limit, gsBudget.FutureDemand()))
 		} else {
