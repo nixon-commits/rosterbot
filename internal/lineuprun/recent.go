@@ -19,6 +19,38 @@ const (
 	recencyLookbackDays = 35
 )
 
+// hitterWindowBounds returns the inclusive date range to fetch the daily FPts
+// series over. Pure: it depends on nothing but the two dates.
+//
+// The fetch reaches back recencyLookbackDays rather than recencyWindowDays so
+// the 30-day window is fully populated at its far edge, and it stops at
+// yesterday because today's period is still open (WindowedRecent's leakage
+// guard would exclude the as-of day regardless). Clamping to seasonStart is
+// what keeps an early-April run from asking Fantrax for preseason periods.
+func hitterWindowBounds(today, seasonStart time.Time) (start, end time.Time, err error) {
+	start = today.AddDate(0, 0, -recencyLookbackDays)
+	if start.Before(seasonStart) {
+		start = seasonStart
+	}
+	end = today.AddDate(0, 0, -1)
+	if end.Before(start) {
+		return time.Time{}, time.Time{}, fmt.Errorf("no completed days before %s", today.Format("2006-01-02"))
+	}
+	return start, end, nil
+}
+
+// collapseHitterWindow reduces an already-fetched per-day FPts series to the
+// per-player recency signal the blend consumes: FP/game and games-in-window,
+// counting only games inside the trailing recencyWindowDays as of asOf.
+//
+// This is the pure core of the hitter recency path — no client, no cache, no
+// dates to fetch (rosterbot-6om criterion 2). It is worth naming separately
+// because a mistake here is invisible: it does not fail, it silently shifts
+// every hitter's Expected Points, and therefore the lineup.
+func collapseHitterWindow(days []fantrax.DayRoster, asOf time.Time) map[string]fantrax.RecentStat {
+	return projections.WindowedRecent(days, asOf, projections.WindowWeight(recencyWindowDays), false)
+}
+
 // windowedHitterRecent builds the trailing-recencyWindowDays hitter recency
 // signal (FP/game + games-in-window) from the daily FPts series, as of today.
 // It replaces the former unbounded season-to-date snapshot (GetRecentStats):
@@ -26,6 +58,9 @@ const (
 // the blended value AND the blend weight (driven by games-in-window) track
 // recent form rather than the whole season. Past periods are cached at 30d TTL,
 // so warm runs only refetch the last day or two.
+//
+// It is the thin fetch wrapper around the two pure functions above: bounds,
+// fetch, collapse.
 func windowedHitterRecent(ft recentStatsClient, teamID string, today, seasonStart time.Time, noCache bool) (map[string]fantrax.RecentStat, error) {
 	if seasonStart.IsZero() {
 		s, _, err := ft.GetSeasonDateRange()
@@ -34,22 +69,16 @@ func windowedHitterRecent(ft recentStatsClient, teamID string, today, seasonStar
 		}
 		seasonStart = s
 	}
-	start := today.AddDate(0, 0, -recencyLookbackDays)
-	if start.Before(seasonStart) {
-		start = seasonStart
-	}
-	// End at yesterday: today's period is incomplete, and WeightedRecent's
-	// leakage guard excludes the as-of day anyway.
-	yesterday := today.AddDate(0, 0, -1)
-	if yesterday.Before(start) {
-		return nil, fmt.Errorf("no completed days before %s", today.Format("2006-01-02"))
+	start, end, err := hitterWindowBounds(today, seasonStart)
+	if err != nil {
+		return nil, err
 	}
 	// DailyFantasyPoints resolves the MLB-statsapi backfill internally
 	// (best-effort, soft-fails per player), so the window sees real same-day
 	// FPts for mid-window first appearances instead of placeholder zeros.
-	days, err := ft.DailyFantasyPoints(teamID, start, yesterday, seasonStart, cacheDir, cacheTTL(noCache, 30*24*time.Hour))
+	days, err := ft.DailyFantasyPoints(teamID, start, end, seasonStart, cacheDir, cacheTTL(noCache, 30*24*time.Hour))
 	if err != nil {
 		return nil, err
 	}
-	return projections.WindowedRecent(days, today, projections.WindowWeight(recencyWindowDays), false), nil
+	return collapseHitterWindow(days, today), nil
 }

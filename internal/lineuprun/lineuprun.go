@@ -279,32 +279,31 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		prog.Logf("WARNING: API pitching projections unavailable — using CSV file")
 	}
 	prog.Logf("fangraphs pitching projections loaded (%s, %d players)", projDisplayName[pitLoadResult.System], fgPitSrc.Len())
-	var recentHitterCount, recentPitcherCount int
-	var hitterProjSrc projections.Source
-	rolling := projections.NewRollingSource()
-	baseSrc := projections.NewChainedSource(fgSrc, rolling)
-
-	if periodErr != nil || currentPeriod <= 1 {
-		if currentPeriod <= 1 {
-			prog.Logf("season not started (period %d) — using %s only", currentPeriod, projDisplayName[opts.ProjectionSystem])
-		}
-		hitterProjSrc = baseSrc
-	} else {
-		prog.Logf("fetching recent hitter stats (trailing %dd window as of %s)...", recencyWindowDays, today.Format("2006-01-02"))
-		recentStats, err := windowedHitterRecent(ft, cfg.TeamID, today, seasonStart, opts.NoCache)
-		if err != nil {
-			prog.Logf("WARNING: recent hitter stats unavailable (%v) — using %s only", err, projDisplayName[opts.ProjectionSystem])
-			hitterProjSrc = baseSrc
-		} else {
-			recentHitterCount = len(recentStats)
-			prog.Logf("recent hitter stats loaded: %d players with data", len(recentStats))
-			nameToID := make(map[string]string)
-			for _, p := range hitterRoster {
-				nameToID[projections.NormalizeName(p.Name)] = p.ID
-			}
-			hitterProjSrc = projections.NewBlendedSource(baseSrc, recentStats, hitterScoring, nameToID, cfg.BlendMinGP, fgSrc.AverageFPG(hitterScoring))
-		}
+	// --- Blend the base sources with recent Fantrax production ---
+	// Hitters use a trailing 30-day window, pitchers season-to-date YTD; that
+	// asymmetry is backtest-justified and documented on BlendSources.
+	blend := BlendSources(ft, BlendInputs{
+		HitterBase:     projections.NewChainedSource(fgSrc, projections.NewRollingSource()),
+		PitcherBase:    projections.NewPitcherChainedSource(fgPitSrc, projections.NewPitcherRollingSource()),
+		HitterRoster:   hitterRoster,
+		PitcherRoster:  pitcherRoster,
+		HitterScoring:  hitterScoring,
+		PitcherScoring: pitcherScoring,
+		HitterAvgFPG:   fgSrc.AverageFPG(hitterScoring),
+		PitcherAvgFPG:  fgPitSrc.AverageFPG(pitcherScoring),
+		TeamID:         cfg.TeamID,
+		Today:          today,
+		SeasonStart:    seasonStart,
+		CurrentPeriod:  currentPeriod,
+		PeriodErr:      periodErr,
+		BlendMinGP:     cfg.BlendMinGP,
+		NoCache:        opts.NoCache,
+		SystemName:     projDisplayName[opts.ProjectionSystem],
+	})
+	for _, line := range blend.Logs {
+		prog.Logf("%s", line)
 	}
+	hitterProjSrc, pitcherProjSrc := blend.Hitters, blend.Pitchers
 
 	// Collect MLBAM IDs for handedness lookup.
 	var hitterMLBAMIDs map[string]int
@@ -312,34 +311,10 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		hitterMLBAMIDs = fgSrc.MLBAMIDs()
 	}
 
-	// --- Pitcher projections (shared across dates) ---
-	var pitcherProjSrc projections.PitcherSource
-	pitRolling := projections.NewPitcherRollingSource()
-	pitBaseSrc := projections.NewPitcherChainedSource(fgPitSrc, pitRolling)
-
-	if periodErr != nil || currentPeriod <= 1 {
-		pitcherProjSrc = pitBaseSrc
-	} else {
-		recentPitStats, err := ft.GetRecentPitcherStats(currentPeriod, 0)
-		if err != nil {
-			prog.Logf("WARNING: recent pitcher stats unavailable (%v) — using %s only", err, projDisplayName[opts.ProjectionSystem])
-			pitcherProjSrc = pitBaseSrc
-		} else {
-			recentPitcherCount = len(recentPitStats)
-			prog.Logf("recent pitcher stats loaded: %d players with data", len(recentPitStats))
-			pitNameToID := make(map[string]string)
-			pitPlayerPos := make(map[string][]string)
-			for _, p := range pitcherRoster {
-				pitNameToID[projections.NormalizeName(p.Name)] = p.ID
-				pitPlayerPos[p.ID] = p.Positions
-			}
-			pitcherProjSrc = projections.NewPitcherBlendedSource(pitBaseSrc, recentPitStats, pitcherScoring, pitNameToID, pitPlayerPos, cfg.BlendMinGP, fgPitSrc.AverageFPG(pitcherScoring))
-		}
-	}
 	prog.Done("Projections", "batting + pitching loaded")
 
 	prog.Start("Recent stats")
-	prog.Done("Recent stats", fmt.Sprintf("%d hitters · %d pitchers", recentHitterCount, recentPitcherCount))
+	prog.Done("Recent stats", fmt.Sprintf("%d hitters · %d pitchers", blend.RecentHitterCount, blend.RecentPitcherCount))
 
 	// Extract pitcher FIP for matchup adjustments.
 	prog.Start("Pitcher info")
