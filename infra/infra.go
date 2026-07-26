@@ -216,6 +216,17 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// webauthn/ holds the single Identity record and is read-modify-written
 	// on every registration and login (sign-counter update).
 	stateBucket.GrantReadWrite(apiFn, jsii.String("webauthn/*"))
+	// GET /v1/infra reports the health of every prefix in the state bucket, so
+	// it needs to LIST the whole bucket — but only list. It reports object
+	// counts, sizes, last-modified times and dt= partition names, all of which
+	// come from the listing itself; it never reads an object body. Granting
+	// s3:ListBucket alone (rather than widening GrantRead to "*") keeps the
+	// Lambda unable to read the contents of prefixes it has no business in,
+	// notably session/ (the Fantrax auth cookie) and claims/.
+	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions:   jsii.Strings("s3:ListBucket"),
+		Resources: jsii.Strings(*stateBucket.BucketArn()),
+	}))
 	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Actions: jsii.Strings("ssm:GetParameter"),
 		Resources: jsii.Strings(

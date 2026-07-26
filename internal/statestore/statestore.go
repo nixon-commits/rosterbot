@@ -18,23 +18,34 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
 	"github.com/nixon-commits/rosterbot/internal/ndjsonstore/s3ndjson"
+	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
 )
 
-// artifact is the durable-state layout for one kind of data: its S3 key prefix
-// (under STATE_BUCKET) and its local-filesystem directory. This table is the
-// single declaration of the prefix layout.
+// artifact is one kind of durable state as this package needs it: an S3 key
+// prefix and a local-filesystem directory.
+//
+// The declarations below are views onto internal/statestore/layout, which is
+// the single source of the bucket layout. They are not a second copy: layout is
+// a zero-dep leaf precisely so internal/lineupapi can serve the same table on
+// GET /v1/infra without importing this package (which imports lineupapi, so the
+// dependency can only run one way).
+//
+// Note analysisArtifact uses the analysis/ ROOT while layout.Analysis names the
+// analysis/grades/ subtree — the writer is constructed at the root and appends
+// grades/dt=.../ itself, whereas the status page lists the leaf where the
+// objects actually land.
 type artifact struct{ s3Prefix, localDir string }
 
 var (
-	cacheArtifact        = artifact{"cache/", ""} // local: default fsStore, no dir override
-	analysisArtifact     = artifact{"analysis/", ".analysis"}
-	teamValueArtifact    = artifact{"analysis/team-values/", ".teamvalue"}
-	runLedgerArtifact    = artifact{"runledger/", ".lineup/runs"}
-	runOutputArtifact    = artifact{"runs/", ".lineup/outputs"}
-	notificationArtifact = artifact{"notifications/", ".lineup/notifications"}
-	progressArtifact     = artifact{"runs/", ".lineup/progress"}
-	lineupArtifact       = artifact{"lineup/", ".lineup"}
+	cacheArtifact        = artifact{layout.Cache.S3Prefix, ""} // local: default fsStore, dir unused
+	analysisArtifact     = artifact{"analysis/", layout.Analysis.LocalDir}
+	teamValueArtifact    = artifact{layout.TeamValues.S3Prefix, layout.TeamValues.LocalDir}
+	runLedgerArtifact    = artifact{layout.RunLedger.S3Prefix, layout.RunLedger.LocalDir}
+	runOutputArtifact    = artifact{layout.RunOutput.S3Prefix, layout.RunOutput.LocalDir}
+	notificationArtifact = artifact{layout.Notification.S3Prefix, layout.Notification.LocalDir}
+	progressArtifact     = artifact{layout.Progress.S3Prefix, layout.Progress.LocalDir}
+	lineupArtifact       = artifact{layout.Lineup.S3Prefix, layout.Lineup.LocalDir}
 )
 
 // Bucket is the single os.Getenv("STATE_BUCKET") read in the codebase. Empty

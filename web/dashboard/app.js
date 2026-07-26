@@ -8,6 +8,7 @@ import { renderRuns } from "./runs.js";
 import { renderPasskeys } from "./passkeys.js";
 import { renderProjections } from "./projections.js";
 import { renderValue } from "./value.js";
+import { renderInfra } from "./infra.js";
 import { startLive, stopLive } from "./live.js";
 
 const ROUTES = {
@@ -17,6 +18,7 @@ const ROUTES = {
   "#passkeys": renderPasskeys,
   "#projections": renderProjections,
   "#value": renderValue,
+  "#infra": renderInfra,
 };
 const DEFAULT_ROUTE = "#lineup";
 

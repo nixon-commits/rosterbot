@@ -65,7 +65,7 @@ flowchart LR
 - **Watches the league** — Trade monitor (valued by HKB), roster-hygiene alerts (players stuck in the wrong slot), and a league-wide games-started violation checker.
 - **Grades the tape** — Backtests past lineups against the hindsight-optimal lineup, and grades every projection against the fantasy points that actually scored — sliced by position and by projection system.
 - **Tells the story** — Sleeper-style weekly HTML recaps with a Game-of-the-Week win-probability chart, League Leaders board, and comeback/lead-change awards.
-- **Publishes dashboards** — A daily projection-accuracy dashboard (scorecard, trend, per-position MAE, calibration, worst misses, model comparison) and a per-team dynasty-value tracker, both served as a private SPA behind a passkey.
+- **Publishes dashboards** — A daily projection-accuracy dashboard (scorecard, trend, per-position MAE, calibration, worst misses, model comparison), a per-team dynasty-value tracker, and an infra status page showing the freshness of every durable and ephemeral data store — all served as a private SPA behind a passkey.
 
 ---
 
@@ -366,6 +366,9 @@ The same Lambda exposes a run ledger and job triggering (these return `501` from
 | `GET /v1/runs/{id}` | One run plus `log_tail` (captured output, populated on failures). |
 | `GET /v1/runs/{id}/progress` | Live phase progress for an in-flight run: `{phase, pct, phases:[…], status, updated_at}`. `404` when a run has no progress recorded. |
 | `POST /v1/jobs/{name}` | Launch a job as a Fargate task (async). Returns `202`; poll `/v1/runs`. Allowlist: `optimize, waivers, prospects, claims, gs-check, transactions, recap-site, backtest, grade`. |
+| `GET /v1/infra` | State-bucket health, listed **live** per request: one row per durable/ephemeral artifact with `health` (`ok`/`gap`/`stale`/`missing`/`unknown`), object count, size, age, `dt=` partition count and sub-dimension coverage. |
+
+`/v1/infra` reads S3 on demand rather than serving a precomputed file — a status page built from a scheduled artifact would go stale in exactly the situation it exists to detect. It reports its own `generated_at` so the client can prove the reading is current. Two signals matter most: **gap detection** on date-partitioned series, flagged as a failure only where the days can never be refilled (the Team Value Store — HKB has no history, so a missed day is gone for good), and **sub-dimension coverage**, which makes one of the four shadow projection systems silently stopping visible as a missing chip.
 
 Run **status** always comes from the run ledger; `/progress` only adds phase detail on top of it. Today only `optimize` emits phases — the other 8 allowlisted jobs show an indeterminate bar.
 

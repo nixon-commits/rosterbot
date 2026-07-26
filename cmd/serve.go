@@ -74,6 +74,7 @@ func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) h
 		Output:        lineupapi.NewFileOutputStore(lineupDir + "/outputs"),
 		Progress:      lineupapi.NewFileProgressStore(lineupDir + "/progress"),
 		Identities:    lineupapi.NewFileIdentityStore(lineupDir),
+		Infra:         lineupapi.NewFileInfraStore("."),
 		WebAuthn:      wa,
 		SessionSecret: sessionSecret,
 		// Jobs is nil locally: triggering real ECS tasks only makes sense on AWS.

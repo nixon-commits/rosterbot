@@ -55,6 +55,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("init s3 progress store: %v", err)
 	}
+	infra, err := s3lineup.NewInfra(ctx, bucket)
+	if err != nil {
+		log.Fatalf("init s3 infra store: %v", err)
+	}
+
 	identities, err := s3lineup.NewIdentity(ctx, bucket, "webauthn/")
 	if err != nil {
 		log.Fatalf("init s3 identity store: %v", err)
@@ -105,6 +110,7 @@ func main() {
 		Notifications: notifs,
 		Output:        output,
 		Progress:      progressStore,
+		Infra:         infra,
 		Identities:    identities,
 		WebAuthn:      wa,
 		SessionSecret: []byte(sessionSecret),
