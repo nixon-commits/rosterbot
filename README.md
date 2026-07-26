@@ -516,3 +516,13 @@ internal/
 | [`docs/ios-api-contract.md`](docs/ios-api-contract.md) | The thin-client HTTP contract served by the Lambda. |
 | [`docs/adr/`](docs/adr/) | Architecture decisions — [S3-not-DB for the cache](docs/adr/0001-s3-not-db-for-cache.md), [Team Value Store accumulates forward](docs/adr/0002-team-value-store-accumulates-forward.md). |
 | [`CLAUDE.md`](CLAUDE.md) · [`AGENTS.md`](AGENTS.md) | Contributor / agent guides (build commands, conventions, issue tracking). |
+
+---
+
+## License
+
+[GNU General Public License v3.0](LICENSE).
+
+rosterbot statically links [`go-fantrax`](https://github.com/pmurley/go-fantrax), which is GPL-3.0, so the
+combined work is GPL-3.0 too — this isn't a free choice among licenses. If you redistribute rosterbot or a
+binary built from it, you have to carry the same terms and offer the source.
