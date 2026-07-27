@@ -6,31 +6,27 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/s3blob"
 )
 
 // InfraStore lists state-bucket prefixes for GET /v1/infra.
 //
 // Unlike the other stores here it is keyed by nothing — each call enumerates a
-// prefix and reports aggregates. It reads on demand rather than from a
+// prefix and reports aggregates — so its Blob is scoped to the bucket root and
+// every prefix arrives per request. It reads on demand rather than from a
 // precomputed file so the status page can never present its own staleness as
 // health.
-type InfraStore struct {
-	client listAPI
-	bucket string
-}
+type InfraStore struct{ blob *s3blob.Blob }
 
 // NewInfra builds a lister over the whole bucket; prefixes come from
 // internal/statestore/layout per request.
 func NewInfra(ctx context.Context, bucket string) (*InfraStore, error) {
-	cfg, err := config.LoadDefaultConfig(ctx)
+	b, err := s3blob.New(ctx, bucket, "")
 	if err != nil {
 		return nil, err
 	}
-	return &InfraStore{client: s3.NewFromConfig(cfg), bucket: bucket}, nil
+	return &InfraStore{blob: b}, nil
 }
 
 // dtRe extracts a Hive dt= partition value from anywhere in a key.
@@ -57,42 +53,29 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 	parts := map[string]bool{}
 	subs := map[string]bool{}
 
-	p := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
-		Bucket: &s.bucket,
-		Prefix: &prefix,
+	err := s.blob.Walk(ctx, prefix, func(o s3blob.Object) bool {
+		out.Objects++
+		out.Bytes += o.Size
+		if o.LastModified.After(out.LastModified) {
+			out.LastModified = o.LastModified
+		}
+
+		rel := strings.TrimPrefix(o.Key, prefix)
+		if m := dtRe.FindStringSubmatch(rel); m != nil {
+			parts[m[1]] = true
+		}
+		if m := systemRe.FindStringSubmatch(rel); m != nil {
+			subs[m[1]] = true
+		} else if prefix == "archive/" {
+			// archive/<source>/dt=.../file — the source is the first segment.
+			if i := strings.Index(rel, "/"); i > 0 {
+				subs[rel[:i]] = true
+			}
+		}
+		return out.Objects < maxKeys
 	})
-	for p.HasMorePages() {
-		page, err := p.NextPage(ctx)
-		if err != nil {
-			return lineupapi.PrefixListing{}, err
-		}
-		for _, o := range page.Contents {
-			out.Objects++
-			if o.Size != nil {
-				out.Bytes += *o.Size
-			}
-			if o.LastModified != nil && o.LastModified.After(out.LastModified) {
-				out.LastModified = *o.LastModified
-			}
-			if o.Key == nil {
-				continue
-			}
-			rel := strings.TrimPrefix(*o.Key, prefix)
-			if m := dtRe.FindStringSubmatch(rel); m != nil {
-				parts[m[1]] = true
-			}
-			if m := systemRe.FindStringSubmatch(rel); m != nil {
-				subs[m[1]] = true
-			} else if prefix == "archive/" {
-				// archive/<source>/dt=.../file — the source is the first segment.
-				if i := strings.Index(rel, "/"); i > 0 {
-					subs[rel[:i]] = true
-				}
-			}
-		}
-		if out.Objects >= maxKeys {
-			break
-		}
+	if err != nil {
+		return lineupapi.PrefixListing{}, err
 	}
 
 	out.Partitions = sortedKeys(parts)
@@ -111,3 +94,5 @@ func sortedKeys(m map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+var _ lineupapi.InfraLister = (*InfraStore)(nil)
