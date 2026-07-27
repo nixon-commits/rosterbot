@@ -66,6 +66,27 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		AutoDeleteObjects: jsii.Bool(true),
 	})
 
+	// Access logs for the recap CDN — the recap site is public and unauthenticated,
+	// so these logs are the only signal that anyone reads it (rosterbot-b41). They
+	// answer when a page was fetched, from what IP, and which week page it was.
+	//
+	// ObjectOwnership must be OBJECT_WRITER: CloudFront's standard logging writes
+	// via an ACL, which buckets have refused by default since S3 disabled ACLs in
+	// 2023, so the CDK default (BUCKET_OWNER_ENFORCED) silently yields no logs.
+	//
+	// 90-day expiry rather than keep-forever: this is a ~12-person league's reading
+	// habits, the questions asked of it are all recent-window, and an unbounded log
+	// prefix is the same slow storage leak the cache/ rule above exists to stop.
+	recapLogBucket := awss3.NewBucket(stack, jsii.String("RecapLogBucket"), &awss3.BucketProps{
+		ObjectOwnership:   awss3.ObjectOwnership_OBJECT_WRITER,
+		RemovalPolicy:     awscdk.RemovalPolicy_DESTROY,
+		AutoDeleteObjects: jsii.Bool(true),
+		LifecycleRules: &[]*awss3.LifecycleRule{{
+			Id:         jsii.String("ExpireRecapAccessLogs"),
+			Expiration: awscdk.Duration_Days(jsii.Number(90)),
+		}},
+	})
+
 	// Dashboard bucket (static web UI; private, served via its own CDN below).
 	dashboardBucket := awss3.NewBucket(stack, jsii.String("DashboardBucket"), &awss3.BucketProps{
 		RemovalPolicy:     awscdk.RemovalPolicy_DESTROY,
@@ -81,6 +102,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	awscdk.NewCfnOutput(stack, jsii.String("RepoUri"), &awscdk.CfnOutputProps{Value: repo.RepositoryUri()})
 	awscdk.NewCfnOutput(stack, jsii.String("StateBucketName"), &awscdk.CfnOutputProps{Value: stateBucket.BucketName()})
 	awscdk.NewCfnOutput(stack, jsii.String("SiteBucketName"), &awscdk.CfnOutputProps{Value: siteBucket.BucketName()})
+	awscdk.NewCfnOutput(stack, jsii.String("RecapLogBucketName"), &awscdk.CfnOutputProps{Value: recapLogBucket.BucketName()})
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardBucketName"), &awscdk.CfnOutputProps{Value: dashboardBucket.BucketName()})
 
 	// --- Phase 3: compute (VPC, cluster, ARM64 Fargate task definition) ---
@@ -109,6 +131,14 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(siteBucket, nil),
 			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
 		},
+		// Readership signal for the recap site. Cookies are deliberately excluded:
+		// the site sets none, and logging them would only widen what these files
+		// hold. Only SiteCdn is logged — DashboardCdn is passkey-gated and out of
+		// scope for rosterbot-b41.
+		EnableLogging:      jsii.Bool(true),
+		LogBucket:          recapLogBucket,
+		LogFilePrefix:      jsii.String("recap/"),
+		LogIncludesCookies: jsii.Bool(false),
 	})
 	cfArn := func(d awscloudfront.Distribution) *string {
 		return awscdk.Fn_Join(jsii.String(""), &[]*string{
@@ -488,6 +518,54 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		},
 	})
 	gradesTable.AddDependency(glueDB)
+
+	// Recap site readership. CloudFront standard logs are gzipped TSV with two
+	// leading comment lines (#Version, #Fields), written FLAT as
+	// recap/<dist-id>.YYYY-MM-DD-HH.<hash>.gz — no Hive dt= layout, so unlike
+	// grades this table takes no partition projection and simply scans the
+	// prefix. At a ~12-person league's request volume that is a rounding error,
+	// and partitioning a flat key layout would mean rewriting the objects.
+	//
+	// Only the first 14 fields of CloudFront's ~33 are declared. LazySimpleSerDe
+	// ignores trailing fields, and 14 reaches everything asked for — timestamp,
+	// client IP, which page, plus the edge location that serves as free coarse
+	// geo. Extending later means appending columns in CloudFront's documented
+	// order; the positions above must not be reordered.
+	recapLogsLoc := awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("s3://"), recapLogBucket.BucketName(), jsii.String("/recap/")})
+	recapLogsTable := awsglue.NewCfnTable(stack, jsii.String("RecapAccessLogsTable"), &awsglue.CfnTableProps{
+		CatalogId:    stack.Account(),
+		DatabaseName: jsii.String("rosterbot_analysis"),
+		TableInput: &awsglue.CfnTable_TableInputProperty{
+			Name:      jsii.String("recap_access_logs"),
+			TableType: jsii.String("EXTERNAL_TABLE"),
+			Parameters: &map[string]*string{
+				"classification": jsii.String("csv"),
+				// The #Version and #Fields comment lines are data rows to a TSV
+				// reader; without this every query returns two junk rows.
+				"skip.header.line.count": jsii.String("2"),
+			},
+			StorageDescriptor: &awsglue.CfnTable_StorageDescriptorProperty{
+				Location:     recapLogsLoc,
+				InputFormat:  jsii.String("org.apache.hadoop.mapred.TextInputFormat"),
+				OutputFormat: jsii.String("org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"),
+				SerdeInfo: &awsglue.CfnTable_SerdeInfoProperty{
+					SerializationLibrary: jsii.String("org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe"),
+					Parameters:           &map[string]*string{"field.delim": jsii.String("\t")},
+				},
+				// Named for querying rather than mirroring CloudFront's own field
+				// names: `date` and `time` are reserved words in Athena, and the
+				// TSV mapping is positional anyway.
+				Columns: &[]interface{}{
+					col("log_date", "string"), col("log_time", "string"), col("edge_location", "string"),
+					col("sc_bytes", "bigint"), col("client_ip", "string"), col("method", "string"),
+					col("host", "string"), col("uri_stem", "string"), col("status", "int"),
+					col("referer", "string"), col("user_agent", "string"), col("uri_query", "string"),
+					col("cookie", "string"), col("edge_result_type", "string"),
+				},
+			},
+		},
+	})
+	recapLogsTable.AddDependency(glueDB)
 
 	awsathena.NewCfnWorkGroup(stack, jsii.String("AnalysisWG"), &awsathena.CfnWorkGroupProps{
 		Name: jsii.String("rosterbot"),

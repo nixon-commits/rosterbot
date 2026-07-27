@@ -27,6 +27,22 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
   cookie) and `claims/` (ledger+cursor) are still bulk-synced by `entrypoint.sh`. Clear the cache
   with `aws s3 rm s3://<state-bucket>/cache/ --recursive`.
 - **S3 site bucket** (`SITE_BUCKET`) + **CloudFront** (`https://d3g6t1hhf4o9r6.cloudfront.net`) — recap site. `entrypoint.sh` invalidates the distribution (`SITE_CF_DIST_ID`) after each sync so a fresh render isn't masked by the CDN cache TTL.
+- **Recap readership logs** (`RecapLogBucket`, name in the `RecapLogBucketName` stack output) — `SiteCdn` writes CloudFront standard access logs to the `recap/` prefix. The recap site is public and unauthenticated, so these logs are the *only* signal that anyone reads it: they record when each page was fetched, the client IP, the URI, and the edge location (a free coarse geo proxy — CloudFront has no country field in standard logs; that needs standard logging v2 or an IP→geo lookup at query time). Cookies are excluded. Objects expire after **90 days** (`ExpireRecapAccessLogs`), so this prefix can't become the unbounded leak the `cache/` rule exists to prevent. **`DashboardCdn` is deliberately not logged** — it's passkey-gated and out of scope. Query via Glue table `rosterbot_analysis.recap_access_logs` (same Athena workgroup as `grades`; unpartitioned, since CloudFront writes flat `recap/<dist-id>.YYYY-MM-DD-HH.<hash>.gz` keys rather than a Hive `dt=` layout — at this traffic volume a full-prefix scan is a rounding error):
+
+  ```sql
+  -- who read which recap page, most recent first
+  SELECT log_date, log_time, client_ip, edge_location, uri_stem
+  FROM rosterbot_analysis.recap_access_logs
+  WHERE status = 200 AND uri_stem LIKE '%.html'
+  ORDER BY log_date DESC, log_time DESC LIMIT 100;
+
+  -- distinct readers per day
+  SELECT log_date, count(DISTINCT client_ip) readers, count(*) views
+  FROM rosterbot_analysis.recap_access_logs
+  WHERE uri_stem LIKE '%.html' GROUP BY log_date ORDER BY log_date DESC;
+  ```
+
+  Only the first 14 of CloudFront's ~33 log fields are declared in the table; the SerDe ignores trailing fields, and 14 reaches everything above. Extending means **appending** columns in CloudFront's documented field order — the existing positions must not be reordered, since the TSV mapping is positional.
 - **Projection-accuracy dashboard + team-value tracker, folded into the private dashboard** — `model.json` (projection accuracy) and `value.json` (team HKB-value tracker) are written per-run by `projection-site` (`internal/report`/`internal/valuereport` produce the aggregated `Model`, serialized straight to JSON — no server-side HTML render) via `entrypoint.sh` sync, published under `DASHBOARD_BUCKET`'s `report/` key prefix (`DASHBOARD_CF_DIST_ID` invalidated after publish) rather than a standalone bucket+CDN — the same bucket/distribution that serves the passkey-gated dashboard SPA (`DashboardBucket`/`DashboardCdn`). Exposed inside the SPA as the "Projections" and "Value" nav tabs, which `fetch()` `/report/model.json` / `/report/value.json` directly and render natively client-side (vendored Chart.js) — no iframe. The JSON files themselves remain fetchable by direct URL without a passkey session, same exposure as before the JSON migration — this was a rendering-path change, not an access-control change. The old standalone `ReportBucket`/`ReportCdn` (formerly at the `ReportUrl` stack output) has been retired. The `TeamValues` schedule (`cron(30 14 * * ? *)`) writes today's `analysis/team-values/` partition before `ProjectionSite` (15:00 UTC) renders `value.json`.
 - **S3 dashboard bucket** (`DashboardBucket`) + **CloudFront** (`DashboardCdn`, URL in `DashboardUrl` stack output) — the private control-panel web UI (`web/dashboard/`, static, no build step). One distribution serves both surfaces: its default behavior serves the static files from `DashboardBucket`; an additional `/v1/*` behavior proxies straight to the `LineupApi` Function URL (`CachePolicy.CACHING_DISABLED`, `OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER` so the `Authorization` header passes through), making the browser's calls same-origin with zero CORS configuration anywhere. CodeBuild deploys the stack first, reads `DashboardBucketName` and `DashboardCdnId` from its outputs, then syncs `web/dashboard/` and invalidates the distribution on every push to `main` — including the first build that creates those resources.
 - **Passkey auth** — the dashboard's real login is WebAuthn (`internal/lineupapi/webauthn.go`,
