@@ -1,45 +1,30 @@
 package s3lineup
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"sort"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/s3blob"
 )
-
-// listAPI is the slice of the S3 client the run store needs (adds ListObjectsV2
-// to the base api).
-type listAPI interface {
-	api
-	ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
-}
 
 // RunsStore is the S3-backed run ledger. Records live at <prefix><key>.json
 // where key is lineupapi.RunKey (inverted-timestamp prefix), so a plain
-// ascending ListObjectsV2 returns newest first.
-type RunsStore struct {
-	client listAPI
-	bucket string
-	prefix string
-}
+// ascending listing returns newest first.
+type RunsStore struct{ blob *s3blob.Blob }
 
 // NewRuns builds a RunsStore. prefix should end in "/", e.g. "runs/".
 func NewRuns(ctx context.Context, bucket, prefix string) (*RunsStore, error) {
-	cfg, err := config.LoadDefaultConfig(ctx)
+	b, err := s3blob.New(ctx, bucket, prefix)
 	if err != nil {
 		return nil, err
 	}
-	return &RunsStore{client: s3.NewFromConfig(cfg), bucket: bucket, prefix: prefix}, nil
+	return &RunsStore{blob: b}, nil
 }
 
-func (s *RunsStore) objKey(key string) string { return s.prefix + key + ".json" }
+func ledgerKey(key string) string { return key + ".json" }
 
 // PutRun writes (or overwrites) a run ledger record. Called by the run-ledger
 // CLI command from inside the task.
@@ -48,13 +33,7 @@ func (s *RunsStore) PutRun(ctx context.Context, rec lineupapi.RunDetail) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      &s.bucket,
-		Key:         ptr(s.objKey(lineupapi.RunKey(rec.StartedAt, rec.ID))),
-		Body:        bytes.NewReader(data),
-		ContentType: ptr("application/json"),
-	})
-	return err
+	return s.blob.PutJSON(ctx, ledgerKey(lineupapi.RunKey(rec.StartedAt, rec.ID)), data)
 }
 
 func (s *RunsStore) List(ctx context.Context, limit int) ([]lineupapi.Run, error) {
@@ -84,74 +63,45 @@ func (s *RunsStore) Get(ctx context.Context, id string) (*lineupapi.RunDetail, b
 	return nil, false, nil
 }
 
-// listFlatKeys lists every flat ledger key under prefix -- i.e. every key
-// immediately under prefix with no further "/" in the remainder, which
-// excludes per-run output sub-objects like <prefix><id>/output.json.
-// Pagination follows NextContinuationToken. If limit > 0, listing stops once
-// at least limit flat keys have been collected and the result is trimmed to
-// exactly limit; limit <= 0 collects every flat key under the prefix.
-func listFlatKeys(ctx context.Context, client listAPI, bucket, prefix string, limit int) ([]string, error) {
+// flatKeys lists every ledger key immediately under prefix — i.e. with no
+// further "/" in the remainder, which excludes per-run sub-objects like
+// <prefix><id>/output.json. Keys come back relative to blob's own prefix, so a
+// store-scoped Blob yields bare record names and a bucket-root Blob (the ledger
+// migration) yields whole keys.
+//
+// If limit > 0, walking stops as soon as limit ledger keys have been collected;
+// limit <= 0 collects every match. Because the walk follows continuation tokens,
+// stopping early is safe: sub-objects sharing the prefix can fill whole pages
+// ahead of the ledger block without hiding it (rosterbot-432).
+func flatKeys(ctx context.Context, blob *s3blob.Blob, prefix string, limit int) ([]string, error) {
 	var keys []string
-	var token *string
-	for {
-		out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:            &bucket,
-			Prefix:            &prefix,
-			ContinuationToken: token,
-		})
-		if err != nil {
-			return nil, err
+	err := blob.Walk(ctx, prefix, func(o s3blob.Object) bool {
+		if strings.Contains(strings.TrimPrefix(o.Key, prefix), "/") {
+			return true
 		}
-		for _, o := range out.Contents {
-			if o.Key == nil {
-				continue
-			}
-			// Ledger records are <prefix><invts>-<id>.json (flat). Skip
-			// per-run sub-objects like <prefix><id>/output.json so they
-			// don't decode as phantom zero-value runs.
-			if strings.Contains(strings.TrimPrefix(*o.Key, prefix), "/") {
-				continue
-			}
-			keys = append(keys, *o.Key)
-		}
-		if limit > 0 && len(keys) >= limit {
-			break
-		}
-		if out.IsTruncated == nil || !*out.IsTruncated || out.NextContinuationToken == nil {
-			break
-		}
-		token = out.NextContinuationToken
+		keys = append(keys, o.Key)
+		return limit <= 0 || len(keys) < limit
+	})
+	if err != nil {
+		return nil, err
 	}
 	sort.Strings(keys) // defensive: ensure newest-first ordering
-	if limit > 0 && len(keys) > limit {
-		keys = keys[:limit]
-	}
 	return keys, nil
 }
 
-// recent lists the newest `limit` ledger objects and reads each. Ledger keys
-// sort newest-first (inverted-timestamp prefix) among themselves, but they
-// share the runs/ prefix with per-run sub-objects (runs/<hex-id>/output.json)
-// whose hex ids can sort anywhere relative to the ledger block - including
-// entirely before it. A single-page list can therefore turn up zero ledger
-// keys even though many exist, so listFlatKeys paginates (following
-// NextContinuationToken) until it has collected `limit` ledger keys or pages
-// are exhausted.
+// recent lists the newest `limit` ledger records and reads each. Records whose
+// object cannot be read or decoded are skipped rather than failing the listing —
+// one malformed record must not blank the dashboard's run list.
 func (s *RunsStore) recent(ctx context.Context, limit int) ([]lineupapi.RunDetail, error) {
-	keys, err := listFlatKeys(ctx, s.client, s.bucket, s.prefix, limit)
+	keys, err := flatKeys(ctx, s.blob, "", limit)
 	if err != nil {
 		return nil, err
 	}
 
 	var recs []lineupapi.RunDetail
 	for _, k := range keys {
-		obj, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &k})
-		if err != nil {
-			continue
-		}
-		data, err := io.ReadAll(obj.Body)
-		obj.Body.Close()
-		if err != nil {
+		data, found, err := s.blob.Get(ctx, k)
+		if err != nil || !found {
 			continue
 		}
 		var rec lineupapi.RunDetail

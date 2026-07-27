@@ -39,7 +39,9 @@ Supporting decisions:
 - **Store shape mirrors the Analysis Store** (`internal/analysis`): date-partitioned
   NDJSON (`dt=YYYY-MM-DD/values.ndjson`), an isolated S3 adapter
   (`internal/teamvalue/s3teamvalue`) keeping the AWS SDK out of the leaf, and a
-  glob-reader. Writes are one file per day (no read-modify-write), so a same-day
+  glob-reader. (Both the adapter and the reader have since moved — see the
+  Amendments below; the store shape itself is unchanged.) Writes are one file per
+  day (no read-modify-write), so a same-day
   re-run is idempotent (last write wins). No Athena table initially — the data is
   tiny (~12 rows/day) and always read wholesale to draw the plot.
 - **Minors split = Fantrax `MinorsEligible`.** It is available league-wide in the
@@ -67,3 +69,29 @@ Supporting decisions:
   change alone.
 - The store is queryable later (add an Athena table like `rosterbot_analysis.grades`)
   if aggregate auditing is ever wanted; the partition layout already supports it.
+
+## Amendments
+
+**2026-07-27 (rosterbot-oye): "an isolated S3 adapter" now means an isolated
+*Store shape*, not an isolated copy of the SDK plumbing.**
+
+This ADR asked for a per-store S3 adapter so the AWS SDK stayed out of the leaf.
+That goal is unchanged and still enforced — `internal/teamvalue` and
+`internal/ndjsonstore` have no SDK dependency. What changed is where the adapter
+lives and how much of it is this store's own:
+
+- The Team Value Store never got its own `internal/teamvalue/s3teamvalue`. It
+  shares `internal/ndjsonstore/s3ndjson` with the Analysis Store, since the two
+  differ only in partition layout — which is domain code in each package, not
+  adapter code.
+- `s3ndjson` no longer drives the AWS SDK itself. It, `internal/cachestore/s3store`
+  and the seven stores in `internal/lineupapi/s3lineup` are all thin shims over
+  one shared **`internal/s3blob`** Blob, which owns credential resolution, prefix
+  joining, not-found mapping, body reads and list pagination. Eight copies of that
+  plumbing had drifted apart — only one of them paginated its listing correctly.
+
+The **Store interfaces stay distinct** and must not be unified: `cache.Store` is a
+delete-capable keyed TTL cache with no enumeration; `ndjsonstore.Store` is an
+enumerable append-only partitioned log with no delete. Those shapes encode the real
+lifecycle difference between the Cache and the durable stores that ADR-0001 and this
+ADR rest on. Only the SDK plumbing beneath them is shared.
