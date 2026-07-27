@@ -7,11 +7,12 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/s3blob/s3blobtest"
 )
 
 func TestIdentityStoreRoundTrip(t *testing.T) {
-	f := &fakeS3{objects: map[string][]byte{}}
-	s := &IdentityStore{client: f, bucket: "b", prefix: "webauthn/"}
+	f := s3blobtest.New()
+	s := &IdentityStore{blob: f.Blob("b", "webauthn/")}
 
 	if _, ok, err := s.GetIdentity(context.Background()); err != nil || ok {
 		t.Fatalf("GetIdentity on empty store: ok=%v err=%v, want ok=false err=nil", ok, err)
@@ -24,8 +25,8 @@ func TestIdentityStoreRoundTrip(t *testing.T) {
 	if err := s.PutIdentity(context.Background(), want); err != nil {
 		t.Fatalf("PutIdentity: %v", err)
 	}
-	if _, stored := f.objects["webauthn/identity.json"]; !stored {
-		t.Fatalf("object not stored at expected key; got keys %v", keys(f.objects))
+	if _, stored := f.Objects["webauthn/identity.json"]; !stored {
+		t.Fatalf("object not stored at expected key; got keys %v", f.Keys())
 	}
 
 	got, ok, err := s.GetIdentity(context.Background())

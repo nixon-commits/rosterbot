@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/cobra"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
@@ -47,14 +45,13 @@ func runMigrateRunLedger(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("migrate-run-ledger: STATE_BUCKET must be set")
 	}
 	ctx := context.Background()
-	cfg, err := config.LoadDefaultConfig(ctx)
+	store, err := s3lineup.NewMigrate(ctx, bucket)
 	if err != nil {
 		return err
 	}
-	client := s3.NewFromConfig(cfg)
 
 	if migrateRunLedgerDryRun {
-		srcKeys, err := s3lineup.ListLedgerKeys(ctx, client, bucket, oldRunLedgerPrefix)
+		srcKeys, err := store.ListLedgerKeys(ctx, oldRunLedgerPrefix)
 		if err != nil {
 			return fmt.Errorf("list %s: %w", oldRunLedgerPrefix, err)
 		}
@@ -62,13 +59,13 @@ func runMigrateRunLedger(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	copied, err := s3lineup.MigrateLedgerPrefix(ctx, client, bucket, oldRunLedgerPrefix, newRunLedgerPrefix)
+	copied, err := store.MigrateLedgerPrefix(ctx, oldRunLedgerPrefix, newRunLedgerPrefix)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	fmt.Printf("copied %d ledger record(s) from %s to %s\n", len(copied), oldRunLedgerPrefix, newRunLedgerPrefix)
 
-	dstKeys, err := s3lineup.ListLedgerKeys(ctx, client, bucket, newRunLedgerPrefix)
+	dstKeys, err := store.ListLedgerKeys(ctx, newRunLedgerPrefix)
 	if err != nil {
 		return fmt.Errorf("verify: list %s: %w", newRunLedgerPrefix, err)
 	}

@@ -4,11 +4,13 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/nixon-commits/rosterbot/internal/s3blob/s3blobtest"
 )
 
 func TestProgressStoreRoundTrip(t *testing.T) {
-	f := &fakeS3{objects: map[string][]byte{}}
-	s := &ProgressStore{client: f, bucket: "b", prefix: "runs/"}
+	f := s3blobtest.New()
+	s := &ProgressStore{blob: f.Blob("b", "runs/")}
 
 	if _, ok, _ := s.GetProgress(context.Background(), "abc"); ok {
 		t.Fatal("expected miss")
@@ -16,8 +18,8 @@ func TestProgressStoreRoundTrip(t *testing.T) {
 	if err := s.PutProgress(context.Background(), "abc", []byte(`{"stage":"optimizing","pct":42}`)); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	if _, stored := f.objects["runs/abc/progress.json"]; !stored {
-		t.Fatalf("object not stored at expected key; got keys %v", keys(f.objects))
+	if _, stored := f.Objects["runs/abc/progress.json"]; !stored {
+		t.Fatalf("object not stored at expected key; got keys %v", f.Keys())
 	}
 	got, ok, err := s.GetProgress(context.Background(), "abc")
 	if err != nil || !ok {
@@ -29,19 +31,18 @@ func TestProgressStoreRoundTrip(t *testing.T) {
 }
 
 func TestProgressStoreObjKey(t *testing.T) {
-	s := &ProgressStore{prefix: "runs/"}
-	key := s.objKey("abc")
+	f := s3blobtest.New()
+	key := f.Blob("b", "runs/").Key(progressKey("abc"))
 	if key != "runs/abc/progress.json" {
-		t.Fatalf("objKey = %q, want runs/abc/progress.json", key)
+		t.Fatalf("key = %q, want runs/abc/progress.json", key)
 	}
 	if !strings.HasSuffix(key, "/progress.json") {
-		t.Fatalf("objKey %q does not end in /progress.json", key)
+		t.Fatalf("key %q does not end in /progress.json", key)
 	}
 }
 
 func TestProgressStoreGetMissingReturnsNoErrorNoData(t *testing.T) {
-	f := &fakeS3{objects: map[string][]byte{}}
-	s := &ProgressStore{client: f, bucket: "b", prefix: "runs/"}
+	s := &ProgressStore{blob: s3blobtest.New().Blob("b", "runs/")}
 
 	data, ok, err := s.GetProgress(context.Background(), "does-not-exist")
 	if err != nil {
