@@ -190,7 +190,7 @@ Snapshot archival and lineup publication read the same already-computed results 
 
 **`LoadInputs` fetches concurrently.** The eight reads run in one `errgroup`. Log lines and the phase completion are emitted *after* the group joins, in the original fixed order, and fatal errors are checked in that same order — so neither terminal output nor the error an operator sees depends on which response lands first. This is also why `fantrax.Client.getLeagueInfo` is mutex-guarded: four of these six fetches share that memo.
 
-**Rendering takes an `io.Writer`.** `Options.Out` (nil → `os.Stdout`) carries through `renderDateResult` and every print site in `Run`; `cmd` supplies `os.Stdout`. The board's ~280 lines of positional box-drawing are golden-tested against `internal/lineuprun/testdata/*.golden` — regenerate with `go test ./internal/lineuprun/ -run TestRenderDateResult -update` and **read the diff, it is the review**. Known pre-existing quirk the goldens lock in: `displayWidth` treats BMP characters as single-width, but `❌` (U+274C) renders double-width in most terminals, so a real-life-benched hitter's row pushes the column separator one cell right.
+**Rendering takes an `io.Writer`.** `Options.Out` (nil → `os.Stdout`) carries through `renderDateResult` and every print site in `Run`; `cmd` supplies `os.Stdout`. The board's ~280 lines of positional box-drawing are golden-tested against `internal/lineuprun/testdata/*.golden` — regenerate with `go test ./internal/lineuprun/ -run TestRenderDateResult -update` and **read the diff, it is the review**. Column widths come from `displayWidth`, which measures each rune's East Asian Width (`golang.org/x/text/width`): **Wide/Fullwidth count two columns, Ambiguous counts one**. Ambiguous-as-one is the load-bearing half — the board's box-drawing and marker glyphs (`─ ═ ║ ╔ · ★`) are all Ambiguous and must stay single-width. Codepoint range is not a usable proxy for this and the earlier "BMP ⇒ single-width" rule mis-measured `❌` (U+274C, BMP but Wide), shifting the `│` separator one cell right on every real-life-benched hitter's row (rosterbot-h9q).
 
 **Verifying a change here.** Unit tests do not cover `Run`'s composition, so every change to this package is checked by building a binary from the last good commit into the scratchpad and diffing `--dry-run` output for `--pipeline`, `--matchup` and an explicit `--dates`. Two gotchas that have produced a false regression: use **identical** stream redirection for both binaries (`2>&1` on both), and run them **back-to-back** — live projections and probables drift within the hour and look exactly like a refactor bug.
 
@@ -242,11 +242,11 @@ When adding new commands, flags, env vars, or changing architecture, update `REA
 
 ### Issue tracker
 
-Issues and PRDs are tracked as local markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+Issues live in **bd (beads)** — see the "Beads Issue Tracker" section below. When a skill says "publish to the issue tracker" or "fetch the relevant ticket", that means `bd create` / `bd show` / `bd update`. `.scratch/<feature-slug>/` still sees occasional use for freeform PRD drafts ahead of filing bd issues, but it is not where issues or triage state live; `docs/agents/issue-tracker.md` describes that older markdown convention and is retained as historical reference only.
 
 ### Triage labels
 
-Default canonical vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), recorded as a `Status:` line in each issue file. See `docs/agents/triage-labels.md`.
+Default canonical vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), recorded on the bd `triage` state dimension (`bd set-state <id> triage=<role> --reason "..."`), not as a `Status:` line in a file. See `docs/agents/triage-labels.md` for the full role→command mapping.
 
 ### Domain docs
 
