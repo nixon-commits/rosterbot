@@ -7,6 +7,53 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 )
 
+// TestDisplayWidth pins the terminal-column width of every non-ASCII glyph the
+// board actually prints. The box-drawing and marker characters are East Asian
+// Ambiguous, which terminals render narrow — only the emoji markers are Wide.
+func TestDisplayWidth(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		want int
+	}{
+		{"ascii", "Player", 6},
+		{"empty", "", 0},
+		{"cross mark is double-width", "❌", 2},
+		{"lock is double-width", "🔒", 2},
+		{"check mark is single-width", "✓", 1},
+		{"triangle is single-width", "▸", 1},
+		{"star is single-width", "★", 1},
+		{"middle dot is single-width", "·", 1},
+		{"box drawing is single-width", "─═║╔│", 5},
+		{"warning sign is single-width", "⚠", 1},
+		{"accented latin is single-width", "José Ramírez", 12},
+		{"variation selector adds nothing", "❌️", 2},
+		{"row cell with marker", "SS   ❌", 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := displayWidth(tt.s); got != tt.want {
+				t.Errorf("displayWidth(%q) = %d, want %d", tt.s, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPadRight_DoubleWidthMarker is the column-drift regression: a cell ending
+// in ❌ must pad to the same total width as one ending in a single-width ✓, or
+// the │ separator between the hitter and pitcher boards shifts one cell right.
+func TestPadRight_DoubleWidthMarker(t *testing.T) {
+	withCross := padRight("SS ❌", 10)
+	withCheck := padRight("SS ✓", 10)
+	if displayWidth(withCross) != displayWidth(withCheck) {
+		t.Errorf("padded widths differ: %q=%d vs %q=%d",
+			withCross, displayWidth(withCross), withCheck, displayWidth(withCheck))
+	}
+	if got := displayWidth(withCross); got != 10 {
+		t.Errorf("padRight(%q, 10) width = %d, want 10", "SS ❌", got)
+	}
+}
+
 func TestColorDelta(t *testing.T) {
 	tests := []struct {
 		name    string

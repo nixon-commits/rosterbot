@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/text/width"
+
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 	"github.com/nixon-commits/rosterbot/internal/projections"
@@ -69,18 +71,34 @@ func padRight(s string, width int) string {
 }
 
 // displayWidth returns the number of terminal columns a string occupies.
-// Characters in the Supplementary Multilingual Plane (U+10000+) like emoji
-// are double-width; BMP characters (★, ✓, ▸) are single-width.
+//
+// Width comes from the rune's East Asian Width property (UAX #11): Wide and
+// Fullwidth occupy two columns, everything else one. Ambiguous counts as one,
+// which is what terminals do outside a CJK locale — that keeps the board's
+// box-drawing and marker glyphs (─ ═ ║ ╔ · ★, all Ambiguous) at one column.
+// Codepoint range is not a usable proxy: ❌ (U+274C) is BMP but Wide, and
+// mis-counting it as one column shifts the │ separator on every row carrying it.
 func displayWidth(s string) int {
 	w := 0
 	for _, r := range s {
-		if r >= 0x10000 {
+		if isZeroWidth(r) {
+			continue
+		}
+		switch width.LookupRune(r).Kind() {
+		case width.EastAsianWide, width.EastAsianFullwidth:
 			w += 2
-		} else {
+		default:
 			w++
 		}
 	}
 	return w
+}
+
+// isZeroWidth reports whether a rune renders in no columns of its own: the
+// variation selectors (U+FE0F selects emoji presentation, and the terminal
+// widens the base rune rather than adding a cell) and the zero-width joiner.
+func isZeroWidth(r rune) bool {
+	return (r >= 0xFE00 && r <= 0xFE0F) || r == 0x200D
 }
 
 // colorDelta formats a pipeline delta with ANSI green (positive) or red (negative).
