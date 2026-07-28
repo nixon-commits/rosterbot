@@ -61,5 +61,6 @@ export const api = {
   // Report JSON is served from the CloudFront root, not /v1.
   reportModel: () => request("GET", "/report/model.json"),
   reportValue: () => request("GET", "/report/value.json"),
+  reportViews: () => request("GET", "/report/views.json"),
   runProgress: (id) => request("GET", `/v1/runs/${encodeURIComponent(id)}/progress`),
 };
