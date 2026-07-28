@@ -18,6 +18,8 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
 	"github.com/nixon-commits/rosterbot/internal/ndjsonstore/s3ndjson"
+	"github.com/nixon-commits/rosterbot/internal/recaplog"
+	"github.com/nixon-commits/rosterbot/internal/recaplog/s3recaplog"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
 )
@@ -51,6 +53,12 @@ var (
 // Bucket is the single os.Getenv("STATE_BUCKET") read in the codebase. Empty
 // means local-filesystem mode.
 func Bucket() string { return os.Getenv("STATE_BUCKET") }
+
+// RecapLogBucket is the single os.Getenv("RECAP_LOG_BUCKET") read. It names a
+// bucket outside the state bucket entirely — CloudFront writes the recap site's
+// access logs there — so it sits beside Bucket() rather than in the layout
+// table, which declares the STATE_BUCKET key layout only.
+func RecapLogBucket() string { return os.Getenv("RECAP_LOG_BUCKET") }
 
 // Selector resolves durable-state stores against one backend choice made once.
 type Selector struct{ bucket string }
@@ -164,6 +172,23 @@ func (s *Selector) Progress() (lineupapi.ProgressWriter, error) {
 			return s3lineup.NewProgress(ctx, b, p)
 		},
 		func(dir string) lineupapi.ProgressWriter { return lineupapi.NewFileProgressStore(dir) })
+}
+
+// RecapLogReader returns a read-only store over the recap site's CloudFront
+// access logs, or (nil, nil) when RECAP_LOG_BUCKET is unset.
+//
+// It deliberately does NOT go through pick[T]. Every other artifact here has a
+// local-directory equivalent because the bot itself writes it; these logs are
+// written by CloudFront and exist only in S3, so there is nothing to fall back
+// to locally. A nil reader means "no readership data available here" and the
+// caller skips that output rather than failing — which is exactly what a local
+// dev run should do.
+func (s *Selector) RecapLogReader() (recaplog.Store, error) {
+	bucket := RecapLogBucket()
+	if bucket == "" {
+		return nil, nil
+	}
+	return s3recaplog.New(context.Background(), bucket, recaplog.Prefix)
 }
 
 func (s *Selector) LineupPublisher() (lineupapi.Publisher, error) {

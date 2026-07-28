@@ -150,6 +150,10 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// invalidate the two CloudFront distributions after publishing a site.
 	stateBucket.GrantReadWrite(taskDef.TaskRole(), nil)
 	siteBucket.GrantReadWrite(taskDef.TaskRole(), nil)
+	// Read-only, and scoped to recap/: projection-site reads these logs to build
+	// views.json, and CloudFront is the only writer. Nothing in the bot should be
+	// able to alter or delete the readership record it reports on.
+	recapLogBucket.GrantRead(taskDef.TaskRole(), jsii.String("recap/*"))
 	taskDef.TaskRole().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Actions:   jsii.Strings("ssm:GetParameters", "ssm:GetParameter"),
 		Resources: jsii.Strings("arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/*"),
@@ -174,6 +178,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		Environment: &map[string]*string{
 			"STATE_BUCKET":        stateBucket.BucketName(),
 			"SITE_BUCKET":         siteBucket.BucketName(),
+			"RECAP_LOG_BUCKET":    recapLogBucket.BucketName(),
 			"DASHBOARD_BUCKET":    dashboardBucket.BucketName(),
 			"SITE_CF_DIST_ID":     dist.DistributionId(),
 			"CLAIMS_CURSOR_PATH":  jsii.String(".waivers/last-claims.json"),

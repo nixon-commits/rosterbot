@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/recaplog"
 	"github.com/nixon-commits/rosterbot/internal/report"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/nixon-commits/rosterbot/internal/valuereport"
@@ -80,6 +81,13 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: value.json not written: %v\n", err)
 	}
 
+	// Emit views.json (recap-site readership) on the same terms: its own source,
+	// additive, and soft-failing so a log-read hiccup never blocks the accuracy
+	// dashboard deploy.
+	if err := renderViewsSite(projSiteOut); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: views.json not written: %v\n", err)
+	}
+
 	if projSiteOpen {
 		if err := openInBrowser(outPath); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
@@ -113,5 +121,44 @@ func renderValueSite(outDir string) error {
 		return fmt.Errorf("encode value model: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Wrote %s (%d team-value rows)\n", outPath, len(rows))
+	return nil
+}
+
+// viewsLimit is how many recent page reads views.json carries. The tab shows a
+// recent-hits table, not a history, so this is a display cap rather than a
+// sample — and it bounds how many log objects ReadRecent has to open.
+const viewsLimit = 200
+
+// renderViewsSite reads the recap site's CloudFront access logs and writes
+// <outDir>/views.json.
+//
+// Skipped entirely (no file, no error) when RECAP_LOG_BUCKET is unset, which is
+// the normal local-dev case: CloudFront writes these logs only in AWS, so there
+// is nothing to read locally. A deployed run with no readers yet still writes a
+// valid empty model, so the tab can say "no reads yet" rather than erroring.
+func renderViewsSite(outDir string) error {
+	store, err := statestore.FromEnv().RecapLogReader()
+	if err != nil {
+		return fmt.Errorf("init recap-log reader: %w", err)
+	}
+	if store == nil {
+		return nil
+	}
+	m, err := recaplog.ReadRecent(store, "", viewsLimit, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("read recap logs: %w", err)
+	}
+	outPath := filepath.Join(outDir, "views.json")
+	f, err := os.Create(outPath)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", outPath, err)
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(m); err != nil {
+		return fmt.Errorf("encode views model: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Wrote %s (%d recent page reads)\n", outPath, len(m.Hits))
 	return nil
 }
