@@ -824,12 +824,23 @@ func rankSystems(rows []analysis.GradeRow, systems []string, latest time.Time, w
 // than the combined standard error. Anything closer is indistinguishable from
 // noise, and crowning it would restate the over-precision problem this metric
 // was introduced to fix.
+//
+// "No competitor" and "uncomputable competitor" are NOT the same case, even
+// though both leave out[1].Rho nil, and must not be collapsed back together.
+// out[1].N == 0 means there is nothing to compare against, so the leader wins
+// unopposed. out[1].N > 0 with a nil Rho means a real competitor exists but
+// never cleared minDayRows on any single day — the SE inequality this
+// function exists to enforce simply cannot be evaluated, so per its own
+// prose ("otherwise") it does not hold, and no system is flagged.
 func flagBest(out []SystemScore) {
 	if len(out) == 0 || out[0].N == 0 || out[0].Rho == nil {
 		return
 	}
-	if len(out) == 1 || out[1].N == 0 || out[1].Rho == nil {
+	if len(out) == 1 || out[1].N == 0 {
 		out[0].Best = true
+		return
+	}
+	if out[1].Rho == nil {
 		return
 	}
 	lead, next := out[0].Rho, out[1].Rho
@@ -839,6 +850,15 @@ func flagBest(out []SystemScore) {
 	}
 }
 ```
+
+> **Corrected in review (commit `91b1875`).** The original guard above —
+> `if len(out) == 1 || out[1].N == 0 || out[1].Rho == nil` — crowned the
+> leader whenever the runner-up's rho was merely *uncomputable*
+> (`out[1].N > 0` but no single day cleared `minDayRows`), bypassing the
+> standard-error comparison this function exists to enforce. The code block
+> above reflects the shipped fix, which splits the `N == 0` ("no competitor")
+> case from the `Rho == nil` ("uncomputable competitor") case so only the
+> former crowns unopposed.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1429,7 +1449,7 @@ Claude-Session: https://claude.ai/code/session_01WUUjcdmPD5H8sbznmzfLCM"
 - Modify: `cmd/grade.go` (imports; insert after the grade-write loop that ends at line 140)
 
 **Interfaces:**
-- Consumes: `backtest.RunLineupAnalysis(days []fantrax.DayRoster, hitterSlots, pitcherSlots []fantrax.Slot) []backtest.LineupDayResult`; `backtest.LineupDayResult{Date time.Time; ActualPts, OptimalPts, Gap float64; Started, Benched []backtest.PlayerPts}`; `ft.GetHitterSlots()`, `ft.GetPitcherSlots()`; `statestore.FromEnv().LineupGapWriter()` (Task 5); `lineupgap.Row` (Task 4).
+- Consumes: `backtest.RunLineupAnalysis(days []fantrax.DayRoster, hitterSlots, pitcherSlots []fantrax.Slot) []backtest.LineupDayResult`; `backtest.LineupDayResult{Date time.Time; ActualPts, OptimalPts, Gap float64; Started, Benched []backtest.PlayerPts}`; `ft.GetActiveSlots()` (corrected in review — `GetHitterSlots` does not exist; see note below), `ft.GetPitcherSlots()`; `statestore.FromEnv().LineupGapWriter()` (Task 5); `lineupgap.Row` (Task 4).
 - Produces: nothing consumed by later Go code. Writes `analysis/lineup-gaps/dt=*/gaps.ndjson`.
 
 - [ ] **Step 1: Write the failing test**
@@ -1531,7 +1551,7 @@ At the end of `runGrade`, replace the final `return nil` (line 141) with:
 // persists the result. Slot lists are stableTTL-cached (7d), so this costs one
 // cold fetch per week on top of the actuals runGrade already holds.
 func recordLineupGaps(ft *fantrax.Client, days []fantrax.DayRoster) error {
-	hitterSlots, err := ft.GetHitterSlots()
+	hitterSlots, err := ft.GetActiveSlots()
 	if err != nil {
 		return fmt.Errorf("get hitter slots: %w", err)
 	}
@@ -1577,6 +1597,13 @@ func writeLineupGaps(w lineupgap.Writer, results []backtest.LineupDayResult) err
 ```
 
 Add `"os"` and `"github.com/nixon-commits/rosterbot/internal/fantrax"` to the imports if they are not already present (check the existing block first — `cmd/grade.go` currently imports neither).
+
+> **Corrected in review.** The plan above originally called `ft.GetHitterSlots()`,
+> which does not exist on `*fantrax.Client`. The real method is
+> `ft.GetActiveSlots()` (`internal/fantrax/client.go:559`), cached under the
+> hitter-slots key and already paired with `GetPitcherSlots()` exactly this way
+> in `cmd/backtest.go:78-83`. The code block above and the Interfaces line at
+> the top of this task reflect the shipped call.
 
 **Dry-run guard:** `runGrade` returns early at line 124 when `cfg.DryRun`, so the gap write is already skipped in dry-run. Confirm that early return is still above the new call; if the code has moved, keep the gap write below it.
 

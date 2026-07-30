@@ -306,7 +306,7 @@ The bot's game day, ordered by clock (times shown in ET for reading; the authori
 | 7:00a Mon | Weekly recap site | `recap-site --out dist` | 7am ET Mondays |
 | 7:40p | Shadow capture | `shadow` | 23:40 UTC daily |
 
-`entrypoint.sh` publishes the recap site from `./dist` to `SITE_BUCKET`, and the dashboard data (`report/model.json` + `report/value.json`) into `DASHBOARD_BUCKET`'s `report/` prefix — the same CloudFront distribution as the dashboard SPA. Any job can also be launched on demand as a one-off Fargate task (or via `POST /v1/jobs/{name}` — see below).
+`entrypoint.sh` publishes the recap site from `./dist` to `SITE_BUCKET`, and the dashboard data (`report/model.json` + `report/value.json` + `report/views.json` + `report/gap.json`) into `DASHBOARD_BUCKET`'s `report/` prefix — the same CloudFront distribution as the dashboard SPA. Any job can also be launched on demand as a one-off Fargate task (or via `POST /v1/jobs/{name}` — see below).
 
 For a local dashboard preview, render into the dashboard's own static dir so `serve` picks it up: `rosterbot projection-site --out web/dashboard/report` (delete that dir afterward — it isn't committed).
 
@@ -381,6 +381,8 @@ Run **status** always comes from the run ledger; `/progress` only adds phase det
 <summary><b>Web dashboard</b> — private SPA, passkey auth, live run status</summary>
 
 A private, single-user web UI over the API: today's lineup, a form to trigger any of the 9 allowlisted jobs, run history with live status, and a viewer for each job's typed output. The **Projections** and **Value** tabs render natively from `projection-site`'s `model.json` / `value.json` (client-side Chart.js, no iframe). Static files live in [`web/dashboard/`](web/dashboard/) (no build step — plain ES modules) and deploy to their own CloudFront distribution (`DashboardUrl` stack output).
+
+The **Projections** tab leads with a *Decision quality* block: points left on the bench versus the hindsight-optimal lineup, lineup efficiency, and within-day rank skill (mean Spearman rho, with standard error and days-positive) for hitters and pitchers separately. MAE, bias and RMSE remain below as calibration diagnostics, each MAE figure annotated with its skill score against a constant-at-sample-mean baseline.
 
 Triggering a job hands you into a live **"Now Running" hero**: a phased progress bar for `optimize`, an indeterminate bar for the other jobs, and an elapsed clock. Finishing a watched run fires a success/failure toast.
 
