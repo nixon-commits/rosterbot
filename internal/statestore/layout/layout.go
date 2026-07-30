@@ -64,6 +64,7 @@ var (
 	Cache        = Artifact{Name: "TTL Cache", S3Prefix: "cache/", LocalDir: ".cache", Durable: false}
 	Analysis     = Artifact{Name: "Analysis Store", S3Prefix: "analysis/grades/", LocalDir: ".analysis", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true}
 	TeamValues   = Artifact{Name: "Team Value Store", S3Prefix: "analysis/team-values/", LocalDir: ".teamvalue", Durable: true, MaxAge: 2 * Day, Producer: "TeamValues", Partitioned: true, NoBackfill: true}
+	LineupGaps   = Artifact{Name: "Lineup Gap Store", S3Prefix: "analysis/lineup-gaps/", LocalDir: ".lineupgap", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true}
 	Archive      = Artifact{Name: "Daily Archive", S3Prefix: "archive/", LocalDir: ".archive", Durable: true, MaxAge: 2 * Day, Producer: "Archive", Partitioned: true}
 	Backtest     = Artifact{Name: "Projection Snapshots", S3Prefix: "backtest/", LocalDir: ".backtest", Durable: true, MaxAge: 2 * Day, Producer: "Lineup"}
 	RunLedger    = Artifact{Name: "Run Ledger", S3Prefix: "runledger/", LocalDir: ".lineup/runs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
@@ -85,7 +86,7 @@ var (
 // double-count the same objects.
 func All() []Artifact {
 	return []Artifact{
-		TeamValues, Analysis, Archive, Backtest,
+		TeamValues, Analysis, LineupGaps, Archive, Backtest,
 		Lineup, RunLedger, RunOutput, Notification, Claims, Session,
 		Cache,
 	}

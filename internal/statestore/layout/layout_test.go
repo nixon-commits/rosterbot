@@ -12,6 +12,7 @@ func TestAll_CoversEveryKnownPrefix(t *testing.T) {
 		"cache/",
 		"analysis/grades/",
 		"analysis/team-values/",
+		"analysis/lineup-gaps/",
 		"runledger/",
 		"runs/",
 		"notifications/",
@@ -92,6 +93,25 @@ func TestTeamValues_IsFlaggedUnbackfillable(t *testing.T) {
 		}
 	}
 	t.Fatal("team-values artifact missing from All()")
+}
+
+// The Lineup Gap Store IS backfillable, unlike Team Values — past-period roster
+// snapshots are immutable and cached, so a missed day is recoverable with
+// `grade --dates`. Flagging it NoBackfill would make the Infra page rank a
+// recoverable gap as permanent data loss.
+func TestLineupGaps_IsBackfillable(t *testing.T) {
+	for _, a := range All() {
+		if a.S3Prefix == "analysis/lineup-gaps/" {
+			if a.NoBackfill {
+				t.Error("lineup-gaps is recoverable via `grade --dates`; it must not be flagged NoBackfill")
+			}
+			if !a.Partitioned {
+				t.Error("lineup-gaps is dt-partitioned; gap detection needs that flag")
+			}
+			return
+		}
+	}
+	t.Fatal("lineup-gaps artifact missing from All()")
 }
 
 func TestCache_IsEphemeral(t *testing.T) {

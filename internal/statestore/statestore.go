@@ -17,6 +17,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/cachestore/s3store"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
+	"github.com/nixon-commits/rosterbot/internal/lineupgap"
 	"github.com/nixon-commits/rosterbot/internal/ndjsonstore/s3ndjson"
 	"github.com/nixon-commits/rosterbot/internal/recaplog"
 	"github.com/nixon-commits/rosterbot/internal/recaplog/s3recaplog"
@@ -43,6 +44,7 @@ var (
 	cacheArtifact        = artifact{layout.Cache.S3Prefix, ""} // local: default fsStore, dir unused
 	analysisArtifact     = artifact{"analysis/", layout.Analysis.LocalDir}
 	teamValueArtifact    = artifact{layout.TeamValues.S3Prefix, layout.TeamValues.LocalDir}
+	lineupGapArtifact    = artifact{layout.LineupGaps.S3Prefix, layout.LineupGaps.LocalDir}
 	runLedgerArtifact    = artifact{layout.RunLedger.S3Prefix, layout.RunLedger.LocalDir}
 	runOutputArtifact    = artifact{layout.RunOutput.S3Prefix, layout.RunOutput.LocalDir}
 	notificationArtifact = artifact{layout.Notification.S3Prefix, layout.Notification.LocalDir}
@@ -142,6 +144,33 @@ func (s *Selector) TeamValueReader() (teamvalue.Reader, error) {
 			return teamvalue.NewReader(st), nil
 		},
 		func(dir string) teamvalue.Reader { return teamvalue.NewFileReader(dir) })
+}
+
+// LineupGapWriter returns the write side of the Lineup Gap Store — S3 when
+// STATE_BUCKET is set, else the local .lineupgap directory.
+func (s *Selector) LineupGapWriter() (lineupgap.Writer, error) {
+	return pick(s, lineupGapArtifact,
+		func(ctx context.Context, b, p string) (lineupgap.Writer, error) {
+			st, err := s3ndjson.New(ctx, b, p)
+			if err != nil {
+				return nil, err
+			}
+			return lineupgap.NewWriter(st), nil
+		},
+		func(dir string) lineupgap.Writer { return lineupgap.NewFileWriter(dir) })
+}
+
+// LineupGapReader returns the read side of the Lineup Gap Store.
+func (s *Selector) LineupGapReader() (lineupgap.Reader, error) {
+	return pick(s, lineupGapArtifact,
+		func(ctx context.Context, b, p string) (lineupgap.Reader, error) {
+			st, err := s3ndjson.New(ctx, b, p)
+			if err != nil {
+				return nil, err
+			}
+			return lineupgap.NewReader(st), nil
+		},
+		func(dir string) lineupgap.Reader { return lineupgap.NewFileReader(dir) })
 }
 
 func (s *Selector) RunLedger() (RunWriter, error) {
