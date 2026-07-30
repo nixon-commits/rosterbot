@@ -100,30 +100,47 @@ func TestWorstMisses_SortedByAbsDiff(t *testing.T) {
 	}
 }
 
-func TestRankSystems_OrdersByMAEAndFlagsBest(t *testing.T) {
+// TestRankSystems_ReportsErrorMetricsAndSortsEmptyLast used to pin
+// MAE-ascending ordering, which rankSystems no longer does — it orders by
+// within-day rho descending (see TestRankSystems_OrdersByRhoDescending). This
+// test survives repurposed: MAE/Bias/RMSE are still computed and reported as
+// columns even though they no longer decide sort order, and a system with no
+// rows still sorts last and is never Best. Do NOT restore an MAE-ordering
+// assertion here — that behavior was deliberately removed.
+//
+// Role is "hitters" (rankSystems is never called with "all" in production —
+// see model.go's comparison-panel loop) and each system has only 2 rows on a
+// single day, below minDayRows(5), so Rho is nil for both systems with data;
+// that's expected for this test, not something it needs to work around.
+func TestRankSystems_ReportsErrorMetricsAndSortsEmptyLast(t *testing.T) {
 	latest := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
 	rows := []analysis.GradeRow{
-		// atc-ros: |diff| avg 1  (best)
-		{System: "atc-ros", Dt: "2026-06-15", Diff: 1},
-		{System: "atc-ros", Dt: "2026-06-15", Diff: -1},
-		// steamer-ros: |diff| avg 3
-		{System: "steamer-ros", Dt: "2026-06-15", Diff: 3},
-		{System: "steamer-ros", Dt: "2026-06-15", Diff: -3},
-		// thebatx-ros: present in set but no rows in window -> sorts last, never best
+		{System: "atc-ros", Dt: "2026-06-15", Diff: 1, IsPitcher: false},
+		{System: "atc-ros", Dt: "2026-06-15", Diff: -1, IsPitcher: false},
+		{System: "steamer-ros", Dt: "2026-06-15", Diff: 3, IsPitcher: false},
+		{System: "steamer-ros", Dt: "2026-06-15", Diff: -3, IsPitcher: false},
+		// thebatx-ros: present in set but no rows -> sorts last, never best
 	}
 	systems := []string{"atc-ros", "steamer-ros", "thebatx-ros"}
-	got := rankSystems(rows, systems, latest, 7, "all")
+	got := rankSystems(rows, systems, latest, 7, "hitters")
 	if len(got) != 3 {
 		t.Fatalf("want 3 scores, got %d", len(got))
 	}
-	if got[0].System != "atc-ros" || !got[0].Best {
-		t.Fatalf("want atc-ros best first, got %+v", got[0])
+
+	byName := map[string]SystemScore{}
+	for _, s := range got {
+		byName[s.System] = s
 	}
-	if got[1].System != "steamer-ros" || got[1].Best {
-		t.Fatalf("want steamer-ros second, not best: %+v", got[1])
+	if !approx(byName["atc-ros"].MAE, 1) {
+		t.Errorf("atc-ros MAE = %v, want 1 (MAE must still be reported as a column)", byName["atc-ros"].MAE)
 	}
-	if got[2].System != "thebatx-ros" || got[2].N != 0 || got[2].Best {
-		t.Fatalf("want empty thebatx-ros last: %+v", got[2])
+	if !approx(byName["steamer-ros"].MAE, 3) {
+		t.Errorf("steamer-ros MAE = %v, want 3 (MAE must still be reported as a column)", byName["steamer-ros"].MAE)
+	}
+
+	last := got[len(got)-1]
+	if last.System != "thebatx-ros" || last.N != 0 || last.Best {
+		t.Fatalf("want empty thebatx-ros last, N 0, not best: %+v", last)
 	}
 }
 
@@ -153,9 +170,26 @@ func TestAggregate_ViewsPerSystem(t *testing.T) {
 	if len(m.Systems) != 2 {
 		t.Fatalf("want 2 systems, got %v", m.Systems)
 	}
-	cmp := m.Compare["0|all"]
-	if len(cmp) != 2 || cmp[0].System != detailSystem || !cmp[0].Best {
-		t.Fatalf("want production system best in compare: %+v", cmp)
+	// A pooled cross-role ranking has no defensible order (see withinDayRho's
+	// doc comment): role "all" is deliberately left uncompared.
+	if cmp := m.Compare["0|all"]; cmp != nil {
+		t.Fatalf(`want Compare["0|all"] nil, got %+v`, cmp)
+	}
+	// Both rows are IsPitcher: false, so the head-to-head comparison these
+	// rows actually drive lives under "hitters" now.
+	cmp := m.Compare["0|hitters"]
+	if len(cmp) != 2 {
+		t.Fatalf(`want 2 systems in Compare["0|hitters"], got %+v`, cmp)
+	}
+	// Neither system can be crowned Best here: each has exactly 1 row total,
+	// far below minDayRows(5), so withinDayRho finds no qualifying day and
+	// Rho is nil for both — the combined-SE gate correctly refuses to pick a
+	// winner from a sample this thin, rather than crowning whichever system
+	// happens to sort first.
+	for _, s := range cmp {
+		if s.Best {
+			t.Fatalf("system %q flagged Best with no qualifying rho sample: %+v", s.System, s)
+		}
 	}
 }
 

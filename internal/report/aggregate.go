@@ -113,14 +113,20 @@ func skillVsMean(rows []analysis.GradeRow, mae float64) float64 {
 }
 
 // SystemScore is one projection system's accuracy for a window×role, used by
-// the head-to-head comparison panel. Best flags the lowest-MAE system.
+// the head-to-head comparison panel.
+//
+// Best flags the highest-rho system, but only when it is separated from the
+// runner-up by more than the combined standard error — otherwise the panel
+// reports too-close-to-call rather than crowning a coin flip. MAE/Bias/RMSE
+// remain as columns but no longer decide the winner: see rank.go for why.
 type SystemScore struct {
-	System string  `json:"system"`
-	MAE    float64 `json:"mae"`
-	Bias   float64 `json:"bias"`
-	RMSE   float64 `json:"rmse"`
-	N      int     `json:"n"`
-	Best   bool    `json:"best"`
+	System string   `json:"system"`
+	MAE    float64  `json:"mae"`
+	Bias   float64  `json:"bias"`
+	RMSE   float64  `json:"rmse"`
+	N      int      `json:"n"`
+	Rho    *RhoStat `json:"rho,omitempty"`
+	Best   bool     `json:"best"`
 }
 
 // normalizeSystems returns a copy of rows with any empty System attributed to
@@ -164,33 +170,62 @@ func filterSystem(rows []analysis.GradeRow, system string) []analysis.GradeRow {
 }
 
 // rankSystems scores each system over the window×role slice and returns them
-// ordered by MAE ascending (best first); the lowest-MAE system with data is
-// flagged Best. Systems with no rows in the window sort last (MAE 0, N 0) and
-// are never marked Best.
+// ordered by within-day rank skill descending (best first).
+//
+// Callers pass a single role — never "all". Systems with no rows in the window
+// sort last (N 0) and are never marked Best.
 func rankSystems(rows []analysis.GradeRow, systems []string, latest time.Time, window int, role string) []SystemScore {
 	out := make([]SystemScore, 0, len(systems))
 	for _, sys := range systems {
 		slice := windowRows(filterRole(filterSystem(rows, sys), role), latest, window)
 		m := computeMetrics(slice)
-		out = append(out, SystemScore{System: sys, MAE: m.MAE, Bias: m.Bias, RMSE: m.RMSE, N: m.N})
+		out = append(out, SystemScore{
+			System: sys, MAE: m.MAE, Bias: m.Bias, RMSE: m.RMSE, N: m.N,
+			Rho: withinDayRho(slice),
+		})
+	}
+
+	// A system with no rho (too few qualifying days) still outranks one with no
+	// data at all, but sorts below any system that produced a real correlation.
+	rhoKey := func(s SystemScore) float64 {
+		if s.Rho == nil {
+			return math.Inf(-1)
+		}
+		return s.Rho.Rho
 	}
 	sort.Slice(out, func(i, j int) bool {
 		// Empty (N==0) systems always sort after any system with data.
 		if (out[i].N == 0) != (out[j].N == 0) {
 			return out[j].N == 0
 		}
-		if out[i].MAE != out[j].MAE {
-			return out[i].MAE < out[j].MAE
+		ki, kj := rhoKey(out[i]), rhoKey(out[j])
+		if ki != kj {
+			return ki > kj // higher rank skill first
 		}
 		return out[i].System < out[j].System // stable tiebreak
 	})
-	for i := range out {
-		if out[i].N > 0 {
-			out[i].Best = true
-			break
-		}
-	}
+
+	flagBest(out)
 	return out
+}
+
+// flagBest marks the leader only when its rho beats the runner-up's by more
+// than the combined standard error. Anything closer is indistinguishable from
+// noise, and crowning it would restate the over-precision problem this metric
+// was introduced to fix.
+func flagBest(out []SystemScore) {
+	if len(out) == 0 || out[0].N == 0 || out[0].Rho == nil {
+		return
+	}
+	if len(out) == 1 || out[1].N == 0 || out[1].Rho == nil {
+		out[0].Best = true
+		return
+	}
+	lead, next := out[0].Rho, out[1].Rho
+	sep := math.Sqrt(lead.SE*lead.SE + next.SE*next.SE)
+	if lead.Rho-next.Rho > sep {
+		out[0].Best = true
+	}
 }
 
 func filterRole(rows []analysis.GradeRow, role string) []analysis.GradeRow {

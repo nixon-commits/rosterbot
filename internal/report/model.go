@@ -25,6 +25,12 @@ type View struct {
 	Calib     []CalibPoint  `json:"calib"`
 	Misses    []Miss        `json:"misses"`
 	Insights  []Insight     `json:"insights"`
+
+	// Rho is within-day rank skill, the headline metric. It is nil for
+	// role == "all": pooling hitters and pitchers has no defensible
+	// interpretation (see withinDayRho), so the UI reads the two role views
+	// instead of being handed a flattering pooled number.
+	Rho *RhoStat `json:"rho,omitempty"`
 }
 
 // Model is the complete payload written to model.json for the dashboard SPA.
@@ -136,6 +142,11 @@ func Aggregate(rows []analysis.GradeRow, generatedAt, seasonStart time.Time) *Mo
 				curM := computeMetrics(cur)
 				priorM := computeMetrics(prior)
 				bp := byPosition(cur)
+				// Rank skill is only defined within a single role.
+				var rho *RhoStat
+				if role != "all" {
+					rho = withinDayRho(cur)
+				}
 				m.Views[key] = View{
 					System:    sys,
 					Window:    w,
@@ -145,16 +156,26 @@ func Aggregate(rows []analysis.GradeRow, generatedAt, seasonStart time.Time) *Mo
 					Calib:     calibration(cur),
 					Misses:    worstMisses(cur, 25),
 					Insights:  generateInsights(curM, priorM, bp, windowLabel(w)),
+					Rho:       rho,
 				}
 			}
 		}
 	}
 
-	// Comparison panel: every captured system, ranked head-to-head per window×role.
+	// Comparison panel: every captured system, ranked head-to-head per
+	// window×role by rank skill.
+	//
+	// Compare is deliberately left nil for role == "all" — ranking systems on a
+	// pooled cross-role rho has no defensible order, so the panel reads the
+	// hitters and pitchers keys and stacks two tables. CompareTrends stays
+	// populated for all three roles: an MAE trend line remains a legitimate
+	// diagnostic under any role filter.
 	for _, role := range stdRoles {
 		for _, w := range stdWindows {
 			key := viewKey(w, role)
-			m.Compare[key] = rankSystems(rows, m.Systems, latest, w, role)
+			if role != "all" {
+				m.Compare[key] = rankSystems(rows, m.Systems, latest, w, role)
+			}
 			trends := map[string][]TrendPoint{}
 			for _, sys := range m.Systems {
 				sysRole := filterRole(filterSystem(rows, sys), role)

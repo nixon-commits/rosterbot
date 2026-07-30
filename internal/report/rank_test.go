@@ -4,6 +4,7 @@ package report
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/analysis"
 )
@@ -168,5 +169,107 @@ func TestSkillVsMean_DegenerateInputsDoNotDivideByZero(t *testing.T) {
 	m := computeMetrics(rows)
 	if math.IsInf(m.SkillVsMean, 0) || math.IsNaN(m.SkillVsMean) {
 		t.Errorf("SkillVsMean = %v, want a finite value when the baseline MAE is 0", m.SkillVsMean)
+	}
+}
+
+// rhoDays builds `days` consecutive days of `n` rows each, with actual = k*projected
+// so every day is perfectly concordant (rho = +1) when asc is true, and
+// perfectly inverted (rho = -1) when false.
+func rhoDays(system string, isPitcher bool, days, n int, asc bool) []analysis.GradeRow {
+	var out []analysis.GradeRow
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	for d := 0; d < days; d++ {
+		dt := base.AddDate(0, 0, d).Format("2006-01-02")
+		for i := 1; i <= n; i++ {
+			actual := float64(i)
+			if !asc {
+				actual = float64(n - i + 1)
+			}
+			out = append(out, analysis.GradeRow{
+				Dt: dt, System: system, PlayerID: string(rune('a' + i)),
+				Projected: float64(i), Actual: actual, Diff: actual - float64(i),
+				IsPitcher: isPitcher,
+			})
+		}
+	}
+	return out
+}
+
+// Rho has no defensible value pooled across roles, so it must be absent rather
+// than computed-and-hoped-for. The type enforces it.
+func TestAggregate_RhoIsNilForAllRole(t *testing.T) {
+	rows := append(
+		rhoDays(analysis.LegacySystem, false, 6, 8, true),
+		rhoDays(analysis.LegacySystem, true, 6, 8, true)...,
+	)
+	latest := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+	m := Aggregate(rows, latest, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC))
+
+	if v := m.Views[detailKey(analysis.LegacySystem, 30, "all")]; v.Rho != nil {
+		t.Errorf(`View.Rho must be nil for role "all", got %+v`, v.Rho)
+	}
+	if v := m.Views[detailKey(analysis.LegacySystem, 30, "hitters")]; v.Rho == nil {
+		t.Error(`View.Rho must be populated for role "hitters"`)
+	}
+	if c := m.Compare[viewKey(30, "all")]; c != nil {
+		t.Errorf(`Compare["30|all"] must be nil — a pooled ranking has no defensible order, got %+v`, c)
+	}
+	if c := m.Compare[viewKey(30, "hitters")]; len(c) == 0 {
+		t.Error(`Compare["30|hitters"] must be populated`)
+	}
+}
+
+func TestRankSystems_OrdersByRhoDescending(t *testing.T) {
+	// good orders every day correctly (+1); bad inverts every day (-1).
+	rows := append(
+		rhoDays("good-sys", false, 6, 8, true),
+		rhoDays("bad-sys", false, 6, 8, false)...,
+	)
+	latest := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+	got := rankSystems(rows, []string{"bad-sys", "good-sys"}, latest, 30, "hitters")
+
+	if len(got) != 2 {
+		t.Fatalf("got %d scores, want 2", len(got))
+	}
+	if got[0].System != "good-sys" {
+		t.Errorf("leader = %q, want good-sys (ranking must be by rho, not MAE)", got[0].System)
+	}
+	if got[0].Rho == nil || !approx(got[0].Rho.Rho, 1) {
+		t.Errorf("leader rho = %+v, want +1", got[0].Rho)
+	}
+	if !got[0].Best {
+		t.Error("a leader separated by far more than the combined SE must be flagged Best")
+	}
+}
+
+// Two systems whose rho means are within the combined standard error are not
+// distinguishable, so neither may be crowned.
+func TestRankSystems_NoBestWhenWithinCombinedSE(t *testing.T) {
+	// Both systems perfectly concordant every day → identical rho (+1), SE 0.
+	// A zero separation cannot exceed a zero threshold, so no Best.
+	rows := append(
+		rhoDays("sys-a", false, 6, 8, true),
+		rhoDays("sys-b", false, 6, 8, true)...,
+	)
+	latest := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+	got := rankSystems(rows, []string{"sys-a", "sys-b"}, latest, 30, "hitters")
+
+	for _, s := range got {
+		if s.Best {
+			t.Errorf("system %q flagged Best despite a tie — expected too-close-to-call", s.System)
+		}
+	}
+}
+
+func TestRankSystems_EmptySystemsSortLastAndAreNeverBest(t *testing.T) {
+	rows := rhoDays("has-data", false, 6, 8, true)
+	latest := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+	got := rankSystems(rows, []string{"empty-sys", "has-data"}, latest, 30, "hitters")
+
+	if got[0].System != "has-data" {
+		t.Errorf("leader = %q, want has-data", got[0].System)
+	}
+	if got[1].N != 0 || got[1].Best {
+		t.Errorf("empty system must sort last and never be Best: %+v", got[1])
 	}
 }
