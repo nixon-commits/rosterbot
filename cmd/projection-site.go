@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/lineupgap"
 	"github.com/nixon-commits/rosterbot/internal/recaplog"
 	"github.com/nixon-commits/rosterbot/internal/report"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
@@ -88,6 +89,13 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: views.json not written: %v\n", err)
 	}
 
+	// Emit gap.json (realized-vs-hindsight lineup gap) on the same terms: its
+	// own store, additive, soft-failing so a gap hiccup never blocks the
+	// accuracy dashboard deploy.
+	if err := renderGapSite(projSiteOut); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: gap.json not written: %v\n", err)
+	}
+
 	if projSiteOpen {
 		if err := openInBrowser(outPath); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
@@ -160,5 +168,46 @@ func renderViewsSite(outDir string) error {
 		return fmt.Errorf("encode views model: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Wrote %s (%d recent page reads)\n", outPath, len(m.Hits))
+	return nil
+}
+
+// renderGapSite reads the Lineup Gap Store (S3 when STATE_BUCKET is set, else
+// local .lineupgap/) and writes <outDir>/gap.json.
+func renderGapSite(outDir string) error {
+	reader, err := statestore.FromEnv().LineupGapReader()
+	if err != nil {
+		return fmt.Errorf("init lineup gap reader: %w", err)
+	}
+	return writeGapModel(reader, outDir)
+}
+
+// writeGapModel is the I/O-light half of renderGapSite, split out so the model
+// and file shape are testable against a local store with no environment.
+//
+// An empty store still writes a valid (empty) model rather than erroring: the
+// gap block is the first thing on the Projections tab, and a fresh deploy must
+// render "no data yet" rather than a broken headline.
+func writeGapModel(reader lineupgap.Reader, outDir string) error {
+	rows, err := reader.ReadAll()
+	if err != nil {
+		return fmt.Errorf("read lineup gaps: %w", err)
+	}
+	m := lineupgap.BuildModel(rows, time.Now().UTC())
+
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", outDir, err)
+	}
+	outPath := filepath.Join(outDir, "gap.json")
+	f, err := os.Create(outPath)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", outPath, err)
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(m); err != nil {
+		return fmt.Errorf("encode gap model: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Wrote %s (%d lineup-gap days)\n", outPath, len(rows))
 	return nil
 }
