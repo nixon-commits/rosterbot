@@ -113,3 +113,60 @@ func TestWithinDayRho_EmptyInput(t *testing.T) {
 		t.Errorf("want nil for no rows, got %+v", rs)
 	}
 }
+
+// A projection pinned at the sample mean IS the baseline, so it must score
+// exactly 0 skill. This is the number that makes the MAE demotion self-evident
+// on the dashboard rather than merely asserted.
+func TestSkillVsMean_ConstantAtMeanScoresZero(t *testing.T) {
+	// actuals {0, 4, 8} → mean 4. A model projecting 4 every time has
+	// MAE = (4+0+4)/3 = 8/3, identical to the baseline.
+	rows := []analysis.GradeRow{
+		{Projected: 4, Actual: 0, Diff: -4},
+		{Projected: 4, Actual: 4, Diff: 0},
+		{Projected: 4, Actual: 8, Diff: 4},
+	}
+	m := computeMetrics(rows)
+	if !approx(m.SkillVsMean, 0) {
+		t.Errorf("SkillVsMean = %v, want 0 for a constant-at-mean model", m.SkillVsMean)
+	}
+}
+
+func TestSkillVsMean_PerfectModelScoresOne(t *testing.T) {
+	rows := []analysis.GradeRow{
+		{Projected: 0, Actual: 0, Diff: 0},
+		{Projected: 4, Actual: 4, Diff: 0},
+		{Projected: 8, Actual: 8, Diff: 0},
+	}
+	m := computeMetrics(rows)
+	if !approx(m.SkillVsMean, 1) {
+		t.Errorf("SkillVsMean = %v, want 1 for a perfect model", m.SkillVsMean)
+	}
+}
+
+func TestSkillVsMean_WorseThanBaselineIsNegative(t *testing.T) {
+	// actuals {0,4,8} → baseline MAE 8/3. This model is deliberately awful.
+	rows := []analysis.GradeRow{
+		{Projected: 8, Actual: 0, Diff: -8},
+		{Projected: 0, Actual: 4, Diff: 4},
+		{Projected: 0, Actual: 8, Diff: 8},
+	}
+	m := computeMetrics(rows)
+	if m.SkillVsMean >= 0 {
+		t.Errorf("SkillVsMean = %v, want negative for a model worse than the baseline", m.SkillVsMean)
+	}
+}
+
+func TestSkillVsMean_DegenerateInputsDoNotDivideByZero(t *testing.T) {
+	if m := computeMetrics(nil); m.SkillVsMean != 0 {
+		t.Errorf("empty: SkillVsMean = %v, want 0", m.SkillVsMean)
+	}
+	// Every actual identical → baseline MAE is 0; guard against 1 - x/0.
+	rows := []analysis.GradeRow{
+		{Projected: 1, Actual: 5, Diff: 4},
+		{Projected: 2, Actual: 5, Diff: 3},
+	}
+	m := computeMetrics(rows)
+	if math.IsInf(m.SkillVsMean, 0) || math.IsNaN(m.SkillVsMean) {
+		t.Errorf("SkillVsMean = %v, want a finite value when the baseline MAE is 0", m.SkillVsMean)
+	}
+}

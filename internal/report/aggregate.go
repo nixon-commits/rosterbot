@@ -12,11 +12,22 @@ import (
 )
 
 // Metrics is the accuracy summary for a set of graded rows.
+//
+// MAE/Bias/RMSE are CALIBRATION diagnostics, not a scoreboard. At player-day
+// grain they are dominated by irreducible single-game variance, which is why
+// SkillVsMean sits beside them: it states plainly how the model compares to
+// projecting the sample mean every time. See internal/report/rank.go for the
+// metric that does carry decision-relevant signal.
 type Metrics struct {
 	MAE  float64 `json:"mae"`
 	Bias float64 `json:"bias"` // mean(actual - projected); positive = under-projecting
 	RMSE float64 `json:"rmse"`
 	N    int     `json:"n"`
+
+	// SkillVsMean is 1 - MAE_model/MAE_constantAtSampleMean. Zero means the
+	// model is exactly as good as ignoring every input and guessing the mean;
+	// negative means worse than that.
+	SkillVsMean float64 `json:"skillVsMean"`
 }
 
 // PositionRow is per-bucket accuracy.
@@ -65,7 +76,40 @@ func computeMetrics(rows []analysis.GradeRow) Metrics {
 		sumSq += d * d
 	}
 	n := float64(len(rows))
-	return Metrics{MAE: sumAbs / n, Bias: sumSigned / n, RMSE: math.Sqrt(sumSq / n), N: len(rows)}
+	mae := sumAbs / n
+	return Metrics{
+		MAE:         mae,
+		Bias:        sumSigned / n,
+		RMSE:        math.Sqrt(sumSq / n),
+		N:           len(rows),
+		SkillVsMean: skillVsMean(rows, mae),
+	}
+}
+
+// skillVsMean scores mae against the MAE of a constant projection at the
+// sample mean of Actual. Returns 0 when there is nothing to compare against —
+// no rows, or a baseline MAE of 0 (every actual identical), where the ratio is
+// undefined rather than infinitely good.
+func skillVsMean(rows []analysis.GradeRow, mae float64) float64 {
+	if len(rows) == 0 {
+		return 0
+	}
+	n := float64(len(rows))
+	var sum float64
+	for _, r := range rows {
+		sum += r.Actual
+	}
+	mean := sum / n
+
+	var base float64
+	for _, r := range rows {
+		base += math.Abs(r.Actual - mean)
+	}
+	base /= n
+	if base == 0 {
+		return 0
+	}
+	return 1 - mae/base
 }
 
 // SystemScore is one projection system's accuracy for a window×role, used by
