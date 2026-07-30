@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/analysis"
 	"github.com/nixon-commits/rosterbot/internal/backtest"
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupgap"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/spf13/cobra"
 )
@@ -137,6 +140,65 @@ func runGrade(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Printf("wrote %d graded rows for %s %s\n", len(rows), sys, dt)
 		}
+	}
+
+	// The Lineup Gap Store: how the lineup we actually applied scored against
+	// the hindsight-optimal one. Computed here because this command already
+	// holds `days` and a live client — the read-side (projection-site) has
+	// neither.
+	//
+	// Soft-fail: grades are irreplaceable, and a gap day is recoverable with
+	// `grade --dates`, so a gap hiccup must never fail the run.
+	if err := recordLineupGaps(ft, days); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: lineup gaps not written: %v\n", err)
+	}
+	return nil
+}
+
+// recordLineupGaps grades each day's applied lineup against hindsight and
+// persists the result. Slot lists are stableTTL-cached (7d), so this costs one
+// cold fetch per week on top of the actuals runGrade already holds.
+func recordLineupGaps(ft *fantrax.Client, days []fantrax.DayRoster) error {
+	hitterSlots, err := ft.GetActiveSlots()
+	if err != nil {
+		return fmt.Errorf("get hitter slots: %w", err)
+	}
+	pitcherSlots, err := ft.GetPitcherSlots()
+	if err != nil {
+		return fmt.Errorf("get pitcher slots: %w", err)
+	}
+
+	results := backtest.RunLineupAnalysis(days, hitterSlots, pitcherSlots)
+	if len(results) == 0 {
+		return nil
+	}
+
+	w, err := statestore.FromEnv().LineupGapWriter()
+	if err != nil {
+		return fmt.Errorf("init lineup gap store: %w", err)
+	}
+	return writeLineupGaps(w, results)
+}
+
+// writeLineupGaps maps lineup-grade results to store rows, one partition per
+// date. Split from recordLineupGaps so the mapping is testable without a
+// Fantrax client.
+func writeLineupGaps(w lineupgap.Writer, results []backtest.LineupDayResult) error {
+	for _, d := range results {
+		dt := d.Date.UTC().Format("2006-01-02")
+		row := lineupgap.Row{
+			Dt:         dt,
+			ActualPts:  d.ActualPts,
+			OptimalPts: d.OptimalPts,
+			Gap:        d.Gap,
+			StartedN:   len(d.Started),
+			BenchedN:   len(d.Benched),
+		}
+		if err := w.WriteGaps(d.Date, []lineupgap.Row{row}); err != nil {
+			return fmt.Errorf("write lineup gap %s: %w", dt, err)
+		}
+		fmt.Printf("wrote lineup gap for %s (actual %.1f, optimal %.1f, gap %.1f)\n",
+			dt, d.ActualPts, d.OptimalPts, d.Gap)
 	}
 	return nil
 }
