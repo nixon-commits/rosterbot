@@ -213,12 +213,23 @@ func rankSystems(rows []analysis.GradeRow, systems []string, latest time.Time, w
 // than the combined standard error. Anything closer is indistinguishable from
 // noise, and crowning it would restate the over-precision problem this metric
 // was introduced to fix.
+//
+// "No competitor" and "uncomputable competitor" are NOT the same case, even
+// though both leave out[1].Rho nil, and must not be collapsed back together.
+// out[1].N == 0 means there is nothing to compare against, so the leader wins
+// unopposed. out[1].N > 0 with a nil Rho means a real competitor exists but
+// never cleared minDayRows on any single day — the SE inequality this
+// function exists to enforce simply cannot be evaluated, so per its own
+// prose ("otherwise") it does not hold, and no system is flagged.
 func flagBest(out []SystemScore) {
 	if len(out) == 0 || out[0].N == 0 || out[0].Rho == nil {
 		return
 	}
-	if len(out) == 1 || out[1].N == 0 || out[1].Rho == nil {
+	if len(out) == 1 || out[1].N == 0 {
 		out[0].Best = true
+		return
+	}
+	if out[1].Rho == nil {
 		return
 	}
 	lead, next := out[0].Rho, out[1].Rho

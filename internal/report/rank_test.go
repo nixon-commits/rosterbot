@@ -261,6 +261,46 @@ func TestRankSystems_NoBestWhenWithinCombinedSE(t *testing.T) {
 	}
 }
 
+// A runner-up with real rows but no day reaching minDayRows is a materially
+// different case from a runner-up with zero rows: there IS a competitor, its
+// rho just can't be computed. flagBest must not treat that as "no
+// competitor" and crown the leader unopposed — the SE comparison the
+// function exists to enforce is simply not evaluable, so it does not hold,
+// and nobody may be flagged Best. This pins the fix for the bug where
+// out[1].Rho == nil was conflated with out[1].N == 0.
+func TestRankSystems_NoBestWhenRunnerUpRhoUncomputable(t *testing.T) {
+	rows := append(
+		// good-sys: 8 rows/day, well above minDayRows(5) -> a real, computable rho.
+		rhoDays("good-sys", false, 6, 8, true),
+		// thin-sys: 4 rows/day, every day below minDayRows(5) -> N > 0 but Rho nil.
+		rhoDays("thin-sys", false, 6, 4, true)...,
+	)
+	latest := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+	got := rankSystems(rows, []string{"thin-sys", "good-sys"}, latest, 30, "hitters")
+
+	if len(got) != 2 {
+		t.Fatalf("got %d scores, want 2", len(got))
+	}
+	if got[0].System != "good-sys" || got[0].Rho == nil {
+		t.Fatalf("leader must be good-sys with a real, computable rho: %+v", got[0])
+	}
+	// Guard the test itself: if thin-sys ever stopped having real rows (N==0),
+	// this would silently exercise the already-covered "no competitor" branch
+	// instead of the "uncomputable competitor" branch this test targets.
+	if got[1].System != "thin-sys" || got[1].N == 0 {
+		t.Fatalf("runner-up must be thin-sys with N > 0 (real rows), got %+v", got[1])
+	}
+	if got[1].Rho != nil {
+		t.Fatalf("runner-up rho must be nil (no day reached minDayRows), got %+v", got[1].Rho)
+	}
+	if got[0].Best {
+		t.Error("leader must not be flagged Best when the runner-up's rho is uncomputable, not absent")
+	}
+	if got[1].Best {
+		t.Error("runner-up must never be flagged Best")
+	}
+}
+
 func TestRankSystems_EmptySystemsSortLastAndAreNeverBest(t *testing.T) {
 	rows := rhoDays("has-data", false, 6, 8, true)
 	latest := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
