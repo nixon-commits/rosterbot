@@ -1,6 +1,7 @@
 package fantrax
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
@@ -18,10 +19,38 @@ const (
 	// stableTTL is season-invariant config set at draft time (slots, scoring
 	// weights, season range, period→date map).
 	stableTTL = 7 * 24 * time.Hour
-	// pastPeriodTTL is the lifetime for snapshots of past scoring periods —
-	// immutable once the period closes (recent stats, period rosters, GS limits).
-	pastPeriodTTL = 30 * 24 * time.Hour
 )
+
+// PastPeriodTTL is the lifetime for snapshots of past scoring periods — recent
+// stats, period rosters, pitcher-GS snapshots, GS limits. These are immutable
+// once the period closes, so the TTL is effectively infinite: an entry written
+// once is never re-fetched.
+//
+// It was 30 days until rosterbot-qoa. Because recap-site re-renders every
+// completed week on every Monday build, a 30-day TTL meant each build
+// re-fetched every week older than a month — cost O(season length), compounding
+// weekly, and measurably so: wall time went 192s → 1411s between April and
+// 2026-07-27, with 1,637 supposedly-immutable snapshot objects rewritten on
+// 2026-07-20 alone.
+//
+// Exported because the same value is the `cacheTTL` argument callers hand to
+// DailyFantasyPoints and GetTeamPitcherStarts; it used to be re-typed as a
+// `30 * 24 * time.Hour` literal at six call sites, so changing "the" past-period
+// TTL changed only a quarter of the caches it named.
+//
+// Two invariants make an unbounded TTL safe, and both must hold:
+//
+//   - Volatility. A period only reaches this tier once it can no longer change
+//     — see periodIsVolatile / recentPeriodLookback, which hold the current
+//     period and the last few closed ones on todayTTL to cover Fantrax's
+//     YTD settling lag and UTC-vs-ET slop. Without that guard a snapshot
+//     captured mid-settle is pinned wrong forever instead of self-healing at
+//     the old 30-day expiry.
+//   - Season scoping. Every key at this tier carries the season year (see
+//     seasonScopedKey). Period numbers restart each season, so without it next
+//     season's period 5 would read this season's frozen snapshot — a collision
+//     the 30-day TTL used to make impossible for free.
+const PastPeriodTTL = 100 * 365 * 24 * time.Hour
 
 // cacheTier names a durable-state mutability class. Making the tier a type
 // (not a bare time.Duration threaded through 20 call sites) is what turns the
@@ -36,7 +65,7 @@ type cacheTier int
 const (
 	tierToday  cacheTier = iota // todayTTL — mutable "today" data
 	tierStable                  // stableTTL — season-invariant config
-	tierPast                    // pastPeriodTTL — immutable past-period snapshots
+	tierPast                    // PastPeriodTTL — immutable past-period snapshots
 )
 
 // duration resolves a tier to its concrete TTL.
@@ -45,31 +74,62 @@ func (t cacheTier) duration() time.Duration {
 	case tierStable:
 		return stableTTL
 	case tierPast:
-		return pastPeriodTTL
+		return PastPeriodTTL
 	default:
 		return todayTTL
 	}
 }
 
-// tierForPeriod picks the tier for a per-period snapshot. Past periods
-// (period < current) are immutable and get tierPast; current/future periods
-// still change and fall back to tierToday. The "current period" comparison
-// uses PeriodForDate against today rather than GetCurrentPeriod (which would
-// itself be cached and potentially circular). On a season-range fetch error it
-// returns tierToday — a short TTL is always the safe pessimistic choice.
+// tierFor picks the tier for one period's snapshot: tierPast once the period is
+// settled, tierToday while it can still change.
 //
-// This performs an upstream fetch (fetchSeasonDateRange), so cachedForPeriod
-// only calls it after the caching-off short-circuit; never on the cacheDir==""
-// (--no-cache / hermetic-test) path.
-func (c *Client) tierForPeriod(period DailyPeriod) cacheTier {
-	seasonStart, _, err := c.fetchSeasonDateRange()
-	if err != nil {
+// The volatility test is periodIsVolatile, not a bare `period < curPeriod`.
+// That distinction did not matter at a 30-day TTL — a snapshot captured while
+// Fantrax's YTD was still settling expired and self-corrected within the month.
+// At PastPeriodTTL it is the whole safety argument: a period admitted to
+// tierPast one day too early is wrong for the rest of the season.
+func tierFor(period, curPeriod DailyPeriod) cacheTier {
+	if periodIsVolatile(period, curPeriod) {
 		return tierToday
 	}
-	if period < PeriodForDate(seasonStart, time.Now().UTC()) {
-		return tierPast
+	return tierPast
+}
+
+// seasonScopedKey builds `<prefix>-<teamID>-<season>-<period>`, the key grammar
+// for everything held at tierPast. Daily and weekly period numbers both restart
+// each season, so the season part is what stops next year's period N from
+// reading this year's entry now that the tier never expires. Matches the
+// existing fantrax-period-date-map-<leagueID>-<year> precedent.
+func seasonScopedKey(prefix, teamID string, season, period int) string {
+	return cache.Key(prefix, teamID, strconv.Itoa(season), strconv.Itoa(period))
+}
+
+// periodCachePolicy resolves both halves of a per-period cache decision — the
+// tier and the season the key is scoped to — from a single season-range read.
+// On a fetch error it returns the pessimistic pair: the short tier (which
+// self-heals) and the current calendar year.
+//
+// This performs a read that can reach upstream, so cachedForPeriod and
+// cachedForSeason only call it after the caching-off short-circuit; never on
+// the cacheDir=="" (--no-cache / hermetic-test) path. It reads the *cached*
+// GetSeasonDateRange rather than the raw fetchSeasonDateRange, so repeated
+// per-period calls cost a disk hit instead of a Fantrax round-trip.
+func (c *Client) periodCachePolicy(period DailyPeriod) (cacheTier, int) {
+	seasonStart, _, err := c.GetSeasonDateRange()
+	if err != nil {
+		return tierToday, time.Now().UTC().Year()
 	}
-	return tierToday
+	return tierFor(period, PeriodForDate(seasonStart, time.Now().UTC())), seasonStart.Year()
+}
+
+// seasonYear is periodCachePolicy's season half on its own, for keys held at a
+// fixed tier (GS limits).
+func (c *Client) seasonYear() int {
+	seasonStart, _, err := c.GetSeasonDateRange()
+	if err != nil {
+		return time.Now().UTC().Year()
+	}
+	return seasonStart.Year()
 }
 
 // cached is the single cache-plumbing seam for every method on *Client that
@@ -89,14 +149,31 @@ func cached[T any](c *Client, key string, tier cacheTier, fetch func() (T, error
 }
 
 // cachedForPeriod is the per-period variant of cached. The tier isn't fixed —
-// a past period is immutable (tierPast) while the current/future period still
-// moves (tierToday) — so it's resolved from the period via tierForPeriod. That
-// resolution needs the season range (an upstream fetch), so it runs only after
-// the caching-off short-circuit, keeping the no-cache / hermetic path free of
-// the extra round-trip that eager tier resolution would introduce.
-func cachedForPeriod[T any](c *Client, key string, period DailyPeriod, fetch func() (T, error)) (T, error) {
+// a settled period is immutable (tierPast) while the current and still-settling
+// ones move (tierToday) — so both it and the key's season scope come from
+// periodCachePolicy. That resolution reads the season range, so it runs only
+// after the caching-off short-circuit, keeping the no-cache / hermetic path
+// free of the extra round-trip that eager resolution would introduce.
+//
+// It takes the key's prefix and teamID rather than a finished key because the
+// season part has to be spliced in after that short-circuit.
+func cachedForPeriod[T any](c *Client, prefix, teamID string, period DailyPeriod, fetch func() (T, error)) (T, error) {
 	if c.cacheDir == "" {
 		return fetch()
 	}
-	return cache.New[T](c.cacheDir, c.tierForPeriod(period).duration()).Get(key, fetch)
+	tier, season := c.periodCachePolicy(period)
+	key := seasonScopedKey(prefix, teamID, season, int(period))
+	return cache.New[T](c.cacheDir, tier.duration()).Get(key, fetch)
+}
+
+// cachedForSeason is cached() for a key whose tier is fixed but whose period
+// number restarts each season (GS limits, keyed by the weekly period). Same
+// laziness rule as cachedForPeriod: the season is resolved only once caching is
+// known to be on.
+func cachedForSeason[T any](c *Client, prefix, teamID string, period int, tier cacheTier, fetch func() (T, error)) (T, error) {
+	if c.cacheDir == "" {
+		return fetch()
+	}
+	key := seasonScopedKey(prefix, teamID, c.seasonYear(), period)
+	return cache.New[T](c.cacheDir, tier.duration()).Get(key, fetch)
 }

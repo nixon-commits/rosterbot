@@ -92,16 +92,16 @@ func (c *Client) DailyFantasyPoints(
 	}
 
 	// snapCacheFor builds a per-period cache so the long, immutable-period TTL
-	// the caller passes (30d for recap/backtest) is never applied to the live
-	// current/future period. Without this, a current-period snapshot cached
-	// before the day's games (e.g. an early hourly run) is served stale for the
-	// rest of the day, zeroing that day's deltas — which made a Sunday-night
-	// recap render scores short by exactly today's points and drop the WP
-	// curves (see cappedTTL). cacheTTL==0 (--no-cache / hermetic tests) keeps
-	// caching off.
+	// the caller passes (PastPeriodTTL for recap/backtest) is never applied to
+	// the live current/future period. Without this, a current-period snapshot
+	// cached before the day's games (e.g. an early hourly run) is served stale
+	// for the rest of the day, zeroing that day's deltas — which made a
+	// Sunday-night recap render scores short by exactly today's points and drop
+	// the WP curves (see cappedTTL). cacheTTL==0 (--no-cache / hermetic tests)
+	// keeps caching off.
 	//
 	// The current-period boundary is computed once from seasonStart (already in
-	// scope) rather than via c.tierForPeriod, which fetches the season range on
+	// scope) rather than via c.periodCachePolicy, which reads the season range on
 	// every call — calling it per period here added ~one network round-trip per
 	// period × team × week (a ~10x slowdown on a full site build).
 	//
@@ -109,16 +109,16 @@ func (c *Client) DailyFantasyPoints(
 	// short TTL; only safely-immutable past periods get the caller's long TTL.
 	// The recently-closed window matters because Fantrax's StatsType=1 roster
 	// YTD lags the live score by up to ~a day on the final day's games — without
-	// it, a snapshot cached during the lag window (e.g. a Sunday-night build) is
-	// pinned stale for the full 30-day past-period TTL and every later rebuild
-	// (the weekly recap-site re-renders every week) reuses the stale value.
+	// it, a snapshot cached during the lag window (e.g. a Sunday-night build)
+	// stays pinned for the whole (now unbounded) past-period TTL and every later
+	// rebuild (the weekly recap-site re-renders every week) reuses the stale
+	// value. That was survivable when the pin expired after 30 days; it is not
+	// now, which is why snapshotTTL is the load-bearing guard rather than a
+	// nicety.
 	curPeriod := c.DailyPeriodFor(seasonStart, time.Now().UTC())
+	season := seasonStart.Year()
 	snapCacheFor := func(period DailyPeriod) *cache.FileCache[periodSnapshot] {
-		ttl := cacheTTL
-		if cacheTTL > 0 && periodIsVolatile(period, curPeriod) {
-			ttl = cappedTTL(cacheTTL, todayTTL)
-		}
-		return cache.New[periodSnapshot](cacheDir, ttl)
+		return cache.New[periodSnapshot](cacheDir, snapshotTTL(cacheTTL, period, curPeriod))
 	}
 
 	// Baseline YTD from the day before `start` so the first day in range
@@ -129,7 +129,7 @@ func (c *Client) DailyFantasyPoints(
 	if !dayBefore.Before(seasonStart) {
 		basePeriod := c.DailyPeriodFor(seasonStart, dayBefore)
 		if basePeriod >= 1 {
-			base, _, err := c.getPeriodSnapshotCached(snapCacheFor(basePeriod), teamID, basePeriod)
+			base, _, err := c.getPeriodSnapshotCached(snapCacheFor(basePeriod), teamID, season, basePeriod)
 			if err != nil {
 				return nil, fmt.Errorf("baseline snapshot period %d: %w", basePeriod, err)
 			}
@@ -141,7 +141,7 @@ func (c *Client) DailyFantasyPoints(
 	var days []DayRoster
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
 		period := c.DailyPeriodFor(seasonStart, d)
-		snap, hitNetwork, err := c.getPeriodSnapshotCached(snapCacheFor(period), teamID, period)
+		snap, hitNetwork, err := c.getPeriodSnapshotCached(snapCacheFor(period), teamID, season, period)
 		if err != nil {
 			return nil, fmt.Errorf("snapshot %s (period %d): %w", d.Format("2006-01-02"), period, err)
 		}
@@ -241,6 +241,19 @@ func periodIsVolatile(period, curPeriod DailyPeriod) bool {
 	return period >= curPeriod-recentPeriodLookback
 }
 
+// snapshotTTL is the per-period TTL decision shared by the two caller-supplied
+// snapshot caches (DailyFantasyPoints's roster stats and GetTeamPitcherStarts's
+// pitcher GS). Callers pass one TTL for the whole window — normally
+// PastPeriodTTL — and this narrows it to todayTTL for any period that can still
+// change. It is the tierFor equivalent for caches whose TTL arrives as an
+// argument rather than from a cacheTier.
+func snapshotTTL(callerTTL time.Duration, period, curPeriod DailyPeriod) time.Duration {
+	if periodIsVolatile(period, curPeriod) {
+		return cappedTTL(callerTTL, todayTTL)
+	}
+	return callerTTL
+}
+
 // cappedTTL picks the cache TTL for one period's snapshot: the caller's TTL
 // capped to the period's own TTL. A zero callerTTL means caching is disabled
 // and is returned as-is. Capping ensures the live current/future period is
@@ -268,9 +281,10 @@ var fetchPeriodSnapshotFn = (*Client).fetchPeriodSnapshot
 func (c *Client) getPeriodSnapshotCached(
 	snapCache *cache.FileCache[periodSnapshot],
 	teamID string,
+	season int,
 	period DailyPeriod,
 ) (snap periodSnapshot, hitNetwork bool, err error) {
-	key := cache.Key(keyRosterStats, teamID, strconv.Itoa(int(period)))
+	key := seasonScopedKey(keyRosterStats, teamID, season, int(period))
 	snap, err = snapCache.Get(key, func() (periodSnapshot, error) {
 		hitNetwork = true
 		return fetchPeriodSnapshotFn(c, teamID, period)

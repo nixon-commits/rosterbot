@@ -75,7 +75,8 @@ func todayET() time.Time {
 // When --no-cache isn't set, the client's on-disk cache layer is enabled
 // (15m TTL for "today, drifts during the day" data like roster + FA pool;
 // 7d TTL for season-stable data like slot counts + scoring weights;
-// 30d TTL for past-period snapshots via ttlForPeriod). All commands
+// PastPeriodTTL for settled past-period snapshots via periodCachePolicy).
+// All commands
 // inherit this — recap, optimize, prospects, etc. don't each need to
 // remember to opt in.
 func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {

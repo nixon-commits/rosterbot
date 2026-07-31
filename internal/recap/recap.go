@@ -21,7 +21,7 @@ type Options struct {
 	WeekNumber  int    // optional; if zero, computed as ((weekStart - seasonStart) / 7) + 1
 	WeekLabel   string // optional; defaults to "Week N"
 	CacheDir    string
-	CacheTTL    time.Duration // 0 → use default; pass 30 days for past weeks (immutable)
+	CacheTTL    time.Duration // 0 → use default; pass fantrax.PastPeriodTTL for past weeks (immutable)
 	TopPlayers  int           // top N for Players-of-Week (default 4)
 	Concurrency int           // parallel team fetches; 0 → runtime.NumCPU()
 }

@@ -423,11 +423,11 @@ Optional:
 
 ## Caching
 
-Network calls (Fantrax, MLB statsapi, FanGraphs, Baseball Savant, HKB, MLB Pipeline) are cached on disk under `.cache/` as JSON, named `<source>-<entity>-<scope>.json` (e.g. `fantrax-pitcher-gs-<teamID>-<period>.json`). On AWS the same cache is backed live by S3 under the `cache/` prefix. Three TTL tiers cover most data:
+Network calls (Fantrax, MLB statsapi, FanGraphs, Baseball Savant, HKB, MLB Pipeline) are cached on disk under `.cache/` as JSON, named `<source>-<entity>-<scope>.json` (e.g. `fantrax-pitcher-gs-<teamID>-<season>-<period>.json`). On AWS the same cache is backed live by S3 under the `cache/` prefix. Three TTL tiers cover most data:
 
 | Tier | TTL | For |
 |---|---|---|
-| Past-period | **30 days** | Immutable once a scoring period closes — per-period roster snapshots, recent stats, pitcher GS, past-date MLB schedules, MLB player IDs. |
+| Past-period | **never expires** | Immutable once a scoring period closes *and stops settling* — per-period roster snapshots, recent stats, pitcher GS, GS limits, past-date MLB schedules, MLB player IDs. A period joins this tier only after the current period plus the three most recently closed ones, which stay on the 15-minute tier while Fantrax's year-to-date totals finish settling. Keys carry the season year so next season's period 5 can't read this season's entry. |
 | Today | **15 minutes** | Drifts during the day but fine to reuse hourly — current roster, FA pool, current period, pending/recent trades. |
 | Stable | **7 days** | Season-invariant config — slot counts, scoring weights, season date range. |
 

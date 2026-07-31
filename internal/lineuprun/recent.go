@@ -56,8 +56,8 @@ func collapseHitterWindow(days []fantrax.DayRoster, asOf time.Time) map[string]f
 // It replaces the former unbounded season-to-date snapshot (GetRecentStats):
 // each player's RecentStat now reflects only games within the window, so both
 // the blended value AND the blend weight (driven by games-in-window) track
-// recent form rather than the whole season. Past periods are cached at 30d TTL,
-// so warm runs only refetch the last day or two.
+// recent form rather than the whole season. Settled past periods are cached at
+// fantrax.PastPeriodTTL, so warm runs only refetch the last day or two.
 //
 // It is the thin fetch wrapper around the two pure functions above: bounds,
 // fetch, collapse.
@@ -76,7 +76,7 @@ func windowedHitterRecent(ft recentStatsClient, teamID string, today, seasonStar
 	// DailyFantasyPoints resolves the MLB-statsapi backfill internally
 	// (best-effort, soft-fails per player), so the window sees real same-day
 	// FPts for mid-window first appearances instead of placeholder zeros.
-	days, err := ft.DailyFantasyPoints(teamID, start, end, seasonStart, cacheDir, cacheTTL(noCache, 30*24*time.Hour))
+	days, err := ft.DailyFantasyPoints(teamID, start, end, seasonStart, cacheDir, cacheTTL(noCache, fantrax.PastPeriodTTL))
 	if err != nil {
 		return nil, err
 	}

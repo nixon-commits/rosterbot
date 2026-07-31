@@ -2,7 +2,6 @@ package fantrax
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/positions"
@@ -30,14 +29,15 @@ func (c *Client) GetPitcherRoster() ([]Player, error) {
 }
 
 // GetPitcherRosterForPeriod returns all pitchers for the given scoring period.
-// Pass 0 to use the current period. Past-period rosters are cached at 30d
-// TTL via cachedForPeriod/tierForPeriod; current/future use todayTTL.
+// Pass 0 to use the current period. Settled past-period rosters are cached at
+// PastPeriodTTL via cachedForPeriod/periodCachePolicy; the current period and
+// the still-settling ones use todayTTL.
 func (c *Client) GetPitcherRosterForPeriod(period DailyPeriod) ([]Player, error) {
 	// period==0 is "current" — let GetPitcherRoster handle the today-keyed cache.
 	if period == 0 {
 		return c.GetPitcherRoster()
 	}
-	return cachedForPeriod(c, cache.Key(keyPitcherRoster, c.teamID, strconv.Itoa(int(period))), period,
+	return cachedForPeriod(c, keyPitcherRoster, c.teamID, period,
 		func() ([]Player, error) { return c.fetchPitcherRosterForPeriod(period) })
 }
 

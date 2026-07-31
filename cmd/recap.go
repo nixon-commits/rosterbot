@@ -55,7 +55,7 @@ func runRecap(cmd *cobra.Command, args []string) error {
 
 	// Past matchup weeks are immutable, so reuse the same long TTL the
 	// backtest command uses to avoid re-hitting Fantrax on rerun.
-	snapTTL := 30 * 24 * time.Hour
+	snapTTL := fantrax.PastPeriodTTL
 	if noCache {
 		snapTTL = 0
 	}

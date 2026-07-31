@@ -59,7 +59,7 @@ func runGrade(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("get season start: %w", err)
 	}
 
-	snapTTL := 30 * 24 * time.Hour
+	snapTTL := fantrax.PastPeriodTTL
 	if noCache {
 		snapTTL = 0
 	}

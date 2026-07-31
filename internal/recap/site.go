@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/schedule"
 )
 
@@ -71,7 +72,7 @@ func RunSite(ft SiteClient, sopts SiteOptions) error {
 		// Past weeks are immutable; default to a long TTL when caller didn't
 		// override. Caller can pass 0 explicitly with --no-cache semantics.
 		if weekOpts.CacheTTL == 0 {
-			weekOpts.CacheTTL = 30 * 24 * time.Hour
+			weekOpts.CacheTTL = fantrax.PastPeriodTTL
 		}
 
 		fmt.Fprintf(os.Stderr, "  building week %d (%s..%s)\n",
