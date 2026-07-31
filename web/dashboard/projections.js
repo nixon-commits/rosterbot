@@ -32,6 +32,16 @@ export async function renderProjections(root) {
     return;
   }
 
+  // gap.json is a separate artifact with its own producer, so its absence is
+  // ordinary (local dev, or a fresh deploy before grade next runs). The
+  // headline block degrades to rho-only rather than failing the whole tab.
+  let gap = null;
+  try {
+    gap = await api.reportGap();
+  } catch {
+    gap = null;
+  }
+
   // Prefer the production (detail) system, but only if it actually has captured
   // rows; otherwise land on whichever system does, so the Detail panel never
   // opens on an empty view. (Ported from the template's boot logic.)
@@ -42,9 +52,9 @@ export async function renderProjections(root) {
 
   const state = { window: 30, role: "all", system: defaultSystem };
   const el = buildLayout(root);
-  const rerender = () => paint(el, model, state);
+  const rerender = () => paint(el, model, gap, state);
   wireToggles(el, model, state, rerender);
-  paint(el, model, state);
+  paint(el, model, gap, state);
 }
 
 // buildLayout paints the static shell once and returns a map of data-ref nodes
@@ -62,6 +72,12 @@ function buildLayout(root) {
     </div>
 
     <section class="card">
+      <h2>Decision quality <span class="muted" data-ref="headlineSub"></span></h2>
+      <div class="stat-row" data-ref="headline"></div>
+      <div class="chart-box"><canvas data-ref="gapChart"></canvas></div>
+    </section>
+
+    <section class="card">
       <h2>Projection system comparison <span class="muted" data-ref="compareSub"></span></h2>
       <div data-ref="compareTable"></div>
       <div class="chart-box"><canvas data-ref="compareChart"></canvas></div>
@@ -73,6 +89,8 @@ function buildLayout(root) {
     <h2>Detail — <span data-ref="detailSysLabel"></span></h2>
     <div class="sub muted" data-ref="detailSub"></div>
 
+    <h3>Calibration diagnostics</h3>
+    <p class="muted">Error magnitude at player-day grain is mostly single-game variance, not model skill. Kept for calibration; see Decision quality above for the metrics that drive lineups.</p>
     <div class="stat-row" data-ref="scorecard"></div>
 
     <section class="card">
@@ -142,7 +160,7 @@ function destroy(el, id) {
   if (el.charts[id]) { el.charts[id].destroy(); delete el.charts[id]; }
 }
 
-function paint(el, model, state) {
+function paint(el, model, gap, state) {
   el.meta.textContent =
     "Latest graded: " + model.latestDate + " · season since " + model.seasonStart + " · generated " + model.generatedAt;
 
@@ -150,6 +168,7 @@ function paint(el, model, state) {
   paintSegActive(el.roleseg, state, "role");
   paintSegActive(el.sysseg, state, "system");
 
+  renderHeadline(el, model, gap, state);
   renderCompare(el, model, state);
 
   el.detailSysLabel.textContent = sysLabel(state.system || "");
@@ -174,6 +193,87 @@ function paint(el, model, state) {
 const detailKey = (s) => s.system + "|" + s.window + "|" + s.role;
 const compareKey = (s) => s.window + "|" + s.role;
 
+// ---- Headline: decision quality -------------------------------------------
+
+// rhoTile formats a RhoStat from internal/report. A nil rho (too few
+// qualifying days, or role "all" where pooling is undefined) renders as "—"
+// rather than a misleading 0.
+function rhoTile(label, rs) {
+  if (!rs || !rs.days) {
+    return tile(label, "—", `<div class="delta flat">not enough graded days</div>`);
+  }
+  const sign = rs.rho >= 0 ? "+" : "";
+  const value = `${sign}${fmt(rs.rho, 3)}`;
+  const sub = `±${fmt(rs.se, 3)} · ${rs.daysPositive}/${rs.days} days positive`;
+  return tile(label, value, `<div class="delta flat">${sub}</div>`);
+}
+
+function renderHeadline(el, model, gap, state) {
+  const w = String(state.window);
+  const win = gap && gap.windows ? gap.windows[w] : null;
+
+  // Rho is only defined within a role, so the headline always shows both —
+  // never a pooled number. Read the two role views directly rather than
+  // whatever the role toggle currently says.
+  const hv = (model.views && model.views[model.detailSystem + "|" + state.window + "|hitters"]) || EMPTY_VIEW;
+  const pv = (model.views && model.views[model.detailSystem + "|" + state.window + "|pitchers"]) || EMPTY_VIEW;
+
+  let tiles = "";
+  if (win && win.days) {
+    const gapSign = win.gapPts > 0 ? "+" : "";
+    tiles += tile("Points left on bench", `${gapSign}${fmt(win.gapPts, 1)}`,
+      `<div class="delta flat">over ${win.days} d</div>`);
+    tiles += tile("Lineup efficiency", `${fmt(win.efficiency * 100, 1)}%`,
+      `<div class="delta flat">${fmt(win.actualPts, 0)} of ${fmt(win.optimalPts, 0)} pts</div>`);
+  } else {
+    tiles += tile("Points left on bench", "—",
+      `<div class="delta flat">no lineup gap data yet</div>`);
+  }
+  tiles += rhoTile("Hitter rank skill", hv.rho);
+  tiles += rhoTile("Pitcher rank skill", pv.rho);
+
+  el.headline.innerHTML = tiles;
+  el.headlineSub.textContent =
+    "· " + winLabel(state.window) + " · rank skill is measured within each day, never pooled across roles";
+
+  renderGapChart(el, gap, state);
+}
+
+function renderGapChart(el, gap, state) {
+  destroy(el, "gapChart");
+  if (!gap || !gap.series || !gap.series.length) return;
+
+  // Trim the series to the selected window; season (0) shows everything.
+  let pts = gap.series;
+  if (state.window > 0) pts = pts.slice(-state.window);
+
+  const t = themeColors();
+  el.charts.gapChart = barChart(el.gapChart, {
+    data: {
+      labels: pts.map((p) => p.dt),
+      datasets: [{
+        label: "Gap (pts)",
+        data: pts.map((p) => p.gapPts),
+        borderColor: t.palette[0],
+        backgroundColor: t.palette[0],
+      }],
+    },
+    options: {
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const p = pts[ctx.dataIndex];
+              return `gap ${fmt(p.gapPts, 1)} · actual ${fmt(p.actualPts, 1)} of ${fmt(p.optimalPts, 1)}`;
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
 // ---- Scorecard -------------------------------------------------------------
 
 function renderScorecard(el, view) {
@@ -184,8 +284,16 @@ function renderScorecard(el, view) {
     el.scorecard.innerHTML = `<p class="muted">No graded data in this window yet.</p>`;
     return;
   }
+  // MAE at player-day grain is dominated by single-game variance, so it sits
+  // here as a calibration check rather than a scoreboard — the skill score
+  // under it says so numerically, and updates daily. The headline metrics are
+  // in the Decision quality block above.
+  const skill = c.skillVsMean || 0;
+  const skillSign = skill >= 0 ? "+" : "";
+  const skillCls = skill > 0 ? "good" : (skill < 0 ? "bad" : "flat");
   el.scorecard.innerHTML =
-    tile("MAE", fmt(c.mae), deltaCell(c.mae, p.mae, true)) +
+    tile("MAE", fmt(c.mae),
+      `<div class="delta ${skillCls}">${skillSign}${fmt(skill * 100, 1)}% vs constant baseline</div>`) +
     tile("Bias", fmt(c.bias), deltaCell(Math.abs(c.bias), Math.abs(p.bias), true)) +
     tile("RMSE", fmt(c.rmse), deltaCell(c.rmse, p.rmse, true)) +
     tile("Sample (player-days)", (c.n || 0).toLocaleString(), `<div class="delta flat">prior ${(p.n || 0).toLocaleString()}</div>`);
@@ -209,35 +317,74 @@ function deltaCell(cur, prior, lowerBetter = true) {
 // ---- System comparison panel ----------------------------------------------
 
 function renderCompare(el, model, state) {
-  const key = compareKey(state);
-  const scores = (model.compare && model.compare[key]) || [];
-  const withData = scores.filter((s) => s.n > 0);
+  // Compare is nil for role "all" — a pooled cross-role ranking has no
+  // defensible order (see internal/report/model.go), so render the two role
+  // tables stacked instead.
+  if (state.role === "all") {
+    renderCompareTable(el, model, state, "hitters");
+    renderCompareTable(el, model, state, "pitchers", true);
+    renderCompareChart(el, model, state);
+    el.compareSub.textContent = "· ranked by within-day rank skill · " + winLabel(state.window);
+    return;
+  }
+  el.compareTable.innerHTML = "";
+  renderCompareTable(el, model, state, state.role);
+  renderCompareChart(el, model, state);
+  el.compareSub.textContent =
+    "· ranked by within-day rank skill (higher = better) · " + winLabel(state.window) + " · " + state.role;
+}
 
-  el.compareSub.textContent = withData.length
-    ? "· ranked by MAE (lower = better) · " + winLabel(state.window) + " · " + state.role
-    : "";
+// renderCompareTable appends one role's ranked table. append=false resets the
+// container first, so the "all" path can stack two.
+function renderCompareTable(el, model, state, role, append = false) {
+  if (!append) el.compareTable.innerHTML = "";
+  const scores = (model.compare && model.compare[state.window + "|" + role]) || [];
+  const withData = scores.filter((s) => s.n > 0);
 
   const t = themeColors();
   const systems = model.systems || [];
   const colorFor = (sys) => t.palette[Math.max(0, systems.indexOf(sys)) % t.palette.length];
 
+  const heading = `<h3>${roleLabel(role)}</h3>`;
   if (!withData.length) {
-    el.compareTable.innerHTML = `<p class="muted">No graded data across systems in this window yet.</p>`;
-  } else {
-    const head = `<tr><th>System</th><th class="num">MAE</th><th class="num">Bias</th><th class="num">RMSE</th><th class="num">Sample</th></tr>`;
-    const body = scores.map((s) => {
-      if (s.n === 0) return "";
-      const prod = s.system === model.detailSystem ? ` <span class="badge">prod</span>` : "";
-      const best = s.best ? ` <span class="badge">best</span>` : "";
-      const sw = `<span class="swatch" style="background:${colorFor(s.system)}"></span>`;
-      return `<tr class="${s.best ? "best" : ""}"><td>${sw}${escapeHtml(sysLabel(s.system))}${prod}${best}</td>` +
-        `<td class="num">${fmt(s.mae, 2)}</td>` +
-        `<td class="num">${s.bias > 0 ? "+" : ""}${fmt(s.bias, 2)}</td>` +
-        `<td class="num">${fmt(s.rmse, 2)}</td>` +
-        `<td class="num">${s.n.toLocaleString()}</td></tr>`;
-    }).join("");
-    el.compareTable.innerHTML = `<table class="data-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+    el.compareTable.insertAdjacentHTML("beforeend",
+      heading + `<p class="muted">No graded data across systems in this window yet.</p>`);
+    return;
   }
+
+  const anyBest = withData.some((s) => s.best);
+  const head = `<tr><th>System</th><th class="num">Rank skill</th><th class="num">MAE</th><th class="num">Bias</th><th class="num">RMSE</th><th class="num">Sample</th></tr>`;
+  const body = scores.map((s) => {
+    if (s.n === 0) return "";
+    const prod = s.system === model.detailSystem ? ` <span class="badge">prod</span>` : "";
+    const best = s.best ? ` <span class="badge">best</span>` : "";
+    const sw = `<span class="swatch" style="background:${colorFor(s.system)}"></span>`;
+    const rho = s.rho && s.rho.days
+      ? `${s.rho.rho >= 0 ? "+" : ""}${fmt(s.rho.rho, 3)} <span class="muted">±${fmt(s.rho.se, 3)}</span>`
+      : "—";
+    return `<tr class="${s.best ? "best" : ""}"><td>${sw}${escapeHtml(sysLabel(s.system))}${prod}${best}</td>` +
+      `<td class="num">${rho}</td>` +
+      `<td class="num">${fmt(s.mae, 2)}</td>` +
+      `<td class="num">${s.bias > 0 ? "+" : ""}${fmt(s.bias, 2)}</td>` +
+      `<td class="num">${fmt(s.rmse, 2)}</td>` +
+      `<td class="num">${s.n.toLocaleString()}</td></tr>`;
+  }).join("");
+
+  // No system separated from the runner-up by more than the combined standard
+  // error, so naming a winner would be reporting noise.
+  const note = anyBest ? "" : `<p class="muted">Too close to call — no system leads by more than the combined standard error.</p>`;
+  el.compareTable.insertAdjacentHTML("beforeend",
+    heading + `<table class="data-table"><thead>${head}</thead><tbody>${body}</tbody></table>` + note);
+}
+
+// renderCompareChart is the overlaid MAE trend, one line per system. Kept
+// separate from renderCompareTable so it can be called once even when the
+// "all" role renders two stacked tables.
+function renderCompareChart(el, model, state) {
+  const key = compareKey(state);
+  const t = themeColors();
+  const systems = model.systems || [];
+  const colorFor = (sys) => t.palette[Math.max(0, systems.indexOf(sys)) % t.palette.length];
 
   // Overlaid MAE trend, one line per system, aligned on the union of dates.
   destroy(el, "compareChart");

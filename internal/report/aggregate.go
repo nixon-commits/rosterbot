@@ -12,11 +12,22 @@ import (
 )
 
 // Metrics is the accuracy summary for a set of graded rows.
+//
+// MAE/Bias/RMSE are CALIBRATION diagnostics, not a scoreboard. At player-day
+// grain they are dominated by irreducible single-game variance, which is why
+// SkillVsMean sits beside them: it states plainly how the model compares to
+// projecting the sample mean every time. See internal/report/rank.go for the
+// metric that does carry decision-relevant signal.
 type Metrics struct {
 	MAE  float64 `json:"mae"`
 	Bias float64 `json:"bias"` // mean(actual - projected); positive = under-projecting
 	RMSE float64 `json:"rmse"`
 	N    int     `json:"n"`
+
+	// SkillVsMean is 1 - MAE_model/MAE_constantAtSampleMean. Zero means the
+	// model is exactly as good as ignoring every input and guessing the mean;
+	// negative means worse than that.
+	SkillVsMean float64 `json:"skillVsMean"`
 }
 
 // PositionRow is per-bucket accuracy.
@@ -65,18 +76,57 @@ func computeMetrics(rows []analysis.GradeRow) Metrics {
 		sumSq += d * d
 	}
 	n := float64(len(rows))
-	return Metrics{MAE: sumAbs / n, Bias: sumSigned / n, RMSE: math.Sqrt(sumSq / n), N: len(rows)}
+	mae := sumAbs / n
+	return Metrics{
+		MAE:         mae,
+		Bias:        sumSigned / n,
+		RMSE:        math.Sqrt(sumSq / n),
+		N:           len(rows),
+		SkillVsMean: skillVsMean(rows, mae),
+	}
+}
+
+// skillVsMean scores mae against the MAE of a constant projection at the
+// sample mean of Actual. Returns 0 when there is nothing to compare against —
+// no rows, or a baseline MAE of 0 (every actual identical), where the ratio is
+// undefined rather than infinitely good.
+func skillVsMean(rows []analysis.GradeRow, mae float64) float64 {
+	if len(rows) == 0 {
+		return 0
+	}
+	n := float64(len(rows))
+	var sum float64
+	for _, r := range rows {
+		sum += r.Actual
+	}
+	mean := sum / n
+
+	var base float64
+	for _, r := range rows {
+		base += math.Abs(r.Actual - mean)
+	}
+	base /= n
+	if base == 0 {
+		return 0
+	}
+	return 1 - mae/base
 }
 
 // SystemScore is one projection system's accuracy for a window×role, used by
-// the head-to-head comparison panel. Best flags the lowest-MAE system.
+// the head-to-head comparison panel.
+//
+// Best flags the highest-rho system, but only when it is separated from the
+// runner-up by more than the combined standard error — otherwise the panel
+// reports too-close-to-call rather than crowning a coin flip. MAE/Bias/RMSE
+// remain as columns but no longer decide the winner: see rank.go for why.
 type SystemScore struct {
-	System string  `json:"system"`
-	MAE    float64 `json:"mae"`
-	Bias   float64 `json:"bias"`
-	RMSE   float64 `json:"rmse"`
-	N      int     `json:"n"`
-	Best   bool    `json:"best"`
+	System string   `json:"system"`
+	MAE    float64  `json:"mae"`
+	Bias   float64  `json:"bias"`
+	RMSE   float64  `json:"rmse"`
+	N      int      `json:"n"`
+	Rho    *RhoStat `json:"rho,omitempty"`
+	Best   bool     `json:"best"`
 }
 
 // normalizeSystems returns a copy of rows with any empty System attributed to
@@ -120,33 +170,73 @@ func filterSystem(rows []analysis.GradeRow, system string) []analysis.GradeRow {
 }
 
 // rankSystems scores each system over the window×role slice and returns them
-// ordered by MAE ascending (best first); the lowest-MAE system with data is
-// flagged Best. Systems with no rows in the window sort last (MAE 0, N 0) and
-// are never marked Best.
+// ordered by within-day rank skill descending (best first).
+//
+// Callers pass a single role — never "all". Systems with no rows in the window
+// sort last (N 0) and are never marked Best.
 func rankSystems(rows []analysis.GradeRow, systems []string, latest time.Time, window int, role string) []SystemScore {
 	out := make([]SystemScore, 0, len(systems))
 	for _, sys := range systems {
 		slice := windowRows(filterRole(filterSystem(rows, sys), role), latest, window)
 		m := computeMetrics(slice)
-		out = append(out, SystemScore{System: sys, MAE: m.MAE, Bias: m.Bias, RMSE: m.RMSE, N: m.N})
+		out = append(out, SystemScore{
+			System: sys, MAE: m.MAE, Bias: m.Bias, RMSE: m.RMSE, N: m.N,
+			Rho: withinDayRho(slice),
+		})
+	}
+
+	// A system with no rho (too few qualifying days) still outranks one with no
+	// data at all, but sorts below any system that produced a real correlation.
+	rhoKey := func(s SystemScore) float64 {
+		if s.Rho == nil {
+			return math.Inf(-1)
+		}
+		return s.Rho.Rho
 	}
 	sort.Slice(out, func(i, j int) bool {
 		// Empty (N==0) systems always sort after any system with data.
 		if (out[i].N == 0) != (out[j].N == 0) {
 			return out[j].N == 0
 		}
-		if out[i].MAE != out[j].MAE {
-			return out[i].MAE < out[j].MAE
+		ki, kj := rhoKey(out[i]), rhoKey(out[j])
+		if ki != kj {
+			return ki > kj // higher rank skill first
 		}
 		return out[i].System < out[j].System // stable tiebreak
 	})
-	for i := range out {
-		if out[i].N > 0 {
-			out[i].Best = true
-			break
-		}
-	}
+
+	flagBest(out)
 	return out
+}
+
+// flagBest marks the leader only when its rho beats the runner-up's by more
+// than the combined standard error. Anything closer is indistinguishable from
+// noise, and crowning it would restate the over-precision problem this metric
+// was introduced to fix.
+//
+// "No competitor" and "uncomputable competitor" are NOT the same case, even
+// though both leave out[1].Rho nil, and must not be collapsed back together.
+// out[1].N == 0 means there is nothing to compare against, so the leader wins
+// unopposed. out[1].N > 0 with a nil Rho means a real competitor exists but
+// never cleared minDayRows on any single day — the SE inequality this
+// function exists to enforce simply cannot be evaluated, so per its own
+// prose ("otherwise") it does not hold, and no system is flagged.
+func flagBest(out []SystemScore) {
+	if len(out) == 0 || out[0].N == 0 || out[0].Rho == nil {
+		return
+	}
+	if len(out) == 1 || out[1].N == 0 {
+		out[0].Best = true
+		return
+	}
+	if out[1].Rho == nil {
+		return
+	}
+	lead, next := out[0].Rho, out[1].Rho
+	sep := math.Sqrt(lead.SE*lead.SE + next.SE*next.SE)
+	if lead.Rho-next.Rho > sep {
+		out[0].Best = true
+	}
 }
 
 func filterRole(rows []analysis.GradeRow, role string) []analysis.GradeRow {

@@ -15,6 +15,7 @@ func TestArtifactLayout(t *testing.T) {
 		{"cache", cacheArtifact, "cache/", ""},
 		{"analysis", analysisArtifact, "analysis/", ".analysis"},
 		{"teamValue", teamValueArtifact, "analysis/team-values/", ".teamvalue"},
+		{"lineupGap", lineupGapArtifact, "analysis/lineup-gaps/", ".lineupgap"},
 		{"runLedger", runLedgerArtifact, "runledger/", ".lineup/runs"},
 		{"runOutput", runOutputArtifact, "runs/", ".lineup/outputs"},
 		{"notification", notificationArtifact, "notifications/", ".lineup/notifications"},
@@ -71,6 +72,12 @@ func TestLocalConstructors(t *testing.T) {
 	}
 	if v, err := s.TeamValueReader(); err != nil || v == nil {
 		t.Errorf("TeamValueReader() local = (%v, %v), want (non-nil, nil)", v, err)
+	}
+	if v, err := s.LineupGapWriter(); err != nil || v == nil {
+		t.Errorf("LineupGapWriter() local = (%v, %v), want (non-nil, nil)", v, err)
+	}
+	if v, err := s.LineupGapReader(); err != nil || v == nil {
+		t.Errorf("LineupGapReader() local = (%v, %v), want (non-nil, nil)", v, err)
 	}
 	if v, err := s.RunLedger(); err != nil || v == nil {
 		t.Errorf("RunLedger() local = (%v, %v), want (non-nil, nil)", v, err)
