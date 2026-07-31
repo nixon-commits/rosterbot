@@ -16,7 +16,7 @@
 
 - **No new Go dependencies.** All correlation math is stdlib (`math`, `sort`).
 - **Tie-corrected Spearman only.** The shortcut `1 - 6*sum(d^2)/(n(n^2-1))` is forbidden — graded rows are full of ties at `actual = 0`.
-- **`minDayRows = 5`** — days with fewer rows in the role are excluded from the rho mean.
+- **`minDayRows = 3`** — days with fewer rows in the role are excluded from the rho mean. **Corrected in review** (task 9): this plan originally specified 5, an unmeasured guess that failed the reproduction gate on pitchers (it discards 15 of 23 usable pitcher-days, since most graded pitcher-days carry only 3-4 rows). A threshold sweep against the 850 production rows showed 3 is the only value that reproduces both roles' triage statistics exactly — see the corrected Task 1 code block and `docs/superpowers/specs/2026-07-30-rank-skill-headline-design.md` §1.2.
 - **Rho is never pooled across roles.** `View.Rho`, `SystemScore.Rho`, and `Model.Compare[w|all]` are all nil when `role == "all"`.
 - **`Metrics` (MAE/Bias/RMSE/N) keeps its exact current meaning.** Existing tests in `internal/report/aggregate_test.go` must not be edited to pass.
 - After every code change: `go vet ./...` and `go mod tidy` (gofmt/vet also run via PostToolUse hooks).
@@ -64,7 +64,7 @@
 
 **Interfaces:**
 - Consumes: `analysis.GradeRow` (fields `Dt`, `Projected`, `Actual`) from `internal/analysis`.
-- Produces: `type RhoStat struct{ Rho, SE float64; Days, DaysPositive int }`; `func withinDayRho(rows []analysis.GradeRow) *RhoStat`; `func spearman(xs, ys []float64) (float64, bool)`; `const minDayRows = 5`.
+- Produces: `type RhoStat struct{ Rho, SE float64; Days, DaysPositive int }`; `func withinDayRho(rows []analysis.GradeRow) *RhoStat`; `func spearman(xs, ys []float64) (float64, bool)`; `const minDayRows = 3`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -168,9 +168,9 @@ func TestWithinDayRho_AveragesPerDayAndCountsPositives(t *testing.T) {
 
 func TestWithinDayRho_DropsThinAndDegenerateDays(t *testing.T) {
 	var rows []analysis.GradeRow
-	// 4 rows — below minDayRows(5), must be dropped.
+	// 2 rows — below minDayRows(3), must be dropped.
 	rows = append(rows, gradeDay("2026-06-01",
-		[2]float64{1, 1}, [2]float64{2, 2}, [2]float64{3, 3}, [2]float64{4, 4})...)
+		[2]float64{1, 1}, [2]float64{2, 2})...)
 	// 5 rows but every actual identical — undefined, must be dropped.
 	rows = append(rows, gradeDay("2026-06-02",
 		[2]float64{1, 7}, [2]float64{2, 7}, [2]float64{3, 7}, [2]float64{4, 7}, [2]float64{5, 7})...)
@@ -223,8 +223,11 @@ type RhoStat struct {
 }
 
 // minDayRows is the smallest number of players in a (day, role) cell worth
-// correlating. A day with 3 rows yields a rho of +/-1 that is pure noise.
-const minDayRows = 5
+// correlating. Calibrated, not guessed: below 3, thin 1-2-row days inject
+// noise into the hitter mean; above 3, the pitcher sample collapses (most
+// graded pitcher-days carry only 3-4 rows). 3 is the only value reproducing
+// both roles' reference statistics. Corrected in review — originally 5.
+const minDayRows = 3
 
 // averageRanks returns 1-based ranks for xs, with tied values sharing the mean
 // of the ranks they span. The average-rank correction is what makes Spearman

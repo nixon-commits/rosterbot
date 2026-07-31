@@ -50,7 +50,7 @@ type Model struct {
 	DetailSystem  string                             `json:"detailSystem"`  // default system for Views/Trends
 	Trends        map[string][]TrendPoint            `json:"trends"`        // keyed "system|window|role"
 	Views         map[string]View                    `json:"views"`         // keyed "system|window|role"
-	Compare       map[string][]SystemScore           `json:"compare"`       // keyed "window|role" → systems ranked by MAE
+	Compare       map[string][]SystemScore           `json:"compare"`       // keyed "window|role" → systems ranked by rho descending; nil for role "all"
 	CompareTrends map[string]map[string][]TrendPoint `json:"compareTrends"` // keyed "window|role" → system → trend
 }
 

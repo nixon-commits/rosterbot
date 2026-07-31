@@ -89,10 +89,34 @@ from the mean, not counted as zero.
 
 ### 1.2 Minimum day size
 
-A day with 3 rows yields a rho of +/-1 that is pure noise. Days with fewer than
-`minDayRows = 5` rows in the role are dropped from the mean. `RhoStat.Days`
-reports how many days survived, so a thin window reads as thin rather than as
-confident.
+**`minDayRows = 5` was the original proposal in this section and it was
+wrong.** It was invented, not measured — flagged as such at the time — and it
+failed the §4.1 reproduction gate on the pitcher role during implementation
+(task 9): most graded pitcher-days carry only 3-4 rows, so a 5-row floor
+discards 15 of the 23 usable pitcher-days, collapsing the sample to 8 days and
+inflating rho to +0.53 (se .106) instead of reproducing the +0.4292 measured
+during triage.
+
+A threshold sweep against the same 850 production rows, run to resolve the
+gate failure, pins the correct value:
+
+| threshold | hitters | pitchers |
+|---|---|---|
+| 1-2 | +0.0944 se .0456 t+2.07  41d | +0.4647 se .1063 t+4.37  32d |
+| **3** | **+0.1218 se .0373 t+3.26  40d** | **+0.4292 se .0982 t+4.37  23d** |
+| 4 | +0.1218 se .0373 t+3.26  40d | +0.4929 se .0947 t+5.20  18d |
+| 5 (original proposal) | +0.1218 se .0373 t+3.26  40d | +0.5299 se .1062 t+4.99   8d |
+| 6 | +0.1196 se .0382 t+3.13  39d | +0.8143 se .0429 t+19.0   2d |
+
+**`minDayRows = 3`** is the calibrated floor: it is the only value that
+reproduces both roles' triage statistics exactly, and the shape of the curve
+around it explains why — below 3, thin 1-2-row days enter the hitter mean and
+inject pure noise; above 3, the pitcher sample collapses toward whichever
+handful of days happened to carry more rows, turning the mean into a
+near-single-day statistic (rho +0.81 at t=+19 on just 2 days by threshold 6)
+rather than a measurement of skill. Days with fewer than `minDayRows = 3` rows
+in the role are dropped from the mean. `RhoStat.Days` reports how many days
+survived, so a thin window reads as thin rather than as confident.
 
 ### 1.3 Never pooled across roles
 
@@ -337,15 +361,25 @@ Everything new is pure and testable without credentials.
 
 Against the 850 production grade rows, the implementation must produce:
 
-| Role | mean rho | se |
-|---|---|---|
-| Hitters | ~ +0.1218 | ~ 0.0373 |
-| Pitchers | ~ +0.4292 | ~ 0.0982 |
+| Role | mean rho | se | days |
+|---|---|---|---|
+| Hitters | ~ +0.1218 | ~ 0.0373 | 40 |
+| Pitchers | ~ +0.4292 | ~ 0.0982 | 23 |
 
-If it does not, the implementation is wrong — most likely the tie correction.
-These figures were independently reproduced twice during triage, so they are a
-trustworthy fixed point, and this gate is what makes the whole feature
-believable.
+If it does not, the implementation is wrong — most likely the tie correction,
+an unfiltered/pooled slice, or (as actually happened — see §1.2) a
+`minDayRows` that doesn't match this data's per-day density. These figures
+were independently reproduced twice during triage, so they are a trustworthy
+fixed point, and this gate is what makes the whole feature believable.
+
+**This gate is not a formality — it caught a real defect.** The implementation
+first shipped with `minDayRows = 5` (§1.2's original, unmeasured proposal) and
+the gate correctly failed on pitchers: 8 qualifying days at rho +0.53 instead
+of 23 days at +0.4292. The day count is as much a pass/fail criterion as the
+rho value — a rho that lands in a plausible range from a materially different
+day count is not a pass, it's a different (and less trustworthy) measurement
+that happens to be numerically close. Recalibrating to `minDayRows = 3` (the
+sweep in §1.2) reproduced all four statistics for both roles exactly.
 
 ---
 

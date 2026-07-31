@@ -110,7 +110,7 @@ func TestWorstMisses_SortedByAbsDiff(t *testing.T) {
 //
 // Role is "hitters" (rankSystems is never called with "all" in production —
 // see model.go's comparison-panel loop) and each system has only 2 rows on a
-// single day, below minDayRows(5), so Rho is nil for both systems with data;
+// single day, below minDayRows(3), so Rho is nil for both systems with data;
 // that's expected for this test, not something it needs to work around.
 func TestRankSystems_ReportsErrorMetricsAndSortsEmptyLast(t *testing.T) {
 	latest := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
@@ -182,7 +182,7 @@ func TestAggregate_ViewsPerSystem(t *testing.T) {
 		t.Fatalf(`want 2 systems in Compare["0|hitters"], got %+v`, cmp)
 	}
 	// Neither system can be crowned Best here: each has exactly 1 row total,
-	// far below minDayRows(5), so withinDayRho finds no qualifying day and
+	// far below minDayRows(3), so withinDayRho finds no qualifying day and
 	// Rho is nil for both — the combined-SE gate correctly refuses to pick a
 	// winner from a sample this thin, rather than crowning whichever system
 	// happens to sort first.

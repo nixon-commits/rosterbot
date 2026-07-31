@@ -23,9 +23,34 @@ type RhoStat struct {
 	DaysPositive int     `json:"daysPositive"` // of those, how many were > 0
 }
 
-// minDayRows is the smallest number of players in a (day, role) cell worth
-// correlating. A day with 3 rows yields a rho of +/-1 that is pure noise.
-const minDayRows = 5
+// minDayRows is the smallest number of graded rows a (day, role) cell needs
+// before its Spearman correlation is trusted.
+//
+// 3 is an empirically calibrated floor, not a guessed one. The original spec
+// proposed 5 without measuring it against real data; that failed the
+// rosterbot-aei reproduction gate on the pitcher role — most graded days
+// carry only 3-4 pitcher rows, so a 5-row floor discards 15 of the 23 usable
+// pitcher-days, collapsing the sample to 8 days and inflating rho to +0.53
+// (se .106). A threshold sweep against the same 850 production rows shows
+// why 3, not 5, is correct:
+//
+//	threshold  hitters                   pitchers
+//	1-2        +0.0944 se .0456  41d     +0.4647 se .1063  32d
+//	3          +0.1218 se .0373  40d     +0.4292 se .0982  23d   <- matches
+//	4          +0.1218 se .0373  40d     +0.4929 se .0947  18d
+//	5          +0.1218 se .0373  40d     +0.5299 se .1062   8d
+//	6          +0.1196 se .0382  39d     +0.8143 se .0429   2d
+//
+// Below 3, thin 1-2-row days enter the hitter mean and inject pure noise
+// (rho drops from +0.12 to +0.09 and SE widens). Above 3, the pitcher sample
+// collapses toward whichever handful of days happened to carry more rows,
+// turning the mean into a near-single-day statistic (rho +0.81 at t=+19 on
+// just 2 days by threshold 6) rather than a measurement of skill. 3 is where
+// both roles are simultaneously well-supported, and it is the only value
+// that reproduces both roles' reference statistics — hitters +0.1218/se
+// .0373/40d, pitchers +0.4292/se .0982/23d — measured independently twice by
+// hand before this package existed.
+const minDayRows = 3
 
 // averageRanks returns 1-based ranks for xs, with tied values sharing the mean
 // of the ranks they span. The average-rank correction is what makes Spearman

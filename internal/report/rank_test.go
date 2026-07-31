@@ -97,9 +97,9 @@ func TestWithinDayRho_AveragesPerDayAndCountsPositives(t *testing.T) {
 
 func TestWithinDayRho_DropsThinAndDegenerateDays(t *testing.T) {
 	var rows []analysis.GradeRow
-	// 4 rows — below minDayRows(5), must be dropped.
+	// 2 rows — below minDayRows(3), must be dropped.
 	rows = append(rows, gradeDay("2026-06-01",
-		[2]float64{1, 1}, [2]float64{2, 2}, [2]float64{3, 3}, [2]float64{4, 4})...)
+		[2]float64{1, 1}, [2]float64{2, 2})...)
 	// 5 rows but every actual identical — undefined, must be dropped.
 	rows = append(rows, gradeDay("2026-06-02",
 		[2]float64{1, 7}, [2]float64{2, 7}, [2]float64{3, 7}, [2]float64{4, 7}, [2]float64{5, 7})...)
@@ -270,10 +270,10 @@ func TestRankSystems_NoBestWhenWithinCombinedSE(t *testing.T) {
 // out[1].Rho == nil was conflated with out[1].N == 0.
 func TestRankSystems_NoBestWhenRunnerUpRhoUncomputable(t *testing.T) {
 	rows := append(
-		// good-sys: 8 rows/day, well above minDayRows(5) -> a real, computable rho.
+		// good-sys: 8 rows/day, well above minDayRows(3) -> a real, computable rho.
 		rhoDays("good-sys", false, 6, 8, true),
-		// thin-sys: 4 rows/day, every day below minDayRows(5) -> N > 0 but Rho nil.
-		rhoDays("thin-sys", false, 6, 4, true)...,
+		// thin-sys: 2 rows/day, every day below minDayRows(3) -> N > 0 but Rho nil.
+		rhoDays("thin-sys", false, 6, 2, true)...,
 	)
 	latest := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
 	got := rankSystems(rows, []string{"thin-sys", "good-sys"}, latest, 30, "hitters")
