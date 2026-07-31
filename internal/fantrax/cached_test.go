@@ -16,7 +16,10 @@ func TestCacheTierDurations(t *testing.T) {
 	}{
 		{tierToday, 15 * time.Minute},
 		{tierStable, 7 * 24 * time.Hour},
-		{tierPast, 30 * 24 * time.Hour},
+		// tierPast is asserted by behaviour rather than by number in
+		// TestPastPeriodTTL_OutlivesAFullSeason — what matters is that it
+		// outlives a season, not the exact figure.
+		{tierPast, PastPeriodTTL},
 	}
 	for _, tc := range cases {
 		if got := tc.tier.duration(); got != tc.want {
@@ -104,7 +107,7 @@ func TestCachedForPeriod_EmptyCacheDirSkipsTierResolution(t *testing.T) {
 		return "ok", nil
 	}
 
-	v, err := cachedForPeriod(c, "k", DailyPeriod(105), fetch)
+	v, err := cachedForPeriod(c, "k", "4", DailyPeriod(105), fetch)
 	if err != nil || v != "ok" {
 		t.Fatalf("call = (%q, %v), want (\"ok\", nil)", v, err)
 	}

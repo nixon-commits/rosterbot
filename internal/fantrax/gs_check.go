@@ -298,19 +298,25 @@ func (c *Client) getPlayerGSSnapshotForPeriod(teamID string, period DailyPeriod)
 func (c *Client) getPlayerGSSnapshotForPeriodCached(
 	snapCache *cache.FileCache[map[string]playerGSSnapshot],
 	teamID string,
+	season int,
 	period DailyPeriod,
 ) (snap map[string]playerGSSnapshot, hitNetwork bool, err error) {
 	if snapCache == nil {
-		snap, err = c.getPlayerGSSnapshotForPeriod(teamID, period)
+		snap, err = getPlayerGSSnapshotFn(c, teamID, period)
 		return snap, true, err
 	}
-	key := cache.Key(keyPitcherGS, teamID, strconv.Itoa(int(period)))
+	key := seasonScopedKey(keyPitcherGS, teamID, season, int(period))
 	snap, err = snapCache.Get(key, func() (map[string]playerGSSnapshot, error) {
 		hitNetwork = true
-		return c.getPlayerGSSnapshotForPeriod(teamID, period)
+		return getPlayerGSSnapshotFn(c, teamID, period)
 	})
 	return snap, hitNetwork, err
 }
+
+// getPlayerGSSnapshotFn is the seam that resolves one period's pitcher-GS
+// snapshot. Production points it at the live Fantrax call; tests override it to
+// inject canned snapshots, mirroring fetchPeriodSnapshotFn in daily_fpts.go.
+var getPlayerGSSnapshotFn = (*Client).getPlayerGSSnapshotForPeriod
 
 // playerGSFromTables finds the pitching table (scGroup=20) and returns per-player
 // YTD GS, YTD fantasy points, name, and active-slot status (keyed by ScorerID).

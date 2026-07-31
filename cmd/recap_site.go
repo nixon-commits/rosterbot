@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/recap"
 	"github.com/spf13/cobra"
 )
@@ -40,7 +41,7 @@ func runRecapSite(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	snapTTL := 30 * 24 * time.Hour
+	snapTTL := fantrax.PastPeriodTTL
 	if noCache {
 		snapTTL = 0
 	}

@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/pmurley/go-fantrax/models"
 )
 
@@ -87,15 +86,16 @@ func isPitcherByName(posShortNames string) bool {
 // It uses the raw API response to extract total FPts per pitcher, then derives
 // GP = round(FPts / FP/G) for accurate blend weight calculation.
 //
-// Cached under fantrax-recent-stats-pitcher-<teamID>-<period> with a TTL
-// determined by cachedForPeriod/tierForPeriod (30d for past, todayTTL otherwise).
+// Cached under fantrax-recent-stats-pitcher-<teamID>-<season>-<period> with a
+// TTL determined by cachedForPeriod/periodCachePolicy (PastPeriodTTL once the
+// period is settled, todayTTL while it can still move).
 func (c *Client) GetRecentPitcherStats(currentPeriod DailyPeriod, _ int) (map[string]RecentStat, error) {
 	period := currentPeriod - 1
 	if period < 1 {
 		return nil, fmt.Errorf("no completed periods (current=%d)", currentPeriod)
 	}
 
-	return cachedForPeriod(c, cache.Key(keyRecentStatsPitcher, c.teamID, strconv.Itoa(int(period))), period,
+	return cachedForPeriod(c, keyRecentStatsPitcher, c.teamID, period,
 		func() (map[string]RecentStat, error) { return c.fetchRecentPitcherStats(period) })
 }
 

@@ -25,8 +25,10 @@ type DatedPitcherStart struct {
 //
 // cacheDir/cacheTTL enable per-period snapshot caching (key
 // `fantrax-pitcher-gs-<teamID>-<period>`). Past-period snapshots are
-// immutable, so a long TTL (e.g. 30d) lets the recap pipeline reuse data
-// across runs and avoid re-hitting Fantrax for completed weeks. Pass
+// immutable, so a long TTL (fantrax.PastPeriodTTL) lets the recap pipeline
+// reuse data across runs and avoid re-hitting Fantrax for completed weeks. The
+// TTL is narrowed per period by snapshotTTL, so passing the long one does not
+// pin the live period. Pass
 // cacheDir="" or cacheTTL=0 to bypass — used by the live gscheck path,
 // which always wants fresh data. The 200ms throttle between days only
 // fires when the upstream API was actually hit; cache-only days don't
@@ -36,9 +38,19 @@ func (c *Client) GetTeamPitcherStarts(teamID string, start, end, seasonStart tim
 		return nil, fmt.Errorf("end %s before start %s", end.Format("2006-01-02"), start.Format("2006-01-02"))
 	}
 
-	var snapCache *cache.FileCache[map[string]playerGSSnapshot]
-	if cacheDir != "" && cacheTTL > 0 {
-		snapCache = cache.New[map[string]playerGSSnapshot](cacheDir, cacheTTL)
+	// One cache per period, not one for the window: the caller's TTL is the long
+	// immutable-past one, and snapshotTTL narrows it to todayTTL for any period
+	// that can still change. Before rosterbot-qoa this was a single flat-TTL
+	// cache, which was survivable at 30 days and is not at PastPeriodTTL — the
+	// live period's snapshot would be pinned for the rest of the season.
+	curPeriod := c.DailyPeriodFor(seasonStart, time.Now().UTC())
+	season := seasonStart.Year()
+	snapCacheFor := func(period DailyPeriod) *cache.FileCache[map[string]playerGSSnapshot] {
+		ttl := snapshotTTL(cacheTTL, period, curPeriod)
+		if cacheDir == "" || ttl == 0 {
+			return nil
+		}
+		return cache.New[map[string]playerGSSnapshot](cacheDir, ttl)
 	}
 
 	// Baseline YTD from the day before `start` so the first day yields a
@@ -49,7 +61,7 @@ func (c *Client) GetTeamPitcherStarts(teamID string, start, end, seasonStart tim
 	if !dayBefore.Before(seasonStart) {
 		basePeriod := c.DailyPeriodFor(seasonStart, dayBefore)
 		if basePeriod >= 1 {
-			info, _, err := c.getPlayerGSSnapshotForPeriodCached(snapCache, teamID, basePeriod)
+			info, _, err := c.getPlayerGSSnapshotForPeriodCached(snapCacheFor(basePeriod), teamID, season, basePeriod)
 			if err != nil {
 				return nil, fmt.Errorf("baseline pitcher snapshot period %d: %w", basePeriod, err)
 			}
@@ -63,7 +75,7 @@ func (c *Client) GetTeamPitcherStarts(teamID string, start, end, seasonStart tim
 	var starts []DatedPitcherStart
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
 		period := c.DailyPeriodFor(seasonStart, d)
-		info, hitNetwork, err := c.getPlayerGSSnapshotForPeriodCached(snapCache, teamID, period)
+		info, hitNetwork, err := c.getPlayerGSSnapshotForPeriodCached(snapCacheFor(period), teamID, season, period)
 		if err != nil {
 			return nil, fmt.Errorf("pitcher snapshot %s (period %d): %w", d.Format("2006-01-02"), period, err)
 		}

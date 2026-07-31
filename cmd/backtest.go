@@ -86,7 +86,7 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	}
 
 	// Past periods are immutable — use a long TTL so repeat runs avoid the API.
-	snapTTL := 30 * 24 * time.Hour
+	snapTTL := fantrax.PastPeriodTTL
 	if noCache {
 		snapTTL = 0
 	}

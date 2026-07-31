@@ -213,7 +213,7 @@ type Client struct {
 // cached helpers persist responses under cacheDir at one of the three tier
 // TTLs (see cacheTier / cached in cached.go): todayTTL (15m) for data that
 // drifts during the day, stableTTL (7d) for season-invariant config, and
-// pastPeriodTTL (30d) for immutable past-period snapshots.
+// PastPeriodTTL (effectively infinite) for settled past-period snapshots.
 //
 // Pass an empty cacheDir or skip this call entirely to disable caching.
 // All cached helpers then fall back to direct upstream fetches —
@@ -309,14 +309,15 @@ func (c *Client) GetHitterRoster() ([]Player, error) {
 }
 
 // GetHitterRosterForPeriod returns all hitters for the given scoring period.
-// Pass 0 to use the current period. Past-period rosters are cached at 30d
-// TTL via cachedForPeriod/tierForPeriod; current/future use todayTTL.
+// Pass 0 to use the current period. Settled past-period rosters are cached at
+// PastPeriodTTL via cachedForPeriod/periodCachePolicy; the current period and
+// the still-settling ones use todayTTL.
 func (c *Client) GetHitterRosterForPeriod(period DailyPeriod) ([]Player, error) {
 	// period==0 is "current" — let GetHitterRoster handle the today-keyed cache.
 	if period == 0 {
 		return c.GetHitterRoster()
 	}
-	return cachedForPeriod(c, cache.Key(keyHitterRoster, c.teamID, strconv.Itoa(int(period))), period,
+	return cachedForPeriod(c, keyHitterRoster, c.teamID, period,
 		func() ([]Player, error) { return c.fetchHitterRosterForPeriod(period) })
 }
 

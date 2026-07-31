@@ -4,7 +4,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/pmurley/go-fantrax/auth_client"
 )
 
@@ -28,14 +27,19 @@ type gsLimits struct {
 // week, which a flat env var can't express. Either return value is nil if
 // that limit isn't configured for the period.
 //
-// Cached at the fixed tierPast (30d) via cached() — deliberately not the
-// per-period cachedForPeriod/tierForPeriod path, whose past-vs-current test
-// compares against the unrelated daily-period numbering while this method
-// takes a WeeklyPeriod (see period-drift-2026 memory). Once a
-// period's min/max is set at league setup time it doesn't change again,
-// past or current.
+// Cached at the fixed tierPast via cachedForSeason — deliberately not the
+// per-period cachedForPeriod/periodCachePolicy path, whose settled-vs-volatile
+// test compares against the unrelated daily-period numbering while this method
+// takes a WeeklyPeriod (see period-drift-2026 memory). Once a period's min/max
+// is set at league setup time it doesn't change again, past or current, so the
+// fixed past tier is right even for the live period.
+//
+// It goes through cachedForSeason rather than plain cached() because weekly
+// period numbers restart every season: at the old 30-day tierPast the off-season
+// flushed the collision for free, but PastPeriodTTL never expires, so the key
+// has to carry the season itself.
 func (c *Client) GetGSLimits(teamID string, period WeeklyPeriod) (min, max *int, err error) {
-	limits, ferr := cached(c, cache.Key(keyGSLimits, teamID, strconv.Itoa(int(period))), tierPast,
+	limits, ferr := cachedForSeason(c, keyGSLimits, teamID, int(period), tierPast,
 		func() (gsLimits, error) { return c.fetchGSLimits(teamID, period) })
 	return limits.Min, limits.Max, ferr
 }
