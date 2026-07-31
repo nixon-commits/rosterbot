@@ -505,8 +505,11 @@ Expected: PASS, including `TestStreak_ReplaysTheRealIncident` and both contract 
 
 - [ ] **Step 5: Verify the leaf stays clean**
 
-Run: `go list -deps ./internal/opsalert | grep -v '^internal/' | grep -c '\.'`
-Expected: `0` — no external (dotted, i.e. domain-named) dependency. If this is non-zero, an import crept in that violates the stdlib-only constraint.
+Run: `go list -deps ./internal/opsalert | grep '\.'`
+
+Expected: exactly one line, `github.com/nixon-commits/rosterbot/internal/opsalert` (the package itself). Standard-library import paths contain no dot in their first element, so any *other* dotted path is an external dependency and violates the stdlib-only constraint.
+
+Note this checks the package's build deps, not its test deps — `contract_test.go` imports `lineupapi` deliberately and is external-test-package (`package opsalert_test`) precisely so it never becomes a build dependency.
 
 - [ ] **Step 6: Commit**
 
@@ -1135,10 +1138,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/opsalert"
 	"github.com/nixon-commits/rosterbot/internal/s3blob/s3blobtest"
 )
+
+// NOTE: this file must NOT import internal/lineupapi, even in a test. `go mod
+// tidy` in this module resolves the test imports of the module's own packages,
+// so a test-only import of lineupapi would pull fantrax and chromedp into
+// opsnotify/go.sum — the exact weight opsalert.Record exists to avoid. The
+// fidelity of Record against the real ledger type is guarded instead by
+// internal/opsalert/contract_test.go, which lives in the root module where that
+// dependency is free.
 
 // ecsDetail builds an ECS Task State Change detail body.
 func ecsDetail(taskID, lastStatus, stoppedReason string, exitCode *int, command []string) json.RawMessage {
@@ -1165,7 +1175,7 @@ func ecsDetail(taskID, lastStatus, stoppedReason string, exitCode *int, command 
 
 // fakeLedger installs a ledgerReader backed by an in-memory S3, seeded with the
 // given records newest-first, and restores the previous reader afterwards.
-func fakeLedger(t *testing.T, recs []lineupapi.RunDetail) {
+func fakeLedger(t *testing.T, recs []opsalert.Record) {
 	t.Helper()
 	objects := map[string][]byte{}
 	for i, r := range recs {
@@ -1183,25 +1193,22 @@ func fakeLedger(t *testing.T, recs []lineupapi.RunDetail) {
 	t.Cleanup(func() { ledger = prev })
 }
 
-func run(id, command, status string, exit int) lineupapi.RunDetail {
-	d := lineupapi.RunDetail{Run: lineupapi.Run{
-		ID: id, Command: command, Status: status,
-		StartedAt: "2026-07-01T17:00:00Z", Trigger: "schedule",
-	}}
+func run(id, command, status string, exit int) opsalert.Record {
+	r := opsalert.Record{ID: id, Command: command, Status: status}
 	if status != opsalert.StatusRunning {
 		e := exit
-		d.ExitCode = &e
+		r.ExitCode = &e
 	}
 	if status == opsalert.StatusFailed {
-		d.LogTail = "fantrax API error STALE_CLIENT: outdated cached version"
+		r.LogTail = "fantrax API error STALE_CLIENT: outdated cached version"
 	}
-	return d
+	return r
 }
 
 const optimizeCmd = "optimize --matchup --archive-projections"
 
 func TestHandleTask_FirstFailureAlerts(t *testing.T) {
-	fakeLedger(t, []lineupapi.RunDetail{
+	fakeLedger(t, []opsalert.Record{
 		run("task1", optimizeCmd, opsalert.StatusFailed, 1),
 		run("task0", optimizeCmd, opsalert.StatusSuccess, 0),
 	})
@@ -1226,7 +1233,7 @@ func TestHandleTask_FirstFailureAlerts(t *testing.T) {
 }
 
 func TestHandleTask_SecondFailureIsSilent(t *testing.T) {
-	fakeLedger(t, []lineupapi.RunDetail{
+	fakeLedger(t, []opsalert.Record{
 		run("task2", optimizeCmd, opsalert.StatusFailed, 1),
 		run("task1", optimizeCmd, opsalert.StatusFailed, 1),
 		run("task0", optimizeCmd, opsalert.StatusSuccess, 0),
@@ -1244,7 +1251,7 @@ func TestHandleTask_SecondFailureIsSilent(t *testing.T) {
 }
 
 func TestHandleTask_SuccessAfterFailuresRecovers(t *testing.T) {
-	fakeLedger(t, []lineupapi.RunDetail{
+	fakeLedger(t, []opsalert.Record{
 		run("task3", optimizeCmd, opsalert.StatusSuccess, 0),
 		run("task2", optimizeCmd, opsalert.StatusFailed, 1),
 		run("task1", optimizeCmd, opsalert.StatusFailed, 1),
@@ -1269,7 +1276,7 @@ func TestHandleTask_SuccessAfterFailuresRecovers(t *testing.T) {
 // final run-ledger write: OOM, image-pull failure, SIGKILL to pid 1. No streak
 // is computable, so it always alerts.
 func TestHandleTask_NoLedgerRecordAlertsUnconditionally(t *testing.T) {
-	fakeLedger(t, []lineupapi.RunDetail{
+	fakeLedger(t, []opsalert.Record{
 		run("task0", optimizeCmd, opsalert.StatusSuccess, 0),
 	})
 	got := capture(t)
@@ -1367,7 +1374,7 @@ func TestEcsTaskDetail_TaskIDAndCommand(t *testing.T) {
 }
 
 func TestLedgerReader_ReadsNewestFirst(t *testing.T) {
-	fakeLedger(t, []lineupapi.RunDetail{
+	fakeLedger(t, []opsalert.Record{
 		run("newest", optimizeCmd, opsalert.StatusFailed, 1),
 		run("middle", optimizeCmd, opsalert.StatusSuccess, 0),
 		run("oldest", optimizeCmd, opsalert.StatusSuccess, 0),
@@ -1388,7 +1395,7 @@ func TestLedgerReader_ReadsNewestFirst(t *testing.T) {
 }
 
 func TestLedgerReader_RespectsTheWindow(t *testing.T) {
-	var recs []lineupapi.RunDetail
+	var recs []opsalert.Record
 	for i := 0; i < 10; i++ {
 		recs = append(recs, run(fmt.Sprintf("t%02d", i), optimizeCmd, opsalert.StatusSuccess, 0))
 	}
