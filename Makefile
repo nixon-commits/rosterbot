@@ -1,4 +1,4 @@
-.PHONY: build build-modules install test run dry-run run-all clean-cache
+.PHONY: build build-modules install test test-modules run dry-run run-all clean-cache
 
 build: build-modules
 	go build -o rosterbot .
@@ -21,8 +21,17 @@ install:
 	go install .
 	"$$(go env GOPATH)/bin/rosterbot" completion zsh > "$${HOMEBREW_PREFIX:-/usr/local}/share/zsh/site-functions/_rosterbot"
 
-test:
+# Mirrors `build: build-modules`. The root `go test ./internal/...` never
+# descends into the nested modules (lambda/, buildnotify/, infra/), so their
+# tests silently never ran — buildnotify/message_test.go sat dead for months.
+test: test-modules
 	go test ./internal/...
+
+test-modules:
+	@for d in $$(find . -name go.mod -not -path './.git/*' -not -path './.claude/*' | grep -v '^\./go\.mod$$' | xargs -n1 dirname | sort); do \
+	  printf '  test %s\n' "$$d"; \
+	  ( cd "$$d" && go test ./... ) || exit 1; \
+	done
 
 run:
 	go run . optimize
