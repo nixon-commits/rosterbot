@@ -1,4 +1,4 @@
-package opsalert_test
+package lineupapi_test
 
 import (
 	"encoding/json"
@@ -13,6 +13,12 @@ import (
 // therefore chromedp) into anything that imports it — unacceptable weight for
 // a notification Lambda. This test is what makes that duplication safe: it
 // fails the moment the two wire contracts drift.
+//
+// It lives here rather than in internal/opsalert so that opsalert itself never
+// imports lineupapi, even in a test — opsnotify's `go mod tidy` resolves the
+// test imports of the module's own packages, so a test-only import there would
+// pull lineupapi -> fantrax -> chromedp into opsnotify/go.sum, the exact weight
+// opsalert.Record exists to avoid.
 func TestRecordDecodesARealLedgerRecord(t *testing.T) {
 	exit := 1
 	want := lineupapi.RunDetail{
