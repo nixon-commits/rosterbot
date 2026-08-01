@@ -384,11 +384,19 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// Created UNCONDITIONALLY, unlike the CodeBuild rule below. Job-failure
 	// alerting must survive a stack deployed without `-c enableBuild=true`,
 	// and the previous BuildNotify function lived entirely inside that gate.
+	// Timeout is 60s, well above the sibling Lambdas' 10s: before it can decide
+	// whether to alert, the handler reads up to ledgerWindow (200) run-ledger
+	// objects sequentially (opsnotify/ledger.go), and the live ledger already
+	// holds enough entries that every invocation hits the full 200-object walk,
+	// not just a worst case. A timeout here is a *silently missed* alert, not
+	// a slow one — handleTask reads the ledger before sending Pushover, so
+	// EventBridge's retry just re-runs the same slow path. Lambda bills on
+	// duration actually used, so a generous ceiling costs nothing.
 	opsNotifyFn := awscdklambdagoalpha.NewGoFunction(stack, jsii.String("OpsNotify"), &awscdklambdagoalpha.GoFunctionProps{
 		Entry:        jsii.String("../opsnotify"),
 		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
 		Architecture: awslambda.Architecture_ARM_64(),
-		Timeout:      awscdk.Duration_Seconds(jsii.Number(15)),
+		Timeout:      awscdk.Duration_Seconds(jsii.Number(60)),
 		Environment: &map[string]*string{
 			"STATE_BUCKET": stateBucket.BucketName(),
 		},
