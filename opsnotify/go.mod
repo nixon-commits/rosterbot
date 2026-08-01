@@ -1,4 +1,4 @@
-module github.com/nixon-commits/rosterbot/buildnotify
+module github.com/nixon-commits/rosterbot/opsnotify
 
 go 1.26.1
 
