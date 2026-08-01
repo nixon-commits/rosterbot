@@ -27,7 +27,7 @@ phases:
       # runtime. 3.12 happens to survive unquoted; the next edit might not.
       python: "3.12"
       # 1.26, not infra/go.mod's 1.25 floor: cdk deploy locally bundles the lambda/
-      # + buildnotify/ GoFunctions with this host go, and both require go 1.26.1 --
+      # + opsnotify/ GoFunctions with this host go, and both require go 1.26.1 --
       # 1.26 satisfies every module the host builds (infra too) without a toolchain
       # auto-download. The AL2023 image exposes golang 1.20-1.26 (see infra.go), so
       # pin it like nodejs/python instead of inheriting a default that shifts on EOL.

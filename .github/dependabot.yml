@@ -5,7 +5,7 @@
 
 version: 2
 updates:
-  # This repo has FOUR Go modules: the root plus lambda/, buildnotify/ and
+  # This repo has FOUR Go modules: the root plus lambda/, opsnotify/ and
   # infra/. The nested ones pull the root in via `replace ../`, so they share
   # its dependency graph — bumping only the root leaves them stale, and a stale
   # nested go.mod does not fail any root build. It only surfaces as a failed
@@ -18,7 +18,7 @@ updates:
     directories:
       - "/"
       - "/lambda"
-      - "/buildnotify"
+      - "/opsnotify"
       - "/infra"
     schedule:
       interval: "weekly"

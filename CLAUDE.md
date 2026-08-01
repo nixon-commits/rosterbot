@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 make build              # build binary + lambda module (or: go build -o rosterbot .)
-make build-modules      # cross-compile every nested Go module (lambda/, buildnotify/, infra/)
+make build-modules      # cross-compile every nested Go module (lambda/, opsnotify/, infra/)
 make install            # install to $GOPATH/bin
 make test               # run all unit tests (or: go test ./internal/...)
 go test ./internal/optimizer/...  # run a specific package's tests
@@ -41,7 +41,7 @@ make run-all            # exercise every command in dry-run / read-only mode + p
 
 After making code changes, always run `go vet ./...` and `go mod tidy` to catch issues early. Note: `gofmt` and `go vet` run automatically via PostToolUse hooks on every Edit/Write.
 
-**`lambda/`, `buildnotify/` and `infra/` are SEPARATE Go modules** (each with its own `go.mod`) — the root `go build ./...` / `go vet ./...` / `go mod tidy` do **not** descend into them. Two guards now exist: `.github/workflows/ci.yml` runs `make build-modules` on every PR (a stale nested module blocks merge), and `.github/dependabot.yml` watches all four module directories and **groups** them into one PR so root and nested modules never drift apart. CDK bundles `lambda/` and `buildnotify/` as `GoFunction` assets, so a stale `go.mod` in any of them only surfaces as a failed `cdk deploy`. They pull the root module via `replace ../`, so **every dependabot bump to a shared root dep re-stales them** (this broke the dashboard-v2 deploy twice — first `lambda/`, then `buildnotify/`). After touching a nested module (or after a dep bump), run `make build-modules`; fix a failure with `cd <dir> && go mod tidy`. `make build` runs it automatically so the break fails locally instead of at deploy.
+**`lambda/`, `opsnotify/` and `infra/` are SEPARATE Go modules** (each with its own `go.mod`) — the root `go build ./...` / `go vet ./...` / `go mod tidy` do **not** descend into them. Two guards now exist: `.github/workflows/ci.yml` runs `make build-modules` on every PR (a stale nested module blocks merge), and `.github/dependabot.yml` watches all four module directories and **groups** them into one PR so root and nested modules never drift apart. CDK bundles `lambda/` and `opsnotify/` as `GoFunction` assets, so a stale `go.mod` in any of them only surfaces as a failed `cdk deploy`. They pull the root module via `replace ../`, so **every dependabot bump to a shared root dep re-stales them** (this broke the dashboard-v2 deploy twice — first `lambda/`, then `opsnotify/`). After touching a nested module (or after a dep bump), run `make build-modules`; fix a failure with `cd <dir> && go mod tidy`. `make build` runs it automatically so the break fails locally instead of at deploy.
 
 Tests require no credentials — all network dependencies are mocked via interfaces or test servers.
 
@@ -180,6 +180,8 @@ Snapshot writing is default-on for real (non-dry-run) `optimize` runs so the cro
 
 **`internal/notify`** — notification helpers. `SendPushover` sends push notifications via the Pushover API. Self-contained function taking explicit parameters (no config dependency).
 
+**`internal/opsalert`** — decides whether a finished job run is worth waking an operator, and renders the message. A **stdlib-only leaf**: its only consumer is the `opsnotify` Lambda, and `internal/lineupapi` (where the run ledger's wire types live) transitively pulls `internal/fantrax` and therefore chromedp, so `opsalert.Record` redeclares the five ledger fields it needs and `internal/lineupapi/opsalert_contract_test.go` (`package lineupapi_test`, so it can import both without `opsalert` importing `lineupapi`) marshals a real `lineupapi.RunDetail` into it to guard the duplication. `Streak(recs, command)` reads newest-first ledger records and returns one of four verdicts: `Started` (first failure after a success), `Escalated` (the `EscalateAt`=3rd consecutive failure, matched on `==` so an eleven-failure outage escalates exactly once), `Recovered` (first success after failures), or `None`. **The whole decision is derived from the append-only ledger**, which is what removes the counter object and the cooldown timer a naive design needs — streak transitions deduplicate themselves. `RUNNING` records are skipped: they are the start-of-run write that the terminal write later overwrites at the same key, so an in-flight sibling job must not break a streak. The message body quotes the **last non-empty line** of the record's `log_tail`, capped at 300 chars *before* append because `SendPushover` truncates at 1024 silently — for the 2026-07-01 outage that line is the `STALE_CLIENT` error itself, which is the difference between "something broke" and a diagnosis.
+
 **`internal/roster`** — `CheckRoster` scans the full roster for slot mismatches (healthy players in IL, called-up players in Minors, injured/minor-leaguers in active slots). Suppresses alerts when IL/Minors slots are full. Separate from prospect report — this is about current roster hygiene.
 
 **`internal/schedule`** — hits `statsapi.mlb.com` for game schedule and probable pitchers. `TeamsPlayingOn` returns a `map[string]bool` of playing team abbreviations. `ProbableStarters` returns normalized pitcher name → team abbreviation. Both URLs are `var` (not `const`) to allow test overriding.
@@ -249,9 +251,15 @@ When adding new commands, flags, env vars, or changing architecture, update `REA
 > **`docs/aws-deployment.md`** for operations, the EventBridge schedule mapping, image builds
 > (CodeBuild, gated `enableBuild`), the schedule gate (`schedulesEnabled`), and cutover/rollback.
 > The `claims` cursor is relocated to `.waivers/last-claims.json` via `CLAIMS_CURSOR_PATH` so it
-> rides the single-writer S3 `claims/` prefix. A push to `main` also triggers a Pushover alert on
+> rides the single-writer S3 `claims/` prefix. A push to `main` triggers a Pushover alert on
 > build success/failure via an EventBridge rule on the `Build` project's CodeBuild state-change
-> events → the `buildnotify/` Lambda (SUCCEEDED/FAILED/STOPPED, priority 0, personal ops channel).
+> events, and **every scheduled ECS task that stops is checked for failure** via a second
+> rule on `ECS Task State Change` — both target the one `opsnotify/` Lambda
+> (SUCCEEDED/FAILED/STOPPED, priority 0, personal ops channel). The function is
+> created **unconditionally**; only the CodeBuild rule sits behind
+> `enableBuild`, because job-failure alerting must survive a stack deployed
+> without that flag. Task failures are judged in Go from the run ledger, not by
+> the event pattern — see `internal/opsalert`.
 > The section below is retained as historical reference for how the jobs ran on GHA.
 
 **Auth in AWS** — every Fargate task syncs `.fantrax-cache/` from S3 `session/` before it runs and syncs it back after completion. The first task run after a stale cache may still do a chromedp browser login; subsequent tasks reuse the cached cookie.

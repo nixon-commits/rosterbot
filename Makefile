@@ -3,11 +3,11 @@
 build: build-modules
 	go build -o rosterbot .
 
-# lambda/, buildnotify/ and infra/ are SEPARATE Go modules (each its own
+# lambda/, opsnotify/ and infra/ are SEPARATE Go modules (each its own
 # go.mod); `go build ./...` at the repo root never descends into them. CDK
-# bundles lambda/ and buildnotify/ as GoFunction assets at deploy time, so a
+# bundles lambda/ and opsnotify/ as GoFunction assets at deploy time, so a
 # stale go.mod in ANY of them only surfaces as a failed `cdk deploy` — this
-# broke the dashboard-v2 deploy twice (lambda/, then buildnotify/). They share
+# broke the dashboard-v2 deploy twice (lambda/, then opsnotify/). They share
 # deps with the root module via `replace ../`, so every dependabot bump to a
 # shared root dep re-stales them. Cross-compile every nested module for the real
 # target so the break fails locally. Fix a failure with: cd <dir> && go mod tidy
@@ -22,8 +22,8 @@ install:
 	"$$(go env GOPATH)/bin/rosterbot" completion zsh > "$${HOMEBREW_PREFIX:-/usr/local}/share/zsh/site-functions/_rosterbot"
 
 # Mirrors `build: build-modules`. The root `go test ./internal/...` never
-# descends into the nested modules (lambda/, buildnotify/, infra/), so their
-# tests silently never ran — buildnotify/message_test.go sat dead for months.
+# descends into the nested modules (lambda/, opsnotify/, infra/), so their
+# tests silently never ran — opsnotify/build_test.go sat dead for months.
 test: test-modules
 	go test ./internal/...
 
