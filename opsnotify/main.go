@@ -80,7 +80,7 @@ func dispatch(ctx context.Context, raw json.RawMessage) error {
 		if err := json.Unmarshal(raw, &ev); err != nil {
 			return err
 		}
-		title, body := formatMessage(ev)
+		title, body := formatBuild(ev)
 		return sendOrLog(title, body)
 
 	case "ECS Task State Change":

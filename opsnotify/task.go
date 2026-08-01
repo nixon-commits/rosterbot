@@ -102,21 +102,58 @@ func handleTask(ctx context.Context, detail json.RawMessage) error {
 		return err
 	}
 
-	// No ledger record for this task means the entrypoint never reached its
-	// final run-ledger write. No streak is computable, and this class of
-	// failure is severe and rare, so it always alerts.
-	if d.failed() && !hasID(recs, d.taskID()) {
-		title, body := opsalert.FormatCrash(command, d.taskID(), d.StoppedReason)
-		return sendOrLog(title, body)
+	// entrypoint.sh writes a RUNNING record at the start of a run and
+	// overwrites the very same ledger key with the terminal SUCCESS/FAILED
+	// record when it finishes (both writes carry the same --id and
+	// --started, and lineupapi.RunKey derives the storage key from exactly
+	// those two). A healthy run therefore always leaves exactly one record
+	// behind — a RUNNING record is what a run in progress looks like, not
+	// what a finished run looks like. A task that stopped without a
+	// *terminal* record for its own id means the entrypoint never reached
+	// that second write: OOM, SIGKILL to pid 1, or — when there is no record
+	// at all — an image-pull failure that never ran the entrypoint in the
+	// first place. Those two outcomes are not the same and must not share a
+	// branch:
+	if !hasTerminalRecord(recs, d.taskID()) {
+		if d.failed() {
+			// No streak is computable for a run the ledger never finished
+			// describing, and this class of failure is severe and rare, so
+			// it always alerts.
+			title, body := opsalert.FormatCrash(command, d.taskID(), d.StoppedReason)
+			return sendOrLog(title, body)
+		}
+		// Succeeded, but the ledger write was lost (the entrypoint's final
+		// run-ledger call is best-effort — `|| true` — so this does happen).
+		// The history no longer describes this run either way: falling
+		// through to Streak here would judge this run's outcome by whatever
+		// came before it, and if that history's most recent terminal record
+		// happens to be FAILED, Streak would open a false "failed" streak on
+		// a run that in fact succeeded. Silence is the only honest answer.
+		log.Printf("task %s succeeded with no terminal ledger record; nothing to judge", d.taskID())
+		return nil
 	}
 
 	title, body := opsalert.FormatTask(opsalert.Streak(recs, command))
 	return sendOrLog(title, body)
 }
 
-func hasID(recs []opsalert.Record, id string) bool {
+// hasTerminalRecord reports whether recs contains a SUCCESS or FAILED record
+// for id.
+//
+// A RUNNING record must NOT count as terminal here. entrypoint.sh writes
+// RUNNING at the start of a run and overwrites that same ledger key with the
+// terminal SUCCESS/FAILED record when it finishes, so a healthy run leaves
+// exactly one record behind and its status alone is what tells "still
+// writing this row" apart from "wrote it, then the terminal write never
+// landed". A run killed mid-flight leaves its RUNNING record sitting at that
+// key forever: if RUNNING counted as terminal here, hasTerminalRecord would
+// report true, the crash branch above would never fire, and Streak — which
+// itself filters RUNNING out when building its history — would have nothing
+// to see either. That is exactly how this class of failure went unalerted in
+// production: not "no record", but "a record that never became terminal".
+func hasTerminalRecord(recs []opsalert.Record, id string) bool {
 	for _, r := range recs {
-		if r.ID == id {
+		if r.ID == id && (r.Status == opsalert.StatusSuccess || r.Status == opsalert.StatusFailed) {
 			return true
 		}
 	}

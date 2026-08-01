@@ -141,15 +141,28 @@ func TestHandleTask_SuccessAfterFailuresRecovers(t *testing.T) {
 	}
 }
 
-// A task that stopped with no ledger record never reached the entrypoint's
-// final run-ledger write: OOM, image-pull failure, SIGKILL to pid 1. No streak
-// is computable, so it always alerts.
-func TestHandleTask_NoLedgerRecordAlertsUnconditionally(t *testing.T) {
+// This is what production actually looks like for an OOM kill:
+// entrypoint.sh's start-of-run write left a RUNNING record behind at the same
+// ledger key the terminal write would have overwritten, and the container
+// died before it could ever make that terminal write. No streak is
+// computable — the ledger's most recent word on this run is "still running",
+// which is not a status this run will ever update — so it always alerts.
+//
+// This fixture used to omit the RUNNING record entirely, which only matches
+// an image-pull failure (see TestHandleTask_ImagePullFailureAlertsUnconditionally
+// below) — the entrypoint never runs in that case, so there is truly no
+// record of any kind. A stopped task whose RUNNING record survives is the
+// far more common crash shape, and the one the ledger-lookup guard must
+// still catch.
+func TestHandleTask_OOMWithSurvivingRunningRecordAlerts(t *testing.T) {
 	fakeLedger(t, []opsalert.Record{
+		run("ghost", optimizeCmd, opsalert.StatusRunning, 0),
 		run("task0", optimizeCmd, opsalert.StatusSuccess, 0),
 	})
 	got := capture(t)
 
+	// OOM kills leave no exit code at all — the container is killed out from
+	// under the process, not given the chance to exit.
 	detail := ecsDetail("ghost", "STOPPED", "OutOfMemoryError: Container killed", nil,
 		strings.Fields(optimizeCmd))
 	if err := handleTask(context.Background(), detail); err != nil {
@@ -158,10 +171,109 @@ func TestHandleTask_NoLedgerRecordAlertsUnconditionally(t *testing.T) {
 	if len(*got) != 1 {
 		t.Fatalf("got %d sends, want 1: %v", len(*got), *got)
 	}
-	for _, want := range []string{"died", "no ledger record", "OutOfMemoryError", "ghost"} {
+	for _, want := range []string{"died", "OutOfMemoryError", "ghost"} {
 		if !strings.Contains((*got)[0], want) {
 			t.Errorf("send %q missing %q", (*got)[0], want)
 		}
+	}
+}
+
+// SIGKILL to pid 1 is the other common crash shape sharing the same signature
+// as the OOM case: a surviving RUNNING record, but this time with a non-zero
+// exit code rather than none at all.
+func TestHandleTask_SIGKILLWithSurvivingRunningRecordAlerts(t *testing.T) {
+	fakeLedger(t, []opsalert.Record{
+		run("victim", optimizeCmd, opsalert.StatusRunning, 0),
+		run("task0", optimizeCmd, opsalert.StatusSuccess, 0),
+	})
+	got := capture(t)
+
+	oneThirtySeven := 137
+	detail := ecsDetail("victim", "STOPPED", "Essential container in task exited", &oneThirtySeven,
+		strings.Fields(optimizeCmd))
+	if err := handleTask(context.Background(), detail); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("got %d sends, want 1: %v", len(*got), *got)
+	}
+	for _, want := range []string{"died", "victim"} {
+		if !strings.Contains((*got)[0], want) {
+			t.Errorf("send %q missing %q", (*got)[0], want)
+		}
+	}
+}
+
+// An image-pull failure never runs the entrypoint at all, so it is the one
+// crash shape that genuinely leaves no ledger record of any kind — not even
+// a RUNNING one. This must keep alerting unconditionally too.
+func TestHandleTask_ImagePullFailureAlertsUnconditionally(t *testing.T) {
+	fakeLedger(t, []opsalert.Record{
+		run("task0", optimizeCmd, opsalert.StatusSuccess, 0),
+	})
+	got := capture(t)
+
+	detail := ecsDetail("imgpull", "STOPPED", "CannotPullContainerError: pull access denied", nil,
+		strings.Fields(optimizeCmd))
+	if err := handleTask(context.Background(), detail); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("got %d sends, want 1: %v", len(*got), *got)
+	}
+	for _, want := range []string{"died", "CannotPullContainerError", "imgpull"} {
+		if !strings.Contains((*got)[0], want) {
+			t.Errorf("send %q missing %q", (*got)[0], want)
+		}
+	}
+}
+
+// entrypoint.sh's terminal run-ledger write is best-effort (`|| true`), so a
+// run that actually succeeded can also end with only its RUNNING record
+// surviving — the same ledger shape as a crash, but with exit code 0. Before
+// the fix this fell through to Streak against whatever history preceded it,
+// which here includes a prior FAILED run for the same command: Streak would
+// read that as the newest terminal record and open a false "failed" streak
+// on a run that in fact succeeded. There is nothing true to say about this
+// run's outcome — the ledger simply doesn't describe it — so the right
+// answer is silence, not a guess in either direction.
+func TestHandleTask_LostTerminalWriteOnSuccessIsSilent(t *testing.T) {
+	fakeLedger(t, []opsalert.Record{
+		run("task2", optimizeCmd, opsalert.StatusRunning, 0),
+		run("task1", optimizeCmd, opsalert.StatusFailed, 1),
+		run("task0", optimizeCmd, opsalert.StatusSuccess, 0),
+	})
+	got := capture(t)
+
+	zero := 0
+	detail := ecsDetail("task2", "STOPPED", "", &zero, strings.Fields(optimizeCmd))
+	if err := handleTask(context.Background(), detail); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 0 {
+		t.Fatalf("got %d sends, want 0 (no false failed alert): %v", len(*got), *got)
+	}
+}
+
+// The STATE_BUCKET-unset path: every other test in this file installs a fake
+// ledger before calling handleTask, so this is the only coverage of what
+// actually happens when main never wired one up. It must stay a quiet no-op,
+// not a hard failure — CDK always sets STATE_BUCKET in production, and a hard
+// init failure here would take CodeBuild build notifications down with it,
+// since both event sources share this one Lambda.
+func TestHandleTask_NilLedgerNoPanic(t *testing.T) {
+	prev := ledger
+	ledger = nil
+	t.Cleanup(func() { ledger = prev })
+	got := capture(t)
+
+	one := 1
+	detail := ecsDetail("task1", "STOPPED", "", &one, strings.Fields(optimizeCmd))
+	if err := handleTask(context.Background(), detail); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 0 {
+		t.Errorf("got %d sends, want 0: %v", len(*got), *got)
 	}
 }
 

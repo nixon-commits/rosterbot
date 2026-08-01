@@ -6,9 +6,9 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// formatMessage renders a Pushover (title, body) from a CodeBuild state-change
+// formatBuild renders a Pushover (title, body) from a CodeBuild state-change
 // event. Pure — no I/O — so it is unit-tested directly.
-func formatMessage(ev events.CodeBuildEvent) (title, body string) {
+func formatBuild(ev events.CodeBuildEvent) (title, body string) {
 	status := string(ev.Detail.BuildStatus)
 	var emoji string
 	switch ev.Detail.BuildStatus {
