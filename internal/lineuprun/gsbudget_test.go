@@ -152,6 +152,8 @@ func TestBuildGSForecast_NoProbablesEstimatesByRotation(t *testing.T) {
 	}
 }
 
+// The slot cap bounds STARTS, so it applies after the rotation divisor. Here 20
+// SPs playing is 4 expected starts, which the 2-slot cap binds down to 2.
 func TestBuildGSForecast_EstimateCapsAtActivePitcherSlots(t *testing.T) {
 	today := day(2026, 7, 25)
 	playing := map[string]bool{}
@@ -166,8 +168,32 @@ func TestBuildGSForecast_EstimateCapsAtActivePitcherSlots(t *testing.T) {
 	got := buildGSForecast(sched, spNames, 2, today, day(2026, 7, 26),
 		func(fantrax.Player) float64 { return 0 })
 
-	if got[0].Estimated != 2.0/5.0 {
-		t.Errorf("estimated = %v, want 0.4 (capped at 2 P slots, then /5)", got[0].Estimated)
+	if got[0].Estimated != 2.0 {
+		t.Errorf("estimated = %v, want 2 (20/5 = 4 starts, capped at 2 P slots)", got[0].Estimated)
+	}
+}
+
+// Regression for rosterbot-abd: with more rostered SPs playing than there are
+// pitcher slots, the old code capped the pitcher count before dividing and
+// reported numPSlots/rotationSize — an understatement on nearly every day of a
+// real roster (10 rostered SPs, 6 active P slots). The slot cap must not bind
+// here: 7 SPs playing is 1.4 expected starts, well under 6 slots.
+func TestBuildGSForecast_MoreSPsPlayingThanSlotsDoesNotUnderstate(t *testing.T) {
+	today := day(2026, 7, 25)
+	playing := map[string]bool{}
+	spNames := map[string]fantrax.Player{}
+	for i := 0; i < 7; i++ {
+		team := string(rune('A' + i))
+		playing[team] = true
+		spNames[team] = activeSP(team, team, team)
+	}
+	sched := &fakeSchedule{playing: map[string]map[string]bool{"2026-07-26": playing}}
+
+	got := buildGSForecast(sched, spNames, 6, today, day(2026, 7, 26),
+		func(fantrax.Player) float64 { return 0 })
+
+	if got[0].Estimated != 7.0/5.0 {
+		t.Errorf("estimated = %v, want 1.4 (7 SPs playing / 5-man rotation, under the 6-slot cap)", got[0].Estimated)
 	}
 }
 

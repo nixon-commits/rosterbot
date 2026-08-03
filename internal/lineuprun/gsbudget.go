@@ -220,7 +220,8 @@ func countTodayStarts(pitcherRoster []fantrax.Player, lockedTeams map[string]boo
 //     than by count. Capped at numPSlots (only active-slot SPs accrue a start),
 //     keeping the highest-value ones.
 //   - no probables yet: estimate by rotation math — rostered SPs whose team
-//     plays, capped at numPSlots, divided by a 5-man rotation.
+//     plays, divided by a 5-man rotation, then capped at numPSlots. The cap is
+//     on starts, so it applies after the division, not before it.
 //
 // projPts is injected rather than taking a projection source directly, so the
 // forecast can be tested without building one.
@@ -259,10 +260,14 @@ func buildGSForecast(
 					spPlaying++
 				}
 			}
-			if spPlaying > float64(numPSlots) {
-				spPlaying = float64(numPSlots)
-			}
-			df.Estimated = spPlaying / rotationSize
+			// Cap STARTS at the slot count, not pitchers-whose-team-plays.
+			// numPSlots bounds how many starts can accrue in a day; the
+			// rotation divisor converts pitchers into expected starts, so the
+			// cap has to come after it (rosterbot-abd). Capping first mixes
+			// units and understates every day where more rostered SPs have a
+			// game than there are pitcher slots — with 10 rostered SPs and 6
+			// slots that is nearly every day.
+			df.Estimated = min(spPlaying/rotationSize, float64(numPSlots))
 		}
 		forecast = append(forecast, df)
 	}
