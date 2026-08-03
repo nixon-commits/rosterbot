@@ -286,7 +286,14 @@ func pitcherOptimalPts(r optimizer.PitcherResult) float64 {
 }
 
 // benchedPoints returns the players who scored points but were not in active
-// slots (StatusID != "1"). These are the real "points left on bench".
+// slots (StatusID != "1").
+//
+// Negative scorers are deliberately retained here. len(Benched) is persisted
+// daily as lineupgap.Row.BenchedN ("scored but not started") in the durable
+// Lineup Gap Store, so filtering at this level would silently redefine that
+// series mid-season and make new partitions incomparable to old ones. The
+// "points left on bench" framing is a property of the *display*, and that is
+// where the sign filter lives — see topBenchCumulative (rosterbot-bqf).
 func benchedPoints(all []fantrax.DayPlayerFP) []PlayerPts {
 	var out []PlayerPts
 	for _, p := range all {
@@ -697,7 +704,20 @@ func BuildReport(start, end time.Time, lineup []LineupDayResult, proj []Projecti
 	return r
 }
 
-// topBenchCumulative aggregates bench-player points across the whole window.
+// topBenchCumulative aggregates bench-player points across the whole window
+// and returns the players who actually cost us something by sitting.
+//
+// Aggregation runs over every bench day including negative ones, so the total
+// is a player's NET counterfactual: benched for +10 Monday and -9 Tuesday is
+// +1 left behind, not +10. Only the net is then required to be positive. A
+// player who was net-negative on the bench is points *avoided* — starting them
+// would have lowered the total — so listing them under "points left on bench"
+// inverts the meaning (rosterbot-bqf: the 2026-07-02 report led with "Roki
+// Sasaki -9.00").
+//
+// Filtering here rather than at the render site also keeps the top-10 cut
+// honest: dropping the non-positives before truncation means the section shows
+// ten real misses when ten exist, instead of spending slots on avoided losses.
 func topBenchCumulative(lineup []LineupDayResult) []PlayerPts {
 	cum := make(map[string]*PlayerPts)
 	for _, day := range lineup {
@@ -712,6 +732,9 @@ func topBenchCumulative(lineup []LineupDayResult) []PlayerPts {
 	}
 	out := make([]PlayerPts, 0, len(cum))
 	for _, p := range cum {
+		if p.Pts <= 0 {
+			continue
+		}
 		out = append(out, *p)
 	}
 	sort.Slice(out, func(i, j int) bool {
