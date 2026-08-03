@@ -166,7 +166,8 @@ func RunLineupAnalysis(
 		hitterResult := optimizeHitters(hitters, hitterSlots)
 		pitcherResult := optimizePitchers(pitchers, pitcherSlots)
 
-		optimalPts := hitterOptimalPts(hitterResult) + pitcherOptimalPts(pitcherResult)
+		optimalPts := guardOptimal(day.Date,
+			actualPts, hitterOptimalPts(hitterResult)+pitcherOptimalPts(pitcherResult))
 
 		// Top bench misses: players not in the optimal lineup who scored — but
 		// here we want "players who actually scored but were benched by us".
@@ -184,6 +185,24 @@ func RunLineupAnalysis(
 	}
 
 	return results
+}
+
+// guardOptimal enforces the invariant that hindsight-optimal can never score
+// below what we actually scored: the lineup we ran is itself a feasible slot
+// assignment, so the optimizer must always be able to match it. A violation
+// means the hindsight reconstruction dropped points it should have counted,
+// which understates the gap and overstates lineup efficiency — and renders on
+// the dashboard as a healthy-looking day rather than an error. Clamp to the
+// tightest correct lower bound (actual) and say so on stderr.
+func guardOptimal(date time.Time, actual, optimal float64) float64 {
+	const eps = 1e-9
+	if optimal >= actual-eps {
+		return optimal
+	}
+	fmt.Fprintf(os.Stderr,
+		"warning: %s hindsight-optimal (%.2f) below actual (%.2f); clamping to actual\n",
+		date.Format("2006-01-02"), optimal, actual)
+	return actual
 }
 
 // optimizeHitters runs the hitter optimizer with a hindsight source.
@@ -362,6 +381,22 @@ func probableStartersFromActuals(pitchers []fantrax.DayPlayerFP) map[string]stri
 
 // --- Hindsight sources ---
 
+// hindsightValue is the per-game value the optimizer sees for one player in
+// hindsight. It is the player's actual FPts floored at zero, because a
+// negative day is never worth seating: benching the player instead yields
+// exactly 0, and that option is always available.
+//
+// The floor matters because the optimizer is a live-lineup engine being reused
+// as a hindsight engine. optimalAssignment fills every slot it can and only
+// leaves one empty when no eligible player remains — sound when values are
+// projections (never negative), wrong when they are realised outcomes. Without
+// the floor a negative scorer gets forced into a free slot, and "optimal" can
+// land below the lineup we actually ran (rosterbot-0gm: 2026-07-02 seated a
+// -9.00 reserve pitcher into one of five empty P slots).
+func hindsightValue(fpts float64) float64 {
+	return math.Max(0, fpts)
+}
+
 // hindsightHitterSource returns actual FPts as projected pts/game.
 type hindsightHitterSource struct {
 	byID   map[string]float64
@@ -374,8 +409,8 @@ func newHindsightHitterSource(players []fantrax.DayPlayerFP) *hindsightHitterSou
 		byName: make(map[string]float64),
 	}
 	for _, p := range players {
-		s.byID[p.PlayerID] = p.FPts
-		s.byName[projections.NormalizeName(p.Name)] = p.FPts
+		s.byID[p.PlayerID] = hindsightValue(p.FPts)
+		s.byName[projections.NormalizeName(p.Name)] = hindsightValue(p.FPts)
 	}
 	return s
 }
@@ -416,8 +451,8 @@ func newHindsightPitcherSource(players []fantrax.DayPlayerFP) *hindsightPitcherS
 		byName: make(map[string]float64),
 	}
 	for _, p := range players {
-		s.byID[p.PlayerID] = p.FPts
-		s.byName[projections.NormalizeName(p.Name)] = p.FPts
+		s.byID[p.PlayerID] = hindsightValue(p.FPts)
+		s.byName[projections.NormalizeName(p.Name)] = hindsightValue(p.FPts)
 	}
 	return s
 }

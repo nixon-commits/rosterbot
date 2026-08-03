@@ -1,0 +1,953 @@
+{
+  "days": [
+    {
+      "date": "2026-07-02T00:00:00Z",
+      "period": 100,
+      "players": [
+        {
+          "player_id": "0316v",
+          "name": "Jake Bauers",
+          "mlb_team": "MIL",
+          "pos_short_names": "1B,INF,OF",
+          "slot_pos_id": "014",
+          "status_id": "1",
+          "fpts": -1,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": false,
+          "positions": [
+            "002",
+            "008",
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "040b5",
+          "name": "Randy Arozarena",
+          "mlb_team": "SEA",
+          "pos_short_names": "OF",
+          "slot_pos_id": "012",
+          "status_id": "1",
+          "fpts": 4,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": false,
+          "positions": [
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04azv",
+          "name": "Jake Burger",
+          "mlb_team": "TEX",
+          "pos_short_names": "1B,INF",
+          "slot_pos_id": "002",
+          "status_id": "1",
+          "fpts": -1,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": false,
+          "positions": [
+            "002",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04mra",
+          "name": "Ezequiel Tovar",
+          "mlb_team": "COL",
+          "pos_short_names": "SS,INF",
+          "slot_pos_id": "014",
+          "status_id": "1",
+          "fpts": 0,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": false,
+          "positions": [
+            "005",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "060ub",
+          "name": "Colt Emerson",
+          "mlb_team": "SEA",
+          "pos_short_names": "3B,SS,INF",
+          "slot_pos_id": "005",
+          "status_id": "1",
+          "fpts": -1,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": false,
+          "positions": [
+            "004",
+            "005",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "03nmw",
+          "name": "Ian Happ",
+          "mlb_team": "CHC",
+          "pos_short_names": "OF",
+          "slot_pos_id": "012",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "03pzn",
+          "name": "Andres Gimenez",
+          "mlb_team": "TOR",
+          "pos_short_names": "2B,SS,INF",
+          "slot_pos_id": "005",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "003",
+            "005",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "03rmz",
+          "name": "Keibert Ruiz",
+          "mlb_team": "WSH",
+          "pos_short_names": "C",
+          "slot_pos_id": "001",
+          "status_id": "1",
+          "fpts": 0,
+          "active": true,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "001",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04aeb",
+          "name": "Royce Lewis",
+          "mlb_team": "MIN",
+          "pos_short_names": "1B,2B,3B,INF",
+          "slot_pos_id": "014",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "002",
+            "003",
+            "004",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "050c3",
+          "name": "Jasson Dominguez",
+          "mlb_team": "NYY",
+          "pos_short_names": "OF",
+          "slot_pos_id": "012",
+          "status_id": "1",
+          "fpts": 0,
+          "active": true,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "051ia",
+          "name": "Spencer Horwitz",
+          "mlb_team": "PIT",
+          "pos_short_names": "1B,INF",
+          "slot_pos_id": "014",
+          "status_id": "3",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "002",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "05tzp",
+          "name": "Jacob Gonzalez",
+          "mlb_team": "PIT",
+          "pos_short_names": "1B,2B,SS,INF",
+          "slot_pos_id": "008",
+          "status_id": "1",
+          "fpts": 2,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": false,
+          "positions": [
+            "002",
+            "003",
+            "005",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "05yai",
+          "name": "Bryce Rainer",
+          "mlb_team": "DET",
+          "pos_short_names": "SS,INF",
+          "slot_pos_id": "005",
+          "status_id": "9",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "005",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "06f0q",
+          "name": "Kristian Campbell",
+          "mlb_team": "BOS",
+          "pos_short_names": "2B,INF",
+          "slot_pos_id": "003",
+          "status_id": "9",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "003",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04mn5",
+          "name": "Alec Bohm",
+          "mlb_team": "PHI",
+          "pos_short_names": "1B,3B,INF",
+          "slot_pos_id": "014",
+          "status_id": "1",
+          "fpts": 5,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": false,
+          "positions": [
+            "002",
+            "004",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "05r5e",
+          "name": "Angel Genao",
+          "mlb_team": "CLE",
+          "pos_short_names": "3B,SS,INF",
+          "slot_pos_id": "004",
+          "status_id": "9",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "004",
+            "005",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04prt",
+          "name": "Lawrence Butler",
+          "mlb_team": "ATH",
+          "pos_short_names": "OF",
+          "slot_pos_id": "012",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "0596e",
+          "name": "Dylan Crews",
+          "mlb_team": "WSH",
+          "pos_short_names": "OF",
+          "slot_pos_id": "014",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "05t9n",
+          "name": "Carson Williams",
+          "mlb_team": "TB",
+          "pos_short_names": "SS,INF",
+          "slot_pos_id": "005",
+          "status_id": "9",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "005",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "03aqw",
+          "name": "Mauricio Dubon",
+          "mlb_team": "ATL",
+          "pos_short_names": "2B,3B,SS,INF,OF",
+          "slot_pos_id": "004",
+          "status_id": "1",
+          "fpts": 6,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": false,
+          "positions": [
+            "003",
+            "004",
+            "005",
+            "008",
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04pmu",
+          "name": "Ryan Jeffers",
+          "mlb_team": "MIN",
+          "pos_short_names": "C",
+          "slot_pos_id": "001",
+          "status_id": "3",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "001",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04qnc",
+          "name": "Francisco Alvarez",
+          "mlb_team": "NYM",
+          "pos_short_names": "C",
+          "slot_pos_id": "014",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "001",
+            "014"
+          ]
+        },
+        {
+          "player_id": "05uei",
+          "name": "Chase DeLauter",
+          "mlb_team": "CLE",
+          "pos_short_names": "OF",
+          "slot_pos_id": "012",
+          "status_id": "1",
+          "fpts": 2,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": false,
+          "positions": [
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "06k7t",
+          "name": "Andrew Fischer",
+          "mlb_team": "MIL",
+          "pos_short_names": "3B,INF",
+          "slot_pos_id": "004",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "004",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "06mh4",
+          "name": "Edward Florentino",
+          "mlb_team": "PIT",
+          "pos_short_names": "OF",
+          "slot_pos_id": "014",
+          "status_id": "9",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "03pje",
+          "name": "Taylor Ward",
+          "mlb_team": "BAL",
+          "pos_short_names": "OF",
+          "slot_pos_id": "012",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04eig",
+          "name": "Jose Caballero",
+          "mlb_team": "NYY",
+          "pos_short_names": "2B,3B,SS,INF,OF",
+          "slot_pos_id": "012",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "003",
+            "004",
+            "005",
+            "008",
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04fhb",
+          "name": "Julio Rodriguez",
+          "mlb_team": "SEA",
+          "pos_short_names": "OF",
+          "slot_pos_id": "012",
+          "status_id": "1",
+          "fpts": 1,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": false,
+          "positions": [
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04nqx",
+          "name": "Ezequiel Duran",
+          "mlb_team": "TEX",
+          "pos_short_names": "1B,2B,3B,SS,INF,OF",
+          "slot_pos_id": "003",
+          "status_id": "1",
+          "fpts": 6,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": false,
+          "positions": [
+            "002",
+            "003",
+            "004",
+            "005",
+            "008",
+            "012",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04pkr",
+          "name": "Nico Hoerner",
+          "mlb_team": "CHC",
+          "pos_short_names": "2B,SS,INF",
+          "slot_pos_id": "005",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": false,
+          "positions": [
+            "003",
+            "005",
+            "008",
+            "014"
+          ]
+        },
+        {
+          "player_id": "04cwf",
+          "name": "Shane Baz",
+          "mlb_team": "BAL",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05gdz",
+          "name": "Roki Sasaki",
+          "mlb_team": "LAD",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "2",
+          "fpts": -9,
+          "active": false,
+          "had_game": true,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05rb3",
+          "name": "Chase Burns",
+          "mlb_team": "CIN",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "1",
+          "fpts": 25,
+          "active": true,
+          "had_game": true,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05uc7",
+          "name": "Noah Schultz",
+          "mlb_team": "CHW",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "3",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05ucd",
+          "name": "Mason Miller",
+          "mlb_team": "SD",
+          "pos_short_names": "RP",
+          "slot_pos_id": "017",
+          "status_id": "1",
+          "fpts": 0,
+          "active": true,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05ycl",
+          "name": "Travis Sykora",
+          "mlb_team": "WSH",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "9",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05zd4",
+          "name": "Hagen Smith",
+          "mlb_team": "CHW",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "9",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "06ktt",
+          "name": "Jamie Arnold",
+          "mlb_team": "ATH",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "9",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "04azu",
+          "name": "Kumar Rocker",
+          "mlb_team": "TEX",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "04y9o",
+          "name": "Jack Leiter",
+          "mlb_team": "TEX",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "3",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05tp6",
+          "name": "Thomas White",
+          "mlb_team": "MIA",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "9",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05ycf",
+          "name": "Noah Cameron",
+          "mlb_team": "KC",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05yj0",
+          "name": "Chase Dollander",
+          "mlb_team": "COL",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "3",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "029si",
+          "name": "Eduardo Rodriguez",
+          "mlb_team": "ARI",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "04mlx",
+          "name": "Matthew Liberatore",
+          "mlb_team": "STL",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "04tlv",
+          "name": "Bryan Abreu",
+          "mlb_team": "HOU",
+          "pos_short_names": "RP",
+          "slot_pos_id": "017",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05aoc",
+          "name": "Eury Perez",
+          "mlb_team": "MIA",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "1",
+          "fpts": 0,
+          "active": true,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05js3",
+          "name": "Kyle Harrison",
+          "mlb_team": "MIL",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "1",
+          "fpts": 0,
+          "active": true,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "061mh",
+          "name": "Robby Snelling",
+          "mlb_team": "MIA",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "3",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "02bu3",
+          "name": "Brandon Woodruff",
+          "mlb_team": "MIL",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "1",
+          "fpts": 0,
+          "active": true,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "04ew7",
+          "name": "Aaron Ashby",
+          "mlb_team": "MIL",
+          "pos_short_names": "RP",
+          "slot_pos_id": "017",
+          "status_id": "1",
+          "fpts": 0,
+          "active": true,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "05gef",
+          "name": "Cade Cavalli",
+          "mlb_team": "WSH",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "2",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        },
+        {
+          "player_id": "06roc",
+          "name": "Liam Doyle",
+          "mlb_team": "STL",
+          "pos_short_names": "SP",
+          "slot_pos_id": "017",
+          "status_id": "9",
+          "fpts": 0,
+          "active": false,
+          "had_game": false,
+          "is_pitcher": true,
+          "positions": [
+            "017"
+          ]
+        }
+      ]
+    }
+  ],
+  "hitter_slots": [
+    {
+      "PosID": "001",
+      "PosName": "C"
+    },
+    {
+      "PosID": "002",
+      "PosName": "1B"
+    },
+    {
+      "PosID": "003",
+      "PosName": "2B"
+    },
+    {
+      "PosID": "004",
+      "PosName": "3B"
+    },
+    {
+      "PosID": "005",
+      "PosName": "SS"
+    },
+    {
+      "PosID": "008",
+      "PosName": "INF"
+    },
+    {
+      "PosID": "012",
+      "PosName": "OF"
+    },
+    {
+      "PosID": "012",
+      "PosName": "OF"
+    },
+    {
+      "PosID": "012",
+      "PosName": "OF"
+    },
+    {
+      "PosID": "012",
+      "PosName": "OF"
+    },
+    {
+      "PosID": "014",
+      "PosName": "UT"
+    },
+    {
+      "PosID": "014",
+      "PosName": "UT"
+    },
+    {
+      "PosID": "014",
+      "PosName": "UT"
+    }
+  ],
+  "pitcher_slots": [
+    {
+      "PosID": "017",
+      "PosName": "P"
+    },
+    {
+      "PosID": "017",
+      "PosName": "P"
+    },
+    {
+      "PosID": "017",
+      "PosName": "P"
+    },
+    {
+      "PosID": "017",
+      "PosName": "P"
+    },
+    {
+      "PosID": "017",
+      "PosName": "P"
+    },
+    {
+      "PosID": "017",
+      "PosName": "P"
+    }
+  ]
+}
