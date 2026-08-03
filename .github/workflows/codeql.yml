@@ -47,7 +47,7 @@ jobs:
           build-mode: none
         - language: go
           # manual (not autobuild) so we can build the nested Go modules too:
-          # lambda/, buildnotify/ and infra/ each have their own go.mod, so a
+          # lambda/, opsnotify/ and infra/ each have their own go.mod, so a
           # root `go build ./...` (what autobuild runs) never descends into them
           # and CodeQL scanned 0 of their files (rosterbot-fjd). See the build
           # step below, which mirrors `make build-modules`.
@@ -107,7 +107,7 @@ jobs:
     # ℹ️ Command-line programs to run using the OS shell.
     # 📚 See https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepsrun
     # Build the root module plus every nested Go module so the CodeQL tracer
-    # extracts all four. Nested modules (lambda/, buildnotify/, infra/) each carry
+    # extracts all four. Nested modules (lambda/, opsnotify/, infra/) each carry
     # their own go.mod, so a root `go build ./...` never descends into them — the
     # same blind spot CLAUDE.md documents for `go vet ./...` / `go mod tidy`. The
     # nested-module loop mirrors `make build-modules` (discovers go.mod dirs

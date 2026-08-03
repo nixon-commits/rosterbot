@@ -380,6 +380,57 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	apiFn.AddEnvironment(jsii.String("RP_ID_PARAM"), jsii.String("/rosterbot/DASHBOARD_RP_ID"), nil)
 	apiFn.AddEnvironment(jsii.String("RP_ORIGIN_PARAM"), jsii.String("/rosterbot/DASHBOARD_RP_ORIGIN"), nil)
 
+	// --- Ops notification: Pushover for CodeBuild + ECS task outcomes ---
+	// Created UNCONDITIONALLY, unlike the CodeBuild rule below. Job-failure
+	// alerting must survive a stack deployed without `-c enableBuild=true`,
+	// and the previous BuildNotify function lived entirely inside that gate.
+	// Timeout is 60s, well above the sibling Lambdas' 10s: before it can decide
+	// whether to alert, the handler reads up to ledgerWindow (200) run-ledger
+	// objects sequentially (opsnotify/ledger.go), and the live ledger already
+	// holds enough entries that every invocation hits the full 200-object walk,
+	// not just a worst case. A timeout here is a *silently missed* alert, not
+	// a slow one — handleTask reads the ledger before sending Pushover, so
+	// EventBridge's retry just re-runs the same slow path. Lambda bills on
+	// duration actually used, so a generous ceiling costs nothing.
+	opsNotifyFn := awscdklambdagoalpha.NewGoFunction(stack, jsii.String("OpsNotify"), &awscdklambdagoalpha.GoFunctionProps{
+		Entry:        jsii.String("../opsnotify"),
+		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
+		Architecture: awslambda.Architecture_ARM_64(),
+		Timeout:      awscdk.Duration_Seconds(jsii.Number(60)),
+		Environment: &map[string]*string{
+			"STATE_BUCKET": stateBucket.BucketName(),
+		},
+	})
+	opsNotifyFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions: jsii.Strings("ssm:GetParameter"),
+		Resources: jsii.Strings(
+			"arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/PUSHOVER_USER_KEY",
+			"arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/PUSHOVER_API_TOKEN",
+		),
+	}))
+	// Read-only on the run ledger: the notifier derives failure streaks from it
+	// and writes nothing. Mirrors the API Lambda's own runledger/ grant.
+	stateBucket.GrantRead(opsNotifyFn, jsii.String("runledger/*"))
+
+	// Every scheduled job failure (rosterbot-naz). The pattern deliberately
+	// stops at "a task in our cluster reached STOPPED" — whether that stop was
+	// a failure is decided in Go (opsnotify/task.go), where "exit code absent
+	// OR non-zero" is table-testable instead of an event-pattern puzzle over an
+	// array of objects. Cost is ~700 invocations/month, inside the free tier.
+	awsevents.NewRule(stack, jsii.String("TaskFailRule"), &awsevents.RuleProps{
+		EventPattern: &awsevents.EventPattern{
+			Source:     jsii.Strings("aws.ecs"),
+			DetailType: jsii.Strings("ECS Task State Change"),
+			Detail: &map[string]interface{}{
+				"clusterArn": []interface{}{cluster.ClusterArn()},
+				"lastStatus": []interface{}{"STOPPED"},
+			},
+		},
+		Targets: &[]awsevents.IRuleTarget{
+			awseventstargets.NewLambdaFunction(opsNotifyFn, &awseventstargets.LambdaFunctionProps{}),
+		},
+	})
+
 	// --- Phase 2: CodeBuild (build + push image to ECR on push to main) ---
 	// Gated: only instantiated with `-c enableBuild=true`, because the GitHub
 	// webhook source requires a one-time source credential (GitHub OAuth/PAT) to
@@ -441,24 +492,11 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		}))
 		awscdk.NewCfnOutput(stack, jsii.String("BuildProject"), &awscdk.CfnOutputProps{Value: project.ProjectName()})
 
-		// Pushover on every terminal build outcome (rosterbot-00j). An EventBridge
-		// rule on the project's "CodeBuild Build State Change" events targets a
-		// small Go lambda that reads the Pushover creds from SSM and posts. This
-		// catches every failure phase (install/pre_build/build/deploy) + success —
-		// unlike a buildspec curl, which never runs if install/pre_build fail.
-		buildNotifyFn := awscdklambdagoalpha.NewGoFunction(stack, jsii.String("BuildNotify"), &awscdklambdagoalpha.GoFunctionProps{
-			Entry:        jsii.String("../buildnotify"),
-			Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
-			Architecture: awslambda.Architecture_ARM_64(),
-			Timeout:      awscdk.Duration_Seconds(jsii.Number(10)),
-		})
-		buildNotifyFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
-			Actions: jsii.Strings("ssm:GetParameter"),
-			Resources: jsii.Strings(
-				"arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/PUSHOVER_USER_KEY",
-				"arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/PUSHOVER_API_TOKEN",
-			),
-		}))
+		// Pushover on every terminal build outcome (rosterbot-00j). This catches
+		// every failure phase (install/pre_build/build/deploy) + success — unlike
+		// a buildspec curl, which never runs if install/pre_build fail. The
+		// target is the shared OpsNotify function created above; only this rule
+		// is gated, because it references the gated CodeBuild project.
 		awsevents.NewRule(stack, jsii.String("BuildNotifyRule"), &awsevents.RuleProps{
 			EventPattern: &awsevents.EventPattern{
 				Source:     jsii.Strings("aws.codebuild"),
@@ -469,7 +507,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				},
 			},
 			Targets: &[]awsevents.IRuleTarget{
-				awseventstargets.NewLambdaFunction(buildNotifyFn, &awseventstargets.LambdaFunctionProps{}),
+				awseventstargets.NewLambdaFunction(opsNotifyFn, &awseventstargets.LambdaFunctionProps{}),
 			},
 		})
 	}

@@ -28,12 +28,12 @@ jobs:
           go build ./...
           go vet ./...
 
-      # lambda/, buildnotify/ and infra/ are separate Go modules that the root
+      # lambda/, opsnotify/ and infra/ are separate Go modules that the root
       # build never descends into. They pull the root via `replace ../`, so a
       # bump to a shared root dep re-stales them — and that only surfaced as a
       # failed production `cdk deploy` (it broke the deploy three times).
       # This is the gate that makes a stale nested module block the PR instead.
-      - name: Build nested Go modules (lambda/, buildnotify/, infra/)
+      - name: Build nested Go modules (lambda/, opsnotify/, infra/)
         run: make build-modules
 
       - name: Test

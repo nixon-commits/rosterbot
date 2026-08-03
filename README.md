@@ -457,7 +457,7 @@ make run-all 2>&1 | tee /tmp/warm.log
 ```
 
 > [!NOTE]
-> `lambda/`, `buildnotify/`, and `infra/` are **separate Go modules** — the root `go build ./...` doesn't descend into them. Run `make build-modules` after touching any of them (or after a dependency bump); `make build` runs it automatically. When you add a new top-level command, append a line to the `run-all` recipe so the smoke test stays complete.
+> `lambda/`, `opsnotify/`, and `infra/` are **separate Go modules** — the root `go build ./...` doesn't descend into them. Run `make build-modules` after touching any of them (or after a dependency bump); `make build` runs it automatically. When you add a new top-level command, append a line to the `run-all` recipe so the smoke test stays complete.
 
 ---
 

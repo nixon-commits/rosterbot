@@ -16,7 +16,7 @@ func evt(status events.CodeBuildPhaseStatus, sha, link string) events.CodeBuildE
 	return ev
 }
 
-func TestFormatMessage(t *testing.T) {
+func TestFormatBuild(t *testing.T) {
 	tests := []struct {
 		name        string
 		ev          events.CodeBuildEvent
@@ -59,7 +59,7 @@ func TestFormatMessage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			title, body := formatMessage(tt.ev)
+			title, body := formatBuild(tt.ev)
 			if title != tt.wantTitle {
 				t.Errorf("title = %q, want %q", title, tt.wantTitle)
 			}
