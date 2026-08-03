@@ -276,6 +276,12 @@ func TestApplyGSGate_ZeroRemaining_SuppressesAll(t *testing.T) {
 // placeholder entry (ceil(0.2)=1), competing at full roster-mean value
 // against today's certain start. It should instead compete at only its
 // fractional share of that value.
+//
+// It doubles as the counterexample that closed rosterbot-idn: 8 points certain
+// beats 20×0.2 = 4.0 expected, and because weekly GS is use-it-or-lose-it, the
+// 80% of the time the estimated start never materializes the held slot is
+// burned rather than banked. Any rewrite that prices this tail at full value
+// fails here, which is the point.
 func TestApplyGSGate_FractionalEstimateDoesNotOverSuppressToday(t *testing.T) {
 	scored := []ScoredPitcher{
 		{Player: fantrax.Player{ID: "today", PosShortNames: "SP"}, ExpectedPts: 8, IsStarter: true},
@@ -298,6 +304,48 @@ func TestApplyGSGate_FractionalEstimateDoesNotOverSuppressToday(t *testing.T) {
 	result := applyGSGate(scored, budget)
 	if !result[0].IsStarter {
 		t.Error("today's 8pt starter should survive a 0.2-expected-start future claim, not lose to a full-value phantom placeholder")
+	}
+}
+
+// TestApplyGSGate_EstimatedLadderPricesWholeUnitsFullAndTailMarginally pins
+// BOTH rungs of the estimated-demand ladder in one case, which matters more
+// since rosterbot-abd made Estimated routinely exceed 1.0 (it was pinned at
+// numPSlots/rotationSize before).
+//
+// The k-th slot held for estimated demand is worth
+// placeholder × min(max(E-(k-1), 0), 1) — full value while whole units of
+// demand remain, the leftover fraction after that. With E=1.4 and a
+// placeholder of 12 that is one entry at 12.0 and one at 4.8. The first
+// outranks today's 9 (real demand, real value); the second loses to today's 8
+// (a 40%-likely claim is not worth a certain start).
+//
+// This is the discriminating test for rosterbot-idn's proposed rewrite, which
+// would price both rungs at a full 12 against a fractional budget: that form
+// fits neither of today's starters into the remaining 2 slots and benches both.
+func TestApplyGSGate_EstimatedLadderPricesWholeUnitsFullAndTailMarginally(t *testing.T) {
+	scored := []ScoredPitcher{
+		{Player: fantrax.Player{ID: "today-strong", PosShortNames: "SP"}, ExpectedPts: 9, IsStarter: true},
+		{Player: fantrax.Player{ID: "today-weak", PosShortNames: "SP"}, ExpectedPts: 8, IsStarter: true},
+		// Bench SP pulls the roster-mean placeholder to (9+8+19)/3 = 12.
+		{Player: fantrax.Player{ID: "bench", PosShortNames: "SP"}, ExpectedPts: 19},
+	}
+	budget := &GSBudget{
+		Limit:   12,
+		Used:    10,
+		Today:   date("2026-04-16"),
+		WeekEnd: date("2026-04-19"),
+		Forecast: []DayForecast{
+			{Date: date("2026-04-17"), Estimated: 1.4},
+		},
+	}
+	// remaining=2, totalPlanned=2(today)+1.4(estimated)=3.4 > remaining → engages.
+	// Ranked: est 12.0 | today 9 | today 8 | est 4.8. Top 2 keeps one today start.
+	result := applyGSGate(scored, budget)
+	if !result[0].IsStarter {
+		t.Error("today's 9pt start should outrank the 0.4 tail (4.8) and survive")
+	}
+	if result[1].IsStarter {
+		t.Error("today's 8pt start should lose to the full 12.0 whole-unit estimated entry")
 	}
 }
 

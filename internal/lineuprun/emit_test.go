@@ -110,7 +110,7 @@ func TestPlanDate_EquallyValuedSwapIsZeroGain(t *testing.T) {
 	}
 }
 
-// A non-starting SP is credited at the optimizer's 0.10x discount, so the delta
+// A non-starting SP is credited at the optimizer's NonStarterSPDiscount, so the delta
 // reflects what the optimizer actually optimized on rather than the raw
 // projection.
 func TestPlanDate_NonStartingSPIsDiscounted(t *testing.T) {

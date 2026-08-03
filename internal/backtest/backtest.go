@@ -363,8 +363,8 @@ func teamsWithGames(players []fantrax.DayPlayerFP) map[string]bool {
 
 // probableStartersFromActuals builds the `probableStarters` input for
 // OptimizePitcherLineup, treating every SP-eligible pitcher who actually
-// earned points as a confirmed starter. This suppresses the 0.10x non-starter
-// discount in hindsight (we already know who started).
+// earned points as a confirmed starter. This suppresses the
+// NonStarterSPDiscount in hindsight (we already know who started).
 func probableStartersFromActuals(pitchers []fantrax.DayPlayerFP) map[string]string {
 	m := make(map[string]string)
 	for _, p := range pitchers {
