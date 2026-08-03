@@ -53,7 +53,11 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 		"at":     0,
 		"av":     "0.0",
 		"tz":     "UTC",
-		"v":      "181.0.0",
+		// Must match fantraxAPIVersion in auth_client/fantrax_client.go — this is
+		// the one /fxpa/req payload we build ourselves rather than via the
+		// library's buildFullRequest, so the two pins move together or this call
+		// alone starts returning STALE_CLIENT. See rosterbot-7rl.
+		"v": "185.1.0",
 	}
 
 	jsonStr, err := json.Marshal(fullRequest)
