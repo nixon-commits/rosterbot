@@ -505,6 +505,58 @@ func TestBuildReport_TopBenchCumulative(t *testing.T) {
 	}
 }
 
+// Regression for rosterbot-bqf: the 2026-07-02 report led "Top points left on
+// bench" with "Roki Sasaki -9.00". A benched player who would have LOST points
+// is points avoided, not points left behind, so a net-negative total must not
+// appear in that section at all.
+func TestBuildReport_TopBenchExcludesNetNegative(t *testing.T) {
+	day := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
+	lineup := []LineupDayResult{
+		{
+			Date: day,
+			Benched: []PlayerPts{
+				{PlayerID: "sasaki", Name: "Roki Sasaki", Pts: -9},
+				{PlayerID: "real", Name: "Real Miss", Pts: 12},
+			},
+		},
+	}
+	r := BuildReport(time.Time{}, time.Time{}, lineup, nil)
+	if len(r.TopBench) != 1 {
+		t.Fatalf("want only the positive miss listed, got %d: %+v", len(r.TopBench), r.TopBench)
+	}
+	if r.TopBench[0].Name != "Real Miss" {
+		t.Errorf("top = %+v, want the +12 miss", r.TopBench[0])
+	}
+	// The underlying per-day data is untouched: len(Benched) still counts the
+	// negative scorer, because it is persisted as lineupgap.Row.BenchedN.
+	if len(lineup[0].Benched) != 2 {
+		t.Errorf("per-day Benched must keep negative scorers for BenchedN, got %d", len(lineup[0].Benched))
+	}
+}
+
+// A player benched across several days nets out before the sign test, so a
+// good day and a bad day don't each get counted on their own terms.
+func TestBuildReport_TopBenchNetsAcrossDaysBeforeFiltering(t *testing.T) {
+	lineup := []LineupDayResult{
+		{
+			Date:    time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC),
+			Benched: []PlayerPts{{PlayerID: "x", Name: "X", Pts: 10}, {PlayerID: "y", Name: "Y", Pts: 4}},
+		},
+		{
+			Date:    time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC),
+			Benched: []PlayerPts{{PlayerID: "x", Name: "X", Pts: -9}, {PlayerID: "y", Name: "Y", Pts: -6}},
+		},
+	}
+	r := BuildReport(time.Time{}, time.Time{}, lineup, nil)
+	// X nets +1 (listed, not +10); Y nets -2 (dropped entirely).
+	if len(r.TopBench) != 1 {
+		t.Fatalf("want only X listed, got %d: %+v", len(r.TopBench), r.TopBench)
+	}
+	if r.TopBench[0].Name != "X" || r.TopBench[0].Pts != 1 {
+		t.Errorf("top = %+v, want X with net 1 (not 10)", r.TopBench[0])
+	}
+}
+
 func TestPositionBucket(t *testing.T) {
 	cases := []struct {
 		name      string

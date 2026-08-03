@@ -417,7 +417,7 @@ func pitcherPipelinesFor(
 		pd.BlendDelta = pd.BlendedPtsPerGame - pd.BasePtsPerGame
 
 		// Stage 3: GS Gate — a probable starter that came back not-starting was
-		// suppressed by the budget, and carries the optimizer's 0.10x discount.
+		// suppressed by the budget, and carries the optimizer's NonStarterSPDiscount.
 		pd.FinalPtsPerGame = pd.BlendedPtsPerGame
 		if spEligible && gated {
 			if _, wasProbable := probableStarters[projections.NormalizeName(sp.Player.Name)]; wasProbable && !sp.IsStarter {

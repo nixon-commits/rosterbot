@@ -68,7 +68,7 @@ func (b *GSBudget) FutureDemand() float64 {
 // (today + future confirmed) against each other, treating estimated future
 // starters as placeholders at the roster-SP mean. Today's starters that fall
 // outside the top `remaining` by value are suppressed, letting the existing
-// 0.10x non-starter discount downstream shift them to bench.
+// NonStarterSPDiscount downstream shift them to bench.
 //
 // Locked players are never suppressed: a locked active-slot SP has already
 // consumed its GS (reflected in budget.Used) and a locked bench SP can't
@@ -168,6 +168,23 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) []ScoredPitcher {
 	// that's already happening — extends the exact-tie "prefer today" rule
 	// below to near-ties. Confirmed future starts are just as certain as
 	// today's and are deliberately excluded from this leniency.
+	//
+	// What it prices is the chance the estimated start never materializes at
+	// all: budget is use-it-or-lose-it weekly, so a slot held for a start that
+	// doesn't happen is burned outright, while a slot spent today is banked.
+	// That asymmetry is the entire justification, and it is why the margin is
+	// signed toward today rather than toward the option value of waiting.
+	//
+	// It is NOT a haircut for projection error. SP projections carry a large
+	// MAE (10.4–13.8 FP/G against an SP mean near 12), but that dispersion is
+	// symmetric: an unbiased noisy estimate is still the best estimate, and
+	// discounting it would bias the ranking rather than de-risk it. A proposal
+	// to re-derive this constant from measured MAE was rejected on those
+	// grounds (rosterbot-idn).
+	//
+	// 0.10 is unmeasured — a plausible magnitude for P(no start materializes),
+	// not a fitted value. Sweeping it against real season outcomes is
+	// rosterbot-xsm; until then, treat it as a prior, not a result.
 	const certaintyMargin = 0.10
 
 	estCount := int(math.Ceil(futureEstimated))
@@ -187,6 +204,29 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) []ScoredPitcher {
 	// so its total value mass equals placeholder*futureEstimated exactly,
 	// instead of ceil-rounding a fractional demand (e.g. 0.2) into one
 	// FULL-value entry that competes on equal footing with certain starts.
+	//
+	// The weight belongs in the PRICE, and it belongs there precisely BECAUSE
+	// the cut below spends a whole slot. This reads like a units error — every
+	// other entry is points-per-start, this one is points×probability — and it
+	// has been reported as one (rosterbot-idn). It is not. The gate's question
+	// is marginal: hold this slot, or spend it today? Holding is worth
+	// placeholder × min(E,1) in expectation; spending is worth the starter's
+	// value with certainty. Those are the two quantities that must be
+	// comparable, so the weighted entry IS the correctly-priced one.
+	//
+	// Concretely, with 1 slot left, a certain 8-pt start today and 0.2 expected
+	// future starts at a 12-pt placeholder: pricing the tail at 12 wins the cut
+	// and benches the 8, holding a slot that materializes 20% of the time —
+	// 2.4 expected against 8 certain, and weekly GS is use-it-or-lose-it, so
+	// the other 80% is burned rather than banked. Pricing it at 12×0.2 = 2.4
+	// loses the cut, which is the right call.
+	// TestApplyGSGate_FractionalEstimateDoesNotOverSuppressToday pins that case;
+	// TestApplyGSGate_EstimatedLadderPricesWholeUnitsFullAndTailMarginally pins
+	// both rungs together.
+	//
+	// The weights are the exact marginal values, not an approximation of one:
+	// the k-th held slot is worth placeholder × min(max(E-(k-1), 0), 1), which
+	// is what this loop emits (1.0, 1.0, …, frac).
 	remainingFrac := futureEstimated
 	for i := 0; i < estCount; i++ {
 		weight := 1.0
