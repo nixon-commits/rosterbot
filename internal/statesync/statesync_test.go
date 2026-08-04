@@ -3,12 +3,14 @@ package statesync
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -159,5 +161,48 @@ func TestUp_MissingLocalDirIsNoop(t *testing.T) {
 	s := &Syncer{s3: f}
 	if err := s.Up(context.Background(), "b", "session/", filepath.Join(t.TempDir(), "absent"), true); err != nil {
 		t.Fatalf("missing dir should be a no-op, got %v", err)
+	}
+}
+
+// truncatedBodyS3 serves an object whose body fails partway through the read —
+// a connection reset or a truncated S3 response.
+type truncatedBodyS3 struct{ *fakeS3 }
+
+var errTruncatedBody = errors.New("unexpected EOF reading body")
+
+func (f truncatedBodyS3) GetObject(_ context.Context, _ *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	return &s3.GetObjectOutput{Body: io.NopCloser(iotest.ErrReader(errTruncatedBody))}, nil
+}
+
+// Down syncs the Fantrax session cookie among other things, so a partial
+// download that reports success is a login loop rather than an obvious failure.
+// The copy error must reach the caller — and must not be masked by the Close
+// that runs alongside it on the same path.
+func TestDown_PropagatesATruncatedBody(t *testing.T) {
+	f := truncatedBodyS3{&fakeS3{objects: map[string][]byte{"session/cookie.json": []byte("c")}}}
+	s := &Syncer{s3: f}
+
+	err := s.Down(context.Background(), "b", "session/", t.TempDir())
+	if err == nil {
+		t.Fatal("a truncated body reported success")
+	}
+	if !errors.Is(err, errTruncatedBody) {
+		t.Errorf("err = %v, want it to wrap %v — the copy failure is the cause and "+
+			"must survive being joined with the Close result", err, errTruncatedBody)
+	}
+}
+
+// The happy path must still report success: joining Close's result must not turn
+// a clean download into an error when Close returns nil.
+func TestDown_CleanDownloadReportsSuccess(t *testing.T) {
+	f := &fakeS3{objects: map[string][]byte{"session/cookie.json": []byte("c")}}
+	s := &Syncer{s3: f}
+	dir := t.TempDir()
+
+	if err := s.Down(context.Background(), "b", "session/", dir); err != nil {
+		t.Fatalf("clean download returned %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "cookie.json")); err != nil || string(b) != "c" {
+		t.Fatalf("cookie.json: %q err=%v", b, err)
 	}
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -191,8 +192,10 @@ func writeGapModel(reader lineupgap.Reader, outDir string) error {
 // inside Close, and entrypoint.sh syncs whatever landed on disk regardless. A
 // dropped Close error means a truncated model.json published to CloudFront while
 // the run printed "Wrote ..." and exited 0 — a broken dashboard reported as a
-// success. On an encode error Close is still called but its error dropped, since
-// the encode failure is the cause and the Close failure only its echo.
+// success. On an encode error the Close error is joined rather than dropped: the
+// encode failure is the cause and reads first, but a Close that also fails says
+// something independent about the disk, which is worth knowing on exactly the
+// path where the write already went wrong.
 func writeJSONModel(path string, v any) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -201,8 +204,7 @@ func writeJSONModel(path string, v any) error {
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
-		f.Close()
-		return fmt.Errorf("encode %s: %w", filepath.Base(path), err)
+		return errors.Join(fmt.Errorf("encode %s: %w", filepath.Base(path), err), f.Close())
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", path, err)
