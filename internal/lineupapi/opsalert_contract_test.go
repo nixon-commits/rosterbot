@@ -3,6 +3,7 @@ package lineupapi_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/opsalert"
@@ -57,6 +58,16 @@ func TestRecordDecodesARealLedgerRecord(t *testing.T) {
 	}
 	if got.LogTail != want.LogTail {
 		t.Errorf("LogTail = %q, want %q", got.LogTail, want.LogTail)
+	}
+	// The heartbeat check reads this to answer "when did this job last launch?".
+	// A drift here would not error — it would decode to the empty string, which
+	// opsalert.Record.Started reads as "unknown" and Overdue then skips, so every
+	// job would look permanently overdue while every test still passed.
+	if got.StartedAt != want.StartedAt {
+		t.Errorf("StartedAt = %q, want %q", got.StartedAt, want.StartedAt)
+	}
+	if !got.Started().Equal(time.Date(2026, 7, 1, 17, 0, 53, 0, time.UTC)) {
+		t.Errorf("Started() = %v, want 2026-07-01T17:00:53Z", got.Started())
 	}
 }
 

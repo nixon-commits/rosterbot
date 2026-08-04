@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 
@@ -21,6 +22,7 @@ type ecsTaskDetail struct {
 	TaskArn       string `json:"taskArn"`
 	LastStatus    string `json:"lastStatus"`
 	StoppedReason string `json:"stoppedReason"`
+	Version       int    `json:"version"`
 	Containers    []struct {
 		Name     string `json:"name"`
 		ExitCode *int   `json:"exitCode"`
@@ -59,6 +61,33 @@ func (d ecsTaskDetail) taskID() string {
 		return d.TaskArn[i+1:]
 	}
 	return d.TaskArn
+}
+
+// dedupeKey identifies the at-most-one alert this task is allowed to produce.
+//
+// The task id alone, deliberately NOT id+detail.version. Version is what AWS
+// documents for de-duplicating an ECS event, and keying on it would satisfy the
+// letter of "a duplicate delivery produces one Pushover" — but it would miss the
+// neighbouring case, because ECS can emit several distinct STOPPED events for
+// one task (different versions, same terminal outcome) as container-level state
+// settles. Those are not duplicate deliveries and version would let each of them
+// through, yet they describe the same dead run and deserve one alert between
+// them. Keying on the task is strictly stronger and matches what handleTask
+// already promises: at most one Pushover per stopped task. Version is kept on
+// the struct and written into the marker body, where it dates the delivery that
+// won without weakening the key.
+func (d ecsTaskDetail) dedupeKey() string {
+	return "task/" + d.taskID()
+}
+
+// alert pairs a rendered message with this task's one-shot identity.
+func (d ecsTaskDetail) alert(title, body string) alert {
+	return alert{
+		key:   d.dedupeKey(),
+		note:  fmt.Sprintf("version=%d lastStatus=%s", d.Version, d.LastStatus),
+		title: title,
+		body:  body,
+	}
 }
 
 // command is the joined container command override, which is exactly the string
@@ -118,9 +147,9 @@ func handleTask(ctx context.Context, detail json.RawMessage) error {
 		if d.failed() {
 			// No streak is computable for a run the ledger never finished
 			// describing, and this class of failure is severe and rare, so
-			// it always alerts.
+			// it always alerts — once per task, see dedupeKey.
 			title, body := opsalert.FormatCrash(command, d.taskID(), d.StoppedReason)
-			return sendOrLog(title, body)
+			return sendOnce(ctx, markers, d.alert(title, body))
 		}
 		// Succeeded, but the ledger write was lost (the entrypoint's final
 		// run-ledger call is best-effort — `|| true` — so this does happen).
@@ -133,8 +162,13 @@ func handleTask(ctx context.Context, detail json.RawMessage) error {
 		return nil
 	}
 
+	// The verdict is a pure function of the ledger, and the ledger does not
+	// change between two deliveries of the same event — so a repeat delivery
+	// recomputes the identical verdict and would push it again. Streak
+	// deduplicates across *runs*; only the marker deduplicates across
+	// deliveries of one run.
 	title, body := opsalert.FormatTask(opsalert.Streak(recs, command))
-	return sendOrLog(title, body)
+	return sendOnce(ctx, markers, d.alert(title, body))
 }
 
 // hasTerminalRecord reports whether recs contains a SUCCESS or FAILED record
