@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"regexp"
@@ -37,8 +36,8 @@ var standingsURL = "https://www.fantrax.com/fxpa/req"
 // view=SCHEDULE. The logos map may have empty values for teams that
 // haven't set a logo (rare); callers should treat empty as "no avatar".
 func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string, map[string]string, error) {
-	fullRequest := map[string]interface{}{
-		"msgs": []auth_client.FantraxMessage{
+	fullRequest := auth_client.BuildFullRequest(
+		[]auth_client.FantraxMessage{
 			{
 				Method: "getStandings",
 				Data: map[string]string{
@@ -47,18 +46,8 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 				},
 			},
 		},
-		"uiv":    3,
-		"refUrl": fmt.Sprintf("https://www.fantrax.com/fantasy/league/%s/standings", c.leagueID),
-		"dt":     0,
-		"at":     0,
-		"av":     "0.0",
-		"tz":     "UTC",
-		// Must match fantraxAPIVersion in auth_client/fantrax_client.go — this is
-		// the one /fxpa/req payload we build ourselves rather than via the
-		// library's buildFullRequest, so the two pins move together or this call
-		// alone starts returning STALE_CLIENT. See rosterbot-7rl.
-		"v": "185.1.0",
-	}
+		fmt.Sprintf("https://www.fantrax.com/fantasy/league/%s/standings", c.leagueID),
+	)
 
 	jsonStr, err := json.Marshal(fullRequest)
 	if err != nil {
@@ -80,7 +69,10 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 		return nil, nil, nil, fmt.Errorf("standings API returned status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// ReadBody surfaces an embedded pageError by name. Reading raw here is what
+	// made the 2026-08 STALE_CLIENT outage report itself as the far less useful
+	// "no response data in standings" below (rosterbot-7i3).
+	body, err := auth_client.ReadBody(resp)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("read standings response: %w", err)
 	}
