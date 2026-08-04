@@ -61,8 +61,13 @@ func runVersionCheck(cmd *cobra.Command, args []string) error {
 
 	line, exitErr := versionCheckResultLine(status, code, err)
 	if exitErr != nil {
-		// Printed to stderr as well so it lands in the ledger's log_tail as the
-		// last non-empty line, which is what opsalert quotes into the Pushover.
+		// This print is redundant, not load-bearing: rootCmd sets neither
+		// SilenceErrors nor SilenceUsage, so on a RunE error cobra already
+		// prints "Error: <err>" plus a usage dump to stderr once this RunE
+		// returns, and cmd/root.go's Execute() reprints the raw error again
+		// after rootCmd.Execute() returns — that final reprint, not this one,
+		// is what guarantees the diagnosis lands as the last non-empty line,
+		// which is what opsalert quotes into the Pushover.
 		fmt.Fprintln(os.Stderr, exitErr)
 		return exitErr
 	}

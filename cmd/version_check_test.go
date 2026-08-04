@@ -58,8 +58,22 @@ func TestVersionCheckResultLine_ExitPolicy(t *testing.T) {
 			if !tt.wantFailure && exitErr != nil {
 				t.Fatalf("expected exit 0, got error: %v", exitErr)
 			}
-			if tt.wantContain != "" && !strings.Contains(line+errString(exitErr), tt.wantContain) {
-				t.Errorf("output %q + %q missing %q", line, errString(exitErr), tt.wantContain)
+			if tt.wantContain == "" {
+				return
+			}
+			// runVersionCheck discards `line` entirely on the failure path (only
+			// exitErr.Error() reaches stderr and the exit), so the two fields must
+			// be checked on the branch that actually carries the text — asserting
+			// against a concatenation of both would pass even if the failure path
+			// silently dropped the diagnostic into the discarded field.
+			if tt.wantFailure {
+				if !strings.Contains(exitErr.Error(), tt.wantContain) {
+					t.Errorf("error %q missing %q", exitErr.Error(), tt.wantContain)
+				}
+				return
+			}
+			if !strings.Contains(line, tt.wantContain) {
+				t.Errorf("line %q missing %q", line, tt.wantContain)
 			}
 		})
 	}
@@ -75,11 +89,4 @@ func TestVersionCheckResultLine_StaleMessageNamesThePinnedVersion(t *testing.T) 
 	if !strings.Contains(exitErr.Error(), "185.1.0") {
 		t.Errorf("stale error %q does not name the pinned version", exitErr.Error())
 	}
-}
-
-func errString(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
 }
