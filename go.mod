@@ -59,4 +59,4 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 )
 
-replace github.com/pmurley/go-fantrax => github.com/nixon-commits/go-fantrax v0.1.14-0.20260803155028-5b9d97f48f4c
+replace github.com/pmurley/go-fantrax => github.com/nixon-commits/go-fantrax v0.1.14-0.20260804211426-5cbe63353216
