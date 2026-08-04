@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -63,15 +64,8 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("mkdir %s: %w", projSiteOut, err)
 	}
 	outPath := filepath.Join(projSiteOut, "model.json")
-	f, err := os.Create(outPath)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", outPath, err)
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(m); err != nil {
-		return fmt.Errorf("encode model: %w", err)
+	if err := writeJSONModel(outPath, m); err != nil {
+		return err
 	}
 	fmt.Fprintf(os.Stderr, "Wrote %s (%d graded rows, latest %s)\n", outPath, len(rows), m.LatestDate)
 
@@ -118,15 +112,8 @@ func renderValueSite(outDir string) error {
 	}
 	vm := valuereport.BuildModel(rows)
 	outPath := filepath.Join(outDir, "value.json")
-	f, err := os.Create(outPath)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", outPath, err)
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(vm); err != nil {
-		return fmt.Errorf("encode value model: %w", err)
+	if err := writeJSONModel(outPath, vm); err != nil {
+		return err
 	}
 	fmt.Fprintf(os.Stderr, "Wrote %s (%d team-value rows)\n", outPath, len(rows))
 	return nil
@@ -157,15 +144,8 @@ func renderViewsSite(outDir string) error {
 		return fmt.Errorf("read recap logs: %w", err)
 	}
 	outPath := filepath.Join(outDir, "views.json")
-	f, err := os.Create(outPath)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", outPath, err)
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(m); err != nil {
-		return fmt.Errorf("encode views model: %w", err)
+	if err := writeJSONModel(outPath, m); err != nil {
+		return err
 	}
 	fmt.Fprintf(os.Stderr, "Wrote %s (%d recent page reads)\n", outPath, len(m.Hits))
 	return nil
@@ -198,16 +178,36 @@ func writeGapModel(reader lineupgap.Reader, outDir string) error {
 		return fmt.Errorf("mkdir %s: %w", outDir, err)
 	}
 	outPath := filepath.Join(outDir, "gap.json")
-	f, err := os.Create(outPath)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", outPath, err)
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(m); err != nil {
-		return fmt.Errorf("encode gap model: %w", err)
+	if err := writeJSONModel(outPath, m); err != nil {
+		return err
 	}
 	fmt.Fprintf(os.Stderr, "Wrote %s (%d lineup-gap days)\n", outPath, len(rows))
+	return nil
+}
+
+// writeJSONModel encodes v as indented JSON at path.
+//
+// Close is returned rather than deferred-and-dropped because these files are the
+// dashboard's entire data feed: json.Encoder buffers, the final flush happens
+// inside Close, and entrypoint.sh syncs whatever landed on disk regardless. A
+// dropped Close error means a truncated model.json published to CloudFront while
+// the run printed "Wrote ..." and exited 0 — a broken dashboard reported as a
+// success. On an encode error the Close error is joined rather than dropped: the
+// encode failure is the cause and reads first, but a Close that also fails says
+// something independent about the disk, which is worth knowing on exactly the
+// path where the write already went wrong.
+func writeJSONModel(path string, v any) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", path, err)
+	}
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return errors.Join(fmt.Errorf("encode %s: %w", filepath.Base(path), err), f.Close())
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", path, err)
+	}
 	return nil
 }

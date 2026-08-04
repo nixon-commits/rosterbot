@@ -148,12 +148,30 @@ func cached[T any](c *Client, key string, tier cacheTier, fetch func() (T, error
 	return cache.New[T](c.cacheDir, tier.duration()).Get(key, fetch)
 }
 
+// periodCacheKey is the single answer to "where does this per-period snapshot
+// live, and how long does it keep?" — the one place a per-period key is built.
+//
+// It is a method, not two lines inlined at each site, because it was not:
+// InvalidatePeriodRosterCache assembled its own key by hand, and when
+// rosterbot-qoa spliced the season into this grammar the invalidator kept
+// building the old one. Deleting a key that does not exist is not an error, so
+// for four days it silently dropped nothing (rosterbot-sza). Anything that needs
+// to name one of these keys must come through here.
+//
+// The caller is responsible for the caching-off short-circuit before calling:
+// resolving the policy reads the season range, and the cacheDir=="" path
+// (--no-cache, hermetic tests) must not trigger that round-trip.
+func (c *Client) periodCacheKey(prefix, teamID string, period DailyPeriod) (string, cacheTier) {
+	tier, season := c.periodCachePolicy(period)
+	return seasonScopedKey(prefix, teamID, season, int(period)), tier
+}
+
 // cachedForPeriod is the per-period variant of cached. The tier isn't fixed —
 // a settled period is immutable (tierPast) while the current and still-settling
 // ones move (tierToday) — so both it and the key's season scope come from
-// periodCachePolicy. That resolution reads the season range, so it runs only
-// after the caching-off short-circuit, keeping the no-cache / hermetic path
-// free of the extra round-trip that eager resolution would introduce.
+// periodCacheKey. That resolution reads the season range, so it runs only after
+// the caching-off short-circuit, keeping the no-cache / hermetic path free of
+// the extra round-trip that eager resolution would introduce.
 //
 // It takes the key's prefix and teamID rather than a finished key because the
 // season part has to be spliced in after that short-circuit.
@@ -161,8 +179,7 @@ func cachedForPeriod[T any](c *Client, prefix, teamID string, period DailyPeriod
 	if c.cacheDir == "" {
 		return fetch()
 	}
-	tier, season := c.periodCachePolicy(period)
-	key := seasonScopedKey(prefix, teamID, season, int(period))
+	key, tier := c.periodCacheKey(prefix, teamID, period)
 	return cache.New[T](c.cacheDir, tier.duration()).Get(key, fetch)
 }
 

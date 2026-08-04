@@ -14,6 +14,7 @@ package statesync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -207,9 +208,20 @@ func (s *Syncer) download(ctx context.Context, bucket, key, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, out.Body)
-	return err
+	// Close is checked rather than deferred-and-dropped because this is a
+	// *write*: the final flush happens inside Close, so a full disk or a failing
+	// volume surfaces there and nowhere else. Discarding it would let download
+	// return nil having left a silently truncated file — and one of the things
+	// this syncs down is the Fantrax session cookie, where a half-written file
+	// is a login loop rather than an obvious failure.
+	if _, cerr := io.Copy(f, out.Body); cerr != nil {
+		// Joined, not dropped. The copy error is the cause and errors.Join keeps
+		// it first, but a Close that also fails is a second, independent fact
+		// about the volume — and on this path the volume is exactly what is
+		// under suspicion, so it is the worst possible moment to throw it away.
+		return errors.Join(cerr, f.Close())
+	}
+	return f.Close()
 }
 
 func (s *Syncer) upload(ctx context.Context, bucket, key, src string) error {

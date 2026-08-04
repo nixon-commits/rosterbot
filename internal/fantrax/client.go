@@ -287,18 +287,28 @@ func (c *Client) allMatchups() (*auth_client.AllMatchupsResult, error) {
 // a specific scoring period so the next call re-fetches from Fantrax. Called
 // after ApplyLineup so a second optimize run sees the updated lineup rather
 // than the stale pre-apply snapshot.
+//
+// The two key families here are deliberately built differently, and neither is
+// a typo for the other. The period-specific keys go through periodCacheKey —
+// the same call cachedForPeriod uses to write them — because they are season
+// scoped (`<prefix>-<teamID>-<season>-<period>`). Hand-assembling them is what
+// broke this function for four days: rosterbot-qoa added the season segment to
+// the writer, this side kept the old grammar, and since removing a nonexistent
+// key is not an error it failed silently (rosterbot-sza). The current-day keys
+// carry no season by design — they sit at todayTTL, where a period number
+// never appears and a stale entry expires in 15 minutes on its own.
 func (c *Client) InvalidatePeriodRosterCache(period DailyPeriod) {
 	if c.cacheDir == "" {
 		return
 	}
 	fc := cache.New[[]Player](c.cacheDir, 0)
-	periodStr := strconv.Itoa(int(period))
-	// Period-specific keys (used by GetHitterRosterForPeriod for future dates).
-	fc.Invalidate(cache.Key(keyHitterRoster, c.teamID, periodStr))
-	fc.Invalidate(cache.Key(keyPitcherRoster, c.teamID, periodStr))
-	// Current-day keys (used by GetHitterRoster / GetPitcherRoster for today).
-	fc.Invalidate(cache.Key(keyHitterRoster, c.teamID))
-	fc.Invalidate(cache.Key(keyPitcherRoster, c.teamID))
+	for _, prefix := range []string{keyHitterRoster, keyPitcherRoster} {
+		// Period-specific, season-scoped (GetHitterRosterForPeriod et al).
+		key, _ := c.periodCacheKey(prefix, c.teamID, period)
+		fc.Invalidate(key)
+		// Current-day (GetHitterRoster / GetPitcherRoster).
+		fc.Invalidate(cache.Key(prefix, c.teamID))
+	}
 }
 
 // GetHitterRoster returns all hitters on the team (active + reserve; excludes IL/minors).

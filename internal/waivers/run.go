@@ -583,7 +583,14 @@ func writeGHASummary(r Report, path string) {
 		log.Printf("WARNING: failed to open GHA summary file: %v", err)
 		return
 	}
-	defer f.Close()
+	// The buffered writes above are only flushed by Close, so dropping its error
+	// would report a summary this function never actually finished writing.
+	// There are early returns below, so this stays a defer.
+	defer func() {
+		if cerr := f.Close(); cerr != nil {
+			log.Printf("WARNING: GHA summary may be incomplete: %v", cerr)
+		}
+	}()
 
 	fmt.Fprintln(f, "## Waiver Picks")
 	fmt.Fprintln(f)

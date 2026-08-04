@@ -106,7 +106,11 @@ func Run(ft ClaimsClient, today time.Time, opts Options) error {
 			log.Printf("WARNING: failed to open GHA summary: %v", ferr)
 		} else {
 			fmt.Fprint(f, FormatReport(moves, opts.DropsMin, false))
-			f.Close()
+			// Checked, not dropped: the write above is only flushed by Close, so
+			// its error is the one that says the summary is truncated.
+			if cerr := f.Close(); cerr != nil {
+				log.Printf("WARNING: GHA summary may be incomplete: %v", cerr)
+			}
 		}
 	}
 
