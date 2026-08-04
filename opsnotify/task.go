@@ -118,11 +118,11 @@ func handleTask(ctx context.Context, detail json.RawMessage) error {
 	}
 	command := d.command()
 	if command == "" {
-		log.Printf("task %s has no container command override; ignoring", d.taskID())
+		log.Printf("task %s has no container command override; ignoring", logSafe(d.taskID()))
 		return nil
 	}
 	if ledger == nil {
-		log.Printf("no ledger reader configured (STATE_BUCKET unset); ignoring task %s", d.taskID())
+		log.Printf("no ledger reader configured (STATE_BUCKET unset); ignoring task %s", logSafe(d.taskID()))
 		return nil
 	}
 
@@ -158,7 +158,7 @@ func handleTask(ctx context.Context, detail json.RawMessage) error {
 		// came before it, and if that history's most recent terminal record
 		// happens to be FAILED, Streak would open a false "failed" streak on
 		// a run that in fact succeeded. Silence is the only honest answer.
-		log.Printf("task %s succeeded with no terminal ledger record; nothing to judge", d.taskID())
+		log.Printf("task %s succeeded with no terminal ledger record; nothing to judge", logSafe(d.taskID()))
 		return nil
 	}
 

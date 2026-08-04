@@ -207,9 +207,19 @@ func (s *Syncer) download(ctx context.Context, bucket, key, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, out.Body)
-	return err
+	// Close is checked rather than deferred-and-dropped because this is a
+	// *write*: the final flush happens inside Close, so a full disk or a failing
+	// volume surfaces there and nowhere else. Discarding it would let download
+	// return nil having left a silently truncated file — and one of the things
+	// this syncs down is the Fantrax session cookie, where a half-written file
+	// is a login loop rather than an obvious failure. On a copy error Close is
+	// still called but its error dropped, since the copy failure is the cause
+	// and the Close failure would only be its echo.
+	if _, err := io.Copy(f, out.Body); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func (s *Syncer) upload(ctx context.Context, bucket, key, src string) error {

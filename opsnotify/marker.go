@@ -48,7 +48,7 @@ func (m *markerStore) token(ctx context.Context, key string) (string, bool) {
 	}
 	data, found, err := m.blob.Get(ctx, key)
 	if err != nil {
-		log.Printf("marker read %s: %v (treating as unsent)", key, err)
+		log.Printf("marker read %s: %v (treating as unsent)", logSafe(key), err)
 		return "", false
 	}
 	if !found {
@@ -74,7 +74,7 @@ func (m *markerStore) record(ctx context.Context, key, note string) {
 		return
 	}
 	if err := m.blob.Put(ctx, key, []byte(note)); err != nil {
-		log.Printf("marker write %s: %v (a repeat delivery will alert again)", key, err)
+		log.Printf("marker write %s: %v (a repeat delivery will alert again)", logSafe(key), err)
 	}
 }
 
@@ -116,7 +116,7 @@ func sendOnce(ctx context.Context, m *markerStore, a alert) error {
 		return nil
 	}
 	if m.sent(ctx, a.key) {
-		log.Printf("already alerted for %s; staying quiet", a.key)
+		log.Printf("already alerted for %s; staying quiet", logSafe(a.key))
 		return nil
 	}
 	return send1(ctx, m, a)

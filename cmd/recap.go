@@ -38,7 +38,9 @@ func init() {
 	rootCmd.AddCommand(recapCmd)
 }
 
-func runRecap(cmd *cobra.Command, args []string) error {
+// The return is named so the deferred Close below can promote its error; every
+// `return` in the body still reads normally.
+func runRecap(cmd *cobra.Command, args []string) (err error) {
 	today := todayET()
 	_, ft, err := initApp([]time.Time{today})
 	if err != nil {
@@ -84,7 +86,17 @@ func runRecap(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("create %s: %w", recapOut, err)
 		}
-		defer f.Close()
+		// Close has to stay deferred — out is os.Stdout on the other branch and
+		// several paths below return early — but its error is promoted to the
+		// function's, since the render's final bytes are only flushed here. A
+		// dropped Close would print "Wrote <path>" and exit 0 over a truncated
+		// page, which recap-site then publishes to CloudFront. It never masks an
+		// earlier failure: that one is the cause, this would be its echo.
+		defer func() {
+			if cerr := f.Close(); cerr != nil && err == nil {
+				err = fmt.Errorf("close %s: %w", recapOut, cerr)
+			}
+		}()
 		out = f
 	}
 
