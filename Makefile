@@ -60,6 +60,7 @@ run-all:
 	@echo "  (serve is long-running — exercise manually: ROSTERBOT_API_TOKEN=test go run . serve)"
 	@echo "=== prospects --dry-run ===";                  time go run . prospects --dry-run;                              echo
 	@echo "=== gs-check --dry-run ===";                   time go run . gs-check --dry-run;                               echo
+	@echo "=== version-check ===";                        time go run . version-check;                                    echo
 	@echo "=== transactions --dry-run ===";               time go run . transactions --dry-run;                           echo
 	@echo "=== waivers --dry-run ===";                    time go run . waivers --dry-run;                                echo
 	@echo "=== claims --dry-run ===";                    time go run . claims --dry-run --no-signals;                    echo
