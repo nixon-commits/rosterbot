@@ -133,6 +133,14 @@ func truncName(name string, maxLen int) string {
 	return string(runes[:maxLen])
 }
 
+// plural returns "s" unless n is exactly 1.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
 func formatDates(dates []time.Time) string {
 	if len(dates) == 1 {
 		return dates[0].Format("2006-01-02")
@@ -388,6 +396,16 @@ func renderDateResult(w io.Writer, dr dateResult, multiDate bool, slotName map[s
 		pLines = append(pLines, fmt.Sprintf("GS: %d/%d used (%d rem, %.1f future)",
 			gsBudget.Used, gsBudget.Limit, remaining, gsBudget.FutureDemand()))
 		pGreen = append(pGreen, false)
+		// The gate firing is the measurement of surplus SP: capacity the roster
+		// owns that the league's 6 P slots and weekly cap will not let it deploy.
+		// Gross projected value, not a net loss — the budget goes to a better start.
+		if n := len(dr.pitcherResult.GateReport.Suppressed); n > 0 {
+			hLines = append(hLines, "")
+			hGreen = append(hGreen, false)
+			pLines = append(pLines, fmt.Sprintf("GS gate: %d start%s suppressed (-%.1f proj pts)",
+				n, plural(n), dr.pitcherResult.GateReport.SuppressedPts()))
+			pGreen = append(pGreen, false)
+		}
 	}
 
 	// Print side by side.

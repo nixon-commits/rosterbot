@@ -218,7 +218,7 @@ func optimizeOneDate(ft dateRosterClient, sched dateScheduleClient, in OptimizeI
 	if in.ShowPipeline {
 		dr.hitterBreakdowns = hitterBreakdownsFor(hitterResult, in.HitterSrc, in.HitterScoring)
 		dr.hitterPipelines = hitterPipelinesFor(hitterResult, in.HitterSrc, in.HitterScoring, dr.hitterBreakdowns, matchupSrc)
-		dr.pitcherPipelines = pitcherPipelinesFor(pitcherResult, in.PitcherSrc, in.PitcherScoring, probableStarters, dateBudget != nil)
+		dr.pitcherPipelines = pitcherPipelinesFor(pitcherResult, in.PitcherSrc, in.PitcherScoring)
 	}
 
 	return dr
@@ -354,15 +354,14 @@ func hitterPipelinesFor(
 }
 
 // pitcherPipelinesFor builds the pitcher-side pipeline table: base → blend →
-// GS gate → final. gated reports whether a budget was in force for this date,
-// which is what makes a suppressed probable starter attributable to the gate
-// rather than to a projection.
+// GS gate → final. Gate attribution comes from res.GateReport, which is the
+// gate's own account of what it declined. It used to be re-derived here by
+// inference (probable ∧ !IsStarter ∧ gated), which was both fragile and, in
+// the case of the discount multiplier, wrong.
 func pitcherPipelinesFor(
 	res optimizer.PitcherResult,
 	src projections.PitcherSource,
 	scoring fantrax.ScoringWeights,
-	probableStarters map[string]string,
-	gated bool,
 ) map[string]*projections.PitcherPipelineDetail {
 	var breakdowns map[string]*projections.PitcherBreakdown
 	if blended, ok := src.(*projections.PitcherBlendedSource); ok {
@@ -372,6 +371,11 @@ func pitcherPipelinesFor(
 				breakdowns[sp.Player.ID] = bd
 			}
 		}
+	}
+
+	suppressed := make(map[string]bool, len(res.GateReport.Suppressed))
+	for _, s := range res.GateReport.Suppressed {
+		suppressed[s.PlayerID] = true
 	}
 
 	out := make(map[string]*projections.PitcherPipelineDetail)
@@ -416,15 +420,13 @@ func pitcherPipelinesFor(
 		}
 		pd.BlendDelta = pd.BlendedPtsPerGame - pd.BasePtsPerGame
 
-		// Stage 3: GS Gate — a probable starter that came back not-starting was
-		// suppressed by the budget, and carries the optimizer's NonStarterSPDiscount.
+		// Stage 3: GS Gate — the gate's own report says which starts it declined.
+		// The suppressed starter carries the optimizer's NonStarterSPDiscount.
 		pd.FinalPtsPerGame = pd.BlendedPtsPerGame
-		if spEligible && gated {
-			if _, wasProbable := probableStarters[projections.NormalizeName(sp.Player.Name)]; wasProbable && !sp.IsStarter {
-				pd.WasGated = true
-				pd.FinalPtsPerGame = pd.BlendedPtsPerGame * 0.10
-				pd.GateDelta = pd.FinalPtsPerGame - pd.BlendedPtsPerGame
-			}
+		if suppressed[sp.Player.ID] {
+			pd.WasGated = true
+			pd.FinalPtsPerGame = pd.BlendedPtsPerGame * optimizer.NonStarterSPDiscount
+			pd.GateDelta = pd.FinalPtsPerGame - pd.BlendedPtsPerGame
 		}
 
 		out[sp.Player.ID] = pd

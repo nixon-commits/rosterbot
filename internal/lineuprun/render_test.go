@@ -134,6 +134,26 @@ func TestRenderDateResult_GoldenFull(t *testing.T) {
 	assertGolden(t, "board_full.golden", buf.String())
 }
 
+// The GS-budget footer with the gate having actually declined starts: the
+// suppressed-starts line only fires when GateReport.Suppressed is non-empty
+// (board_full.golden's budget fixture has none, so it never exercises this
+// branch). Also pins the pluralization and the gross-forgone-points total.
+func TestRenderDateResult_GoldenGSSuppressed(t *testing.T) {
+	dr := goldenResult()
+	dr.pitcherResult.GateReport = optimizer.GSGateReport{
+		Suppressed: []optimizer.SuppressedStart{
+			{PlayerID: "p1", Name: "Some SP", ProjectedPts: 8.50},
+			{PlayerID: "p2", Name: "Another SP", ProjectedPts: 4.75},
+		},
+		Limit: 12, Used: 5, Remaining: 7,
+	}
+	gs := &optimizer.GSBudget{Limit: 12, Used: 5, Today: day(2026, 7, 25), WeekEnd: day(2026, 7, 26)}
+
+	var buf bytes.Buffer
+	renderDateResult(&buf, dr, false, goldenSlotNames(), false, gs)
+	assertGolden(t, "board_gs_suppressed.golden", buf.String())
+}
+
 // renderDateResult must not reach for os.Stdout — the whole point of the
 // injected writer (rosterbot-rr1 criterion 2). If it ever did, this would
 // produce an empty buffer while the board leaked to the test's own output.
