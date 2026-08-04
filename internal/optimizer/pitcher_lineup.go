@@ -31,6 +31,9 @@ type PitcherResult struct {
 	ToActivate []fantrax.PlayerSlot
 	ToBench    []string // player IDs to move to reserve
 	Scored     []ScoredPitcher
+	// GateReport names the starts the weekly GS budget declined. Zero-valued
+	// when no budget was in force for this date.
+	GateReport GSGateReport
 }
 
 // OptimizePitcherLineup computes the optimal daily pitcher lineup.
@@ -49,7 +52,7 @@ func OptimizePitcherLineup(
 	gsBudget *GSBudget,
 ) PitcherResult {
 	scored := scorePitcherRoster(roster, playingToday, probableStarters, projSrc, scoring)
-	scored = applyGSGate(scored, gsBudget)
+	scored, gateReport := applyGSGate(scored, gsBudget)
 
 	// Sort: hasGame first, then by pts desc, then by ID for stability.
 	sort.Slice(scored, func(i, j int) bool {
@@ -173,6 +176,7 @@ func OptimizePitcherLineup(
 		ToActivate: changedActivate,
 		ToBench:    toBench,
 		Scored:     scored,
+		GateReport: gateReport,
 	}
 }
 

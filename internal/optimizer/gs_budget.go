@@ -28,6 +28,44 @@ type DayForecast struct {
 	Estimated         float64
 }
 
+// GSGateReport records what the weekly game-start budget cost on one date: the
+// starts the gate declined, plus the budget state that forced the decision.
+//
+// The gate has always known this; before rosterbot-i1c it discarded the answer
+// and the display layer re-derived an approximation of it by inference.
+type GSGateReport struct {
+	Suppressed []SuppressedStart
+	// Budget state echoed so a consumer can report the cost and its cause
+	// together without also carrying the *GSBudget.
+	Limit, Used, Remaining int
+}
+
+// SuppressedStart is one start the gate declined to spend budget on.
+type SuppressedStart struct {
+	PlayerID     string
+	Name         string
+	ProjectedPts float64 // blended pts/game at the moment of suppression
+}
+
+// SuppressedPts is the GROSS projected value of the starts the gate declined.
+//
+// It is NOT a net loss to the week, and must not be subtracted from a realised
+// total. The budget is not destroyed by a suppression — it is spent on a
+// higher-ranked start instead, which is the entire point of the ranked cut.
+//
+// What it measures is SP capacity the roster owns and the league will not let
+// it deploy: 13 active hitter slots against 6 undifferentiated P slots plus a
+// weekly game-start cap mean that above the cap an extra ace start produces
+// exactly zero marginal points. A gate that fires regularly is the measurement
+// of that surplus.
+func (r GSGateReport) SuppressedPts() float64 {
+	var total float64
+	for _, s := range r.Suppressed {
+		total += s.ProjectedPts
+	}
+	return total
+}
+
 // Remaining returns how many GS are available from today onward.
 func (b *GSBudget) Remaining() int {
 	if b == nil || b.Limit == 0 {
@@ -75,12 +113,17 @@ func (b *GSBudget) FutureDemand() float64 {
 // be moved into an active slot, so either way gate suppression has no
 // practical effect and only misleads the displayed pts/gate delta. Suppressed
 // starters fall to NonStarterSPDiscount downstream.
-func applyGSGate(scored []ScoredPitcher, budget *GSBudget) []ScoredPitcher {
+//
+// The returned GSGateReport names every start the gate declined. It is the
+// authoritative account — downstream must not re-derive suppression by
+// comparing probable-starter membership against IsStarter.
+func applyGSGate(scored []ScoredPitcher, budget *GSBudget) ([]ScoredPitcher, GSGateReport) {
 	if budget == nil || budget.Limit == 0 {
-		return scored
+		return scored, GSGateReport{}
 	}
 
 	remaining := budget.Remaining()
+	report := GSGateReport{Limit: budget.Limit, Used: budget.Used, Remaining: remaining}
 	if remaining <= 0 {
 		for i := range scored {
 			// Locked players' GS is already decided (either consumed in an
@@ -90,9 +133,16 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) []ScoredPitcher {
 			if scored[i].Player.Locked {
 				continue
 			}
+			if scored[i].IsStarter {
+				report.Suppressed = append(report.Suppressed, SuppressedStart{
+					PlayerID:     scored[i].Player.ID,
+					Name:         scored[i].Player.Name,
+					ProjectedPts: scored[i].ExpectedPts,
+				})
+			}
 			scored[i].IsStarter = false
 		}
-		return scored
+		return scored, report
 	}
 
 	type starterRef struct {
@@ -110,7 +160,7 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) []ScoredPitcher {
 		}
 	}
 	if len(todayStarters) == 0 {
-		return scored
+		return scored, report
 	}
 
 	var futureConfirmed []float64
@@ -131,7 +181,7 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) []ScoredPitcher {
 
 	const eps = 1e-9
 	if float64(remaining)+eps >= totalPlanned {
-		return scored
+		return scored, report
 	}
 
 	// Placeholder value for estimated (unknown-value) future starters: the mean
@@ -269,8 +319,13 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) []ScoredPitcher {
 
 	for i, s := range todayStarters {
 		if !keepToday[i] {
+			report.Suppressed = append(report.Suppressed, SuppressedStart{
+				PlayerID:     scored[s.idx].Player.ID,
+				Name:         scored[s.idx].Player.Name,
+				ProjectedPts: scored[s.idx].ExpectedPts,
+			})
 			scored[s.idx].IsStarter = false
 		}
 	}
-	return scored
+	return scored, report
 }

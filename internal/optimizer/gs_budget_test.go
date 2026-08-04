@@ -79,7 +79,7 @@ func TestApplyGSGate_NilBudget(t *testing.T) {
 	scored := []ScoredPitcher{
 		{Player: fantrax.Player{ID: "p1"}, ExpectedPts: 10, IsStarter: true},
 	}
-	result := applyGSGate(scored, nil)
+	result, _ := applyGSGate(scored, nil)
 	if !result[0].IsStarter {
 		t.Error("nil budget should not suppress starters")
 	}
@@ -101,7 +101,7 @@ func TestApplyGSGate_AmpleBudget(t *testing.T) {
 		},
 	}
 	// remaining=10, planned=2+2.8=4.8 — ample budget.
-	result := applyGSGate(scored, budget)
+	result, _ := applyGSGate(scored, budget)
 	for _, sp := range result {
 		if !sp.IsStarter {
 			t.Errorf("ample budget should not suppress starter %s", sp.Player.ID)
@@ -126,7 +126,7 @@ func TestApplyGSGate_TightBudget_SuppressesWeakestToday(t *testing.T) {
 		},
 	}
 	// remaining=2, planned=3 (2 today + 1 future). Top 2 values: p1(10), future(8). p2(5) cut.
-	result := applyGSGate(scored, budget)
+	result, _ := applyGSGate(scored, budget)
 	if !result[0].IsStarter {
 		t.Error("best starter (p1, 10pts) should NOT be suppressed")
 	}
@@ -167,7 +167,7 @@ func TestApplyGSGate_ValueAwareKeepsTodayOverMediocreFuture(t *testing.T) {
 	// Under old count-based gate: allowToday = round(5 * 3/7.8) = round(1.92) = 2 — would cut Burns.
 	// Under value-aware gate: today's 10pt SP should beat ~10pt placeholder by
 	// stability tiebreaker (today wins ties), so all 3 today SPs kept.
-	result := applyGSGate(scored, budget)
+	result, _ := applyGSGate(scored, budget)
 	for _, sp := range result {
 		if sp.Player.ID == "ace" || sp.Player.ID == "mid" || sp.Player.ID == "burn" {
 			if !sp.IsStarter {
@@ -195,7 +195,7 @@ func TestApplyGSGate_HighValueFutureCutsTodayWeakest(t *testing.T) {
 	}
 	// remaining=3, total known=4 (2 today + 2 future). Top 3: 16, 15, 6.
 	// today2 (5pts) suppressed; today1 (6pts) kept.
-	result := applyGSGate(scored, budget)
+	result, _ := applyGSGate(scored, budget)
 	if !result[0].IsStarter {
 		t.Error("today1 (6pts) should survive — higher than future cut")
 	}
@@ -227,7 +227,7 @@ func TestApplyGSGate_SkipsLockedPlayers(t *testing.T) {
 	// remaining=2, 6 planned (3 today + 3 future). Locked SPs excluded from
 	// the ranking entirely — only unlocked_low (5pts) competes against
 	// future (15/14/13). It loses and is suppressed. Locked pair stays put.
-	result := applyGSGate(scored, budget)
+	result, _ := applyGSGate(scored, budget)
 	if !result[0].IsStarter {
 		t.Error("locked active SP should keep IsStarter=true (can't be suppressed)")
 	}
@@ -247,7 +247,7 @@ func TestApplyGSGate_ZeroRemaining_PreservesLocked(t *testing.T) {
 		{Player: fantrax.Player{ID: "unlocked"}, ExpectedPts: 8, IsStarter: true},
 	}
 	budget := &GSBudget{Limit: 12, Used: 12, Today: date("2026-04-10"), WeekEnd: date("2026-04-12")}
-	result := applyGSGate(scored, budget)
+	result, _ := applyGSGate(scored, budget)
 	if !result[0].IsStarter {
 		t.Error("locked player should retain IsStarter even at zero remaining")
 	}
@@ -262,7 +262,7 @@ func TestApplyGSGate_ZeroRemaining_SuppressesAll(t *testing.T) {
 		{Player: fantrax.Player{ID: "p2"}, ExpectedPts: 8, IsStarter: true},
 	}
 	budget := &GSBudget{Limit: 12, Used: 12, Today: date("2026-04-10"), WeekEnd: date("2026-04-12")}
-	result := applyGSGate(scored, budget)
+	result, _ := applyGSGate(scored, budget)
 	for _, sp := range result {
 		if sp.IsStarter {
 			t.Errorf("zero remaining should suppress all starters, but %s still starting", sp.Player.ID)
@@ -301,7 +301,7 @@ func TestApplyGSGate_FractionalEstimateDoesNotOverSuppressToday(t *testing.T) {
 	// remaining=1, totalPlanned=1(today)+0.2(estimated)=1.2 > remaining → gate engages.
 	// Old (ceil-rounded) code: 1 placeholder entry at full mean (20) beats today (8) → today cut.
 	// Fixed code: placeholder entry discounted to 20*0.2=4.0 → today (8) wins.
-	result := applyGSGate(scored, budget)
+	result, _ := applyGSGate(scored, budget)
 	if !result[0].IsStarter {
 		t.Error("today's 8pt starter should survive a 0.2-expected-start future claim, not lose to a full-value phantom placeholder")
 	}
@@ -340,7 +340,7 @@ func TestApplyGSGate_EstimatedLadderPricesWholeUnitsFullAndTailMarginally(t *tes
 	}
 	// remaining=2, totalPlanned=2(today)+1.4(estimated)=3.4 > remaining → engages.
 	// Ranked: est 12.0 | today 9 | today 8 | est 4.8. Top 2 keeps one today start.
-	result := applyGSGate(scored, budget)
+	result, _ := applyGSGate(scored, budget)
 	if !result[0].IsStarter {
 		t.Error("today's 9pt start should outrank the 0.4 tail (4.8) and survive")
 	}
@@ -372,7 +372,7 @@ func TestApplyGSGate_NearTiePrefersTodayOverEstimated(t *testing.T) {
 	// remaining=1, totalPlanned=1(today)+1.0(estimated)=2.0 > remaining → gate engages.
 	// Estimated entry (10.5) is only ~5% above today (10) — inside the margin,
 	// so today should still win despite having the nominally lower value.
-	result := applyGSGate(scored, budget)
+	result, _ := applyGSGate(scored, budget)
 	if !result[0].IsStarter {
 		t.Error("today's start should beat an estimated future start only marginally ahead in value (near-tie)")
 	}
@@ -399,7 +399,7 @@ func TestApplyGSGate_ConfirmedNearTieUnaffected(t *testing.T) {
 	// remaining=1, totalPlanned=2 (1 today + 1 confirmed future) > remaining.
 	// Confirmed future (10.5) is strictly higher than today (10) with no
 	// near-tie leniency for confirmed starts, so it wins the slot outright.
-	result := applyGSGate(scored, budget)
+	result, _ := applyGSGate(scored, budget)
 	if result[0].IsStarter {
 		t.Error("confirmed future start narrowly ahead of today should still win — no near-tie leniency for confirmed starts")
 	}
@@ -448,5 +448,102 @@ func TestOptimizePitcherLineup_GSBudgetCapsStarter(t *testing.T) {
 				t.Error("Back SP should be suppressed (lower value)")
 			}
 		}
+	}
+}
+
+// The gate already knew which starters it flipped; it just threw the answer
+// away, leaving pitcherPipelinesFor to re-derive it by inference. These pin the
+// report as the authoritative account.
+func TestApplyGSGate_ReportNamesTheSuppressedStarters(t *testing.T) {
+	scored := []ScoredPitcher{
+		{Player: fantrax.Player{ID: "p1", Name: "Ace", PosShortNames: "SP"}, ExpectedPts: 10, IsStarter: true},
+		{Player: fantrax.Player{ID: "p2", Name: "Filler", PosShortNames: "SP"}, ExpectedPts: 5, IsStarter: true},
+		{Player: fantrax.Player{ID: "r1", Name: "Reliever", PosShortNames: "RP"}, ExpectedPts: 7, IsStarter: false, HasGame: true},
+	}
+	budget := &GSBudget{
+		Limit:   12,
+		Used:    10,
+		Today:   date("2026-04-10"),
+		WeekEnd: date("2026-04-12"),
+		Forecast: []DayForecast{
+			{Date: date("2026-04-11"), ConfirmedStarters: []float64{8}},
+		},
+	}
+	// remaining=2, planned=3. Top 2: p1(10), future(8). p2(5) is cut.
+	_, report := applyGSGate(scored, budget)
+
+	if len(report.Suppressed) != 1 {
+		t.Fatalf("Suppressed = %d entries, want 1: %+v", len(report.Suppressed), report.Suppressed)
+	}
+	got := report.Suppressed[0]
+	if got.PlayerID != "p2" {
+		t.Errorf("suppressed PlayerID = %q, want p2", got.PlayerID)
+	}
+	if got.Name != "Filler" {
+		t.Errorf("suppressed Name = %q, want Filler", got.Name)
+	}
+	if got.ProjectedPts != 5 {
+		t.Errorf("suppressed ProjectedPts = %v, want 5", got.ProjectedPts)
+	}
+	if report.SuppressedPts() != 5 {
+		t.Errorf("SuppressedPts() = %v, want 5", report.SuppressedPts())
+	}
+	if report.Limit != 12 || report.Used != 10 || report.Remaining != 2 {
+		t.Errorf("budget echo = %d/%d rem %d, want 12/10 rem 2", report.Used, report.Limit, report.Remaining)
+	}
+}
+
+// Locked players are exempt from suppression, so they must not appear in the
+// report either — otherwise the reported cost includes starts the gate never
+// actually declined.
+func TestApplyGSGate_ReportExcludesLockedPlayers(t *testing.T) {
+	scored := []ScoredPitcher{
+		{Player: fantrax.Player{ID: "locked", Name: "Locked SP", PosShortNames: "SP", Locked: true}, ExpectedPts: 9, IsStarter: true},
+		{Player: fantrax.Player{ID: "open", Name: "Open SP", PosShortNames: "SP"}, ExpectedPts: 4, IsStarter: true},
+	}
+	budget := &GSBudget{Limit: 10, Used: 10, Today: date("2026-04-10"), WeekEnd: date("2026-04-12")}
+
+	_, report := applyGSGate(scored, budget)
+
+	for _, s := range report.Suppressed {
+		if s.PlayerID == "locked" {
+			t.Error("locked player must not appear in the gate report")
+		}
+	}
+	if len(report.Suppressed) != 1 || report.Suppressed[0].PlayerID != "open" {
+		t.Errorf("Suppressed = %+v, want exactly the unlocked SP", report.Suppressed)
+	}
+}
+
+// A budget that covers everything planned suppresses nothing, and the report
+// must say so rather than being left zero-valued by accident.
+func TestApplyGSGate_AmpleBudgetReportsNoSuppressions(t *testing.T) {
+	scored := []ScoredPitcher{
+		{Player: fantrax.Player{ID: "p1", Name: "Ace", PosShortNames: "SP"}, ExpectedPts: 10, IsStarter: true},
+	}
+	budget := &GSBudget{Limit: 12, Used: 0, Today: date("2026-04-10"), WeekEnd: date("2026-04-12")}
+
+	_, report := applyGSGate(scored, budget)
+
+	if len(report.Suppressed) != 0 {
+		t.Errorf("Suppressed = %+v, want none", report.Suppressed)
+	}
+	if report.SuppressedPts() != 0 {
+		t.Errorf("SuppressedPts() = %v, want 0", report.SuppressedPts())
+	}
+	if report.Limit != 12 {
+		t.Errorf("Limit = %d, want 12 even with no suppressions", report.Limit)
+	}
+}
+
+// A nil budget means no GS limit is configured at all — the report must be
+// inert, not a zero-limit report that reads as "budget 0/0".
+func TestApplyGSGate_NilBudgetReportIsEmpty(t *testing.T) {
+	scored := []ScoredPitcher{
+		{Player: fantrax.Player{ID: "p1", Name: "Ace", PosShortNames: "SP"}, ExpectedPts: 10, IsStarter: true},
+	}
+	_, report := applyGSGate(scored, nil)
+	if len(report.Suppressed) != 0 || report.Limit != 0 {
+		t.Errorf("nil-budget report = %+v, want zero value", report)
 	}
 }
