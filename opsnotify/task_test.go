@@ -389,3 +389,111 @@ func TestLedgerReader_RespectsTheWindow(t *testing.T) {
 		t.Errorf("got %d records, want 4", len(got))
 	}
 }
+
+// --- Duplicate delivery (rosterbot-chs) ---
+
+// EventBridge can deliver one event more than once, and async-invoke retries on
+// a returned error. The verdict is a pure function of the ledger and the ledger
+// does not move between deliveries, so without a marker the second delivery
+// recomputes the identical alert and pushes it again.
+func TestHandleTask_DuplicateDeliveryAlertsOnce(t *testing.T) {
+	fakeLedger(t, []opsalert.Record{
+		run("task1", optimizeCmd, opsalert.StatusFailed, 1),
+		run("task0", optimizeCmd, opsalert.StatusSuccess, 0),
+	})
+	got := capture(t)
+	fakeMarkers(t)
+
+	one := 1
+	detail := ecsDetail("task1", "STOPPED", "", &one, strings.Fields(optimizeCmd))
+	for i := 0; i < 3; i++ {
+		if err := handleTask(context.Background(), detail); err != nil {
+			t.Fatalf("delivery %d: %v", i, err)
+		}
+	}
+	if len(*got) != 1 {
+		t.Fatalf("got %d sends across 3 deliveries, want 1: %v", len(*got), *got)
+	}
+}
+
+// The crash path (no terminal ledger record) has no streak to deduplicate it and
+// always sends, so it needs the marker just as much.
+func TestHandleTask_DuplicateDeliveryOfACrashAlertsOnce(t *testing.T) {
+	fakeLedger(t, []opsalert.Record{
+		run("task0", optimizeCmd, opsalert.StatusSuccess, 0),
+	})
+	got := capture(t)
+	fakeMarkers(t)
+
+	detail := ecsDetail("task9", "STOPPED", "OutOfMemoryError: Container killed due to memory usage",
+		nil, strings.Fields(optimizeCmd))
+	for i := 0; i < 2; i++ {
+		if err := handleTask(context.Background(), detail); err != nil {
+			t.Fatalf("delivery %d: %v", i, err)
+		}
+	}
+	if len(*got) != 1 {
+		t.Fatalf("got %d sends across 2 deliveries, want 1: %v", len(*got), *got)
+	}
+	if !strings.Contains((*got)[0], "died") {
+		t.Errorf("send = %q, want the crash alert", (*got)[0])
+	}
+}
+
+// Deduplication is per task, so a genuinely different failed run still alerts —
+// the marker must not become a mute on the command.
+func TestHandleTask_ADifferentTaskStillAlerts(t *testing.T) {
+	got := capture(t)
+	fakeMarkers(t)
+	one := 1
+
+	fakeLedger(t, []opsalert.Record{
+		run("task1", optimizeCmd, opsalert.StatusFailed, 1),
+		run("task0", optimizeCmd, opsalert.StatusSuccess, 0),
+	})
+	if err := handleTask(context.Background(),
+		ecsDetail("task1", "STOPPED", "", &one, strings.Fields(optimizeCmd))); err != nil {
+		t.Fatal(err)
+	}
+
+	// A later, unrelated outage on the same command: one success in between
+	// closes the first streak, so this is a fresh "Started".
+	fakeLedger(t, []opsalert.Record{
+		run("task3", optimizeCmd, opsalert.StatusFailed, 1),
+		run("task2", optimizeCmd, opsalert.StatusSuccess, 0),
+		run("task1", optimizeCmd, opsalert.StatusFailed, 1),
+	})
+	if err := handleTask(context.Background(),
+		ecsDetail("task3", "STOPPED", "", &one, strings.Fields(optimizeCmd))); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(*got) != 2 {
+		t.Fatalf("got %d sends, want 2 (one per outage): %v", len(*got), *got)
+	}
+}
+
+// A silent verdict must not claim the task's marker: if the same task is later
+// re-delivered in a state that does warrant an alert, the marker left by the
+// quiet pass would suppress it.
+func TestHandleTask_SilentVerdictLeavesTheMarkerUnclaimed(t *testing.T) {
+	got := capture(t)
+	fake := fakeMarkers(t)
+
+	fakeLedger(t, []opsalert.Record{
+		run("task2", optimizeCmd, opsalert.StatusFailed, 1),
+		run("task1", optimizeCmd, opsalert.StatusFailed, 1),
+		run("task0", optimizeCmd, opsalert.StatusSuccess, 0),
+	})
+	one := 1
+	if err := handleTask(context.Background(),
+		ecsDetail("task2", "STOPPED", "", &one, strings.Fields(optimizeCmd))); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 0 {
+		t.Fatalf("got %d sends, want 0", len(*got))
+	}
+	if len(fake.Keys()) != 0 {
+		t.Errorf("wrote markers %v for a silent verdict", fake.Keys())
+	}
+}

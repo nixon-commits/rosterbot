@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"strings"
+	"time"
+
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsathena"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfront"
@@ -57,6 +61,23 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			Id:                          jsii.String("ExpireNoncurrentCacheVersions"),
 			Prefix:                      jsii.String("cache/"),
 			NoncurrentVersionExpiration: awscdk.Duration_Days(jsii.Number(14)),
+		}, {
+			// opsalert/ holds one small object per alert the notifier has
+			// already sent, purely so a repeat delivery of the same event
+			// stays quiet (rosterbot-chs). One key per stopped task means it
+			// grows with the run rate — ~26/day — and a marker is worthless
+			// once no further delivery of its event can arrive. 30 days is far
+			// past EventBridge's retry horizon, so expiring here can never
+			// resurrect an old alert.
+			//
+			// The heartbeat's markers (rosterbot-ys8) share the prefix and are
+			// one per *job*, rewritten in place, so they are unaffected by the
+			// count — but they are also refreshed on every alert, and an
+			// expiry during an outage longer than 30 days costs exactly one
+			// repeat push.
+			Id:         jsii.String("ExpireOpsAlertMarkers"),
+			Prefix:     jsii.String("opsalert/"),
+			Expiration: awscdk.Duration_Days(jsii.Number(30)),
 		}},
 	})
 
@@ -411,6 +432,11 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// Read-only on the run ledger: the notifier derives failure streaks from it
 	// and writes nothing. Mirrors the API Lambda's own runledger/ grant.
 	stateBucket.GrantRead(opsNotifyFn, jsii.String("runledger/*"))
+	// Read-write on its own marker prefix, and only that one. This is the sole
+	// place the notifier writes anything; scoping it here keeps the "a notifier
+	// cannot mutate the bot's state" property intact while letting it remember
+	// which alerts it has already sent (rosterbot-chs, rosterbot-ys8).
+	stateBucket.GrantReadWrite(opsNotifyFn, jsii.String("opsalert/*"))
 
 	// Every scheduled job failure (rosterbot-naz). The pattern deliberately
 	// stops at "a task in our cluster reached STOPPED" — whether that stop was
@@ -630,34 +656,51 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	if v, ok := stack.Node().TryGetContext(jsii.String("schedulesEnabled")).(string); ok && v == "false" {
 		schedulesEnabled = false
 	}
+	// maxGap is how long a job may go without launching before the heartbeat
+	// check calls it dead (rosterbot-ys8). It lives here, beside the cron it
+	// describes, because the two only mean anything together — a tolerance kept
+	// in the notifier would drift from the schedule it claims to describe, and
+	// would do so silently, surfacing only as an alert that never fires. The
+	// notifier receives this table through JOB_SCHEDULES below.
+	//
+	// Each value is the job's longest legitimate quiet period plus slack, not
+	// its nominal period: Lineup runs hourly but only 14:00-03:00 UTC, so its
+	// real worst case is the 11h overnight gap, and a "1h" tolerance would page
+	// every single morning.
+	const (
+		hourlyGap = 13 * time.Hour     // 11h overnight window + 2h slack
+		dailyGap  = 26 * time.Hour     // 24h + 2h slack
+		weeklyGap = 8 * 24 * time.Hour // 7d + 1d slack
+	)
 	type job struct {
 		id, cron string
 		cmd      *[]*string
+		maxGap   time.Duration
 	}
 	jobs := []job{
-		{"Lineup", "cron(0 14-23,0-3 * * ? *)", jsii.Strings("optimize", "--matchup", "--archive-projections")},
-		{"Prospects", "cron(0 11 * * ? *)", jsii.Strings("prospects")},
-		{"GsCheck", "cron(0 12 * * ? *)", jsii.Strings("gs-check")},
-		{"Waivers", "cron(0 13 * * ? *)", jsii.Strings("waivers")},
-		{"Transactions", "cron(0 14 * * ? *)", jsii.Strings("transactions")},
-		{"Claims", "cron(20 14 * * ? *)", jsii.Strings("claims")},
-		{"Recap", "cron(0 11 ? * MON *)", jsii.Strings("recap-site", "--out", "dist")},
-		{"Backtest", "cron(0 12 ? * MON *)", jsii.Strings("backtest")},
-		{"Grade", "cron(30 13 * * ? *)", jsii.Strings("grade")},
-		{"ProjectionSite", "cron(0 15 * * ? *)", jsii.Strings("projection-site", "--out", "report")},
+		{"Lineup", "cron(0 14-23,0-3 * * ? *)", jsii.Strings("optimize", "--matchup", "--archive-projections"), hourlyGap},
+		{"Prospects", "cron(0 11 * * ? *)", jsii.Strings("prospects"), dailyGap},
+		{"GsCheck", "cron(0 12 * * ? *)", jsii.Strings("gs-check"), dailyGap},
+		{"Waivers", "cron(0 13 * * ? *)", jsii.Strings("waivers"), dailyGap},
+		{"Transactions", "cron(0 14 * * ? *)", jsii.Strings("transactions"), dailyGap},
+		{"Claims", "cron(20 14 * * ? *)", jsii.Strings("claims"), dailyGap},
+		{"Recap", "cron(0 11 ? * MON *)", jsii.Strings("recap-site", "--out", "dist"), weeklyGap},
+		{"Backtest", "cron(0 12 ? * MON *)", jsii.Strings("backtest"), weeklyGap},
+		{"Grade", "cron(30 13 * * ? *)", jsii.Strings("grade"), dailyGap},
+		{"ProjectionSite", "cron(0 15 * * ? *)", jsii.Strings("projection-site", "--out", "report"), dailyGap},
 		// daily capture of ephemeral upstream data (HKB, projections, Savant, prospects) after upstreams' once-daily refresh
-		{"Archive", "cron(15 14 * * ? *)", jsii.Strings("archive")},
+		{"Archive", "cron(15 14 * * ? *)", jsii.Strings("archive"), dailyGap},
 		// Appends today's per-team aggregate HKB dynasty value to the Team Value
 		// Store. Runs 14:30 UTC (after Archive's HKB refresh, before ProjectionSite
 		// at 15:00) so value.json renders today's point same-day. Accumulates
 		// forward — HKB has no history — so one write per day is the whole record.
-		{"TeamValues", "cron(30 14 * * ? *)", jsii.Strings("team-values")},
+		{"TeamValues", "cron(30 14 * * ? *)", jsii.Strings("team-values"), dailyGap},
 		// Shadow captures every projection system's lineup projection for the
 		// model-comparison report. It runs at 23:40 UTC (~late ET evening, same
 		// UTC/ET calendar day so the snapshot's generated_at passes the backtest
 		// stale-guard) after the 23:00 Lineup run, so the next day's Grade
 		// (13:30 UTC) finds and scores its per-system snapshots.
-		{"Shadow", "cron(40 23 * * ? *)", jsii.Strings("shadow")},
+		{"Shadow", "cron(40 23 * * ? *)", jsii.Strings("shadow"), dailyGap},
 	}
 	for _, j := range jobs {
 		r := awsevents.NewRule(stack, jsii.String(j.id+"Rule"), &awsevents.RuleProps{
@@ -675,6 +718,67 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			}},
 		}))
 	}
+
+	// --- Heartbeat: alert on a job that never launched (rosterbot-ys8) ---
+	//
+	// TaskFailRule above is reactive — a task has to stop for it to hear
+	// anything — so a disabled rule, a broken cron or an unreachable cluster
+	// emits no event, writes no ledger record, and produces perfect silence,
+	// which is indistinguishable from perfect health. This is the scheduled
+	// counterweight: it asserts on a timer that every job in the table above has
+	// a run recent enough to be alive.
+	//
+	// The command string is what joins the three sides: EventBridge passes j.cmd
+	// as the container override, entrypoint.sh joins argv with spaces into
+	// `run-ledger --command`, and opsalert matches on that exact string. One
+	// table, three consumers, no restatement.
+	type jobSchedule struct {
+		Command       string `json:"command"`
+		MaxGapSeconds int    `json:"max_gap_seconds"`
+	}
+	scheds := make([]jobSchedule, 0, len(jobs))
+	for _, j := range jobs {
+		parts := make([]string, 0, len(*j.cmd))
+		for _, s := range *j.cmd {
+			parts = append(parts, *s)
+		}
+		scheds = append(scheds, jobSchedule{
+			Command:       strings.Join(parts, " "),
+			MaxGapSeconds: int(j.maxGap.Seconds()),
+		})
+	}
+	schedJSON, err := json.Marshal(scheds)
+	if err != nil {
+		panic(err) // a literal table cannot fail to marshal; reaching here is a code bug
+	}
+	opsNotifyFn.AddEnvironment(jsii.String("JOB_SCHEDULES"), jsii.String(string(schedJSON)), nil)
+
+	// Every 6 hours at :15, off the top of the hour the jobs themselves crowd.
+	// This cadence bounds detection *latency* only — the per-job tolerances
+	// decide what counts as overdue and the notifier alerts once per outage — so
+	// a tighter schedule would buy a few hours at the cost of re-reading the
+	// ledger, and a looser one risks a whole day passing unnoticed.
+	//
+	// Gated with the other schedules: `-c schedulesEnabled=false` is an explicit
+	// operator pause, and a heartbeat that pages about jobs someone deliberately
+	// stopped is exactly the alert that teaches people to ignore the channel.
+	awsevents.NewRule(stack, jsii.String("HeartbeatRule"), &awsevents.RuleProps{
+		Schedule: awsevents.Schedule_Expression(jsii.String("cron(15 */6 * * ? *)")),
+		Enabled:  jsii.Bool(schedulesEnabled),
+		Targets: &[]awsevents.IRuleTarget{
+			awseventstargets.NewLambdaFunction(opsNotifyFn, &awseventstargets.LambdaFunctionProps{
+				// A scheduled rule carries no detail-type of its own, so the
+				// dispatcher's envelope switch needs one supplied. The
+				// "Rosterbot" prefix marks it as ours beside the two real AWS
+				// sources; it must match heartbeatDetailType in opsnotify/.
+				Event: awsevents.RuleTargetInput_FromObject(&map[string]interface{}{
+					"detail-type": "Rosterbot Heartbeat",
+					"source":      "rosterbot.ops",
+					"detail":      map[string]interface{}{},
+				}),
+			}),
+		},
+	})
 
 	return stack
 }

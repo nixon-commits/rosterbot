@@ -3,6 +3,12 @@
 //
 //   - "CodeBuild Build State Change" — image build outcomes (rosterbot-00j)
 //   - "ECS Task State Change"        — scheduled job failures (rosterbot-naz)
+//   - "Rosterbot Heartbeat"          — jobs that never launched (rosterbot-ys8)
+//
+// The first two are reactive: something has to happen for them to fire, so a job
+// whose schedule is disabled or whose cluster is unreachable produces no event
+// and no alert. The heartbeat is the scheduled counterweight that turns that
+// silence into a signal.
 //
 // Both are wired by the CDK in infra/ (Entry: ../opsnotify). The function
 // itself is created unconditionally; only the CodeBuild rule sits behind the
@@ -27,6 +33,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
 	"github.com/nixon-commits/rosterbot/internal/notify"
+	"github.com/nixon-commits/rosterbot/internal/s3blob"
 )
 
 // send is the Pushover seam. Replaced in tests so handler tests never reach the
@@ -36,6 +43,12 @@ var send = func(title, message string) error { return nil }
 // ledger is the run-ledger reader, nil until main wires it (and in the
 // CodeBuild-only tests, which never touch the ECS path).
 var ledger *ledgerReader
+
+// markers deduplicates alerts across repeated deliveries of one event. Nil is a
+// working configuration — every alert simply goes out — so a state bucket that
+// is unset or unwritable degrades to the pre-deduplication behaviour rather than
+// to silence.
+var markers *markerStore
 
 func main() {
 	ctx := context.Background()
@@ -59,7 +72,14 @@ func main() {
 			log.Fatalf("ledger reader: %v", err)
 		}
 		ledger = l
+
+		b, err := s3blob.New(ctx, bucket, markerPrefix)
+		if err != nil {
+			log.Fatalf("marker store: %v", err)
+		}
+		markers = &markerStore{blob: b}
 	}
+	schedules = loadSchedules()
 
 	lambda.Start(dispatch)
 }
@@ -85,6 +105,9 @@ func dispatch(ctx context.Context, raw json.RawMessage) error {
 
 	case "ECS Task State Change":
 		return handleTask(ctx, env.Detail)
+
+	case heartbeatDetailType:
+		return handleHeartbeat(ctx)
 
 	default:
 		log.Printf("ignoring unhandled detail-type %q", env.DetailType)

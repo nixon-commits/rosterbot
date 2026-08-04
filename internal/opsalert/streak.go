@@ -10,6 +10,8 @@
 // Everything here is pure: the Lambda fetches, opsalert judges.
 package opsalert
 
+import "time"
+
 // Ledger record statuses, as written by the run-ledger command in entrypoint.sh.
 const (
 	StatusRunning = "RUNNING"
@@ -19,12 +21,28 @@ const (
 
 // Record is the subset of a run ledger record the alerting logic needs. The
 // json tags mirror internal/lineupapi.RunDetail's wire contract.
+//
+// StartedAt is RFC3339 UTC and is what the heartbeat check reads to answer "when
+// did this job last launch?" — see heartbeat.go. Streak ignores it: a streak is
+// ordering, and the ledger's inverted-timestamp keys already deliver records in
+// order, so parsing a timestamp to re-derive that would only add a failure mode.
 type Record struct {
-	ID       string `json:"id"`
-	Command  string `json:"command"`
-	Status   string `json:"status"`
-	ExitCode *int   `json:"exit_code,omitempty"`
-	LogTail  string `json:"log_tail,omitempty"`
+	ID        string `json:"id"`
+	Command   string `json:"command"`
+	Status    string `json:"status"`
+	StartedAt string `json:"started_at"`
+	ExitCode  *int   `json:"exit_code,omitempty"`
+	LogTail   string `json:"log_tail,omitempty"`
+}
+
+// Started parses StartedAt. The zero time means the record carries no usable
+// timestamp, which every caller must treat as "unknown", never as "the epoch".
+func (r Record) Started() time.Time {
+	t, err := time.Parse(time.RFC3339, r.StartedAt)
+	if err != nil {
+		return time.Time{}
+	}
+	return t.UTC()
 }
 
 // Kind is what, if anything, the operator should be told.
