@@ -166,7 +166,7 @@ rosterbot transactions --dry-run
 </details>
 
 <details>
-<summary><b>Mind the rules</b> — <code>gs-check</code> · <code>scoring</code></summary>
+<summary><b>Mind the rules</b> — <code>gs-check</code> · <code>scoring</code> · <code>version-check</code></summary>
 
 ```bash
 # League-wide games-started violation check (most recently completed period)
@@ -174,9 +174,14 @@ rosterbot gs-check --dry-run
 
 # Print the league's stat → fantasy-point weights
 rosterbot scoring
+
+# Probe Fantrax with the pinned API version, unauthenticated
+rosterbot version-check
 ```
 
 `gs-check` needs `GS_TRACKING_ENABLED=true` plus Pushover credentials; it's a clean no-op when tracking is off.
+
+`version-check` exits non-zero **only** on a confirmed `STALE_CLIENT` rejection — an inconclusive probe (transport error, unrecognized response) exits 0 with a warning rather than raising a second alert for a Fantrax outage that every other scheduled job already pages through.
 
 </details>
 
@@ -266,7 +271,7 @@ Backtracking with pruning finds the slot assignment that maximizes total expecte
 
 ### Pitchers
 
-Pitchers are scored off probable-starter data. A confirmed SP start gets full value; an SP not listed as probable gets a `0.10×` discount so relievers are preferred for scarce P slots. With `GS_TRACKING_ENABLED=true`, a games-started budget gate fetches the real GS limit live from Fantrax's own per-period config (which scales it whenever a period spans more than one calendar week, e.g. the All-Star break) and keeps only the highest-value starts across the matchup period.
+Pitchers are scored off probable-starter data. A confirmed SP start gets full value; an SP not listed as probable gets a `0.05×` discount so relievers are preferred for scarce P slots. With `GS_TRACKING_ENABLED=true`, a games-started budget gate fetches the real GS limit live from Fantrax's own per-period config (which scales it whenever a period spans more than one calendar week, e.g. the All-Star break) and keeps only the highest-value starts across the matchup period.
 
 ### Projection blending
 
@@ -294,6 +299,7 @@ The bot's game day, ordered by clock (times shown in ET for reading; the authori
 | When (ET) | Job | Command | Schedule (as configured) |
 |---|---|---|---|
 | Hourly, 11a–10p | Set the lineup | `optimize --matchup` | every hour 8am–7pm **PT** |
+| 6:30a | API version check | `version-check` | 10:30 UTC daily |
 | 7:00a | Prospects | `prospects` | 7am ET daily |
 | 8:00a | GS check | `gs-check` | 8am ET daily |
 | 9:00a | Waivers | `waivers` | 9am ET daily |
