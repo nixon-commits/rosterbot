@@ -121,6 +121,14 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 	fmt.Print(backtest.FormatReport(report))
+
+	dates := make([]time.Time, len(days))
+	for i, d := range days {
+		dates[i] = d.Date
+	}
+	if gate := backtest.SummarizeGSGate(backtestSnapshotDir, dates); gate.Days > 0 {
+		fmt.Print(backtest.FormatGateSummary(gate))
+	}
 	return nil
 }
 
