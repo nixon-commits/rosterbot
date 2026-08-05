@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/pmurley/go-fantrax/auth_client"
 )
 
 // The exit mapping is the load-bearing policy: the probe may only fail the job
@@ -86,7 +87,7 @@ func TestVersionCheckResultLine_StaleMessageNamesThePinnedVersion(t *testing.T) 
 	if exitErr == nil {
 		t.Fatal("expected an error")
 	}
-	if !strings.Contains(exitErr.Error(), "185.1.0") {
+	if !strings.Contains(exitErr.Error(), auth_client.APIVersion) {
 		t.Errorf("stale error %q does not name the pinned version", exitErr.Error())
 	}
 }
