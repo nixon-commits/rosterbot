@@ -30,5 +30,3 @@ require (
 )
 
 replace github.com/nixon-commits/rosterbot => ../
-
-replace github.com/pmurley/go-fantrax => github.com/nixon-commits/go-fantrax v0.1.14-0.20260804211426-5cbe63353216
