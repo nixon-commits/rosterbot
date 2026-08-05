@@ -9,6 +9,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
+	"github.com/pmurley/go-fantrax/auth_client"
 )
 
 // fakeEmitClient records every remote mutation the emit phase attempts. The
@@ -122,8 +123,31 @@ func TestPlanDate_NonStartingSPIsDiscounted(t *testing.T) {
 	dr.pitcherResult.ToActivate = []fantrax.PlayerSlot{{PlayerID: "Idle Ace", PosID: "020"}}
 
 	got := planDate(dr, nil)
-	if want := 2.00; got.Delta < want-1e-9 || got.Delta > want+1e-9 {
-		t.Errorf("delta = %v, want %v (20.00 × 0.10)", got.Delta, want)
+	want := 20.00 * optimizer.NonStarterSPDiscount
+	if got.Delta < want-1e-9 || got.Delta > want+1e-9 {
+		t.Errorf("delta = %v, want %v (20.00 × optimizer.NonStarterSPDiscount)", got.Delta, want)
+	}
+}
+
+// A pitcher can be SP-eligible via Player.Positions (the "015" position ID)
+// without PosShortNames containing "SP" — e.g. a league using a single
+// generic "P" slot, where PosShortNames may read "P" instead of "SP". The
+// optimizer's own discount test (pitcher_lineup.go) matches on
+// optimizer.IsSPEligible(Positions) OR PosShortNames contains "SP"; this
+// pins that emit's delta calculation uses the identical combined predicate,
+// so the two never disagree about whether a non-starter is discounted.
+func TestPlanDate_NonStartingSPEligibleViaPositionsIsDiscounted(t *testing.T) {
+	dr := goldenResult()
+	dr.hitterResult.Scored = nil
+	idleAce := scoredPitcher("Idle Ace", "LAD", "020", "P", 20.00, false, true, false)
+	idleAce.Player.Positions = []string{auth_client.PosSP}
+	dr.pitcherResult.Scored = []optimizer.ScoredPitcher{idleAce}
+	dr.pitcherResult.ToActivate = []fantrax.PlayerSlot{{PlayerID: "Idle Ace", PosID: "020"}}
+
+	got := planDate(dr, nil)
+	want := 20.00 * optimizer.NonStarterSPDiscount
+	if got.Delta < want-1e-9 || got.Delta > want+1e-9 {
+		t.Errorf("delta = %v, want %v (20.00 × optimizer.NonStarterSPDiscount, eligible via Positions not PosShortNames)", got.Delta, want)
 	}
 }
 

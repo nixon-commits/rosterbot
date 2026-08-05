@@ -75,7 +75,7 @@ func OptimizePitcherLineup(
 			continue
 		}
 		pts := sp.ExpectedPts
-		if !sp.IsStarter && (isSPEligible(sp.Player.Positions) || strings.Contains(sp.Player.PosShortNames, "SP")) {
+		if !sp.IsStarter && (IsSPEligible(sp.Player.Positions) || strings.Contains(sp.Player.PosShortNames, "SP")) {
 			pts *= NonStarterSPDiscount
 		}
 		generic = append(generic, ScoredPlayer{
@@ -203,7 +203,7 @@ func scorePitcherRoster(
 		// Determine SP eligibility from PosShortNames (e.g. "SP", "RP").
 		// Position IDs may only contain generic "P" ("017") in leagues
 		// that use a single P slot, so PosShortNames is the reliable source.
-		spEligible := isSPEligible(p.Positions) || strings.Contains(p.PosShortNames, "SP")
+		spEligible := IsSPEligible(p.Positions) || strings.Contains(p.PosShortNames, "SP")
 
 		// Determine hasGame based on role.
 		var hasGame, isStarter bool
@@ -259,7 +259,14 @@ func scorePitcherRoster(
 	return scored
 }
 
-func isSPEligible(positions []string) bool {
+// IsSPEligible reports whether a player's position-ID list carries SP
+// eligibility ("015"). It is the shared definition of SP eligibility: the
+// optimizer's own discount test combines it with a PosShortNames("SP") check
+// (positions may only carry generic "P" in single-P-slot leagues), and
+// internal/lineuprun's emit-phase delta calculation depends on using this
+// exact combination too — a divergence here would let the delta the zero-gain
+// guard checks disagree with what the optimizer actually valued.
+func IsSPEligible(positions []string) bool {
 	for _, pos := range positions {
 		if pos == auth_client.PosSP { // "015"
 			return true
