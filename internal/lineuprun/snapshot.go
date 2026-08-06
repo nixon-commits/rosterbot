@@ -66,6 +66,11 @@ func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string,
 		})
 	}
 
+	gsSuppressed := make(map[string]bool, len(dr.pitcherResult.GateReport.Suppressed))
+	for _, s := range dr.pitcherResult.GateReport.Suppressed {
+		gsSuppressed[s.PlayerID] = true
+	}
+
 	for _, sp := range dr.pitcherResult.Scored {
 		role := "RP"
 		if strings.Contains(sp.Player.PosShortNames, "SP") {
@@ -83,6 +88,7 @@ func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string,
 			IsPitcher:      true,
 			Slot:           slotName[sp.Player.RosterPosition],
 			Locked:         sp.Player.Locked,
+			GSSuppressed:   gsSuppressed[sp.Player.ID],
 			Eligibility:    sp.Player.Positions,
 		})
 	}

@@ -102,18 +102,23 @@ type PositionMAE struct {
 // analysis can slice projection error by position, by whether we started the
 // player, and by whether their game was already locked when we snapshotted.
 type SnapshotPlayer struct {
-	PlayerID       string   `json:"player_id"`
-	Name           string   `json:"name"`
-	MLBTeam        string   `json:"mlb_team"`
-	ProjPtsPerGame float64  `json:"proj_pts_per_game"`
-	HasGame        bool     `json:"has_game"`
-	WasStarted     bool     `json:"was_started"`
-	IsPitcher      bool     `json:"is_pitcher"`
-	IsStarter      bool     `json:"is_starter,omitempty"`
-	Role           string   `json:"role,omitempty"`        // "SP" / "RP" for pitchers
-	Slot           string   `json:"slot,omitempty"`        // active slot occupied, e.g. "OF"; "" if benched
-	Locked         bool     `json:"locked,omitempty"`      // game in progress/final at snapshot time
-	Eligibility    []string `json:"eligibility,omitempty"` // position IDs the player is eligible for
+	PlayerID       string  `json:"player_id"`
+	Name           string  `json:"name"`
+	MLBTeam        string  `json:"mlb_team"`
+	ProjPtsPerGame float64 `json:"proj_pts_per_game"`
+	HasGame        bool    `json:"has_game"`
+	WasStarted     bool    `json:"was_started"`
+	IsPitcher      bool    `json:"is_pitcher"`
+	IsStarter      bool    `json:"is_starter,omitempty"`
+	Role           string  `json:"role,omitempty"`   // "SP" / "RP" for pitchers
+	Slot           string  `json:"slot,omitempty"`   // active slot occupied, e.g. "OF"; "" if benched
+	Locked         bool    `json:"locked,omitempty"` // game in progress/final at snapshot time
+	// GSSuppressed records that the weekly game-start gate declined this
+	// pitcher's start on this date. Written from the gate's own report, not
+	// inferred. Present only from 2026-08 forward; earlier snapshots read as
+	// false, which is why GateSummary counts days with snapshots separately.
+	GSSuppressed bool     `json:"gs_suppressed,omitempty"`
+	Eligibility  []string `json:"eligibility,omitempty"` // position IDs the player is eligible for
 }
 
 // Snapshot is the serialized per-date snapshot file format.

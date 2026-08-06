@@ -215,8 +215,11 @@ func planDate(dr dateResult, playerName map[string]string) datePlan {
 
 	// Effective-pts lookup for the optimization delta. Hitters contribute full
 	// ExpectedPts when they have a game. Pitchers: RPs and confirmed starters
-	// contribute full pts; non-starting SPs contribute 10% (the optimizer's
-	// own discount, mirrored here so the delta matches what it optimized on).
+	// contribute full pts; non-starting SPs are discounted by
+	// optimizer.NonStarterSPDiscount, using the same combined SP-eligibility
+	// predicate (optimizer.IsSPEligible || PosShortNames contains "SP") the
+	// optimizer itself uses — so the delta reflects what the optimizer
+	// actually optimized on, not a hand-copied approximation of it.
 	pts := make(map[string]float64)
 	for _, sp := range dr.hitterResult.Scored {
 		if sp.HasGame {
@@ -227,11 +230,11 @@ func planDate(dr dateResult, playerName map[string]string) datePlan {
 		if !sp.HasGame {
 			continue
 		}
-		isRP := !strings.Contains(sp.Player.PosShortNames, "SP")
-		if sp.IsStarter || isRP {
+		spEligible := optimizer.IsSPEligible(sp.Player.Positions) || strings.Contains(sp.Player.PosShortNames, "SP")
+		if sp.IsStarter || !spEligible {
 			pts[sp.Player.ID] = sp.ExpectedPts
 		} else {
-			pts[sp.Player.ID] = sp.ExpectedPts * 0.10
+			pts[sp.Player.ID] = sp.ExpectedPts * optimizer.NonStarterSPDiscount
 		}
 	}
 

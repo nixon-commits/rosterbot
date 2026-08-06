@@ -679,6 +679,12 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	}
 	jobs := []job{
 		{"Lineup", "cron(0 14-23,0-3 * * ? *)", jsii.Strings("optimize", "--matchup", "--archive-projections"), hourlyGap},
+		// Asserts the pinned Fantrax API version still passes Fantrax's gate.
+		// 10:30 UTC sits ahead of the first daily job (Prospects, 11:00) and well
+		// ahead of the hourly Lineup window (14:00-03:00), so a dead pin is known
+		// before the day's cascade rather than after it. Exits non-zero on
+		// STALE_CLIENT, so the alert rides the ordinary task-failure path.
+		{"VersionCheck", "cron(30 10 * * ? *)", jsii.Strings("version-check"), dailyGap},
 		{"Prospects", "cron(0 11 * * ? *)", jsii.Strings("prospects"), dailyGap},
 		{"GsCheck", "cron(0 12 * * ? *)", jsii.Strings("gs-check"), dailyGap},
 		{"Waivers", "cron(0 13 * * ? *)", jsii.Strings("waivers"), dailyGap},
