@@ -57,6 +57,14 @@ type Row struct {
 	// totals undercount by the unmatched players (surfaced on the page).
 	RosteredCount int `json:"rostered_count"`
 	MatchedCount  int `json:"matched_count"`
+
+	// Unmatched lists the rostered player names that produced RosteredCount
+	// > MatchedCount in the run that built this Row — the operator-facing
+	// answer to "which players." json:"-" because it is a diagnostic for
+	// the run that computed it, not part of the durable schema: a Row
+	// read back from the store round-trips through encoding/json, which
+	// leaves this nil rather than replaying a stale run's unmatched list.
+	Unmatched []string `json:"-"`
 }
 
 // TotalValue is the team's whole-roster HKB value (all four leaves).

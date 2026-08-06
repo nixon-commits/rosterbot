@@ -79,7 +79,7 @@ func TestBlendedSource_NoBaseProjection_SmallSample_ShrinksTowardBaseline(t *tes
 
 	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{
 		"player1": {FPtsPerGame: 13.0, GamesPlayed: 2},
-	}, scoring, map[string]string{"call-up": "player1"}, 2, baseline)
+	}, scoring, map[string]string{NormalizeName("Call-Up"): "player1"}, 2, baseline)
 
 	pts, ok := src.GetPtsPerGame("Call-Up", "NYY", scoring)
 	if !ok {

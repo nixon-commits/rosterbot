@@ -206,7 +206,7 @@ func TestPitcherBlendedSource_NoBaseProjection_SmallSample_ShrinksTowardBaseline
 	scoring := testPitScoring()
 	const baseline = 3.0
 
-	nameToID := map[string]string{"call-up": "p1"}
+	nameToID := map[string]string{NormalizeName("Call-Up"): "p1"}
 	playerPos := map[string][]string{"p1": {"016"}} // RP only
 
 	src := NewPitcherBlendedSource(inner, map[string]fantrax.RecentStat{

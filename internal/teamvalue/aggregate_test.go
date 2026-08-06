@@ -81,6 +81,36 @@ func TestAggregate_UnmatchedCountsAsRosteredOnly(t *testing.T) {
 	if r.HitterMinorsCount != 0 {
 		t.Errorf("unmatched minor leaguer should not increment a count leaf, got %d", r.HitterMinorsCount)
 	}
+	if len(r.Unmatched) != 1 || r.Unmatched[0] != "Obscure Prospect" {
+		t.Errorf("Unmatched = %v, want [\"Obscure Prospect\"]", r.Unmatched)
+	}
+}
+
+// Unmatched names accumulate per team, in roster order, and a team with full
+// coverage gets a nil (not empty-but-allocated) slice.
+func TestAggregate_UnmatchedNamesListedPerTeam(t *testing.T) {
+	pool := []models.PoolPlayer{
+		pp("Mike Trout", "t1", false, positions.OF),
+		pp("Unknown One", "t1", false, positions.OF),
+		pp("Unknown Two", "t1", true, positions.SS),
+		pp("Tarik Skubal", "t2", false, positions.SP), // fully matched
+	}
+	hkbPlayers := []hkb.Player{hp("Mike Trout", 500), hp("Tarik Skubal", 400)}
+
+	rows := Aggregate(testDate, pool, hkbPlayers, nil, nil)
+	byTeam := map[string]Row{}
+	for _, r := range rows {
+		byTeam[r.TeamID] = r
+	}
+
+	got := byTeam["t1"].Unmatched
+	want := []string{"Unknown One", "Unknown Two"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("t1 Unmatched = %v, want %v", got, want)
+	}
+	if u := byTeam["t2"].Unmatched; u != nil {
+		t.Errorf("t2 Unmatched = %v, want nil (fully matched)", u)
+	}
 }
 
 // A two-way player with both hitter and pitcher eligibility resolves to pitcher.

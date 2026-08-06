@@ -1,6 +1,7 @@
 package teamvalue
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -35,6 +36,7 @@ func TestRow_DerivedTotals(t *testing.T) {
 
 func TestNDJSON_RoundTrip(t *testing.T) {
 	in := []Row{sampleRow(), {Dt: "2026-07-12", TeamID: "t2", TeamName: "Beta"}}
+	in[0].Unmatched = []string{"Some Unmatched Player"} // json:"-": must not survive the round trip
 	b, err := MarshalNDJSON(in)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -46,8 +48,9 @@ func TestNDJSON_RoundTrip(t *testing.T) {
 	if len(out) != 2 {
 		t.Fatalf("want 2 rows, got %d", len(out))
 	}
-	if out[0] != in[0] {
-		t.Errorf("row 0 round-trip mismatch:\n got %+v\nwant %+v", out[0], in[0])
+	want := sampleRow() // Unmatched left nil: a re-read Row never inherits it
+	if !reflect.DeepEqual(out[0], want) {
+		t.Errorf("row 0 round-trip mismatch:\n got %+v\nwant %+v", out[0], want)
 	}
 	if out[1].TeamID != "t2" || out[1].RosteredCount != 0 {
 		t.Errorf("row 1 mismatch: %+v", out[1])

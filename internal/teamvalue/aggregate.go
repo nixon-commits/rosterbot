@@ -24,8 +24,10 @@ import (
 //
 // A rostered player with no HKB match increments RosteredCount only (value and
 // the four count leaves are matched-players-only), so MatchedCount < RosteredCount
-// signals the totals undercount by the unmatched players. HKB draft picks
-// (AssetType != "PLAYER") never match a rostered name and are naturally excluded.
+// signals the totals undercount by the unmatched players; that player's name is
+// also appended to the row's Unmatched list so a shortfall is traceable to
+// specific players, not just a count. HKB draft picks (AssetType != "PLAYER")
+// never match a rostered name and are naturally excluded.
 //
 // teamNames / teamLogos are denormalized into each Row (from
 // GetScoringPeriodsAndTeams) so the read+render path needs no Fantrax call; the
@@ -52,6 +54,7 @@ func Aggregate(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb.Player
 
 		hp, ok := lookup[playername.Normalize(pp.Name)]
 		if !ok {
+			r.Unmatched = append(r.Unmatched, pp.Name)
 			continue // unmatched: counted as rostered, contributes no value
 		}
 		r.MatchedCount++
