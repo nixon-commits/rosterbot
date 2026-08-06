@@ -119,6 +119,16 @@ type SnapshotPlayer struct {
 	// false, which is why GateSummary counts days with snapshots separately.
 	GSSuppressed bool     `json:"gs_suppressed,omitempty"`
 	Eligibility  []string `json:"eligibility,omitempty"` // position IDs the player is eligible for
+	// Status is the raw Fantrax roster status ("Active", "Reserve",
+	// "Injured Reserve", "Minors") at the moment the snapshot was written.
+	// WasStarted collapses this to a single boolean, which cannot distinguish
+	// a healthy benched player from an injured or minor-league one — so an
+	// injury would read as owned-but-not-fielded value, i.e. as a structural
+	// roster surplus, which is precisely what the roster-shape report exists
+	// to measure. Present only from 2026-08 forward; earlier snapshots read
+	// as "" and are excluded from that report as pre-schema rather than
+	// silently counted as a fully-fielded day.
+	Status string `json:"status,omitempty"`
 }
 
 // Snapshot is the serialized per-date snapshot file format.
@@ -139,6 +149,13 @@ type Snapshot struct {
 	// existed — they're graded as before, not silently excluded.
 	HittersNoData  bool `json:"hitters_no_data,omitempty"`
 	PitchersNoData bool `json:"pitchers_no_data,omitempty"`
+	// GSLimit is the weekly game-start cap in force when this date was
+	// optimized, copied from optimizer.GSGateReport.Limit. Recorded per day
+	// rather than fetched once at report time because Fantrax rescales the cap
+	// whenever a period spans more than one calendar week. Zero means no
+	// budget was in force — the ordinary state of a --matchup pre-write, since
+	// optimize_dates.go applies the gate to today's date only.
+	GSLimit int `json:"gs_limit,omitempty"`
 }
 
 // RunLineupAnalysis grades each day's actual lineup against the hindsight

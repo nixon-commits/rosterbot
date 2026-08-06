@@ -49,6 +49,7 @@ func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string,
 		GeneratedAt:      time.Now().UTC(),
 		HittersNoData:    hittersNoData,
 		PitchersNoData:   pitchersNoData,
+		GSLimit:          dr.pitcherResult.GateReport.Limit,
 	}
 
 	for _, sp := range dr.hitterResult.Scored {
@@ -62,6 +63,7 @@ func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string,
 			IsPitcher:      false,
 			Slot:           slotName[sp.Player.RosterPosition],
 			Locked:         sp.Player.Locked,
+			Status:         sp.Player.Status,
 			Eligibility:    sp.Player.Positions,
 		})
 	}
@@ -88,6 +90,7 @@ func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string,
 			IsPitcher:      true,
 			Slot:           slotName[sp.Player.RosterPosition],
 			Locked:         sp.Player.Locked,
+			Status:         sp.Player.Status,
 			GSSuppressed:   gsSuppressed[sp.Player.ID],
 			Eligibility:    sp.Player.Positions,
 		})

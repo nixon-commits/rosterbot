@@ -100,3 +100,80 @@ func TestBuildSnapshot_SetsNoDataFlags(t *testing.T) {
 		t.Error("PitchersNoData = false, want true")
 	}
 }
+
+// TestBuildSnapshot_RecordsStatusAndGSCap pins the two fields the roster-shape
+// report reads. Status is what separates an IL/Minors player from a healthy
+// benched one — without it an injury reads as a structural surplus. GSLimit is
+// recorded per day rather than fetched once at report time because Fantrax
+// rescales the cap for merged periods, and because the gate runs for today's
+// date only (optimize_dates.go nils the budget for every other date), so a
+// --matchup pre-write correctly carries no cap at all.
+func TestBuildSnapshot_RecordsStatusAndGSCap(t *testing.T) {
+	dr := dateResult{
+		date: time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC),
+		hitterResult: optimizer.Result{
+			Scored: []optimizer.ScoredPlayer{
+				{
+					Player: fantrax.Player{
+						ID: "h1", Name: "Healthy Bench", Status: "Reserve",
+					},
+					ExpectedPts: 4.0, HasGame: true,
+				},
+				{
+					Player: fantrax.Player{
+						ID: "h2", Name: "Hurt Bat", Status: "Injured Reserve",
+					},
+					ExpectedPts: 9.0, HasGame: true,
+				},
+			},
+		},
+		pitcherResult: optimizer.PitcherResult{
+			Scored: []optimizer.ScoredPitcher{
+				{
+					Player: fantrax.Player{
+						ID: "p1", Name: "Ace", PosShortNames: "SP", Status: "Active",
+					},
+					ExpectedPts: 16.0, HasGame: true, IsStarter: true,
+				},
+			},
+			GateReport: optimizer.GSGateReport{Limit: 12, Used: 9, Remaining: 3},
+		},
+	}
+
+	snap := buildSnapshot(dr, "depthcharts-ros", nil, false, false)
+
+	if snap.GSLimit != 12 {
+		t.Errorf("GSLimit = %d, want 12", snap.GSLimit)
+	}
+	if got := snap.Hitters[0].Status; got != "Reserve" {
+		t.Errorf("hitter[0].Status = %q, want Reserve", got)
+	}
+	if got := snap.Hitters[1].Status; got != "Injured Reserve" {
+		t.Errorf("hitter[1].Status = %q, want Injured Reserve", got)
+	}
+	if got := snap.Pitchers[0].Status; got != "Active" {
+		t.Errorf("pitcher[0].Status = %q, want Active", got)
+	}
+}
+
+// TestBuildSnapshot_NoGateLeavesCapUnset pins that a date optimized without a
+// GS budget in force records no cap rather than a misleading zero-that-means-
+// twelve. optimize_dates.go nils the budget for every non-today date, so this
+// is the ordinary state of a --matchup pre-write.
+func TestBuildSnapshot_NoGateLeavesCapUnset(t *testing.T) {
+	dr := dateResult{
+		date: time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC),
+		pitcherResult: optimizer.PitcherResult{
+			Scored: []optimizer.ScoredPitcher{
+				{
+					Player:      fantrax.Player{ID: "p1", PosShortNames: "SP", Status: "Active"},
+					ExpectedPts: 10.0, HasGame: true,
+				},
+			},
+		},
+	}
+
+	if snap := buildSnapshot(dr, "depthcharts-ros", nil, false, false); snap.GSLimit != 0 {
+		t.Errorf("GSLimit = %d, want 0 when no budget was in force", snap.GSLimit)
+	}
+}
