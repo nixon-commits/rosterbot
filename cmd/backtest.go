@@ -129,6 +129,13 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	if gate := backtest.SummarizeGSGate(backtestSnapshotDir, dates); gate.Days > 0 {
 		fmt.Print(backtest.FormatGateSummary(gate))
 	}
+	// Roster shape is the analytical companion to the gate summary: the gate
+	// measures which starts the cap declined, this measures the structural
+	// imbalance that keeps producing them. Printed after so the measurement
+	// comes before its explanation.
+	if shape := backtest.SummarizeRosterShape(backtestSnapshotDir, dates, len(hitterSlots), len(pitcherSlots)); shape.Days > 0 {
+		fmt.Print(backtest.FormatRosterShape(shape))
+	}
 	return nil
 }
 

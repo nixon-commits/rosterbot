@@ -208,6 +208,12 @@ rosterbot shadow --dates 2026-06-30
 rosterbot grade
 ```
 
+The report also prints a **roster shape** block: the share of deployable
+projected value each side of the roster actually fielded, against the league's
+slot counts and weekly game-start cap. Each side is normalized against its own
+owned value, so the two rates are comparable without reducing to the slot ratio.
+Days whose snapshots predate roster-status capture are excluded and named.
+
 </details>
 
 <details>
