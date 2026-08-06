@@ -176,9 +176,12 @@ func TestCheckControlVersion_SendsTheControlVersion(t *testing.T) {
 }
 
 // The control has to sit far enough below Fantrax's floor that a threshold move
-// can never turn it green. Measured 2026-08-05, the floor was between 180.0.0
-// and 184.0.0; a control anywhere near that would false-alarm the day Fantrax
-// lowered it. A leading major of 1 is the cheap, checkable form of "far below".
+// can never turn it green. Measured 2026-08-05, the floor was between 181.0.0
+// (STALE_CLIENT) and 182.0.0 (passes) — note the fork's own main sat at 182.0.0
+// that week, i.e. one release above the floor, which is exactly how little
+// headroom a "just below the pin" control would have had. A control anywhere
+// near there would false-alarm the day Fantrax lowered the threshold. A leading
+// major of 1 is the cheap, checkable form of "far below".
 func TestControlVersion_IsFarBelowTheGateFloor(t *testing.T) {
 	major, _, ok := strings.Cut(ControlVersion, ".")
 	if !ok {

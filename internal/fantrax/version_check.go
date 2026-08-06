@@ -45,8 +45,8 @@ const versionProbeTimeout = 20 * time.Second
 
 // ControlVersion is a deliberately ancient client version used as a positive
 // control for the probe itself. Fantrax's gate is a MINIMUM check, not an
-// equality check — measured live on 2026-08-05, the floor sits between 180.0.0
-// (STALE_CLIENT) and 184.0.0 (WARNING_NOT_LOGGED_IN), and 999.999.999 passes.
+// equality check — measured live on 2026-08-05, the floor sits between 181.0.0
+// (STALE_CLIENT) and 182.0.0 (WARNING_NOT_LOGGED_IN), and 999.999.999 passes.
 // So a version far below the floor must come back STALE_CLIENT for as long as
 // the gate exists at all, which is what makes it a control: if it stops
 // answering STALE_CLIENT, the probe has stopped discriminating and every
