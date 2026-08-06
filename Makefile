@@ -1,6 +1,6 @@
-.PHONY: build build-modules install test test-modules run dry-run run-all clean-cache
+.PHONY: build build-modules check-pins install test test-modules run dry-run run-all clean-cache
 
-build: build-modules
+build: check-pins build-modules
 	go build -o rosterbot .
 
 # lambda/, opsnotify/ and infra/ are SEPARATE Go modules (each its own
@@ -16,6 +16,43 @@ build-modules:
 	  printf '  build %s\n' "$$d"; \
 	  ( cd "$$d" && GOOS=linux GOARCH=arm64 go build -o /dev/null ./ ) || exit 1; \
 	done
+
+# Every module that imports a forked dep carries its OWN `replace` line for it —
+# the root and lambda/ each pin github.com/pmurley/go-fantrax to a fork commit,
+# with nothing making them agree. `build-modules` catches that drift only when
+# the bump adds exported symbols (which is why rosterbot-7i3 looked covered);
+# in the actual recovery scenario — bumping auth_client.APIVersion's STRING with
+# no API change — a stale lambda/go.mod compiles clean, CI stays green, and the
+# Lambda ships the old constant. `version-check` can't see it either: it probes
+# the root binary's pin only. So: any module path replaced in more than one
+# go.mod must resolve to the same target everywhere (rosterbot-00e).
+#
+# Only VERSION-pinned replaces are compared. `replace <root> => ../` appears in
+# lambda/ and opsnotify/ and the strings match, but only by luck — a filesystem
+# path resolves against its own module dir, so comparing it across modules is
+# meaningless. Filtering on a non-empty Version drops those honestly instead of
+# passing them accidentally.
+check-pins:
+	@command -v jq >/dev/null 2>&1 || { echo "check-pins: jq not found (required)" >&2; exit 1; }
+	@tmp=$$(mktemp); \
+	for f in $$(find . -name go.mod -not -path './.git/*' -not -path './.claude/*' | sort); do \
+	  d=$$(dirname "$$f"); \
+	  json=$$( cd "$$d" && go mod edit -json ) || { echo "check-pins: go mod edit failed in $$d" >&2; rm -f "$$tmp"; exit 1; }; \
+	  printf '%s' "$$json" | jq -r --arg d "$$d" \
+	    '.Replace[]? | select(.New.Version != null and .New.Version != "") | "\(.Old.Path)\t\(.New.Path)@\(.New.Version)\t\($$d)"' >> "$$tmp" || { rm -f "$$tmp"; exit 1; }; \
+	done; \
+	bad=$$(cut -f1,2 "$$tmp" | sort -u | cut -f1 | uniq -d); \
+	if [ -n "$$bad" ]; then \
+	  echo "check-pins: replace directives disagree across modules:" >&2; \
+	  for p in $$bad; do \
+	    sort "$$tmp" | awk -F'\t' -v p="$$p" '$$1==p {printf "  %-12s %s => %s\n", $$3, $$1, $$2}' >&2; \
+	  done; \
+	  echo "  fix: make every go.mod above use one target, then re-run make build-modules" >&2; \
+	  rm -f "$$tmp"; exit 1; \
+	fi; \
+	n=$$(sort -u "$$tmp" | wc -l | tr -d ' '); \
+	rm -f "$$tmp"; \
+	printf '  pins agree (%s version-pinned replace site(s))\n' "$$n"
 
 install:
 	go install .

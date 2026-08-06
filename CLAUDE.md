@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make build              # build binary + lambda module (or: go build -o rosterbot .)
 make build-modules      # cross-compile every nested Go module (lambda/, opsnotify/, infra/)
+make check-pins         # assert shared `replace` pins agree across all four go.mod files
 make install            # install to $GOPATH/bin
 make test               # run all unit tests (or: go test ./internal/...)
 go test ./internal/optimizer/...  # run a specific package's tests
@@ -43,6 +44,8 @@ make run-all            # exercise every command in dry-run / read-only mode + p
 After making code changes, always run `go vet ./...` and `go mod tidy` to catch issues early. Note: `gofmt` and `go vet` run automatically via PostToolUse hooks on every Edit/Write.
 
 **`lambda/`, `opsnotify/` and `infra/` are SEPARATE Go modules** (each with its own `go.mod`) — the root `go build ./...` / `go vet ./...` / `go mod tidy` do **not** descend into them. Two guards now exist: `.github/workflows/ci.yml` runs `make build-modules` on every PR (a stale nested module blocks merge), and `.github/dependabot.yml` watches all four module directories and **groups** them into one PR so root and nested modules never drift apart. CDK bundles `lambda/` and `opsnotify/` as `GoFunction` assets, so a stale `go.mod` in any of them only surfaces as a failed `cdk deploy`. They pull the root module via `replace ../`, so **every dependabot bump to a shared root dep re-stales them** (this broke the dashboard-v2 deploy twice — first `lambda/`, then `opsnotify/`). After touching a nested module (or after a dep bump), run `make build-modules`; fix a failure with `cd <dir> && go mod tidy`. `make build` runs it automatically so the break fails locally instead of at deploy.
+
+**A third guard covers what `build-modules` structurally cannot**: each module that imports a forked dep carries its **own** `replace` line for it (root `go.mod` and `lambda/go.mod` both pin `github.com/pmurley/go-fantrax` to a fork commit), and nothing makes them agree. `build-modules` only notices the drift when the bump changes an API — which is exactly why rosterbot-7i3 *looked* covered. In the real recovery scenario, bumping `auth_client.APIVersion`'s **string** with no API change, a stale `lambda/go.mod` compiles clean, CI stays green, and the Lambda ships the old constant; `version-check` can't see it either, since it probes the root binary's pin only. **`make check-pins`** (run by CI and by `make build`) asserts that any module path replaced in more than one `go.mod` resolves to the same target everywhere. It compares **version-pinned replaces only** — `replace <root> => ../` appears in both `lambda/` and `opsnotify/` and the strings match, but only by luck, since a filesystem path resolves against its own module dir; filtering on a non-empty version drops those honestly rather than passing them by accident. Missing `jq` is a hard error, not a skip — a guard that silently no-ops is the false-confidence failure this one exists to kill (rosterbot-00e).
 
 Tests require no credentials — all network dependencies are mocked via interfaces or test servers.
 
