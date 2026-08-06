@@ -181,7 +181,9 @@ rosterbot version-check
 
 `gs-check` needs `GS_TRACKING_ENABLED=true` plus Pushover credentials; it's a clean no-op when tracking is off.
 
-`version-check` exits non-zero **only** on a confirmed `STALE_CLIENT` rejection — an inconclusive probe (transport error, unrecognized response) exits 0 with a warning rather than raising a second alert for a Fantrax outage that every other scheduled job already pages through.
+`version-check` exits non-zero on a confirmed `STALE_CLIENT` rejection — an inconclusive probe (transport error, unrecognized response) exits 0 with a warning rather than raising a second alert for a Fantrax outage that every other scheduled job already pages through.
+
+When the pin reads OK, a second probe sends a deliberately obsolete version as a positive control. Fantrax's gate is a *minimum* check, so a working gate must reject it; if it doesn't, the gate has stopped discriminating and every "version OK" reading is meaningless, which also exits non-zero (`PROBE_BLIND`). Without it a broken probe reads green forever and no heartbeat can tell — the job does launch and does exit 0.
 
 </details>
 

@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/pmurley/go-fantrax/auth_client"
@@ -138,5 +140,56 @@ func TestCheckAPIVersion_SendsThePinnedVersion(t *testing.T) {
 	}
 	if sent["v"] != auth_client.APIVersion {
 		t.Errorf(`sent "v" = %v, want %q`, sent["v"], auth_client.APIVersion)
+	}
+}
+
+// The control probe must send ControlVersion and not the pinned constant.
+// auth_client.BuildFullRequest always stamps the pinned version, so the
+// override is the only thing making the control a control — and a control that
+// silently sends the pinned version tests nothing.
+func TestCheckControlVersion_SendsTheControlVersion(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Write([]byte(staleBody))
+	}))
+	t.Cleanup(srv.Close)
+	withProbeURL(t, srv.URL)
+
+	status, _, err := CheckControlVersion(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != VersionStale {
+		t.Errorf("status = %v, want stale", status)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(gotBody, &sent); err != nil {
+		t.Fatalf("control probe sent unparseable JSON: %v", err)
+	}
+	if sent["v"] != ControlVersion {
+		t.Errorf(`sent "v" = %v, want %q`, sent["v"], ControlVersion)
+	}
+	if sent["v"] == auth_client.APIVersion {
+		t.Error("control probe sent the pinned version — it would pass the gate and never act as a control")
+	}
+}
+
+// The control has to sit far enough below Fantrax's floor that a threshold move
+// can never turn it green. Measured 2026-08-05, the floor was between 180.0.0
+// and 184.0.0; a control anywhere near that would false-alarm the day Fantrax
+// lowered it. A leading major of 1 is the cheap, checkable form of "far below".
+func TestControlVersion_IsFarBelowTheGateFloor(t *testing.T) {
+	major, _, ok := strings.Cut(ControlVersion, ".")
+	if !ok {
+		t.Fatalf("ControlVersion %q is not dotted", ControlVersion)
+	}
+	n, err := strconv.Atoi(major)
+	if err != nil {
+		t.Fatalf("ControlVersion %q has a non-numeric major: %v", ControlVersion, err)
+	}
+	if n > 100 {
+		t.Errorf("ControlVersion major %d is close to the observed gate floor (180-184); "+
+			"the control must only fail when the mechanism breaks, never when the threshold moves", n)
 	}
 }
