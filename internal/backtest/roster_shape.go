@@ -1,5 +1,7 @@
 package backtest
 
+import "time"
+
 // SideShape holds one role's projected value over a window: what the roster
 // could have fielded, and what it did field.
 //
@@ -84,4 +86,129 @@ func pitcherIsDeployable(p SnapshotPlayer) bool {
 		return p.IsStarter || p.GSSuppressed
 	}
 	return p.HasGame
+}
+
+// RosterShape reports how much deployable projected value a roster fielded on
+// each side of the ball over a window, against the league's slot counts and
+// weekly game-start cap.
+//
+// It is the analytical companion to GateSummary: the gate measures which starts
+// the cap declined, this measures the structural imbalance that keeps producing
+// them. The two print together.
+type RosterShape struct {
+	// Days is the size of the window asked for.
+	Days int
+	// DaysWithSnapshot is how many of those days had a snapshot that was fresh
+	// (same Eastern-time calendar day, per sameETDate) AND carried roster
+	// status. Only these contribute to the totals.
+	DaysWithSnapshot int
+	// DaysStale is how many days had a snapshot whose GeneratedAt falls on a
+	// different ET calendar day than the date it projects — a --matchup
+	// pre-write never overwritten by that day's own run. Its roster state
+	// belongs to a different day, so it is excluded.
+	DaysStale int
+	// DaysPreSchema is how many days had a fresh snapshot written before
+	// SnapshotPlayer.Status existed. Excluded, and counted separately, because
+	// an empty status fails the deployable filter for every player — leaving a
+	// day with zero owned value that is otherwise indistinguishable from a day
+	// measured as fully fielded.
+	DaysPreSchema int
+
+	HitterSlots, PitcherSlots int
+
+	// GSCapMin/GSCapMax bound the weekly game-start cap over the counted days.
+	// They range over NON-ZERO caps only: a day with GS tracking disabled
+	// records 0, and letting that into the minimum would render "GS cap
+	// 0–18/wk". Both zero means no counted day recorded a cap at all.
+	GSCapMin, GSCapMax int
+
+	Hitters, Pitchers SideShape
+}
+
+// SummarizeRosterShape reads the projection snapshots for the given dates and
+// totals deployable versus fielded projected value on each side.
+//
+// It is a second, independent pass over the same snapshots SummarizeGSGate
+// reads. They are kept separate so each owns its own failure policy and doc
+// burden; the cost is one extra read of a handful of small JSON files.
+//
+// hitterSlots and pitcherSlots are carried through for rendering only — they
+// are never divided by. Normalizing by slot count is exactly the reduction this
+// measure exists to avoid (see SideShape.FieldedRate).
+func SummarizeRosterShape(dir string, dates []time.Time, hitterSlots, pitcherSlots int) RosterShape {
+	s := RosterShape{Days: len(dates), HitterSlots: hitterSlots, PitcherSlots: pitcherSlots}
+
+	for _, d := range dates {
+		snap, ok := LoadSnapshot(dir, d)
+		if !ok {
+			continue
+		}
+		// A zero GeneratedAt predates the field and can't be judged for
+		// staleness, so it is treated as fresh — matching RunProjectionAnalysis
+		// and SummarizeGSGate.
+		if !snap.GeneratedAt.IsZero() && !sameETDate(snap.GeneratedAt, d) {
+			s.DaysStale++
+			continue
+		}
+		if isPreStatusSnapshot(snap) {
+			s.DaysPreSchema++
+			continue
+		}
+		s.DaysWithSnapshot++
+
+		for _, h := range snap.Hitters {
+			if !hitterIsDeployable(h) {
+				continue
+			}
+			s.Hitters.OwnedPts += h.ProjPtsPerGame
+			if h.WasStarted {
+				s.Hitters.FieldedPts += h.ProjPtsPerGame
+			}
+		}
+		for _, p := range snap.Pitchers {
+			if !pitcherIsDeployable(p) {
+				continue
+			}
+			s.Pitchers.OwnedPts += p.ProjPtsPerGame
+			if p.WasStarted {
+				s.Pitchers.FieldedPts += p.ProjPtsPerGame
+			}
+		}
+
+		if snap.GSLimit > 0 {
+			if s.GSCapMin == 0 || snap.GSLimit < s.GSCapMin {
+				s.GSCapMin = snap.GSLimit
+			}
+			if snap.GSLimit > s.GSCapMax {
+				s.GSCapMax = snap.GSLimit
+			}
+		}
+	}
+	return s
+}
+
+// isPreStatusSnapshot reports whether a snapshot was written before
+// SnapshotPlayer.Status existed.
+//
+// The test is all-or-nothing rather than "any player missing a status" because
+// that is the true shape of the transition: Status is copied straight off the
+// roster for every player, so a real write sets it for all of them or the code
+// predates the field entirely. A snapshot with no players at all is not marked
+// pre-schema — it contributes nothing either way, and mislabelling it would
+// misreport why the window is thin.
+func isPreStatusSnapshot(s Snapshot) bool {
+	seen := 0
+	for _, p := range s.Hitters {
+		if p.Status != "" {
+			return false
+		}
+		seen++
+	}
+	for _, p := range s.Pitchers {
+		if p.Status != "" {
+			return false
+		}
+		seen++
+	}
+	return seen > 0
 }
