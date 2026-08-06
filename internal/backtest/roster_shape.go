@@ -16,6 +16,20 @@ import (
 type SideShape struct {
 	OwnedPts   float64
 	FieldedPts float64
+
+	// DeployableCount is how many player-days entered OwnedPts — passed the
+	// role's deployable predicate. RosteredCount is how many player-days
+	// appeared in the counted snapshots at all, deployable or not. Their
+	// ratio is the measure's COVERAGE, and it is load-bearing for
+	// interpretation: a rate computed over a small slice of the roster can
+	// reflect availability cadence rather than roster balance. Measured
+	// against 2026-08-06 production data, the pitcher denominator (SP:
+	// IsStarter||GSSuppressed; RP: HasGame) admitted 2 of 13 rostered
+	// pitchers — a FieldedRate on that base is a near-single-player fact
+	// wearing a percentage, and a reader has no way to see that without
+	// these two counts printed alongside it.
+	DeployableCount int
+	RosteredCount   int
 }
 
 // StrandedPts is deployable projected value the roster owned and did not field.
@@ -75,13 +89,29 @@ func hitterIsDeployable(p SnapshotPlayer) bool {
 // roughly the same rate — a measurement of rotation cadence, not roster shape.
 //
 // IsStarter||GSSuppressed reconstructs the PRE-gate probable-starter set, since
-// applyGSGate flips IsStarter to false on the starts it declines. That is also
-// what makes every start reported by FormatGateSummary appear in this side's
-// stranded total.
+// applyGSGate flips IsStarter to false on the starts it declines. That puts
+// every start FormatGateSummary reports into this side's OWNED total — it does
+// NOT put them into stranded. Whether a gate-declined start lands in stranded
+// depends on what happened next: applyGSGate discounts the pitcher to 0.05x
+// but OptimizePitcherLineup still adds him to the slot-assignment pool if he
+// has a game, so on a light slate the candidate pool fits inside the 6 P
+// slots, the suppressed SP is slotted anyway, WasStarted comes back true, and
+// his full projection lands in fielded, not stranded.
 //
 // The branch keys on Role, which buildSnapshot sets to "SP" when PosShortNames
 // contains SP — so a player with any SP eligibility takes the starter branch,
 // matching how the gate itself treats them.
+//
+// buildSnapshot derives Role from PosShortNames alone, but the optimizer's own
+// SP test is broader: IsSPEligible(sp.Player.Positions) ||
+// strings.Contains(PosShortNames, "SP") (internal/optimizer/pitcher_lineup.go).
+// The two agree today only because every pitcher's Eligibility in real
+// snapshots is ["017"], so IsSPEligible is always false. If Fantrax ever
+// emits the "015" SP position ID, such a pitcher would get Role == "RP" here,
+// fall to the HasGame branch below, and contribute his full undiscounted
+// projection on every rest day — the exact rotation-cadence failure this
+// function exists to prevent, and it would fail open (silently inflating
+// owned/fielded) rather than erroring.
 func pitcherIsDeployable(p SnapshotPlayer) bool {
 	if !statusIsRosterable(p.Status) {
 		return false
@@ -161,18 +191,22 @@ func SummarizeRosterShape(dir string, dates []time.Time, hitterSlots, pitcherSlo
 		s.DaysWithSnapshot++
 
 		for _, h := range snap.Hitters {
+			s.Hitters.RosteredCount++
 			if !hitterIsDeployable(h) {
 				continue
 			}
+			s.Hitters.DeployableCount++
 			s.Hitters.OwnedPts += h.ProjPtsPerGame
 			if h.WasStarted {
 				s.Hitters.FieldedPts += h.ProjPtsPerGame
 			}
 		}
 		for _, p := range snap.Pitchers {
+			s.Pitchers.RosteredCount++
 			if !pitcherIsDeployable(p) {
 				continue
 			}
+			s.Pitchers.DeployableCount++
 			s.Pitchers.OwnedPts += p.ProjPtsPerGame
 			if p.WasStarted {
 				s.Pitchers.FieldedPts += p.ProjPtsPerGame
@@ -238,6 +272,11 @@ func FormatRosterShape(s RosterShape) string {
 	fmt.Fprintf(&b, "Measured over %d of %d days.%s\n\n", s.DaysWithSnapshot, s.Days, excludedClause(s))
 	fmt.Fprint(&b, formatSideLine("Hitters", s.Hitters))
 	fmt.Fprint(&b, formatSideLine("Pitchers", s.Pitchers))
+	fmt.Fprintf(&b, "\nCoverage: hitters %d of %d rostered player-days deployable · pitchers %d of %d.\n",
+		s.Hitters.DeployableCount, s.Hitters.RosteredCount,
+		s.Pitchers.DeployableCount, s.Pitchers.RosteredCount)
+	fmt.Fprintf(&b, "A starter counts as deployable only on days he was a probable start, so the\n")
+	fmt.Fprintf(&b, "pitcher denominator is narrow — read its rate against that count, not alone.\n")
 	fmt.Fprintf(&b, "\nEach side is normalized against its own owned value, not against the\n")
 	fmt.Fprintf(&b, "other, so the gap is not the %d:%d slot ratio — a roster carrying exactly\n",
 		s.HitterSlots, s.PitcherSlots)

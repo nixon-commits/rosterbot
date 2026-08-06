@@ -229,6 +229,37 @@ func TestSummarizeRosterShape_ExcludesPreSchemaDay(t *testing.T) {
 	}
 }
 
+// TestSummarizeRosterShape_MixedStatusSnapshotIsMeasuredNotPreSchema pins the
+// deliberate all-or-nothing shape of isPreStatusSnapshot: it only fires when
+// EVERY player's status is empty. A snapshot with statuses on pitchers but not
+// hitters (a hypothetical partial-schema write, not one the real writer
+// produces) is NOT pre-schema — it's a measured day whose hitter side happens
+// to fail the deployable filter for every player, while the pitcher side
+// contributes normally. This is the intended behavior, not a bug: the test
+// pins it so a future change to isPreStatusSnapshot doesn't silently alter it.
+func TestSummarizeRosterShape_MixedStatusSnapshotIsMeasuredNotPreSchema(t *testing.T) {
+	dir := t.TempDir()
+	writeShapeSnapshot(t, dir, day("2026-08-06"), 12,
+		[]SnapshotPlayer{{PlayerID: "h1", Status: "", HasGame: true, WasStarted: true, ProjPtsPerGame: 10}},
+		[]SnapshotPlayer{{PlayerID: "p1", IsPitcher: true, Role: "SP", Status: "Active", IsStarter: true, HasGame: true, WasStarted: true, ProjPtsPerGame: 16}},
+	)
+
+	got := SummarizeRosterShape(dir, []time.Time{day("2026-08-06")}, 13, 6)
+
+	if got.DaysWithSnapshot != 1 {
+		t.Errorf("DaysWithSnapshot = %d, want 1 — a mixed-status snapshot is measured, not pre-schema", got.DaysWithSnapshot)
+	}
+	if got.DaysPreSchema != 0 {
+		t.Errorf("DaysPreSchema = %d, want 0", got.DaysPreSchema)
+	}
+	if got.Pitchers.OwnedPts != 16 || got.Pitchers.FieldedPts != 16 {
+		t.Errorf("pitcher side = %+v, want owned 16 fielded 16 (contributes normally)", got.Pitchers)
+	}
+	if got.Hitters.OwnedPts != 0 || got.Hitters.RosteredCount != 1 || got.Hitters.DeployableCount != 0 {
+		t.Errorf("hitter side = %+v, want owned 0, rostered 1, deployable 0 (empty status fails the filter for every hitter)", got.Hitters)
+	}
+}
+
 // TestSummarizeRosterShape_ExcludesStaleDay reuses the sameETDate rule: a
 // --matchup pre-write never overwritten by that day's own run carries a roster
 // state from a different day and must not be measured.
@@ -298,9 +329,13 @@ func TestSummarizeRosterShape_IsValueWeightedNotMeanOfRates(t *testing.T) {
 func TestSummarizeRosterShape_CapRangeIgnoresUntrackedDays(t *testing.T) {
 	dir := t.TempDir()
 	hitters := []SnapshotPlayer{{PlayerID: "h1", Status: "Active", HasGame: true, WasStarted: true, ProjPtsPerGame: 5}}
-	writeShapeSnapshot(t, dir, day("2026-08-06"), 12, hitters, nil)
+	// Caps arrive high-then-low (18, untracked, 12) so that GSCapMin is
+	// actually exercised as a running minimum rather than set once by the
+	// first non-zero day and never revisited — that ordering is what makes
+	// this test fail if the `|| snap.GSLimit < s.GSCapMin` clause is deleted.
+	writeShapeSnapshot(t, dir, day("2026-08-06"), 18, hitters, nil)
 	writeShapeSnapshot(t, dir, day("2026-08-07"), 0, hitters, nil)
-	writeShapeSnapshot(t, dir, day("2026-08-08"), 18, hitters, nil)
+	writeShapeSnapshot(t, dir, day("2026-08-08"), 12, hitters, nil)
 
 	got := SummarizeRosterShape(dir, []time.Time{day("2026-08-06"), day("2026-08-07"), day("2026-08-08")}, 13, 6)
 
@@ -382,6 +417,56 @@ func TestFormatRosterShape_EmptySideIsNotZeroPercent(t *testing.T) {
 	// an actually-zero rate from the "90%" on the hitter row above it.
 	if strings.Contains(out, "  0% of owned") {
 		t.Errorf("empty side must not render as 0%%:\n%s", out)
+	}
+}
+
+// TestFormatRosterShape_LegitimateZeroRendersAsZeroPercent is the complement
+// of TestFormatRosterShape_EmptySideIsNotZeroPercent: a side that OWNED
+// deployable value and fielded none of it is a genuine 0%, and must go
+// through formatSideLine's numeric branch (the "fielded N% of owned" line),
+// not the "no deployable value in window" prose reserved for OwnedPts <= 0.
+func TestFormatRosterShape_LegitimateZeroRendersAsZeroPercent(t *testing.T) {
+	out := FormatRosterShape(RosterShape{
+		Days: 1, DaysWithSnapshot: 1, HitterSlots: 13, PitcherSlots: 6,
+		GSCapMin: 12, GSCapMax: 12,
+		Hitters: SideShape{OwnedPts: 100, FieldedPts: 0},
+	})
+
+	if !strings.Contains(out, "fielded   0% of owned projected value") {
+		t.Errorf("a fully-stranded side should render 0%% via the numeric branch:\n%s", out)
+	}
+	// The (unset) Pitchers side legitimately renders "no deployable value" —
+	// this test only pins that the Hitters row, which HAS positive OwnedPts,
+	// does not.
+	if strings.Contains(out, "Hitters    no deployable") {
+		t.Errorf("a side with positive OwnedPts must not fall into the empty-side prose branch:\n%s", out)
+	}
+}
+
+// TestFormatRosterShape_RendersCoverageLine pins the Coverage line itself —
+// nothing else in this file asserts that FormatRosterShape actually renders
+// DeployableCount/RosteredCount. The line exists because the pitcher
+// denominator is routinely tiny (IsStarter||GSSuppressed admits only that
+// day's probable starters): without printing the counts alongside the rate,
+// a 100% pitcher figure built from 2 of 13 rostered pitchers is
+// indistinguishable from a 100% figure built from a healthy sample, and
+// reads as "no surplus" when it is really "almost nothing was measurable."
+func TestFormatRosterShape_RendersCoverageLine(t *testing.T) {
+	out := FormatRosterShape(RosterShape{
+		Days: 7, DaysWithSnapshot: 7, HitterSlots: 13, PitcherSlots: 6,
+		GSCapMin: 12, GSCapMax: 12,
+		Hitters:  SideShape{OwnedPts: 100, FieldedPts: 90, DeployableCount: 14, RosteredCount: 19},
+		Pitchers: SideShape{OwnedPts: 50, FieldedPts: 50, DeployableCount: 2, RosteredCount: 13},
+	})
+
+	if !strings.Contains(out, "hitters 14 of 19 rostered player-days deployable") {
+		t.Errorf("output missing hitter coverage figures:\n%s", out)
+	}
+	if !strings.Contains(out, "pitchers 2 of 13") {
+		t.Errorf("output missing pitcher coverage figures:\n%s", out)
+	}
+	if !strings.Contains(out, "so the") || !strings.Contains(out, "pitcher denominator is narrow") {
+		t.Errorf("output missing the narrow-denominator caveat sentence:\n%s", out)
 	}
 }
 

@@ -107,12 +107,25 @@ type SnapshotPlayer struct {
 	MLBTeam        string  `json:"mlb_team"`
 	ProjPtsPerGame float64 `json:"proj_pts_per_game"`
 	HasGame        bool    `json:"has_game"`
-	WasStarted     bool    `json:"was_started"`
-	IsPitcher      bool    `json:"is_pitcher"`
-	IsStarter      bool    `json:"is_starter,omitempty"`
-	Role           string  `json:"role,omitempty"`   // "SP" / "RP" for pitchers
-	Slot           string  `json:"slot,omitempty"`   // active slot occupied, e.g. "OF"; "" if benched
-	Locked         bool    `json:"locked,omitempty"` // game in progress/final at snapshot time
+	// WasStarted is Status == "Active" on the roster AS FETCHED when the
+	// optimizer ran that pass — i.e. pre-apply for that run. It measures "was
+	// in an active slot when we looked," not "we chose to start them."
+	//
+	// This is an accepted limitation, not an oversight: the winning daily
+	// snapshot is written by the LAST run of the day (last write wins, see
+	// WriteSnapshot), by which point games are over and the idempotency
+	// invariant means the observed roster status has converged to the applied
+	// lineup — so on a normal day this is indistinguishable from "we started
+	// them." The residual exposure is a day whose later runs all failed: it
+	// keeps an early pre-apply snapshot that still passes the sameETDate
+	// freshness guard (same ET calendar day, just an earlier hour), biasing
+	// fielded downward exactly on the days the bot did the most retry work.
+	WasStarted bool   `json:"was_started"`
+	IsPitcher  bool   `json:"is_pitcher"`
+	IsStarter  bool   `json:"is_starter,omitempty"`
+	Role       string `json:"role,omitempty"`   // "SP" / "RP" for pitchers
+	Slot       string `json:"slot,omitempty"`   // active slot occupied, e.g. "OF"; "" if benched
+	Locked     bool   `json:"locked,omitempty"` // game in progress/final at snapshot time
 	// GSSuppressed records that the weekly game-start gate declined this
 	// pitcher's start on this date. Written from the gate's own report, not
 	// inferred. Present only from 2026-08 forward; earlier snapshots read as
