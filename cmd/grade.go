@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/analysis"
@@ -29,6 +30,53 @@ func init() {
 	gradeCmd.Flags().StringVar(&gradeDates, "dates", "", "explicit date or range to grade (overrides --window)")
 	gradeCmd.Flags().IntVar(&gradeWindow, "window", 3, "(re)grade this many trailing days ending yesterday; re-grades are idempotent per date, so a night that failed self-heals on the next run")
 	rootCmd.AddCommand(gradeCmd)
+}
+
+// ungradeableDays picks out the days on which no rostered player appeared in a
+// game. Those days produce no graded rows, so no dt= partition is written, and
+// the Infra page counts the absence as a hole (rosterbot-u9u).
+//
+// The discriminator is the day's own roster snapshot rather than the MLB
+// schedule, for two reasons. The 2026 All-Star break spans three dates and the
+// middle one DID have a game — the All-Star Game, an exhibition Fantrax scores
+// nothing for — so a schedule lookup would call that day gradeable and leave
+// the false gap in place. And the answer is already in hand here, so asking
+// statsapi would add a network dependency to a judgement that does not need one.
+//
+// Only dates the fetch actually returned are considered, and only when the
+// snapshot held players. An absent or empty day is not evidence that no
+// baseball was played — treating it as such would suppress precisely the real
+// gap this has to keep reporting (2026-07-01: games were played, the shadow
+// capture missed the day, the partition is genuinely and recoverably absent).
+func ungradeableDays(days []fantrax.DayRoster, graded map[string]int) []analysis.SkipMarker {
+	var out []analysis.SkipMarker
+	for _, d := range days {
+		if len(d.Players) == 0 {
+			continue
+		}
+		dt := d.Date.UTC().Format("2006-01-02")
+		if graded[dt] > 0 {
+			continue
+		}
+		played := 0
+		for _, p := range d.Players {
+			if p.HadGame || p.FPts != 0 {
+				played++
+			}
+		}
+		if played > 0 {
+			continue
+		}
+		out = append(out, analysis.SkipMarker{
+			Dt:               dt,
+			Reason:           "no rostered player appeared in a game",
+			RosterPlayers:    len(d.Players),
+			PlayersWithGames: 0,
+			WrittenAt:        time.Now().UTC(),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Dt < out[j].Dt })
+	return out
 }
 
 func runGrade(cmd *cobra.Command, args []string) error {
@@ -116,6 +164,13 @@ func runGrade(cmd *cobra.Command, args []string) error {
 			counts[dt] += len(rows)
 		}
 	}
+
+	// Days with no fantasy-relevant baseball at all. These produce no graded
+	// rows and so no dt= partition, which the Infra page then counts as a hole
+	// — three fabricated gaps across the 2026 All-Star break, sitting in the
+	// same "Re-runnable" list as one real one (rosterbot-u9u). A date that did
+	// grade rows is never marked, so the two signals can't contradict.
+	skips := ungradeableDays(days, counts)
 	lineupapi.RecordOutput("grade", gradeToWireResult(counts))
 
 	if cfg.DryRun {
@@ -123,6 +178,9 @@ func runGrade(cmd *cobra.Command, args []string) error {
 			for dt, rows := range bySystemDate[sys] {
 				fmt.Printf("[dry-run] %s %s: %d graded rows\n", sys, dt, len(rows))
 			}
+		}
+		for _, m := range skips {
+			fmt.Printf("[dry-run] %s: nothing to grade (%s)\n", m.Dt, m.Reason)
 		}
 		return nil
 	}
@@ -140,6 +198,16 @@ func runGrade(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Printf("wrote %d graded rows for %s %s\n", len(rows), sys, dt)
 		}
+	}
+
+	// Written after the grades so a partial run can never leave a day marked
+	// "nothing to grade" when grading was in fact attempted and failed.
+	for _, m := range skips {
+		date, _ := time.Parse("2006-01-02", m.Dt)
+		if err := w.WriteSkip(date, m); err != nil {
+			return fmt.Errorf("write skip marker %s: %w", m.Dt, err)
+		}
+		fmt.Printf("marked %s ungradeable: %s\n", m.Dt, m.Reason)
 	}
 
 	// The Lineup Gap Store: how the lineup we actually applied scored against

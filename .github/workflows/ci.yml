@@ -28,6 +28,14 @@ jobs:
           go build ./...
           go vet ./...
 
+      # Every module importing a forked dep carries its own `replace` line for
+      # it; nothing makes them agree. build-modules only catches that drift when
+      # the bump changes an API — a pure constant-value bump (e.g. the Fantrax
+      # APIVersion string) leaves a stale lambda/go.mod compiling clean and
+      # shipping the old constant. See the check-pins comment in the Makefile.
+      - name: Check shared replace pins agree across modules
+        run: make check-pins
+
       # lambda/, opsnotify/ and infra/ are separate Go modules that the root
       # build never descends into. They pull the root via `replace ../`, so a
       # bump to a shared root dep re-stales them — and that only surfaced as a

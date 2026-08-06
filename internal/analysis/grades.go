@@ -9,6 +9,7 @@
 package analysis
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -49,9 +50,46 @@ type GradeRow struct {
 	Source    string  `json:"source"`
 }
 
-// Writer persists a day's graded rows for one projection system to the store.
+// Writer persists a day's graded rows for one projection system to the store,
+// or a marker recording that the day was deliberately not graded.
 type Writer interface {
 	WriteGrades(date time.Time, system string, rows []GradeRow) error
+	WriteSkip(date time.Time, m SkipMarker) error
+}
+
+// skipMarkerFilename is the leaf object name of a deliberate-skip marker. It is
+// NOT gradesFilename, so Reader's suffix filter skips it and it never decodes as
+// a GradeRow, and it carries no system= segment, so it falls outside every
+// projected Athena partition and cannot appear as a row there either.
+const skipMarkerFilename = "no-actuals.json"
+
+// SkipMarker records that a date produced no graded rows on purpose — there was
+// no fantasy-relevant baseball that day, so there is nothing to grade and the
+// absent partition is correct rather than a fault.
+//
+// It exists because absence cannot carry that meaning on its own. The Infra
+// page counts a missing dt= day in a partitioned series as a hole, which during
+// the All-Star break reported three fabricated gaps beside one real one and
+// labelled all four "Re-runnable" — inviting a re-run that silently does
+// nothing (rosterbot-u9u). A zero-row grades.ndjson would close the hole but is
+// indistinguishable from a truncated write, so the marker is a distinct key
+// with an explicit reason and the counts behind it.
+type SkipMarker struct {
+	Dt string `json:"dt"`
+	// Reason is prose for whoever finds this object while investigating.
+	Reason string `json:"reason"`
+	// RosterPlayers is how many players the day's roster snapshot held, and
+	// PlayersWithGames how many of them actually appeared. The marker is only
+	// written when the latter is zero, so these two numbers are the evidence
+	// for the claim rather than a restatement of it.
+	RosterPlayers    int       `json:"roster_players"`
+	PlayersWithGames int       `json:"players_with_games"`
+	WrittenAt        time.Time `json:"written_at"`
+}
+
+// SkipMarkerKey is the store-relative key for a date's skip marker.
+func SkipMarkerKey(date time.Time) string {
+	return fmt.Sprintf("%sdt=%s/%s", gradesPrefix, date.UTC().Format("2006-01-02"), skipMarkerFilename)
 }
 
 // MarshalNDJSON serializes rows as newline-delimited JSON (one row per line).
@@ -90,4 +128,12 @@ func NewFileWriter(root string) Writer { return NewWriter(ndjsonstore.NewFileSto
 
 func (w writer) WriteGrades(date time.Time, system string, rows []GradeRow) error {
 	return ndjsonstore.Write(w.store, objectKey(date, system), rows)
+}
+
+func (w writer) WriteSkip(date time.Time, m SkipMarker) error {
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return w.store.Put(SkipMarkerKey(date), b)
 }

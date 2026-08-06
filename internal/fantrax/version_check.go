@@ -43,6 +43,29 @@ var versionProbeURL = "https://www.fantrax.com/fxpa/req"
 // versionProbeTimeout bounds the single probe request.
 const versionProbeTimeout = 20 * time.Second
 
+// ControlVersion is a deliberately ancient client version used as a positive
+// control for the probe itself. Fantrax's gate is a MINIMUM check, not an
+// equality check — measured live on 2026-08-05, the floor sits between 181.0.0
+// (STALE_CLIENT) and 182.0.0 (WARNING_NOT_LOGGED_IN), and 999.999.999 passes.
+// So a version far below the floor must come back STALE_CLIENT for as long as
+// the gate exists at all, which is what makes it a control: if it stops
+// answering STALE_CLIENT, the probe has stopped discriminating and every
+// subsequent green reading is meaningless.
+//
+// Far below the floor on purpose. A control just under the pin (184.x) would
+// be a tighter test of where the threshold sits, and would false-alarm the
+// moment Fantrax lowered it — the control must only fail when the MECHANISM
+// breaks, never when the threshold moves. A moved threshold is already the
+// real probe's job to report.
+const ControlVersion = "1.0.0"
+
+// CheckControlVersion probes with ControlVersion. A working gate answers
+// VersionStale; anything else means the probe can no longer tell a good pin
+// from a bad one. See rosterbot-0a1.
+func CheckControlVersion(ctx context.Context) (VersionStatus, string, error) {
+	return probeVersion(ctx, ControlVersion)
+}
+
 // CheckAPIVersion asks Fantrax whether the version this binary pins still
 // passes its server-side gate. It deliberately does NOT authenticate: the
 // version gate is checked ahead of auth, so an unauthenticated getUserInfo
@@ -63,6 +86,17 @@ const versionProbeTimeout = 20 * time.Second
 // none. An error is returned only for transport/protocol failures, never for
 // VersionStale — a stale pin is a successful probe with a bad answer.
 func CheckAPIVersion(ctx context.Context) (VersionStatus, string, error) {
+	return probeVersion(ctx, auth_client.APIVersion)
+}
+
+// probeVersion runs the unauthenticated gate probe with an arbitrary client
+// version. CheckAPIVersion passes the pinned constant; CheckControlVersion
+// passes ControlVersion. The version is overwritten on the envelope rather than
+// threaded through auth_client.BuildFullRequest, which always stamps the pinned
+// constant — that constant staying the single source of truth for real calls is
+// the whole point of rosterbot-7i3, so the override lives here, at the one
+// caller that deliberately sends something else.
+func probeVersion(ctx context.Context, version string) (VersionStatus, string, error) {
 	payload := auth_client.BuildFullRequest(
 		[]auth_client.FantraxMessage{{
 			Method: "getUserInfo",
@@ -70,6 +104,7 @@ func CheckAPIVersion(ctx context.Context) (VersionStatus, string, error) {
 		}},
 		"https://www.fantrax.com/",
 	)
+	payload["v"] = version
 
 	body, err := json.Marshal(payload)
 	if err != nil {
