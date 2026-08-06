@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/hkb"
@@ -110,7 +111,11 @@ func teamValueWriter() (teamvalue.Writer, string, error) {
 
 // printTeamValueSummary prints a total-descending table with a join-coverage
 // line, so a dry-run or log shows at a glance who leads and whether the
-// HKB↔Fantrax name join covered the rosters.
+// HKB↔Fantrax name join covered the rosters. Any team with a shortfall gets
+// its unmatched player names printed on a follow-up line — the dashboard's
+// Matched column can only show the ratio (it reads back rows from the store,
+// where Unmatched never persists, see teamvalue.Row), so this stdout summary
+// is the one place the actual names surface, for whoever reads the job log.
 func printTeamValueSummary(date time.Time, rows []teamvalue.Row) {
 	sorted := make([]teamvalue.Row, len(rows))
 	copy(sorted, rows)
@@ -122,6 +127,9 @@ func printTeamValueSummary(date time.Time, rows []teamvalue.Row) {
 	for _, r := range sorted {
 		fmt.Printf("%-24s %8d %8d %8d   %d/%d\n",
 			truncate(r.TeamName, 24), r.TotalValue(), r.MLBValue(), r.MinorsValue(), r.MatchedCount, r.RosteredCount)
+		if len(r.Unmatched) > 0 {
+			fmt.Printf("%-24s   unmatched: %s\n", "", strings.Join(r.Unmatched, ", "))
+		}
 		totRostered += r.RosteredCount
 		totMatched += r.MatchedCount
 	}
