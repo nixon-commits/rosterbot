@@ -1,6 +1,10 @@
 package backtest
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // SideShape holds one role's projected value over a window: what the roster
 // could have fielded, and what it did field.
@@ -211,4 +215,90 @@ func isPreStatusSnapshot(s Snapshot) bool {
 		seen++
 	}
 	return seen > 0
+}
+
+// FormatRosterShape renders the roster-shape section of the backtest report.
+//
+// The prose is part of the measure, not decoration: a bare pair of percentages
+// invites exactly the two misreadings the design rules out — that the gap is
+// the league's slot ratio, and that the two stranded figures can be added into
+// a weekly loss.
+func FormatRosterShape(s RosterShape) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\nROSTER SHAPE — value owned vs value the league lets you field\n")
+	fmt.Fprintf(&b, "%s\n", strings.Repeat("-", 64))
+	fmt.Fprintf(&b, "%d hitter slots · %d pitcher slots · %s\n",
+		s.HitterSlots, s.PitcherSlots, formatGSCap(s))
+
+	if s.DaysWithSnapshot == 0 {
+		fmt.Fprintf(&b, "%s\n", noMeasurableDaysReason(s))
+		return b.String()
+	}
+
+	fmt.Fprintf(&b, "Measured over %d of %d days.%s\n\n", s.DaysWithSnapshot, s.Days, excludedClause(s))
+	fmt.Fprint(&b, formatSideLine("Hitters", s.Hitters))
+	fmt.Fprint(&b, formatSideLine("Pitchers", s.Pitchers))
+	fmt.Fprintf(&b, "\nEach side is normalized against its own owned value, not against the\n")
+	fmt.Fprintf(&b, "other, so the gap is not the %d:%d slot ratio — a roster carrying exactly\n",
+		s.HitterSlots, s.PitcherSlots)
+	fmt.Fprintf(&b, "its slots reads 100%% on both sides.\n")
+	fmt.Fprintf(&b, "Hitter stranding rotates day to day; pitcher stranding above the cap is\n")
+	fmt.Fprintf(&b, "dead for the week. The two are not summed.\n")
+	return b.String()
+}
+
+func formatGSCap(s RosterShape) string {
+	switch {
+	case s.GSCapMax == 0:
+		return "GS cap not tracked"
+	case s.GSCapMin == s.GSCapMax:
+		return fmt.Sprintf("GS cap %d/wk", s.GSCapMax)
+	default:
+		return fmt.Sprintf("GS cap %d–%d/wk", s.GSCapMin, s.GSCapMax)
+	}
+}
+
+// formatSideLine renders one role's row, or says plainly that the side had no
+// deployable value. It must never fall back to 0%: no value to field and all
+// value stranded are opposite readings.
+func formatSideLine(label string, side SideShape) string {
+	rate, ok := side.FieldedRate()
+	if !ok {
+		return fmt.Sprintf("%-10s no deployable value in window\n", label)
+	}
+	return fmt.Sprintf("%-10s fielded %3.0f%% of owned projected value   (%.1f stranded)\n",
+		label, rate*100, side.StrandedPts())
+}
+
+// excludedClause names days dropped from the sample, so a window thinned by
+// failed runs or by pre-schema history is visible rather than silently
+// shrinking the denominator.
+func excludedClause(s RosterShape) string {
+	var parts []string
+	if s.DaysStale > 0 {
+		parts = append(parts, fmt.Sprintf("%d stale", s.DaysStale))
+	}
+	if s.DaysPreSchema > 0 {
+		parts = append(parts, fmt.Sprintf("%d predating roster-status capture", s.DaysPreSchema))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" Excluded: %s.", strings.Join(parts, ", "))
+}
+
+func noMeasurableDaysReason(s RosterShape) string {
+	switch {
+	case s.DaysStale > 0 && s.DaysPreSchema > 0:
+		return fmt.Sprintf("No measurable days: %d stale, %d predate roster-status capture.",
+			s.DaysStale, s.DaysPreSchema)
+	case s.DaysPreSchema > 0:
+		return fmt.Sprintf("All %d day(s) with snapshots predate roster-status capture — nothing to report.",
+			s.DaysPreSchema)
+	case s.DaysStale > 0:
+		return fmt.Sprintf("All %d day(s) with snapshots are stale (never overwritten by that day's own run) — nothing to report.",
+			s.DaysStale)
+	default:
+		return fmt.Sprintf("No snapshots on disk for these %d days — nothing to report.", s.Days)
+	}
 }

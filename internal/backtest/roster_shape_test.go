@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -305,5 +306,131 @@ func TestSummarizeRosterShape_CapRangeIgnoresUntrackedDays(t *testing.T) {
 
 	if got.GSCapMin != 12 || got.GSCapMax != 18 {
 		t.Errorf("cap = %d–%d, want 12–18", got.GSCapMin, got.GSCapMax)
+	}
+}
+
+func TestFormatRosterShape_RendersBothRatesAndCap(t *testing.T) {
+	out := FormatRosterShape(RosterShape{
+		Days: 7, DaysWithSnapshot: 7,
+		HitterSlots: 13, PitcherSlots: 6,
+		GSCapMin: 12, GSCapMax: 12,
+		Hitters:  SideShape{OwnedPts: 1000, FieldedPts: 910},
+		Pitchers: SideShape{OwnedPts: 500, FieldedPts: 340},
+	})
+
+	for _, want := range []string{
+		"13 hitter slots",
+		"6 pitcher slots",
+		"GS cap 12/wk",
+		"Measured over 7 of 7 days.",
+		"Hitters",
+		"91%",
+		"90.0 stranded",
+		"Pitchers",
+		"68%",
+		"160.0 stranded",
+		"not the 13:6 slot ratio",
+		"not summed",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestFormatRosterShape_CapVariants(t *testing.T) {
+	tests := []struct {
+		name          string
+		min, max      int
+		want, notWant string
+	}{
+		{name: "single cap", min: 12, max: 12, want: "GS cap 12/wk"},
+		{name: "range", min: 12, max: 18, want: "GS cap 12–18/wk"},
+		{name: "untracked", min: 0, max: 0, want: "GS cap not tracked", notWant: "/wk"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := FormatRosterShape(RosterShape{
+				Days: 1, DaysWithSnapshot: 1, HitterSlots: 13, PitcherSlots: 6,
+				GSCapMin: tt.min, GSCapMax: tt.max,
+				Hitters: SideShape{OwnedPts: 10, FieldedPts: 5},
+			})
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("output missing %q:\n%s", tt.want, out)
+			}
+			if tt.notWant != "" && strings.Contains(out, tt.notWant) {
+				t.Errorf("output should not contain %q:\n%s", tt.notWant, out)
+			}
+		})
+	}
+}
+
+// TestFormatRosterShape_EmptySideIsNotZeroPercent pins that a side with no
+// deployable value reads as such. Rendering it as 0% would claim the roster
+// stranded everything it owned.
+func TestFormatRosterShape_EmptySideIsNotZeroPercent(t *testing.T) {
+	out := FormatRosterShape(RosterShape{
+		Days: 1, DaysWithSnapshot: 1, HitterSlots: 13, PitcherSlots: 6,
+		GSCapMin: 12, GSCapMax: 12,
+		Hitters: SideShape{OwnedPts: 100, FieldedPts: 90},
+	})
+
+	if !strings.Contains(out, "no deployable value in window") {
+		t.Errorf("empty pitcher side should say so explicitly:\n%s", out)
+	}
+	// %3.0f renders a true zero as "  0", so the two-space form distinguishes
+	// an actually-zero rate from the "90%" on the hitter row above it.
+	if strings.Contains(out, "  0% of owned") {
+		t.Errorf("empty side must not render as 0%%:\n%s", out)
+	}
+}
+
+func TestFormatRosterShape_NamesExcludedDays(t *testing.T) {
+	out := FormatRosterShape(RosterShape{
+		Days: 7, DaysWithSnapshot: 4, DaysStale: 1, DaysPreSchema: 2,
+		HitterSlots: 13, PitcherSlots: 6, GSCapMin: 12, GSCapMax: 12,
+		Hitters: SideShape{OwnedPts: 100, FieldedPts: 90},
+	})
+
+	if !strings.Contains(out, "Measured over 4 of 7 days.") {
+		t.Errorf("missing measured-days line:\n%s", out)
+	}
+	if !strings.Contains(out, "1 stale") || !strings.Contains(out, "2 predating roster-status capture") {
+		t.Errorf("excluded days not named:\n%s", out)
+	}
+}
+
+func TestFormatRosterShape_NoMeasurableDaysExplainsWhy(t *testing.T) {
+	tests := []struct {
+		name  string
+		shape RosterShape
+		want  string
+	}{
+		{
+			name:  "all pre-schema",
+			shape: RosterShape{Days: 3, DaysPreSchema: 3},
+			want:  "predate roster-status capture",
+		},
+		{
+			name:  "all stale",
+			shape: RosterShape{Days: 3, DaysStale: 3},
+			want:  "stale",
+		},
+		{
+			name:  "none on disk",
+			shape: RosterShape{Days: 3},
+			want:  "No snapshots on disk",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := FormatRosterShape(tt.shape)
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("output missing %q:\n%s", tt.want, out)
+			}
+			if strings.Contains(out, "% of owned") {
+				t.Errorf("must not report a rate with no measurable days:\n%s", out)
+			}
+		})
 	}
 }
