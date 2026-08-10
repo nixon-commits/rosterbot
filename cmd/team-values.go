@@ -84,6 +84,13 @@ func runTeamValues(cmd *cobra.Command, args []string) error {
 
 	printTeamValueSummary(date, rows)
 
+	// Built before the dry-run gate, not after, so `--dry-run` exercises the
+	// whole path bar the write. A producer whose output only ever materializes
+	// in production is one that can only be tested in production.
+	table := buildTradeValues(date, pool, hkbPlayers, rows, teamNames)
+	fmt.Printf("Trade values table: %d players, %d picks, HKB coverage %d/%d\n",
+		len(table.Players), len(table.Picks), table.Matched, table.Rostered)
+
 	if dryRun {
 		fmt.Printf("team-values (dry-run): computed %d team rows for %s; not written\n", len(rows), date.Format("2006-01-02"))
 		return nil
@@ -109,14 +116,31 @@ func runTeamValues(cmd *cobra.Command, args []string) error {
 	// permanent (docs/adr/0002), whereas this table is a rewritable snapshot
 	// the next run replaces. A trades hiccup must not take the irreplaceable
 	// artifact down with it.
-	if err := writeTradeValues(date, pool, hkbPlayers, rows, teamNames); err != nil {
+	if err := publishTradeValues(table); err != nil {
 		warn("team-values: trade values table not written: %v", err)
 	}
 	return nil
 }
 
-// writeTradeValues builds and stores the Trades tab's league values table.
-func writeTradeValues(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb.Player, rows []teamvalue.Row, teamNames map[string]string) error {
+// publishTradeValues stores the Trades tab's league values table.
+func publishTradeValues(table tradeboard.ValuesTable) error {
+	data, err := json.Marshal(table)
+	if err != nil {
+		return fmt.Errorf("marshal values table: %w", err)
+	}
+	store, err := statestore.FromEnv().TradeValuesStore()
+	if err != nil {
+		return fmt.Errorf("open trade values store: %w", err)
+	}
+	if err := store.Publish(lineupapi.TradeValuesKey, data); err != nil {
+		return fmt.Errorf("publish values table: %w", err)
+	}
+	fmt.Printf("Wrote trade values table (%d players, %d picks)\n", len(table.Players), len(table.Picks))
+	return nil
+}
+
+// buildTradeValues assembles the Trades tab's league values table.
+func buildTradeValues(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb.Player, rows []teamvalue.Row, teamNames map[string]string) tradeboard.ValuesTable {
 	// tradeboard deliberately does not import internal/fantrax (it would drag
 	// chromedp in behind it), so the pool is mapped across here. IsPitcher is
 	// teamvalue's own, not a reimplementation, so the two-way tiebreak stays
@@ -132,21 +156,7 @@ func writeTradeValues(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb
 		})
 	}
 
-	table := tradeboard.BuildValuesTable(date, players, hkbPlayers, rows, teamNames)
-	data, err := json.Marshal(table)
-	if err != nil {
-		return fmt.Errorf("marshal values table: %w", err)
-	}
-	store, err := statestore.FromEnv().TradeValuesStore()
-	if err != nil {
-		return fmt.Errorf("open trade values store: %w", err)
-	}
-	if err := store.Publish(lineupapi.TradeValuesKey, data); err != nil {
-		return fmt.Errorf("publish values table: %w", err)
-	}
-	fmt.Printf("Wrote trade values table: %d players, %d picks, HKB coverage %d/%d\n",
-		len(table.Players), len(table.Picks), table.Matched, table.Rostered)
-	return nil
+	return tradeboard.BuildValuesTable(date, players, hkbPlayers, rows, teamNames)
 }
 
 // teamValueWriter returns the S3-backed writer when STATE_BUCKET is set (Fargate),

@@ -43,11 +43,13 @@ type Offer struct {
 	Sides   []Side             `json:"sides"`
 	Verdict tradevalue.Verdict `json:"verdict"`
 
-	// Impact is what accepting would do to my roster's value composition.
-	// Nil when the verdict is incomplete -- an offer we cannot price is one
-	// whose consequence we cannot state either -- and when the teams could
-	// not be resolved against the values table.
-	Impact *Impact `json:"impact,omitempty"`
+	// Impact is what accepting would do to my roster's value composition,
+	// and ImpactNote is why it is absent when it is. A missing impact always
+	// carries its reason, so the tab can say why instead of silently
+	// dropping the section -- see BuildImpact on why an offer can be fully
+	// priced and still have no impact.
+	Impact     *Impact `json:"impact,omitempty"`
+	ImpactNote string  `json:"impact_note,omitempty"`
 }
 
 // Side is one team's half of an offer: what they receive, and the totals.

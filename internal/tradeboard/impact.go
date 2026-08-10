@@ -1,6 +1,7 @@
 package tradeboard
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/nixon-commits/rosterbot/internal/playername"
@@ -50,16 +51,23 @@ var metrics = []struct {
 // BuildImpact replays an offer against the league's team-value rows and
 // reports the before/after for myTeam.
 //
-// It returns nil rather than a partial answer whenever anything cannot be
-// resolved -- an asset with no HKB match, an unidentified draft pick, a team
-// name that is not in the values table, or myTeam not being a participant.
-// The same rule governs the verdict: an offer we cannot price is one whose
-// consequence we cannot state, and a composition delta computed with a
-// missing player would look authoritative while being silently short by
-// however much that player is worth.
-func BuildImpact(myTeam string, inputs []OfferInput, teams []teamvalue.Row, players []PlayerValue) *Impact {
+// It returns (nil, reason) rather than a partial answer whenever anything
+// cannot be resolved -- an unidentified draft pick, an asset on nobody's
+// roster, a team name the values table does not know, or myTeam not being a
+// participant. A composition delta computed with a missing player would look
+// authoritative while being silently short by whatever that player is worth.
+//
+// The reason is returned rather than swallowed because suppression has to be
+// legible. An offer can be fully PRICED and still have no impact: pricing
+// needs only an HKB entry, while placing a player in a value leaf needs their
+// current Fantrax roster row. A player dropped to free agency since the values
+// table was built satisfies the first and not the second -- observed on
+// 2026-08-09 with Heriberto Hernandez, who sat in a recorded offer, priced
+// cleanly, and belonged to no team. Without a reason the tab would quietly
+// omit the section and look like it had simply decided not to bother.
+func BuildImpact(myTeam string, inputs []OfferInput, teams []teamvalue.Row, players []PlayerValue) (*Impact, string) {
 	if len(inputs) == 0 || len(teams) == 0 {
-		return nil
+		return nil, "no league value data yet"
 	}
 
 	byName := make(map[string]PlayerValue, len(players))
@@ -74,18 +82,23 @@ func BuildImpact(myTeam string, inputs []OfferInput, teams []teamvalue.Row, play
 		after[r.TeamName] = r
 	}
 	if _, ok := before[myTeam]; !ok {
-		return nil
+		return nil, fmt.Sprintf("%s is not in the league value table", myTeam)
 	}
 
 	for _, in := range inputs {
 		pv, ok := byName[playername.Normalize(in.Player)]
-		if !ok || !pv.Matched {
-			return nil // unpriced asset (or a draft pick, whose Player is empty)
+		switch {
+		case in.Player == "":
+			return nil, "the offer includes an unidentified draft pick"
+		case !ok:
+			return nil, fmt.Sprintf("%s is not on any roster", in.Player)
+		case !pv.Matched:
+			return nil, fmt.Sprintf("%s has no HKB value", in.Player)
 		}
 		from, okFrom := after[in.From]
 		to, okTo := after[in.To]
 		if !okFrom || !okTo {
-			return nil // a team name the values table does not know
+			return nil, "the offer names a team not in the league value table"
 		}
 		after[in.From] = addToLeaf(from, pv, -1)
 		after[in.To] = addToLeaf(to, pv, +1)
@@ -104,7 +117,7 @@ func BuildImpact(myTeam string, inputs []OfferInput, teams []teamvalue.Row, play
 			Teams:      len(teams),
 		})
 	}
-	return imp
+	return imp, ""
 }
 
 // addToLeaf moves one player's value and count into (sign +1) or out of

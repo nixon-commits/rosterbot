@@ -129,9 +129,12 @@ func metric(t *testing.T, imp *Impact, name string) ImpactMetric {
 }
 
 func TestBuildImpact_MovesValueBetweenTheRightLeavesAndReRanks(t *testing.T) {
-	imp := BuildImpact(me, liveOffer(), teams(), pvs())
+	imp, note := BuildImpact(me, liveOffer(), teams(), pvs())
 	if imp == nil {
-		t.Fatal("BuildImpact = nil, want an impact")
+		t.Fatalf("BuildImpact = nil (%s), want an impact", note)
+	}
+	if note != "" {
+		t.Errorf("note = %q, want empty alongside a non-nil impact", note)
 	}
 
 	// I receive 1391+1234 and give up 2292: pitcher value +333.
@@ -165,9 +168,9 @@ func TestBuildImpact_RankChangesWhenValueCrossesARival(t *testing.T) {
 		{TradeID: "x", Player: "Kyle Harrison", From: me, To: them},
 		{TradeID: "x", Player: "Alec Bohm", From: them, To: me},
 	}
-	imp := BuildImpact(me, inputs, teams(), pvs())
+	imp, note := BuildImpact(me, inputs, teams(), pvs())
 	if imp == nil {
-		t.Fatal("BuildImpact = nil")
+		t.Fatalf("BuildImpact = nil (%s)", note)
 	}
 	p := metric(t, imp, "Pitchers")
 	if p.After != 2708 {
@@ -199,9 +202,16 @@ func TestBuildImpact_SuppressedWhenAnythingCannotBeResolved(t *testing.T) {
 	}
 	for name, inputs := range cases {
 		t.Run(name, func(t *testing.T) {
-			if imp := BuildImpact(me, inputs, teams(), pvs()); imp != nil {
+			imp, note := BuildImpact(me, inputs, teams(), pvs())
+			if imp != nil {
 				t.Errorf("BuildImpact = %+v, want nil", imp)
 			}
+			// Suppression must always be legible: the tab shows this
+			// instead of silently dropping the section.
+			if note == "" {
+				t.Error("suppressed impact carried no reason")
+			}
+			t.Logf("note: %s", note)
 		})
 	}
 }
@@ -211,8 +221,12 @@ func TestBuildImpact_NilWhenIAmNotAParticipant(t *testing.T) {
 		{TradeID: "x", Player: "Gage Jump", From: them, To: other},
 		{TradeID: "x", Player: "Alec Bohm", From: other, To: them},
 	}
-	if imp := BuildImpact("Not A Team", inputs, teams(), pvs()); imp != nil {
+	imp, note := BuildImpact("Not A Team", inputs, teams(), pvs())
+	if imp != nil {
 		t.Errorf("BuildImpact = %+v, want nil", imp)
+	}
+	if note == "" {
+		t.Error("suppressed impact carried no reason")
 	}
 }
 

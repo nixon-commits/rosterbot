@@ -79,9 +79,15 @@ func captureTradeOffers(ft *fantrax.Client, cfg *config.Config, now time.Time) e
 		}
 		for i := range mine {
 			if mine[i].Verdict.Status == tradevalue.StatusIncomplete {
+				mine[i].ImpactNote = "the offer could not be fully priced"
 				continue // an offer we cannot price is one we cannot project
 			}
-			mine[i].Impact = tradeboard.BuildImpact(myTeam, byTrade[mine[i].TradeID], table.Teams, table.Players)
+			mine[i].Impact, mine[i].ImpactNote = tradeboard.BuildImpact(
+				myTeam, byTrade[mine[i].TradeID], table.Teams, table.Players)
+		}
+	} else {
+		for i := range mine {
+			mine[i].ImpactNote = "no league value data yet — run team-values"
 		}
 	}
 
@@ -195,7 +201,11 @@ func printTradeSnapshot(s tradeboard.Snapshot, table *tradeboard.ValuesTable) {
 			}
 		}
 		fmt.Printf("    verdict: %s\n", verdictLine(o.Verdict))
-		if o.Impact != nil {
+		if o.Impact == nil {
+			if o.ImpactNote != "" {
+				fmt.Printf("    impact: unavailable — %s\n", o.ImpactNote)
+			}
+		} else {
 			for _, m := range o.Impact.Metrics {
 				if m.Delta == 0 && m.RankBefore == m.RankAfter {
 					continue
