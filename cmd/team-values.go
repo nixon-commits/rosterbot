@@ -1,14 +1,19 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/pmurley/go-fantrax/models"
+
 	"github.com/nixon-commits/rosterbot/internal/hkb"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
+	"github.com/nixon-commits/rosterbot/internal/tradeboard"
 	"github.com/spf13/cobra"
 )
 
@@ -92,6 +97,55 @@ func runTeamValues(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("write team values: %w", err)
 	}
 	fmt.Printf("Wrote %d team rows to %s (dt=%s)\n", len(rows), dest, date.Format("2006-01-02"))
+
+	// The Trades tab's league values table. Written here because this command
+	// already holds everything it needs — the 10.7 MB player pool, the HKB
+	// rankings and the team names — and no other daily job does. Splitting it
+	// into its own schedule would re-fetch the pool for no freshness gain:
+	// HKB's own cache TTL is 8h, so a values table cannot be fresher than that
+	// however often it is rebuilt.
+	//
+	// Soft-fail: the Team Value Store is NoBackfill and a missed day is
+	// permanent (docs/adr/0002), whereas this table is a rewritable snapshot
+	// the next run replaces. A trades hiccup must not take the irreplaceable
+	// artifact down with it.
+	if err := writeTradeValues(date, pool, hkbPlayers, rows, teamNames); err != nil {
+		warn("team-values: trade values table not written: %v", err)
+	}
+	return nil
+}
+
+// writeTradeValues builds and stores the Trades tab's league values table.
+func writeTradeValues(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb.Player, rows []teamvalue.Row, teamNames map[string]string) error {
+	// tradeboard deliberately does not import internal/fantrax (it would drag
+	// chromedp in behind it), so the pool is mapped across here. IsPitcher is
+	// teamvalue's own, not a reimplementation, so the two-way tiebreak stays
+	// stated once.
+	players := make([]tradeboard.PoolPlayer, 0, len(pool))
+	for _, pp := range pool {
+		players = append(players, tradeboard.PoolPlayer{
+			Name:           pp.Name,
+			Position:       pp.MultiPositions,
+			FantasyTeamID:  pp.FantasyTeamID,
+			MinorsEligible: pp.MinorsEligible,
+			IsPitcher:      teamvalue.IsPitcher(pp.Positions),
+		})
+	}
+
+	table := tradeboard.BuildValuesTable(date, players, hkbPlayers, rows, teamNames)
+	data, err := json.Marshal(table)
+	if err != nil {
+		return fmt.Errorf("marshal values table: %w", err)
+	}
+	store, err := statestore.FromEnv().TradeValuesStore()
+	if err != nil {
+		return fmt.Errorf("open trade values store: %w", err)
+	}
+	if err := store.Publish(lineupapi.TradeValuesKey, data); err != nil {
+		return fmt.Errorf("publish values table: %w", err)
+	}
+	fmt.Printf("Wrote trade values table: %d players, %d picks, HKB coverage %d/%d\n",
+		len(table.Players), len(table.Picks), table.Matched, table.Rostered)
 	return nil
 }
 

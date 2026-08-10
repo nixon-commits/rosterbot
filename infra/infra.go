@@ -269,6 +269,8 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	stateBucket.GrantRead(apiFn, jsii.String("runledger/*"))
 	stateBucket.GrantRead(apiFn, jsii.String("runs/*"))
 	stateBucket.GrantRead(apiFn, jsii.String("notifications/*"))
+	stateBucket.GrantRead(apiFn, jsii.String("trades/*"))
+	stateBucket.GrantRead(apiFn, jsii.String("tradevalues/*"))
 	// webauthn/ holds the single Identity record and is read-modify-written
 	// on every registration and login (sign-counter update).
 	stateBucket.GrantReadWrite(apiFn, jsii.String("webauthn/*"))

@@ -218,10 +218,10 @@ func TestBuildImpact_NilWhenIAmNotAParticipant(t *testing.T) {
 
 func TestBuildValuesTable(t *testing.T) {
 	pool := []PoolPlayer{
-		{Name: "Kyle Harrison", Positions: []string{"SP"}, FantasyTeamID: "1", IsPitcher: true},
-		{Name: "Alec Bohm", Positions: []string{"3B"}, FantasyTeamID: "1"},
-		{Name: "Unranked Nobody", Positions: []string{"OF"}, FantasyTeamID: "2"},
-		{Name: "Some Free Agent", Positions: []string{"OF"}}, // no team: skipped
+		{Name: "Kyle Harrison", Position: "SP", FantasyTeamID: "1", IsPitcher: true},
+		{Name: "Alec Bohm", Position: "3B,INF", FantasyTeamID: "1"},
+		{Name: "Unranked Nobody", Position: "OF", FantasyTeamID: "2"},
+		{Name: "Some Free Agent", Position: "OF"}, // no team: skipped
 	}
 	names := map[string]string{"1": me, "2": them}
 

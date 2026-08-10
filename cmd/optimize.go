@@ -111,6 +111,19 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		NoCache:            noCache,
 		Verbose:            verbose,
 	}
-	_, err = lineuprun.Run(ft, cfg, opts)
-	return err
+	if _, err := lineuprun.Run(ft, cfg, opts); err != nil {
+		return err
+	}
+
+	// The Trades tab's pending-offer snapshot. This job is the only schedule
+	// that runs often enough for a trade offer to be actionable, and it
+	// already holds an authenticated client with a warm session.
+	//
+	// Soft-fail, deliberately after Run and outside its error path: applying
+	// the lineup is this command's job and a trades hiccup must not fail a run
+	// that already wrote the lineup. Same rule as cmd/grade.go's lineup gaps.
+	if err := captureTradeOffers(ft, cfg, time.Now()); err != nil {
+		warn("optimize: pending trade offers not captured: %v", err)
+	}
+	return nil
 }

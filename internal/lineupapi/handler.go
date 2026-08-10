@@ -38,6 +38,8 @@ type Config struct {
 	Output        OutputStore
 	Progress      ProgressStore
 	Infra         InfraLister
+	Trades        ObjectStore
+	TradeValues   ObjectStore
 
 	// WebAuthn passkey auth (see webauthn.go).
 	Identities    IdentityStore
@@ -56,6 +58,8 @@ type Config struct {
 //	GET  /v1/runs/{id}      -> one run + log tail
 //	GET  /v1/runs/{id}/progress -> live phase progress for a run
 //	GET  /v1/infra          -> live state-bucket health (listed on demand)
+//	GET  /v1/trades         -> pending trade offers, HKB-valued
+//	GET  /v1/trades/values  -> league player/pick values table
 //	POST /v1/jobs/{name}    -> launch a job (async), 202
 //	POST /v1/auth/*         -> passkey login/register/logout, session mgmt
 func Handler(cfg Config) http.Handler {
@@ -68,6 +72,8 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/notifications", cfg.handleNotifications)
 	mux.HandleFunc("GET /v1/jobs", cfg.handleJobs)
 	mux.HandleFunc("GET /v1/infra", cfg.handleInfra)
+	mux.HandleFunc("GET /v1/trades", cfg.handleTrades)
+	mux.HandleFunc("GET /v1/trades/values", cfg.handleTradeValues)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
 
 	// Auth routes gate themselves (open login, session-or-token register,

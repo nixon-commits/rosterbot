@@ -50,8 +50,11 @@ type Artifact struct {
 	Partitioned bool
 
 	// NoBackfill marks an artifact whose missing days can never be recovered,
-	// so a gap is permanent data loss rather than a re-runnable job. Only the
-	// Team Value Store carries this today (docs/adr/0002).
+	// so a gap is permanent data loss rather than a re-runnable job. Two
+	// artifacts carry it: the Team Value Store (docs/adr/0002 — HKB has no
+	// history and rosters are not archived) and the Trade Offer Log (Fantrax
+	// keeps no record of a trade that did not happen, so an offer not
+	// captured while pending is gone).
 	NoBackfill bool
 }
 
@@ -72,7 +75,19 @@ var (
 	Notification = Artifact{Name: "Notifications", S3Prefix: "notifications/", LocalDir: ".lineup/notifications", Durable: true, MaxAge: 7 * Day, Producer: ""}
 	Lineup       = Artifact{Name: "Published Lineup", S3Prefix: "lineup/", LocalDir: ".lineup", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
 	Claims       = Artifact{Name: "Claims Ledger", S3Prefix: "claims/", LocalDir: ".waivers", Durable: true, MaxAge: 3 * Day, Producer: "Claims"}
-	Session      = Artifact{Name: "Fantrax Session", S3Prefix: "session/", LocalDir: ".fantrax-cache", Durable: true, MaxAge: 7 * Day, Producer: ""}
+
+	// The three Trades-tab artifacts. They are separate prefixes rather than
+	// one, because they have different producers and different cadences and a
+	// single prefix would judge all of them by whichever object is newest —
+	// hiding a dead daily producer behind a healthy hourly one.
+	//
+	// Trades' 14h tolerance is not its 1h cadence: the Lineup schedule runs
+	// 14:00-03:00 UTC, so an 11h overnight quiet period is legitimate. This is
+	// the same reasoning as infra.go's hourlyGap (13h), plus slack.
+	Trades      = Artifact{Name: "Pending Offers", S3Prefix: "trades/", LocalDir: ".trades", Durable: true, MaxAge: 14 * time.Hour, Producer: "Lineup"}
+	TradeValues = Artifact{Name: "Trade Values Table", S3Prefix: "tradevalues/", LocalDir: ".tradevalues", Durable: true, MaxAge: 26 * time.Hour, Producer: "TeamValues"}
+	TradeOffers = Artifact{Name: "Trade Offer Log", S3Prefix: "analysis/trade-offers/", LocalDir: ".tradeoffers", Durable: true, MaxAge: 2 * Day, Producer: "Lineup", Partitioned: true, NoBackfill: true}
+	Session     = Artifact{Name: "Fantrax Session", S3Prefix: "session/", LocalDir: ".fantrax-cache", Durable: true, MaxAge: 7 * Day, Producer: ""}
 
 	// Progress shares the runs/ prefix with RunOutput; it is not a separate
 	// listing target, so it is deliberately absent from All().
@@ -86,8 +101,8 @@ var (
 // double-count the same objects.
 func All() []Artifact {
 	return []Artifact{
-		TeamValues, Analysis, LineupGaps, Archive, Backtest,
-		Lineup, RunLedger, RunOutput, Notification, Claims, Session,
+		TeamValues, TradeOffers, Analysis, LineupGaps, Archive, Backtest,
+		Lineup, Trades, TradeValues, RunLedger, RunOutput, Notification, Claims, Session,
 		Cache,
 	}
 }

@@ -113,9 +113,14 @@ type ValuesTable struct {
 
 // PoolPlayer is the subset of a Fantrax pool entry the values table needs.
 // Declared here rather than imported for the reason in the package doc.
+//
+// Position is the display string ("3B,INF"), not the position-ID slice: the
+// hitter/pitcher decision is already made by the caller via teamvalue.IsPitcher
+// so this package never interprets an ID, and the pool's PosShortNames field
+// carries HTML markup that has no business reaching a JSON artifact.
 type PoolPlayer struct {
 	Name           string
-	Positions      []string
+	Position       string
 	FantasyTeamID  string
 	MinorsEligible bool
 	IsPitcher      bool
@@ -134,13 +139,9 @@ func BuildValuesTable(now time.Time, pool []PoolPlayer, hkbPlayers []hkb.Player,
 		}
 		t.Rostered++
 
-		pos := ""
-		if len(pp.Positions) > 0 {
-			pos = pp.Positions[0]
-		}
 		pv := PlayerValue{
 			Name:      pp.Name,
-			Position:  pos,
+			Position:  pp.Position,
 			OwnerID:   pp.FantasyTeamID,
 			OwnerName: teamNames[pp.FantasyTeamID],
 			IsPitcher: pp.IsPitcher,

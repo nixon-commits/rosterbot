@@ -174,6 +174,31 @@ func MergeLog(now time.Time, myTeam string, prior []LogRow, current []Offer, exe
 	return out
 }
 
+// Latest collapses the log to one row per TradeID, keeping the most recently
+// observed.
+//
+// Each daily partition is a cumulative snapshot -- MergeLog carries every
+// known offer forward -- so the newest partition alone is the complete state
+// and reading the whole series yields each offer once per day it was known.
+// The volume makes that a non-issue (a season is a few dozen offers), and the
+// property earned is that any single partition is self-describing rather than
+// a delta that only means something applied to its predecessors.
+func Latest(rows []LogRow) []LogRow {
+	byID := map[string]LogRow{}
+	for _, r := range rows {
+		if prev, ok := byID[r.TradeID]; ok && prev.LastSeen.After(r.LastSeen) {
+			continue
+		}
+		byID[r.TradeID] = r
+	}
+	out := make([]LogRow, 0, len(byID))
+	for _, r := range byID {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TradeID < out[j].TradeID })
+	return out
+}
+
 // Writer persists a day's offer log rows.
 type Writer interface {
 	WriteOffers(date time.Time, rows []LogRow) error
