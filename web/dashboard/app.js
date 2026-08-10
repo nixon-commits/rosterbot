@@ -8,6 +8,7 @@ import { renderRuns } from "./runs.js";
 import { renderPasskeys } from "./passkeys.js";
 import { renderProjections } from "./projections.js";
 import { renderValue } from "./value.js";
+import { renderTrades } from "./trades.js";
 import { renderViews } from "./views.js";
 import { renderInfra } from "./infra.js";
 import { startLive, stopLive } from "./live.js";
@@ -19,6 +20,7 @@ const ROUTES = {
   "#passkeys": renderPasskeys,
   "#projections": renderProjections,
   "#value": renderValue,
+  "#trades": renderTrades,
   "#views": renderViews,
   "#infra": renderInfra,
 };

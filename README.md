@@ -381,6 +381,8 @@ The same Lambda exposes a run ledger and job triggering (these return `501` from
 | `GET /v1/runs/{id}/progress` | Live phase progress for an in-flight run: `{phase, pct, phases:[…], status, updated_at}`. `404` when a run has no progress recorded. |
 | `POST /v1/jobs/{name}` | Launch a job as a Fargate task (async). Returns `202`; poll `/v1/runs`. Allowlist: `optimize, waivers, prospects, claims, gs-check, transactions, recap-site, backtest, grade`. |
 | `GET /v1/infra` | State-bucket health, listed **live** per request: one row per durable/ephemeral artifact with `health` (`ok`/`gap`/`stale`/`missing`/`unknown`), object count, size, age, `dt=` partition count and sub-dimension coverage. |
+| `GET /v1/trades` | Pending trade offers involving your team, both sides HKB-priced, with a verdict and the roster-composition impact of accepting. Written hourly by `optimize`. |
+| `GET /v1/trades/values` | The league values table: every rostered player joined to its HKB dynasty value, grouped by owner, plus HKB's 18 draft-pick assets. Written daily by `team-values`. |
 
 `/v1/infra` reads S3 on demand rather than serving a precomputed file — a status page built from a scheduled artifact would go stale in exactly the situation it exists to detect. It reports its own `generated_at` so the client can prove the reading is current. Two signals matter most: **gap detection** on date-partitioned series, flagged as a failure only where the days can never be refilled (the Team Value Store — HKB has no history, so a missed day is gone for good), and **sub-dimension coverage**, which makes one of the four shadow projection systems silently stopping visible as a missing chip.
 
@@ -395,6 +397,8 @@ Run **status** always comes from the run ledger; `/progress` only adds phase det
 <summary><b>Web dashboard</b> — private SPA, passkey auth, live run status</summary>
 
 A private, single-user web UI over the API: today's lineup, a form to trigger any of the 9 allowlisted jobs, run history with live status, and a viewer for each job's typed output. The **Projections** and **Value** tabs render natively from `projection-site`'s `model.json` / `value.json` (client-side Chart.js, no iframe). Static files live in [`web/dashboard/`](web/dashboard/) (no build step — plain ES modules) and deploy to their own CloudFront distribution (`DashboardUrl` stack output).
+
+The **Trades** tab answers one question: *should I take this offer?* Each pending offer is priced two ways — a plain sum of HKB dynasty values, and a sum that discounts every asset after the best — and a winner is named **only when the two agree**. On the live 2-for-1 that motivated the tab they name opposite sides, so it reports *too close to call* rather than picking one. An offer containing a draft pick gets no verdict at all: Fantrax identifies picks only as blank rows, and a pick can outweigh everything beside it. Below the verdict, *If you accept* shows what the trade does to your hitter/pitcher × MLB/minors value and your league rank in each — a trade can be dead even on value and still move you several places. The tab also carries the full league values table, filterable by player and owner. Unlike the other tabs it is served from `/v1/*` rather than the world-readable `report/` prefix, since an open offer shouldn't be public before you've decided on it.
 
 The **Projections** tab leads with a *Decision quality* block: points left on the bench versus the hindsight-optimal lineup, lineup efficiency, and within-day rank skill (mean Spearman rho, with standard error and days-positive) for hitters and pitchers separately. MAE, bias and RMSE remain below as calibration diagnostics, each MAE figure annotated with its skill score against a constant-at-sample-mean baseline.
 
@@ -502,6 +506,8 @@ internal/
   waivers/              Statcast-driven free-agent picks
   claims/               league-wide CLAIM/DROP recap + HKB valuation + ledger
   transactions/         trade monitor with HKB valuations
+  tradevalue/           pure n-sided trade valuation + verdict (raw vs decayed)
+  tradeboard/           Trades tab: offer snapshot, values table, offer log
   prospects/            minor-league prospect monitoring
   gscheck/              league-wide games-started violation checker
   roster/               roster-hygiene alerts

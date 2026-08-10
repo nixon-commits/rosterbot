@@ -95,7 +95,6 @@ func TestCorpus_LiveOffersAgainstTheRealLeague(t *testing.T) {
 		byTrade[in.TradeID] = append(byTrade[in.TradeID], in)
 	}
 
-	sawRankMove := false
 	for _, o := range offers {
 		t.Logf("--- %s: %s", o.TradeID, o.Verdict.Status)
 		for _, s := range o.Sides {
@@ -121,9 +120,6 @@ func TestCorpus_LiveOffersAgainstTheRealLeague(t *testing.T) {
 		for _, m := range imp.Metrics {
 			t.Logf("    %-9s %7d -> %-7d (%+6d)  rank %2d -> %2d of %d",
 				m.Name, m.Before, m.After, m.Delta, m.RankBefore, m.RankAfter, m.Teams)
-			if m.RankBefore != m.RankAfter {
-				sawRankMove = true
-			}
 			if m.Teams != len(vt.Teams) {
 				t.Errorf("%s/%s: Teams = %d, want %d", o.TradeID, m.Name, m.Teams, len(vt.Teams))
 			}
@@ -146,10 +142,81 @@ func TestCorpus_LiveOffersAgainstTheRealLeague(t *testing.T) {
 			twoForOne.Verdict.Status)
 	}
 
-	// rosterbot-hx5: a metric that cannot move is not a measurement. Rank is
-	// the whole reason Impact exists over a bare value delta.
-	if !sawRankMove {
-		t.Errorf("no metric changed rank on either real offer — Impact may be reporting a constant")
+}
+
+// rosterbot-hx5: a metric that cannot move is not a measurement. Rank is the
+// whole reason Impact exists over a bare value delta, so something has to
+// prove it can actually change.
+//
+// The obvious way to check that -- assert the two recorded offers move a rank
+// -- is what this test did first, and it was wrong. Those offers moved Minors
+// 3 -> 2 on 2026-08-05 and move nothing on 2026-08-10, because the team is now
+// already 2nd in Minors and +1222 does not reach 1st. Nothing about the code
+// changed. An assertion that fails when the standings shift is a property of
+// the day's data, not of the model, and the cost of one is that it trains you
+// to wave the gate through.
+//
+// So the probe drives the real league with a swing chosen to be decisive: give
+// away the single most valuable player on the roster. If rank cannot move under
+// that, rankOf is not discriminating and the tab's Rank column is decoration.
+func TestCorpus_RankRespondsToARealTrade(t *testing.T) {
+	const me = "Intentional Balk"
+	vt := loadValuesTable(t)
+
+	var best PlayerValue
+	for _, p := range vt.Players {
+		if p.OwnerName == me && p.Matched && p.Value > best.Value {
+			best = p
+		}
+	}
+	if best.Name == "" {
+		t.Fatalf("no matched player owned by %s", me)
+	}
+	// Any counterparty will do; take the first team that is not me.
+	var them string
+	for _, r := range vt.Teams {
+		if r.TeamName != me {
+			them = r.TeamName
+			break
+		}
+	}
+
+	inputs := []OfferInput{{TradeID: "probe", Player: best.Name, Position: best.Position, From: me, To: them}}
+	imp, note := BuildImpact(me, inputs, vt.Teams, vt.Players)
+	if imp == nil {
+		t.Fatalf("BuildImpact returned nil for a one-player probe: %s", note)
+	}
+
+	t.Logf("giving up %s (%d, pitcher=%v minors=%v) to %s",
+		best.Name, best.Value, best.IsPitcher, best.IsMinors, them)
+
+	moved, distinct := 0, map[int]bool{}
+	for _, m := range imp.Metrics {
+		t.Logf("  %-9s %7d -> %-7d (%+6d)  rank %2d -> %2d of %d",
+			m.Name, m.Before, m.After, m.Delta, m.RankBefore, m.RankAfter, m.Teams)
+		if m.RankBefore != m.RankAfter {
+			moved++
+		}
+		distinct[m.RankBefore] = true
+
+		// Giving value away can never raise a total. This catches a sign
+		// inversion in addToLeaf, which no rank assertion would notice.
+		if m.Delta > 0 {
+			t.Errorf("%s: gave away %s and Delta is %+d — value moved the wrong way", m.Name, best.Name, m.Delta)
+		}
+		// A worse total can never mean a better (lower) rank.
+		if m.Delta < 0 && m.RankAfter < m.RankBefore {
+			t.Errorf("%s: lost %d value but rank improved %d -> %d", m.Name, -m.Delta, m.RankBefore, m.RankAfter)
+		}
+	}
+	if moved == 0 {
+		t.Errorf("dropping the roster's best asset (%s, %d) moved no rank in any of the %d metrics — "+
+			"rankOf may be reporting a constant", best.Name, best.Value, len(imp.Metrics))
+	}
+	// A second degeneracy: if every metric reported the same rank, the five
+	// dimensions would be one dimension wearing five labels.
+	if len(distinct) == 1 {
+		t.Errorf("all %d metrics report rank %v — the dimensions are not independent", len(imp.Metrics), distinct)
 	}
 }
 

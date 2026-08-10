@@ -8,6 +8,9 @@ rosterbot
 .analysis/
 .teamvalue/
 .lineupgap/
+.trades/
+.tradevalues/
+.tradeoffers/
 report/
 .waivers/
 .lineup/

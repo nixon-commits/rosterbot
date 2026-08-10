@@ -28,13 +28,24 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 )
 
-// Baseline measured 2026-08-06 over .cache/fantrax-all-trades-epsb8xzlmj203yrx.json
-// (48 rows / 16 trade groups) by an independent Python implementation.
+// Baseline re-measured 2026-08-10 over .cache/fantrax-all-trades-epsb8xzlmj203yrx.json
+// (25 trade groups) by an independent Python implementation -- its own name
+// normalization, its own decay loop, its own comparison -- which reproduced
+// these four numbers exactly. The first baseline (2026-08-06: 16 groups, 9/0/7)
+// was superseded when the trades cache refreshed and picked up more history;
+// re-deriving it independently, rather than pasting in whatever the Go printed,
+// is the whole discipline of rosterbot-aei.
+//
+// The corpus is a live cache file and grows whenever a trade happens, so these
+// counts are asserted only when the group count still matches -- same corpus
+// must give the same answer. On a changed corpus they are reported and the
+// corpus-independent invariants below carry the gate instead, because a check
+// that goes red on every league trade is one you learn to bump without reading.
 const (
-	wantFavors     = 9 // 56%
-	wantIncomplete = 7 // 44%, every one of them a draft pick
-	wantTooClose   = 0
-	wantGroups     = 16
+	wantFavors     = 15 // 60%
+	wantIncomplete = 9  // 36%, every one of them a draft pick
+	wantTooClose   = 1  // 0v0fkidsmskf32gg: raw favors DillonP33, decayed favors Yordan's Schlong
+	wantGroups     = 25
 )
 
 type cachedTrades struct {
@@ -117,27 +128,51 @@ func TestCorpus_VerdictDistributionOverRealTrades(t *testing.T) {
 	t.Logf("  incomplete:        %d  (%d pick-blocked, %d HKB name-miss)",
 		counts[StatusIncomplete], pickBlocked, nameMissBlocked)
 
-	if len(groups) != wantGroups {
-		t.Errorf("trade groups = %d, want %d (corpus changed; re-derive the baseline independently before editing it)", len(groups), wantGroups)
-	}
-	if counts[StatusFavors] != wantFavors {
-		t.Errorf("verdict fires = %d, want %d", counts[StatusFavors], wantFavors)
-	}
-	if counts[StatusIncomplete] != wantIncomplete {
-		t.Errorf("incomplete = %d, want %d", counts[StatusIncomplete], wantIncomplete)
-	}
-	if counts[StatusTooClose] != wantTooClose {
-		t.Errorf("too-close = %d, want %d", counts[StatusTooClose], wantTooClose)
-	}
-	if nameMissBlocked != 0 {
-		t.Errorf("HKB name-miss blocked %d trades, want 0 (the join was 38/38 at baseline)", nameMissBlocked)
+	// Exact reproduction, but only against the corpus the baseline was taken
+	// from. On the same input the shipped code must give the same answer it
+	// gave the independent implementation.
+	if len(groups) == wantGroups {
+		if counts[StatusFavors] != wantFavors {
+			t.Errorf("verdict fires = %d, want %d", counts[StatusFavors], wantFavors)
+		}
+		if counts[StatusIncomplete] != wantIncomplete {
+			t.Errorf("incomplete = %d, want %d", counts[StatusIncomplete], wantIncomplete)
+		}
+		if counts[StatusTooClose] != wantTooClose {
+			t.Errorf("too-close = %d, want %d", counts[StatusTooClose], wantTooClose)
+		}
+	} else {
+		t.Logf("corpus has moved (%d groups, baseline %d) — exact counts not asserted. "+
+			"If you want them back, re-derive them with an INDEPENDENT implementation over "+
+			"the current cache and update the constants; do not paste in what this test just printed.",
+			len(groups), wantGroups)
 	}
 
-	// The point of the gate: the statistic must be able to take more than
-	// one value on this data. A verdict that always says the same thing is
-	// not a measurement.
+	// Everything below holds on any corpus.
+
+	// The HKB name join is the one input failure that would masquerade as a
+	// model result: an unmatched name suppresses the verdict exactly the way a
+	// draft pick does, so without this the join could rot to nothing and the
+	// distribution would just look pick-heavy. It was 38/38 at first baseline
+	// and has never missed since.
+	if nameMissBlocked != 0 {
+		t.Errorf("HKB name-miss blocked %d trades, want 0 — the cross-source join has regressed", nameMissBlocked)
+	}
+
+	// rosterbot-hx5: the statistic must be able to take more than one value on
+	// this data. A verdict that always says the same thing is not a
+	// measurement, whichever thing it always says.
 	if counts[StatusFavors] == 0 || counts[StatusFavors] == len(groups) {
 		t.Errorf("verdict is degenerate: %d/%d groups fire, so it conveys no information",
 			counts[StatusFavors], len(groups))
+	}
+
+	// Pick-blocking is the headline argument for rosterbot-uc3, so it is worth
+	// failing on rather than merely logging: if it ever reads zero, either
+	// picks became identifiable (finish uc3 and delete this) or the pick
+	// detection broke and unpriced assets are silently scoring zero.
+	if counts[StatusIncomplete] > 0 && pickBlocked == 0 {
+		t.Errorf("%d incomplete verdicts and not one is pick-blocked — pick detection may have broken",
+			counts[StatusIncomplete])
 	}
 }

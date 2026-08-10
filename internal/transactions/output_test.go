@@ -9,7 +9,7 @@ func TestToWireResult(t *testing.T) {
 	trades := []Trade{
 		{
 			ProcessedDate: time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC),
-			Sides: [2]TradeSide{
+			Sides: []TradeSide{
 				{TeamName: "A", Players: []TradePlayer{{Name: "P1", Position: "OF", Value: 30}}},
 				{TeamName: "B", Players: []TradePlayer{{Name: "P2", Position: "SP", Value: 25}}},
 			},

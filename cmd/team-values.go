@@ -149,7 +149,7 @@ func buildTradeValues(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb
 	for _, pp := range pool {
 		players = append(players, tradeboard.PoolPlayer{
 			Name:           pp.Name,
-			Position:       pp.MultiPositions,
+			Position:       positionDisplay(pp.PosShortNames),
 			FantasyTeamID:  pp.FantasyTeamID,
 			MinorsEligible: pp.MinorsEligible,
 			IsPitcher:      teamvalue.IsPitcher(pp.Positions),
@@ -157,6 +157,44 @@ func buildTradeValues(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb
 	}
 
 	return tradeboard.BuildValuesTable(date, players, hkbPlayers, rows, teamNames)
+}
+
+// positionDisplay turns a pool entry's PosShortNames into plain text.
+//
+// PosShortNames is the right source despite the markup, and the two obvious
+// alternatives are both wrong. MultiPositions is populated only for players
+// eligible at more than one *named* position -- Juan Soto (OF) and Paul Skenes
+// (SP) come back empty, which blanked the Pos column for 340 of 515 rostered
+// players. Deriving from the Positions IDs is worse: everyone carries the UT
+// flex slot ("014"), and Fantrax hides it except where it is a player's only
+// hitting eligibility, so "SS,INF,UT" for Bobby Witt Jr. and "UT,P" for Ohtani
+// both have to come out of the same list. PosShortNames already encodes that
+// rule.
+//
+// The tags are stripped rather than tolerated because this string lands in a
+// durable JSON artifact. Upstream documents the field as HTML ("<b>UT</b>,SP")
+// and the roster endpoints do emit it; this league's pool currently does not,
+// which is exactly the kind of thing that changes without notice. Nothing here
+// guards against injection -- the value is Fantrax's own and the tab renders it
+// through textContent -- it guards against "<b>OF</b>" showing up in a table
+// cell the day the payload shifts.
+func positionDisplay(short string) string {
+	if !strings.ContainsRune(short, '<') {
+		return short
+	}
+	var b strings.Builder
+	depth := 0
+	for _, r := range short {
+		switch {
+		case r == '<':
+			depth++
+		case r == '>' && depth > 0:
+			depth--
+		case depth == 0:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // teamValueWriter returns the S3-backed writer when STATE_BUCKET is set (Fargate),
