@@ -11,8 +11,14 @@ import (
 func toWireResult(trades []Trade) lineupapi.TransactionsResult {
 	out := lineupapi.TransactionsResult{}
 	for _, tr := range trades {
+		// Every side, not the first two: Trade.Sides became a slice precisely
+		// because a third team used to be dropped here as well.
+		teams := make([]string, 0, len(tr.Sides))
+		for _, s := range tr.Sides {
+			teams = append(teams, s.TeamName)
+		}
 		to := lineupapi.TradeOut{
-			Teams:       []string{tr.Sides[0].TeamName, tr.Sides[1].TeamName},
+			Teams:       teams,
 			ProcessedAt: tr.ProcessedDate.UTC().Format(time.RFC3339),
 		}
 		for _, side := range tr.Sides {

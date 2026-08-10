@@ -317,7 +317,7 @@ func TestFormatReport(t *testing.T) {
 	trades := []Trade{
 		{
 			ProcessedDate: time.Now(),
-			Sides: [2]TradeSide{
+			Sides: []TradeSide{
 				{
 					TeamName: "Team A",
 					Players: []TradePlayer{
@@ -390,7 +390,7 @@ func TestGroupPendingTrades(t *testing.T) {
 func TestFormatPendingReport(t *testing.T) {
 	trades := []Trade{
 		{
-			Sides: [2]TradeSide{
+			Sides: []TradeSide{
 				{TeamName: "Team A", Players: []TradePlayer{{Name: "P1", Position: "SP", Value: 1200, Ranked: true, Rank: 80, Age: 25, Level: "MLB"}}, Total: 1200},
 				{TeamName: "Team B", Players: []TradePlayer{{Name: "P2", Position: "3B", Value: 4500, Ranked: true, Rank: 40, Age: 23, Level: "MLB"}}, Total: 4500},
 			},

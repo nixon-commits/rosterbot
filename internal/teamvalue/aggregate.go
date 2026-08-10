@@ -33,7 +33,7 @@ import (
 // GetScoringPeriodsAndTeams) so the read+render path needs no Fantrax call; the
 // pool's own FantasyTeamName is a fallback when the name map lacks a team.
 func Aggregate(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb.Player, teamNames, teamLogos map[string]string) []Row {
-	lookup := buildHKBLookup(hkbPlayers)
+	lookup := hkb.BuildLookup(hkbPlayers)
 	dt := date.UTC().Format("2006-01-02")
 
 	byTeam := make(map[string]*Row)
@@ -59,7 +59,7 @@ func Aggregate(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb.Player
 		}
 		r.MatchedCount++
 
-		pitcher := isPitcher(pp.Positions)
+		pitcher := IsPitcher(pp.Positions)
 		minors := pp.MinorsEligible
 		switch {
 		case pitcher && minors:
@@ -85,18 +85,11 @@ func Aggregate(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb.Player
 	return out
 }
 
-// buildHKBLookup maps normalized player name → HKB player, matching the join in
-// internal/claims and internal/transactions.
-func buildHKBLookup(players []hkb.Player) map[string]hkb.Player {
-	m := make(map[string]hkb.Player, len(players))
-	for _, p := range players {
-		m[playername.Normalize(p.Name)] = p
-	}
-	return m
-}
-
-// isPitcher reports whether any of the player's eligibility IDs is a pitcher slot.
-func isPitcher(posIDs []string) bool {
+// IsPitcher reports whether any of the player's eligibility IDs is a pitcher
+// slot. Exported because the Trades values table buckets players the same way
+// and must not re-derive the two-way tiebreak documented on Aggregate: a
+// player with any pitcher eligibility resolves to pitcher.
+func IsPitcher(posIDs []string) bool {
 	for _, id := range posIDs {
 		if positions.IsPitcherSlot(id) {
 			return true

@@ -13,6 +13,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/playername"
+	"github.com/nixon-commits/rosterbot/internal/tradevalue"
 	"github.com/pmurley/go-fantrax/models"
 )
 
@@ -26,7 +27,12 @@ type TradeClient interface {
 type TradeSide struct {
 	TeamName string
 	Players  []TradePlayer
+
+	// Total is the plain sum of HKB values; Adjusted discounts every asset
+	// after the best by tradevalue.PackageDecay. Both are reported because on
+	// live offers they disagree about who wins -- see Trade.Verdict.
 	Total    int
+	Adjusted float64
 }
 
 // TradePlayer is a player involved in a trade with their HKB value and metadata.
@@ -41,6 +47,12 @@ type TradePlayer struct {
 	Level          string  // MLB, AAA, AA, etc.
 	Prospect       bool
 	FYPD           bool
+	// IsPick marks a draft pick. Fantrax sends these as a row with an empty
+	// player name, which used to render as a nameless bullet with no value —
+	// indistinguishable from an unranked player, though HKB prices picks as
+	// high as 1419.
+	IsPick bool
+
 	// Key stats — exactly one set is populated based on player type.
 	IsPitcher bool
 	HasStats  bool
@@ -49,10 +61,24 @@ type TradePlayer struct {
 	WHIP      float64 // pitchers only
 }
 
-// Trade represents a grouped trade between two teams.
+// Trade represents a grouped trade between two or more teams.
+//
+// Sides is a slice, not a [2]TradeSide. The array silently dropped every side
+// past the second: both group builders filled it from a map under `if i < 2`,
+// so a three-team trade lost a third of itself and the report still printed a
+// confident total. None have occurred in this league yet, which is exactly why
+// it would have gone unnoticed. Sides is ordered by team name so the same
+// trade renders identically on every run -- the map iteration it replaced put
+// the two teams in an arbitrary order each time.
 type Trade struct {
 	ProcessedDate time.Time
-	Sides         [2]TradeSide
+	Sides         []TradeSide
+
+	// Verdict is tradevalue's judgement, shared with the dashboard's Trades
+	// tab so the two never contradict each other. It is deliberately withheld
+	// when the sides disagree under the two pricing methods, or when an asset
+	// (a draft pick) could not be priced at all.
+	Verdict tradevalue.Verdict
 }
 
 // CheckTrades fetches recent and pending trades, values them via HKB, and sends a notification.
@@ -163,18 +189,57 @@ func buildTrade(group []models.Transaction, lookup map[string]hkb.Player) Trade 
 
 		tp := newTradePlayer(tx.PlayerName, tx.PlayerPosition, lookup)
 		side.Players = append(side.Players, tp)
-		side.Total += tp.Value
 	}
 
 	trade := Trade{ProcessedDate: processedDate}
-	i := 0
-	for _, side := range sides {
-		if i < 2 {
-			trade.Sides[i] = *side
-			i++
-		}
-	}
+	trade.Sides, trade.Verdict = assembleSides(sides)
 	return trade
+}
+
+// assembleSides turns the by-receiving-team accumulator into a deterministic
+// slice and prices it through tradevalue.
+//
+// The valuation lives in tradevalue rather than here so this report and the
+// dashboard's Trades tab cannot drift apart. Before this, the two carried
+// separate models: the Pushover message summed raw HKB values and declared a
+// winner, while the tab withheld the call whenever the package-adjusted sum
+// named the other side. On the live 2-for-1 that motivated the tab, those are
+// opposite answers.
+func assembleSides(sides map[string]*TradeSide) ([]TradeSide, tradevalue.Verdict) {
+	names := make([]string, 0, len(sides))
+	for name := range sides {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]TradeSide, 0, len(names))
+	valued := make([]tradevalue.Side, 0, len(names))
+	for _, name := range names {
+		s := *sides[name]
+		vs := tradevalue.Side{Team: name, Assets: assetsOf(s.Players)}
+		s.Total = vs.Raw()
+		s.Adjusted = vs.Adjusted()
+		out = append(out, s)
+		valued = append(valued, vs)
+	}
+	return out, tradevalue.Evaluate(valued)
+}
+
+// assetsOf maps the report's display records onto tradevalue's pricing view.
+// Ranked is the pricing bit: an unranked player and an unidentified draft pick
+// are both unpriced, and either one is enough to suppress the verdict.
+func assetsOf(players []TradePlayer) []tradevalue.Asset {
+	assets := make([]tradevalue.Asset, 0, len(players))
+	for _, p := range players {
+		assets = append(assets, tradevalue.Asset{
+			Name:     p.Name,
+			Position: p.Position,
+			Value:    p.Value,
+			Priced:   p.Ranked,
+			IsPick:   p.IsPick,
+		})
+	}
+	return assets
 }
 
 const (
@@ -205,16 +270,31 @@ const nbsp = " "
 //
 //	Team B receives:
 //	...
+//	→ verdict
 func formatTrades(header string, trades []Trade, color bool) string {
 	var b strings.Builder
 	b.WriteString(header + "\n")
 	indent := strings.Repeat(nbsp, 3)
 	for _, t := range trades {
+		if len(t.Sides) == 0 {
+			continue
+		}
 		b.WriteString("\n")
-		fmt.Fprintf(&b, "%s ⇄ %s\n", t.Sides[0].TeamName, t.Sides[1].TeamName)
+		names := make([]string, 0, len(t.Sides))
+		for _, s := range t.Sides {
+			names = append(names, s.TeamName)
+		}
+		fmt.Fprintf(&b, "%s\n", strings.Join(names, " ⇄ "))
+
 		for si, side := range t.Sides {
-			other := t.Sides[1-si]
-			diff := side.Total - other.Total
+			// The pairwise "(±diff)" only means something with exactly two
+			// sides. With three it would compare against an arbitrary one of
+			// the other two, so the verdict line below carries the comparison
+			// instead.
+			diff := 0
+			if len(t.Sides) == 2 {
+				diff = side.Total - t.Sides[1-si].Total
+			}
 			var sideClr string
 			if color {
 				switch {
@@ -230,24 +310,48 @@ func formatTrades(header string, trades []Trade, color bool) string {
 			for _, p := range side.Players {
 				formatPlayer(&b, p, indent, color)
 			}
-			diffSign := "+"
-			absDiff := diff
-			if diff < 0 {
-				diffSign = "-"
-				absDiff = -diff
-			}
 			reset := ""
 			if sideClr != "" {
 				reset = colorReset
 			}
+			// Adjusted is shown only when it differs from raw, i.e. when the
+			// side is a multi-asset package — for a one-for-one they are equal
+			// by construction and the second number is noise.
+			adj := ""
+			if math.Abs(float64(side.Total)-side.Adjusted) >= 1 {
+				adj = fmt.Sprintf(" · adj %s", formatValue(int(math.Round(side.Adjusted))))
+			}
 			if diff != 0 {
-				fmt.Fprintf(&b, "Total: %s%s (%s%s)%s\n", sideClr, formatValue(side.Total), diffSign, formatValue(absDiff), reset)
+				diffSign := "+"
+				absDiff := diff
+				if diff < 0 {
+					diffSign = "-"
+					absDiff = -diff
+				}
+				fmt.Fprintf(&b, "Total: %s%s (%s%s)%s%s\n", sideClr, formatValue(side.Total), diffSign, formatValue(absDiff), reset, adj)
 			} else {
-				fmt.Fprintf(&b, "Total: %s\n", formatValue(side.Total))
+				fmt.Fprintf(&b, "Total: %s%s\n", formatValue(side.Total), adj)
 			}
 		}
+		fmt.Fprintf(&b, "→ %s\n", formatVerdict(t.Verdict))
 	}
 	return b.String()
+}
+
+// formatVerdict renders tradevalue's judgement as one line. It says "too close
+// to call" rather than naming a winner whenever the raw and package-adjusted
+// sums disagree — the case the raw-only report used to call confidently and
+// wrongly.
+func formatVerdict(v tradevalue.Verdict) string {
+	switch v.Status {
+	case tradevalue.StatusFavors:
+		return fmt.Sprintf("favors %s (raw %.1f%%, adj %.1f%%)", v.FavoredTeam, v.RawPct, v.AdjPct)
+	case tradevalue.StatusTooClose:
+		return fmt.Sprintf("too close to call — raw favors %s by %.1f%%, adjusted favors %s by %.1f%%",
+			v.RawLeader, v.RawPct, v.AdjLeader, v.AdjPct)
+	default:
+		return fmt.Sprintf("no verdict — %d asset(s) could not be priced", v.UnpricedAssets)
+	}
 }
 
 // formatPlayer writes a multi-line player block. The first line is flush
@@ -261,6 +365,14 @@ func formatTrades(header string, trades []Trade, color bool) string {
 // Unranked players collapse to a single line: `• Name (Pos) — unranked`.
 // indent should be NBSP-based so Pushover preserves it.
 func formatPlayer(b *strings.Builder, p TradePlayer, indent string, color bool) {
+	// A pick is unpriced for a different reason than an unranked player: HKB
+	// does price picks, we just cannot tell which one this is. Calling it
+	// "unranked" would read as "worth nothing" for an asset HKB values up to
+	// 1419, and the verdict line already explains the consequence.
+	if p.IsPick {
+		fmt.Fprintf(b, "• %s\n", p.Name)
+		return
+	}
 	if !p.Ranked {
 		fmt.Fprintf(b, "• %s (%s) — unranked\n", p.Name, p.Position)
 		return
@@ -371,23 +483,36 @@ func groupPendingTrades(pts []fantrax.PendingTrade, lookup map[string]hkb.Player
 			}
 			tp := newTradePlayer(pt.PlayerName, pt.Position, lookup)
 			side.Players = append(side.Players, tp)
-			side.Total += tp.Value
 		}
 		t := Trade{}
-		i := 0
-		for _, side := range sides {
-			if i < 2 {
-				t.Sides[i] = *side
-				i++
-			}
-		}
+		t.Sides, t.Verdict = assembleSides(sides)
 		trades = append(trades, t)
 	}
+	// Pending trades carry no processed date to sort by, so order on TradeID:
+	// ranging the groups map put them in a different order every run.
+	sort.Slice(trades, func(i, j int) bool { return tradeKey(trades[i]) < tradeKey(trades[j]) })
 	return trades
 }
 
+// tradeKey is a stable ordering key for a trade with no timestamp: the
+// concatenated side names, which are themselves already sorted.
+func tradeKey(t Trade) string {
+	names := make([]string, 0, len(t.Sides))
+	for _, s := range t.Sides {
+		names = append(names, s.TeamName)
+	}
+	return strings.Join(names, "\x00")
+}
+
 // newTradePlayer creates a TradePlayer populated with HKB metadata if found.
+//
+// An empty name is Fantrax's representation of a draft pick, labelled here the
+// same way tradevalue.NewAsset labels it so the report and the tab call the
+// same thing by the same name.
 func newTradePlayer(name, position string, lookup map[string]hkb.Player) TradePlayer {
+	if name == "" {
+		return TradePlayer{Name: "Draft pick (unidentified)", IsPick: true}
+	}
 	e := hkb.Enrich(name, position, lookup, false)
 	return TradePlayer{
 		Name:           e.Name,

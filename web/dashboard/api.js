@@ -58,6 +58,12 @@ export const api = {
   authRevokePasskey: (id) => request("DELETE", `/v1/auth/passkeys/${encodeURIComponent(id)}`),
   authLogout: () => request("POST", "/v1/auth/logout"),
 
+  // Pending offers go through /v1 rather than the report/ prefix: report JSON
+  // is served from the CloudFront root with no auth, and an open offer is not
+  // something to publish to the world before deciding on it.
+  trades: () => request("GET", "/v1/trades"),
+  tradeValues: () => request("GET", "/v1/trades/values"),
+
   // Report JSON is served from the CloudFront root, not /v1.
   reportModel: () => request("GET", "/report/model.json"),
   reportValue: () => request("GET", "/report/value.json"),

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -75,6 +76,11 @@ func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) h
 		Progress:      lineupapi.NewFileProgressStore(lineupDir + "/progress"),
 		Identities:    lineupapi.NewFileIdentityStore(lineupDir),
 		Infra:         lineupapi.NewFileInfraStore("."),
+		// The Trades artifacts live in their own local dirs (matching their
+		// own S3 prefixes) rather than under lineupDir, so `serve` reads
+		// exactly what the producers wrote.
+		Trades:        lineupapi.NewFileBlobStore(layout.Trades.LocalDir, "trades-"),
+		TradeValues:   lineupapi.NewFileBlobStore(layout.TradeValues.LocalDir, "tradevalues-"),
 		WebAuthn:      wa,
 		SessionSecret: sessionSecret,
 		// Jobs is nil locally: triggering real ECS tasks only makes sense on AWS.

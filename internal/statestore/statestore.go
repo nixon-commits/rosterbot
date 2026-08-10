@@ -23,6 +23,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/recaplog/s3recaplog"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
+	"github.com/nixon-commits/rosterbot/internal/tradeboard"
 )
 
 // artifact is one kind of durable state as this package needs it: an S3 key
@@ -50,6 +51,9 @@ var (
 	notificationArtifact = artifact{layout.Notification.S3Prefix, layout.Notification.LocalDir}
 	progressArtifact     = artifact{layout.Progress.S3Prefix, layout.Progress.LocalDir}
 	lineupArtifact       = artifact{layout.Lineup.S3Prefix, layout.Lineup.LocalDir}
+	tradesArtifact       = artifact{layout.Trades.S3Prefix, layout.Trades.LocalDir}
+	tradeValuesArtifact  = artifact{layout.TradeValues.S3Prefix, layout.TradeValues.LocalDir}
+	tradeOfferArtifact   = artifact{layout.TradeOffers.S3Prefix, layout.TradeOffers.LocalDir}
 )
 
 // Bucket is the single os.Getenv("STATE_BUCKET") read in the codebase. Empty
@@ -224,4 +228,52 @@ func (s *Selector) LineupPublisher() (lineupapi.Publisher, error) {
 	return pick(s, lineupArtifact,
 		func(ctx context.Context, b, p string) (lineupapi.Publisher, error) { return s3lineup.New(ctx, b, p) },
 		func(dir string) lineupapi.Publisher { return lineupapi.NewFileStore(dir) })
+}
+
+// blobStore wires an artifact to s3lineup's generic <prefix><key>.json layout
+// on S3, or to a filename-prefixed local file. s3lineup.Store is not
+// lineup-specific despite its package name — the prefix is a constructor
+// argument — so the Trades artifacts need no new S3 adapter.
+func blobStore(s *Selector, a artifact, namePrefix string) (lineupapi.BlobStore, error) {
+	return pick(s, a,
+		func(ctx context.Context, b, p string) (lineupapi.BlobStore, error) { return s3lineup.New(ctx, b, p) },
+		func(dir string) lineupapi.BlobStore { return lineupapi.NewFileBlobStore(dir, namePrefix) })
+}
+
+// TradesStore is the pending-offer snapshot (trades/current.json), rewritten
+// hourly by the Lineup job.
+func (s *Selector) TradesStore() (lineupapi.BlobStore, error) {
+	return blobStore(s, tradesArtifact, "trades-")
+}
+
+// TradeValuesStore is the league values table (tradevalues/values.json),
+// rewritten daily by the TeamValues job.
+func (s *Selector) TradeValuesStore() (lineupapi.BlobStore, error) {
+	return blobStore(s, tradeValuesArtifact, "tradevalues-")
+}
+
+// TradeOfferWriter is the write side of the durable Trade Offer Log.
+func (s *Selector) TradeOfferWriter() (tradeboard.Writer, error) {
+	return pick(s, tradeOfferArtifact,
+		func(ctx context.Context, b, p string) (tradeboard.Writer, error) {
+			st, err := s3ndjson.New(ctx, b, p)
+			if err != nil {
+				return nil, err
+			}
+			return tradeboard.NewWriter(st), nil
+		},
+		func(dir string) tradeboard.Writer { return tradeboard.NewFileWriter(dir) })
+}
+
+// TradeOfferReader is the read side of the durable Trade Offer Log.
+func (s *Selector) TradeOfferReader() (tradeboard.Reader, error) {
+	return pick(s, tradeOfferArtifact,
+		func(ctx context.Context, b, p string) (tradeboard.Reader, error) {
+			st, err := s3ndjson.New(ctx, b, p)
+			if err != nil {
+				return nil, err
+			}
+			return tradeboard.NewReader(st), nil
+		},
+		func(dir string) tradeboard.Reader { return tradeboard.NewFileReader(dir) })
 }
