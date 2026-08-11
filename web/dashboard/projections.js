@@ -79,7 +79,7 @@ function buildLayout(root) {
 
     <section class="card">
       <h2>Projection system comparison <span class="muted" data-ref="compareSub"></span></h2>
-      <div data-ref="compareTable"></div>
+      <div class="table-wrap" data-ref="compareTable"></div>
       <div class="chart-box"><canvas data-ref="compareChart"></canvas></div>
     </section>
 
@@ -101,7 +101,7 @@ function buildLayout(root) {
     <section class="card">
       <h2>Accuracy by position</h2>
       <div class="chart-box"><canvas data-ref="posChart"></canvas></div>
-      <div data-ref="posTable"></div>
+      <div class="table-wrap" data-ref="posTable"></div>
     </section>
 
     <section class="card">
@@ -116,7 +116,7 @@ function buildLayout(root) {
 
     <section class="card">
       <h2>Worst misses</h2>
-      <div data-ref="missTable"></div>
+      <div class="table-wrap" data-ref="missTable"></div>
     </section>
   `;
   root.appendChild(wrap);

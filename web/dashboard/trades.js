@@ -149,7 +149,9 @@ function offerCard(offer, myTeam) {
 
   if (offer.impact) {
     card.appendChild(el("h3", null, "If you accept"));
-    card.appendChild(impactTable(offer.impact));
+    const tw = el("div", "table-wrap");
+    tw.appendChild(impactTable(offer.impact));
+    card.appendChild(tw);
   } else if (offer.impact_note) {
     card.appendChild(el("p", "sub muted", `Roster impact unavailable — ${offer.impact_note}.`));
   }

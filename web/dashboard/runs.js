@@ -96,7 +96,10 @@ async function loadRuns(container, detailSection, silent) {
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
-  container.appendChild(table);
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  wrap.appendChild(table);
+  container.appendChild(wrap);
   return runs;
 }
 

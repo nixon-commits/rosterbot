@@ -75,7 +75,7 @@ function buildLayout(root, model) {
 
     <section class="card">
       <h2>Standings — ${escapeHtml(model.last_date)} <span class="muted">(HKB dynasty value)</span></h2>
-      <div data-ref="standings"></div>
+      <div class="table-wrap" data-ref="standings"></div>
       <p class="sub muted">Matched = players joined to an HKB value / total rostered. A shortfall means the value totals undercount by the unmatched players.</p>
     </section>
   `;
