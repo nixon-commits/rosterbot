@@ -15,6 +15,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/analysis"
 	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/cachestore/s3store"
+	"github.com/nixon-commits/rosterbot/internal/dynasty"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
 	"github.com/nixon-commits/rosterbot/internal/lineupgap"
@@ -42,18 +43,19 @@ import (
 type artifact struct{ s3Prefix, localDir string }
 
 var (
-	cacheArtifact        = artifact{layout.Cache.S3Prefix, ""} // local: default fsStore, dir unused
-	analysisArtifact     = artifact{"analysis/", layout.Analysis.LocalDir}
-	teamValueArtifact    = artifact{layout.TeamValues.S3Prefix, layout.TeamValues.LocalDir}
-	lineupGapArtifact    = artifact{layout.LineupGaps.S3Prefix, layout.LineupGaps.LocalDir}
-	runLedgerArtifact    = artifact{layout.RunLedger.S3Prefix, layout.RunLedger.LocalDir}
-	runOutputArtifact    = artifact{layout.RunOutput.S3Prefix, layout.RunOutput.LocalDir}
-	notificationArtifact = artifact{layout.Notification.S3Prefix, layout.Notification.LocalDir}
-	progressArtifact     = artifact{layout.Progress.S3Prefix, layout.Progress.LocalDir}
-	lineupArtifact       = artifact{layout.Lineup.S3Prefix, layout.Lineup.LocalDir}
-	tradesArtifact       = artifact{layout.Trades.S3Prefix, layout.Trades.LocalDir}
-	tradeValuesArtifact  = artifact{layout.TradeValues.S3Prefix, layout.TradeValues.LocalDir}
-	tradeOfferArtifact   = artifact{layout.TradeOffers.S3Prefix, layout.TradeOffers.LocalDir}
+	cacheArtifact         = artifact{layout.Cache.S3Prefix, ""} // local: default fsStore, dir unused
+	analysisArtifact      = artifact{"analysis/", layout.Analysis.LocalDir}
+	teamValueArtifact     = artifact{layout.TeamValues.S3Prefix, layout.TeamValues.LocalDir}
+	footballValueArtifact = artifact{layout.FootballValues.S3Prefix, layout.FootballValues.LocalDir}
+	lineupGapArtifact     = artifact{layout.LineupGaps.S3Prefix, layout.LineupGaps.LocalDir}
+	runLedgerArtifact     = artifact{layout.RunLedger.S3Prefix, layout.RunLedger.LocalDir}
+	runOutputArtifact     = artifact{layout.RunOutput.S3Prefix, layout.RunOutput.LocalDir}
+	notificationArtifact  = artifact{layout.Notification.S3Prefix, layout.Notification.LocalDir}
+	progressArtifact      = artifact{layout.Progress.S3Prefix, layout.Progress.LocalDir}
+	lineupArtifact        = artifact{layout.Lineup.S3Prefix, layout.Lineup.LocalDir}
+	tradesArtifact        = artifact{layout.Trades.S3Prefix, layout.Trades.LocalDir}
+	tradeValuesArtifact   = artifact{layout.TradeValues.S3Prefix, layout.TradeValues.LocalDir}
+	tradeOfferArtifact    = artifact{layout.TradeOffers.S3Prefix, layout.TradeOffers.LocalDir}
 )
 
 // Bucket is the single os.Getenv("STATE_BUCKET") read in the codebase. Empty
@@ -148,6 +150,30 @@ func (s *Selector) TeamValueReader() (teamvalue.Reader, error) {
 			return teamvalue.NewReader(st), nil
 		},
 		func(dir string) teamvalue.Reader { return teamvalue.NewFileReader(dir) })
+}
+
+func (s *Selector) FootballValueWriter() (dynasty.Writer, error) {
+	return pick(s, footballValueArtifact,
+		func(ctx context.Context, b, p string) (dynasty.Writer, error) {
+			st, err := s3ndjson.New(ctx, b, p)
+			if err != nil {
+				return nil, err
+			}
+			return dynasty.NewWriter(st), nil
+		},
+		func(dir string) dynasty.Writer { return dynasty.NewFileWriter(dir) })
+}
+
+func (s *Selector) FootballValueReader() (dynasty.Reader, error) {
+	return pick(s, footballValueArtifact,
+		func(ctx context.Context, b, p string) (dynasty.Reader, error) {
+			st, err := s3ndjson.New(ctx, b, p)
+			if err != nil {
+				return nil, err
+			}
+			return dynasty.NewReader(st), nil
+		},
+		func(dir string) dynasty.Reader { return dynasty.NewFileReader(dir) })
 }
 
 // LineupGapWriter returns the write side of the Lineup Gap Store — S3 when

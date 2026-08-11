@@ -703,6 +703,11 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// at 15:00) so value.json renders today's point same-day. Accumulates
 		// forward — HKB has no history — so one write per day is the whole record.
 		{"TeamValues", "cron(30 14 * * ? *)", jsii.Strings("team-values"), dailyGap},
+		// Appends today's per-player dynasty value rows (players + reconstructed
+		// picks) to the Dynasty Value Store. Runs 14:45 UTC -- after Archive
+		// (14:15) and TeamValues (14:30), before ProjectionSite (15:00) reads it,
+		// the same staging as TeamValues -- football's Sleeper/StatsGuy analog.
+		{"FootballValues", "cron(45 14 * * ? *)", jsii.Strings("football-values"), dailyGap},
 		// Shadow captures every projection system's lineup projection for the
 		// model-comparison report. It runs at 23:40 UTC (~late ET evening, same
 		// UTC/ET calendar day so the snapshot's generated_at passes the backtest

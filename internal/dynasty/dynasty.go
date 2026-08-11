@@ -57,6 +57,25 @@ type Row struct {
 	ValueNonSFRedraft int `json:"value_non_sf_redraft"`
 }
 
+// ValueFor returns the row's value in the given StatsGuy format (one of
+// "sf_dynasty"/"non_sf_dynasty"/"sf_redraft"/"non_sf_redraft" — the raw JSON
+// keys, matching DYNASTY_FORMAT), or 0 for an unrecognized format. Mirrors
+// statsguy.FormatValues.Get.
+func (r Row) ValueFor(format string) int {
+	switch format {
+	case "sf_dynasty":
+		return r.ValueSFDynasty
+	case "non_sf_dynasty":
+		return r.ValueNonSFDynasty
+	case "sf_redraft":
+		return r.ValueSFRedraft
+	case "non_sf_redraft":
+		return r.ValueNonSFRedraft
+	default:
+		return 0
+	}
+}
+
 // Writer persists a day's per-asset rows to the store.
 type Writer interface {
 	WriteValues(date time.Time, rows []Row) error

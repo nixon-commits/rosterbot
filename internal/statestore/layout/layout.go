@@ -64,17 +64,22 @@ const Day = 24 * time.Hour
 // The table. Keep S3Prefix values in sync with cmd/sync.go's statePairs and
 // with the CDK's bucket policy.
 var (
-	Cache        = Artifact{Name: "TTL Cache", S3Prefix: "cache/", LocalDir: ".cache", Durable: false}
-	Analysis     = Artifact{Name: "Analysis Store", S3Prefix: "analysis/grades/", LocalDir: ".analysis", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true}
-	TeamValues   = Artifact{Name: "Team Value Store", S3Prefix: "analysis/team-values/", LocalDir: ".teamvalue", Durable: true, MaxAge: 2 * Day, Producer: "TeamValues", Partitioned: true, NoBackfill: true}
-	LineupGaps   = Artifact{Name: "Lineup Gap Store", S3Prefix: "analysis/lineup-gaps/", LocalDir: ".lineupgap", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true}
-	Archive      = Artifact{Name: "Daily Archive", S3Prefix: "archive/", LocalDir: ".archive", Durable: true, MaxAge: 2 * Day, Producer: "Archive", Partitioned: true}
-	Backtest     = Artifact{Name: "Projection Snapshots", S3Prefix: "backtest/", LocalDir: ".backtest", Durable: true, MaxAge: 2 * Day, Producer: "Lineup"}
-	RunLedger    = Artifact{Name: "Run Ledger", S3Prefix: "runledger/", LocalDir: ".lineup/runs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
-	RunOutput    = Artifact{Name: "Run Output", S3Prefix: "runs/", LocalDir: ".lineup/outputs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
-	Notification = Artifact{Name: "Notifications", S3Prefix: "notifications/", LocalDir: ".lineup/notifications", Durable: true, MaxAge: 7 * Day, Producer: ""}
-	Lineup       = Artifact{Name: "Published Lineup", S3Prefix: "lineup/", LocalDir: ".lineup", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
-	Claims       = Artifact{Name: "Claims Ledger", S3Prefix: "claims/", LocalDir: ".waivers", Durable: true, MaxAge: 3 * Day, Producer: "Claims"}
+	Cache      = Artifact{Name: "TTL Cache", S3Prefix: "cache/", LocalDir: ".cache", Durable: false}
+	Analysis   = Artifact{Name: "Analysis Store", S3Prefix: "analysis/grades/", LocalDir: ".analysis", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true}
+	TeamValues = Artifact{Name: "Team Value Store", S3Prefix: "analysis/team-values/", LocalDir: ".teamvalue", Durable: true, MaxAge: 2 * Day, Producer: "TeamValues", Partitioned: true, NoBackfill: true}
+	// FootballValues is per-player grain (unlike TeamValues' per-team
+	// aggregate), so unlike the Team Value Store it is NOT NoBackfill: both
+	// the Sleeper roster snapshot and the StatsGuy bundle are re-fetchable,
+	// so a missed day is re-runnable rather than permanently lost.
+	FootballValues = Artifact{Name: "Dynasty Value Store", S3Prefix: "analysis/football-values/", LocalDir: ".footballvalue", Durable: true, MaxAge: 2 * Day, Producer: "FootballValues", Partitioned: true}
+	LineupGaps     = Artifact{Name: "Lineup Gap Store", S3Prefix: "analysis/lineup-gaps/", LocalDir: ".lineupgap", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true}
+	Archive        = Artifact{Name: "Daily Archive", S3Prefix: "archive/", LocalDir: ".archive", Durable: true, MaxAge: 2 * Day, Producer: "Archive", Partitioned: true}
+	Backtest       = Artifact{Name: "Projection Snapshots", S3Prefix: "backtest/", LocalDir: ".backtest", Durable: true, MaxAge: 2 * Day, Producer: "Lineup"}
+	RunLedger      = Artifact{Name: "Run Ledger", S3Prefix: "runledger/", LocalDir: ".lineup/runs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
+	RunOutput      = Artifact{Name: "Run Output", S3Prefix: "runs/", LocalDir: ".lineup/outputs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
+	Notification   = Artifact{Name: "Notifications", S3Prefix: "notifications/", LocalDir: ".lineup/notifications", Durable: true, MaxAge: 7 * Day, Producer: ""}
+	Lineup         = Artifact{Name: "Published Lineup", S3Prefix: "lineup/", LocalDir: ".lineup", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
+	Claims         = Artifact{Name: "Claims Ledger", S3Prefix: "claims/", LocalDir: ".waivers", Durable: true, MaxAge: 3 * Day, Producer: "Claims"}
 
 	// The three Trades-tab artifacts. They are separate prefixes rather than
 	// one, because they have different producers and different cadences and a
@@ -101,7 +106,7 @@ var (
 // double-count the same objects.
 func All() []Artifact {
 	return []Artifact{
-		TeamValues, TradeOffers, Analysis, LineupGaps, Archive, Backtest,
+		TeamValues, TradeOffers, Analysis, LineupGaps, FootballValues, Archive, Backtest,
 		Lineup, Trades, TradeValues, RunLedger, RunOutput, Notification, Claims, Session,
 		Cache,
 	}

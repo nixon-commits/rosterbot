@@ -7,6 +7,19 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/ndjsonstore"
 )
 
+func TestRow_ValueFor(t *testing.T) {
+	r := Row{ValueSFDynasty: 100, ValueNonSFDynasty: 200, ValueSFRedraft: 300, ValueNonSFRedraft: 400}
+	if got := r.ValueFor("sf_dynasty"); got != 100 {
+		t.Errorf("ValueFor(sf_dynasty) = %d, want 100", got)
+	}
+	if got := r.ValueFor("non_sf_redraft"); got != 400 {
+		t.Errorf("ValueFor(non_sf_redraft) = %d, want 400", got)
+	}
+	if got := r.ValueFor("unknown"); got != 0 {
+		t.Errorf("ValueFor(unknown) = %d, want 0", got)
+	}
+}
+
 func TestObjectKey(t *testing.T) {
 	d := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
 	if got, want := ObjectKey(d), "dt=2026-08-11/values.ndjson"; got != want {
