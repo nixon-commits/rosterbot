@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Finds remote branches whose *content* differs from main on safety-critical
-# paths and have sat that way past a staleness threshold.
+# paths — and where that content is actually the branch's own unlanded
+# work, not just main having moved forward since the branch forked — and
+# have sat that way past a staleness threshold.
 #
 # Content diff (not commit-ancestry) is deliberate: a squash-merged branch
 # stays "ahead" of main by commit count forever, but once its content on the
-# critical paths matches main, it's no longer a real gap.
+# critical paths matches main, it's no longer a real gap. That two-tree diff
+# is symmetric, though, so it's intersected with the branch's own
+# diff-since-fork to recover direction — otherwise a branch that's merely
+# behind main gets every file main has since touched misattributed to it.
 #
 # See docs/superpowers/specs/2026-08-11-stale-critical-branch-alert-design.md.
 set -euo pipefail
@@ -19,7 +24,7 @@ report=""
 
 # shellcheck disable=SC2086
 for branch in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin \
-  | grep -v -E '^origin/(HEAD|main)$'); do
+  | grep -v -F -x -e 'origin' -e "${BASE_REF}"); do
 
   # Direct two-tree diff (no dots) — deliberately NOT `A...B`, which diffs
   # from the merge-base to B and ignores whatever main did after the fork.
@@ -33,13 +38,34 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin
   # (feat/recap-access-logs, feat/recap-views-tab) false-positive on the
   # unfiltered directory diff. Only source changes are the actual signal.
   # shellcheck disable=SC2086
-  diff_files=$(git diff --name-only "${BASE_REF}" "${branch}" -- ${CRITICAL_PATHS} 2>/dev/null | grep -E '\.go$' || true)
+  still_differs=$(git diff --name-only "${BASE_REF}" "${branch}" -- ${CRITICAL_PATHS} 2>/dev/null | grep -E '\.go$' | sort || true)
+  if [ -z "$still_differs" ]; then
+    continue
+  fi
+
+  # The two-tree diff above is symmetric — it can't tell "the branch
+  # introduced this" from "main moved forward on this after the branch
+  # forked and never rebased". Intersect with the branch's OWN diff since
+  # its fork point so only files the branch itself actually changed can be
+  # attributed to it. This recovers direction without regressing the
+  # squash-merge case above: a branch's diff-since-fork can still differ
+  # from main after main independently squash-merges the same content under
+  # a new SHA, so both checks are needed together, not either alone.
+  merge_base=$(git merge-base "${BASE_REF}" "${branch}" 2>/dev/null || true)
+  if [ -z "$merge_base" ]; then
+    continue
+  fi
+
+  # shellcheck disable=SC2086
+  branch_changed=$(git diff --name-only "${merge_base}" "${branch}" -- ${CRITICAL_PATHS} 2>/dev/null | grep -E '\.go$' | sort || true)
+  # comm -12 requires both inputs sorted, hence the `sort` above on both sides.
+  diff_files=$(comm -12 <(printf '%s\n' "$still_differs") <(printf '%s\n' "$branch_changed") | grep -v '^$' || true)
   if [ -z "$diff_files" ]; then
     continue
   fi
 
   # shellcheck disable=SC2086
-  last_touch=$(git log -1 --format=%ct "${BASE_REF}..${branch}" -- $diff_files 2>/dev/null || true)
+  last_touch=$(git log -1 --format=%ct "${merge_base}..${branch}" -- $diff_files 2>/dev/null || true)
   if [ -z "$last_touch" ]; then
     continue
   fi

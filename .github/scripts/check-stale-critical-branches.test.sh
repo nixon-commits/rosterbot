@@ -172,7 +172,102 @@ test_stale_go_masked_by_recent_non_go() {
   echo "PASS: test_stale_go_masked_by_recent_non_go"
 }
 
+test_excludes_files_the_branch_never_touched() {
+  # Regression test for the direction-blind two-tree diff (Finding 1 of the
+  # 2026-08-11 final review): a branch with its OWN real unlanded
+  # critical-path change must still be flagged, but the reported file list
+  # must not also include a *different* critical-path file that only main
+  # touched after the branch forked. The plain two-tree diff can't tell
+  # "the branch introduced this" from "main moved forward on this" — it
+  # conflated both into one file list. Verified this reproduces against the
+  # pre-fix script: exit 1, with the report listing BOTH infra/infra.go
+  # (which behind-branch never touched) and internal/opsalert/y.go (which it
+  # did). The fix intersects the two-tree diff with the branch's
+  # diff-since-fork so only files the branch itself changed can appear.
+  local tmpdir work old_date main_only_date
+  tmpdir=$(setup_repo)
+  work="$tmpdir/work"
+
+  commit_file "$work" "infra/infra.go" "v1" "$(epoch_hours_ago 72)"
+  (cd "$work" && git push -q origin main)
+
+  # Branch forks from main and adds its own, genuinely unlanded, old change
+  # to a DIFFERENT critical-path file.
+  (cd "$work" && git checkout -q -b behind-branch)
+  old_date=$(epoch_hours_ago 47)
+  commit_file "$work" "internal/opsalert/y.go" "own-work" "$old_date"
+  (cd "$work" && git push -q origin behind-branch)
+
+  # main moves on independently: a NEW value on infra/infra.go, a file
+  # behind-branch never touched.
+  (cd "$work" && git checkout -q main)
+  main_only_date=$(epoch_hours_ago 30)
+  commit_file "$work" "infra/infra.go" "v2" "$main_only_date"
+  (cd "$work" && git push -q origin main)
+
+  (cd "$work" && git fetch -q origin)
+
+  local output status
+  set +e
+  output=$(cd "$work" && STALE_HOURS=24 CRITICAL_PATHS="infra/ internal/opsalert/ opsnotify/" BASE_REF=origin/main "$SCRIPT" 2>&1)
+  status=$?
+  set -e
+
+  rm -rf "$tmpdir"
+
+  [ "$status" -eq 1 ] || fail "expected exit 1 (behind-branch has its own real unlanded change), got $status. Output:\n$output"
+  echo "$output" | grep -q "behind-branch" || fail "expected behind-branch to be flagged for its own y.go change. Output:\n$output"
+  echo "$output" | grep -q "internal/opsalert/y.go" || fail "expected the branch's own file to appear in the report. Output:\n$output"
+  echo "$output" | grep -q "infra/infra.go" && fail "infra/infra.go should NOT be attributed to behind-branch -- the branch never touched it, only main moved it forward. Output:\n$output"
+
+  echo "PASS: test_excludes_files_the_branch_never_touched"
+}
+
+test_purely_behind_branch_not_flagged() {
+  # Companion invariant: a branch with ZERO commits of its own touching any
+  # critical-path file must never be flagged at all, even though a symmetric
+  # two-tree diff shows the critical-path file as "different" once main
+  # moves it forward after the fork. Note: this exact shape happens to
+  # already pass on the pre-fix script too (its last_touch lookup already
+  # scopes to commits reachable only from the branch, which is empty here),
+  # so on its own it doesn't distinguish pre/post-fix behavior -- it's kept
+  # as a correctness pin for the intersection logic going forward.
+  # test_excludes_files_the_branch_never_touched above is the test that
+  # actually reproduces and proves the fix for Finding 1.
+  local tmpdir work
+  tmpdir=$(setup_repo)
+  work="$tmpdir/work"
+
+  commit_file "$work" "infra/infra.go" "v1" "$(epoch_hours_ago 72)"
+  (cd "$work" && git push -q origin main)
+
+  (cd "$work" && git checkout -q -b behind-branch)
+  commit_file "$work" "README.md" "unrelated" "$(epoch_hours_ago 47)"
+  (cd "$work" && git push -q origin behind-branch)
+
+  (cd "$work" && git checkout -q main)
+  commit_file "$work" "infra/infra.go" "v2" "$(epoch_hours_ago 30)"
+  (cd "$work" && git push -q origin main)
+
+  (cd "$work" && git fetch -q origin)
+
+  local output status
+  set +e
+  output=$(cd "$work" && STALE_HOURS=24 CRITICAL_PATHS="infra/ internal/opsalert/ opsnotify/" BASE_REF=origin/main "$SCRIPT" 2>&1)
+  status=$?
+  set -e
+
+  rm -rf "$tmpdir"
+
+  [ "$status" -eq 0 ] || fail "expected exit 0 (behind-branch never touched a critical-path file itself), got $status. Output:\n$output"
+  echo "$output" | grep -q "behind-branch" && fail "behind-branch should not be flagged. Output:\n$output"
+
+  echo "PASS: test_purely_behind_branch_not_flagged"
+}
+
 test_flags_and_filters_correctly
 test_clean_when_nothing_stale
 test_stale_go_masked_by_recent_non_go
+test_excludes_files_the_branch_never_touched
+test_purely_behind_branch_not_flagged
 echo "All tests passed."
