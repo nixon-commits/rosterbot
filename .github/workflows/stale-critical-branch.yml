@@ -1,0 +1,44 @@
+name: Stale critical-path branch check
+
+# Repo-hygiene check, not one of the Fantrax-dependent scheduled jobs — those
+# run on ECS Fargate (see docs/aws-deployment.md). This one only needs read
+# access to branches, which Actions provides for free via actions/checkout;
+# it sits alongside ci.yml/codeql.yml, not in place of them.
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  STALE_HOURS: '24'
+  CRITICAL_PATHS: 'infra/ internal/opsalert/ opsnotify/'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for stale critical-path branches
+        id: check
+        run: .github/scripts/check-stale-critical-branches.sh
+
+      - name: Notify Pushover
+        if: failure()
+        env:
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
+          REPORT: ${{ steps.check.outputs.report }}
+        run: |
+          curl -sS \
+            --form-string "token=${PUSHOVER_APP_TOKEN}" \
+            --form-string "user=${PUSHOVER_USER_KEY}" \
+            --form-string "title=Stale critical-path branch" \
+            --form-string "message=${REPORT}" \
+            --form-string "priority=0" \
+            https://api.pushover.net/1/messages.json
