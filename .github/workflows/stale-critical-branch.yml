@@ -19,6 +19,10 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: stale-critical-branch-check
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,10 +39,10 @@ jobs:
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           REPORT: ${{ steps.check.outputs.report }}
         run: |
-          curl -sS \
+          curl -sS --fail \
             --form-string "token=${PUSHOVER_APP_TOKEN}" \
             --form-string "user=${PUSHOVER_USER_KEY}" \
             --form-string "title=Stale critical-path branch" \
-            --form-string "message=${REPORT}" \
+            --form-string "message=${REPORT:-Stale-branch check failed to produce a report — see the Actions run for details}" \
             --form-string "priority=0" \
             https://api.pushover.net/1/messages.json
