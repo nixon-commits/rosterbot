@@ -39,7 +39,7 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin
   fi
 
   # shellcheck disable=SC2086
-  last_touch=$(git log -1 --format=%ct "${BASE_REF}..${branch}" -- ${CRITICAL_PATHS} 2>/dev/null || true)
+  last_touch=$(git log -1 --format=%ct "${BASE_REF}..${branch}" -- $diff_files 2>/dev/null || true)
   if [ -z "$last_touch" ]; then
     continue
   fi

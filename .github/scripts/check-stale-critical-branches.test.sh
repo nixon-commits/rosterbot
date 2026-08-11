@@ -133,6 +133,46 @@ test_clean_when_nothing_stale() {
   echo "PASS: test_clean_when_nothing_stale"
 }
 
+test_stale_go_masked_by_recent_non_go() {
+  # Regression test for bug where last_touch wasn't filtered to .go files.
+  # A branch with an old .go change plus a more recent non-.go commit in the
+  # same critical path would have its age masked by the fresher commit.
+  # This test verifies the branch is still correctly flagged as stale.
+  local tmpdir work old_go_date recent_gomod_date
+  tmpdir=$(setup_repo)
+  work="$tmpdir/work"
+  old_go_date=$(epoch_hours_ago 30)
+  recent_gomod_date=$(epoch_hours_ago 1)
+
+  commit_file "$work" "infra/infra.go" "v1" "$(epoch_hours_ago 48)"
+  (cd "$work" && git push -q origin main)
+
+  # Create branch with old .go change
+  (cd "$work" && git checkout -q -b masked-branch)
+  commit_file "$work" "infra/safety.go" "stale-code" "$old_go_date"
+  # Then add a more recent non-.go commit (go.mod) in the same critical path
+  commit_file "$work" "infra/go.mod" "module infra" "$recent_gomod_date"
+  (cd "$work" && git push -q origin masked-branch)
+
+  (cd "$work" && git fetch -q origin)
+
+  local output status
+  set +e
+  output=$(cd "$work" && STALE_HOURS=24 CRITICAL_PATHS="infra/ internal/opsalert/ opsnotify/" BASE_REF=origin/main "$SCRIPT" 2>&1)
+  status=$?
+  set -e
+
+  rm -rf "$tmpdir"
+
+  # Should flag as stale (exit 1) because the actual .go change is 30h old,
+  # even though go.mod is only 1h old
+  [ "$status" -eq 1 ] || fail "expected exit 1 (stale .go change should be detected), got $status. Output:\n$output"
+  echo "$output" | grep -q "masked-branch" || fail "expected masked-branch to be flagged despite recent go.mod. Output:\n$output"
+
+  echo "PASS: test_stale_go_masked_by_recent_non_go"
+}
+
 test_flags_and_filters_correctly
 test_clean_when_nothing_stale
+test_stale_go_masked_by_recent_non_go
 echo "All tests passed."
