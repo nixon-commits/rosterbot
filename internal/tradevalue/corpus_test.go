@@ -28,13 +28,19 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 )
 
-// Baseline re-measured 2026-08-10 over .cache/fantrax-all-trades-epsb8xzlmj203yrx.json
-// (25 trade groups) by an independent Python implementation -- its own name
-// normalization, its own decay loop, its own comparison -- which reproduced
-// these four numbers exactly. The first baseline (2026-08-06: 16 groups, 9/0/7)
-// was superseded when the trades cache refreshed and picked up more history;
-// re-deriving it independently, rather than pasting in whatever the Go printed,
-// is the whole discipline of rosterbot-aei.
+// Baseline re-measured 2026-08-11 over the same 25-group corpus
+// (.cache/fantrax-all-trades-epsb8xzlmj203yrx.json) after rosterbot-uc3
+// (draft-pick identity recovery) shipped, by an independent Python
+// implementation -- its own name normalization, its own pick-tier
+// averaging, its own decay loop, its own comparison -- which reproduced
+// these four numbers exactly. The prior baseline (2026-08-10: same 25
+// groups, 15/1/9) predates uc3: 5 of the 9 incomplete groups carried a
+// still-upcoming (2027) pick that NewDraftPickAsset can now price, so they
+// moved into favors (+3) or too-close (+2); the other 4 carried a pick from
+// a draft that has already happened, which HKB no longer lists as an
+// upcoming asset, so they stay incomplete. Re-deriving this independently,
+// rather than pasting in whatever the Go printed, is the whole discipline
+// of rosterbot-aei.
 //
 // The corpus is a live cache file and grows whenever a trade happens, so these
 // counts are asserted only when the group count still matches -- same corpus
@@ -42,18 +48,28 @@ import (
 // corpus-independent invariants below carry the gate instead, because a check
 // that goes red on every league trade is one you learn to bump without reading.
 const (
-	wantFavors     = 15 // 60%
-	wantIncomplete = 9  // 36%, every one of them a draft pick
-	wantTooClose   = 1  // 0v0fkidsmskf32gg: raw favors DillonP33, decayed favors Yordan's Schlong
-	wantGroups     = 25
+	wantFavors     = 18 // 72%
+	wantIncomplete = 4  // 16%, every one of them a draft pick from an already-resolved draft
+	wantTooClose   = 3  // 0v0fkidsmskf32gg (pre-existing) plus two newly priced by uc3's pick
+	// averaging, both flipping leader between raw and decayed once the pick
+	// entered the sum: 2bm0369cmsmd4m4u (raw favors Houston Swang and Bang
+	// 4033-3799, decayed favors Intentional Balk 3799-3778) and
+	// hdh6we5pmsi3229b (raw favors Yordan's Schlong 4222-4205, decayed
+	// favors Intentional Balk 3829.4-3492.52).
+	wantGroups = 25
 )
 
 type cachedTrades struct {
 	Data []struct {
-		PlayerName     string `json:"playerName"`
-		PlayerPosition string `json:"playerPosition"`
-		ToTeamName     string `json:"toTeamName"`
-		TradeGroupID   string `json:"tradeGroupId"`
+		PlayerName            string `json:"playerName"`
+		PlayerPosition        string `json:"playerPosition"`
+		ToTeamName            string `json:"toTeamName"`
+		TradeGroupID          string `json:"tradeGroupId"`
+		IsDraftPick           bool   `json:"isDraftPick"`
+		DraftPickYear         int    `json:"draftPickYear"`
+		DraftPickRound        int    `json:"draftPickRound"`
+		DraftPickNumber       int    `json:"draftPickNumber"`
+		DraftPickOriginalTeam string `json:"draftPickOriginalTeam"`
 	} `json:"data"`
 }
 
@@ -91,7 +107,13 @@ func TestCorpus_VerdictDistributionOverRealTrades(t *testing.T) {
 			g = map[string][]Asset{}
 			groups[r.TradeGroupID] = g
 		}
-		g[r.ToTeamName] = append(g[r.ToTeamName], NewAsset(r.PlayerName, r.PlayerPosition, lookup))
+		var asset Asset
+		if r.IsDraftPick {
+			asset = NewDraftPickAsset(r.DraftPickYear, r.DraftPickRound, r.DraftPickNumber, r.DraftPickOriginalTeam, players.Data)
+		} else {
+			asset = NewAsset(r.PlayerName, r.PlayerPosition, lookup)
+		}
+		g[r.ToTeamName] = append(g[r.ToTeamName], asset)
 	}
 
 	counts := map[Status]int{}
@@ -167,10 +189,13 @@ func TestCorpus_VerdictDistributionOverRealTrades(t *testing.T) {
 			counts[StatusFavors], len(groups))
 	}
 
-	// Pick-blocking is the headline argument for rosterbot-uc3, so it is worth
-	// failing on rather than merely logging: if it ever reads zero, either
-	// picks became identifiable (finish uc3 and delete this) or the pick
-	// detection broke and unpriced assets are silently scoring zero.
+	// rosterbot-uc3 recovers identity and, for a still-upcoming draft, a
+	// price for a traded pick -- but a pick from an already-resolved draft
+	// stays permanently unpriced, since HKB stops listing it once that
+	// draft is no longer upcoming. So every remaining incomplete verdict on
+	// this corpus should still be pick-blocked; if it ever reads zero while
+	// incomplete verdicts exist, pick detection itself has broken and
+	// unpriced assets are silently scoring zero.
 	if counts[StatusIncomplete] > 0 && pickBlocked == 0 {
 		t.Errorf("%d incomplete verdicts and not one is pick-blocked — pick detection may have broken",
 			counts[StatusIncomplete])

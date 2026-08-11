@@ -14,6 +14,7 @@
 package tradevalue
 
 import (
+	"fmt"
 	"math"
 	"sort"
 
@@ -57,11 +58,17 @@ type Asset struct {
 	// short -- and why Evaluate refuses a verdict in that case.
 	Priced bool `json:"priced"`
 
-	// IsPick marks a draft pick. Fantrax gives pick rows an empty player
-	// name and nothing else -- no year, no round -- so today IsPick always
-	// implies !Priced. HKB does price picks (45-1419), so recovering the
-	// pick's identity would flip these to priced (rosterbot-uc3).
+	// IsPick marks a draft pick. Before rosterbot-uc3, IsPick always implied
+	// !Priced: Fantrax's simplified Transaction carried no year or round for
+	// a pick row, only an empty player name. NewDraftPickAsset recovers that
+	// identity from the row's draftPickDisplayParts and can produce a Priced
+	// pick when HKB still lists the year+round as upcoming.
 	IsPick bool `json:"is_pick"`
+
+	// Estimated marks a Value that is not a direct HKB name match but an
+	// average across HKB's Early/Mid/Late tiers for a pick's year+round --
+	// see NewDraftPickAsset. Always false for a player asset.
+	Estimated bool `json:"estimated,omitempty"`
 }
 
 // Side is what one team receives in a trade.
@@ -240,11 +247,12 @@ func pctDiff(a, b float64) float64 {
 
 // NewAsset builds an Asset by joining a Fantrax trade row against HKB.
 //
-// An empty name is Fantrax's representation of a draft pick: the row carries
-// from-team, to-team and nothing else, because pick rows have no scorer for
-// the upstream parser to read a name from. There is no year and no round, so
-// the pick cannot be matched to any of HKB's 18 pick assets and the result is
-// unpriced by construction, not by lookup failure.
+// An empty name is Fantrax's representation of a draft pick: the row's
+// scorer object carries no name for the upstream parser to read. This
+// constructor has no year or round to work with -- a caller that has
+// already recovered a pick's identity (see NewDraftPickAsset) should call
+// that instead, since the identity lives in a different part of the row
+// than the player scorer this function reads.
 func NewAsset(name, position string, lookup map[string]hkb.Player) Asset {
 	if name == "" {
 		return Asset{Name: "Draft pick (unidentified)", IsPick: true}
@@ -255,5 +263,42 @@ func NewAsset(name, position string, lookup map[string]hkb.Player) Asset {
 		Position: position,
 		Value:    e.Value,
 		Priced:   e.Ranked,
+	}
+}
+
+// NewDraftPickAsset builds an Asset for a traded draft pick using the
+// identity recovered from Fantrax's draftPickDisplayParts (rosterbot-uc3):
+// the draft year, the round, and either a resolved slot number or the team
+// whose future draft slot it is.
+//
+// HKB prices picks generically by projected slot (Early/Mid/Late per
+// round), not by team, and Fantrax's payload names the team but not that
+// team's projected standing -- so there is no principled way to choose one
+// of the three tiers. hkb.PickAverage's mean of whichever tiers HKB
+// currently lists is used instead, and the result is flagged Estimated so
+// callers can distinguish it from a direct name match.
+//
+// A pick with a resolved slot (pickNumber > 0) came from a draft whose
+// order is already known, which also means HKB has stopped listing it as
+// an upcoming PICK asset -- PickAverage reports zero tiers for it and the
+// asset stays unpriced, exactly as an unidentified pick did before this.
+func NewDraftPickAsset(year, round, pickNumber int, originalTeam string, players []hkb.Player) Asset {
+	name := pickDisplayName(year, round, pickNumber, originalTeam)
+	avg, tiers := hkb.PickAverage(players, year, round)
+	if tiers == 0 {
+		return Asset{Name: name, IsPick: true}
+	}
+	return Asset{Name: name, Value: avg, Priced: true, IsPick: true, Estimated: true}
+}
+
+func pickDisplayName(year, round, pickNumber int, originalTeam string) string {
+	label := fmt.Sprintf("%d %s Round Pick", year, hkb.Ordinal(round))
+	switch {
+	case pickNumber > 0:
+		return fmt.Sprintf("%s (Pick %d)", label, pickNumber)
+	case originalTeam != "":
+		return fmt.Sprintf("%s (%s)", label, originalTeam)
+	default:
+		return label
 	}
 }

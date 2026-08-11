@@ -220,3 +220,67 @@ func TestNewAsset(t *testing.T) {
 		}
 	})
 }
+
+func testPickPlayers() []hkb.Player {
+	return []hkb.Player{
+		{Name: "2027 Early 1st", AssetType: "PICK", Value: 1456},
+		{Name: "2027 Mid 1st", AssetType: "PICK", Value: 821},
+		{Name: "2027 Late 1st", AssetType: "PICK", Value: 778},
+	}
+}
+
+// rosterbot-uc3: a pick still tied to a team's future draft slot (Fantrax
+// gave us a year, round and the original-owner team, no resolved number)
+// prices at the average of whatever tiers HKB currently lists for that
+// year+round, and is flagged Estimated so it reads differently from a
+// direct name match.
+func TestNewDraftPickAsset_StillProjected_PricesAtTheTierAverage(t *testing.T) {
+	a := NewDraftPickAsset(2027, 1, 0, "Houston Swang and Bang", testPickPlayers())
+	wantAvg := (1456 + 821 + 778) / 3
+	if !a.Priced || !a.IsPick || !a.Estimated {
+		t.Fatalf("got %+v, want Priced, IsPick and Estimated all true", a)
+	}
+	if a.Value != wantAvg {
+		t.Errorf("Value = %d, want %d", a.Value, wantAvg)
+	}
+	if a.Name != "2027 1st Round Pick (Houston Swang and Bang)" {
+		t.Errorf("Name = %q", a.Name)
+	}
+}
+
+// A resolved slot (the draft order is already known) carries no team
+// ambiguity, but by the same token HKB has stopped listing it as an
+// upcoming PICK asset -- PickAverage finds zero tiers and the asset stays
+// unpriced, same as an unidentified pick did before this recovery existed.
+func TestNewDraftPickAsset_ResolvedSlot_NoLongerListedByHKB_StaysUnpriced(t *testing.T) {
+	a := NewDraftPickAsset(2026, 1, 6, "", testPickPlayers())
+	if a.Priced || a.Estimated {
+		t.Fatalf("got %+v, want !Priced and !Estimated", a)
+	}
+	if !a.IsPick {
+		t.Error("want IsPick true even when unpriced")
+	}
+	if a.Name != "2026 1st Round Pick (Pick 6)" {
+		t.Errorf("Name = %q", a.Name)
+	}
+}
+
+// An asset can be both IsPick and Priced now, which used to be impossible --
+// pin that a caller checking IsPick alone (e.g. formatting code) still sees
+// Value/Priced reflect the estimate rather than always reading as 0/false.
+func TestNewDraftPickAsset_FeedsIntoEvaluateLikeAnyPricedAsset(t *testing.T) {
+	pick := NewDraftPickAsset(2027, 2, 0, "Some Team", testPickPlayers())
+	if pick.Priced {
+		t.Fatalf("fixture has no 2027 2nd tiers, expected this pick to stay unpriced for the test setup")
+	}
+	// Re-derive with a round that IS covered so the fed-in Evaluate actually
+	// exercises the priced path.
+	pick = NewDraftPickAsset(2027, 1, 0, "Some Team", testPickPlayers())
+	side := Side{Team: "A", Assets: []Asset{pick}}
+	other := Side{Team: "B", Assets: []Asset{{Name: "Player", Value: 100, Priced: true}}}
+
+	v := Evaluate([]Side{side, other})
+	if v.Status == StatusIncomplete {
+		t.Errorf("Status = incomplete, want a verdict now that the pick is priced: %+v", v)
+	}
+}
