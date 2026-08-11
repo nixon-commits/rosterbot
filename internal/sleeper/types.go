@@ -83,4 +83,11 @@ type Player struct {
 	FantasyPositions []string `json:"fantasy_positions"`
 	Status           string   `json:"status"`
 	InjuryStatus     string   `json:"injury_status"`
+
+	// SearchRank is Sleeper's own depth-chart/relevance ranking (lower =
+	// more relevant; undrafted/irrelevant players carry a large sentinel
+	// value). Used as the starter-selection fallback when a roster's
+	// Starters array is empty or unusable — never StatsGuy value, which
+	// would make an unvalued player unselectable by construction.
+	SearchRank int `json:"search_rank"`
 }

@@ -194,7 +194,7 @@ func TestPlayersNFLParsesResponseAndCaches(t *testing.T) {
 			t.Errorf("path = %q, want /players/nfl", r.URL.Path)
 		}
 		w.Write([]byte(`{
-			"4984": {"player_id": "4984", "first_name": "Josh", "last_name": "Allen", "position": "QB", "team": "BUF", "fantasy_positions": ["QB"]}
+			"4984": {"player_id": "4984", "first_name": "Josh", "last_name": "Allen", "position": "QB", "team": "BUF", "fantasy_positions": ["QB"], "search_rank": 42}
 		}`))
 	}))
 	defer srv.Close()
@@ -209,7 +209,7 @@ func TestPlayersNFLParsesResponseAndCaches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlayersNFL: %v", err)
 	}
-	if p, ok := players["4984"]; !ok || p.LastName != "Allen" {
+	if p, ok := players["4984"]; !ok || p.LastName != "Allen" || p.SearchRank != 42 {
 		t.Errorf("players[4984] = %+v, ok=%v, unexpected shape", p, ok)
 	}
 
