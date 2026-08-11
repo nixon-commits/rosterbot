@@ -52,6 +52,10 @@ type TradePlayer struct {
 	// indistinguishable from an unranked player, though HKB prices picks as
 	// high as 1419.
 	IsPick bool
+	// Estimated marks a pick priced by averaging HKB's Early/Mid/Late tiers
+	// for its year+round rather than a direct name match (rosterbot-uc3).
+	// Always false for a player.
+	Estimated bool
 
 	// Key stats — exactly one set is populated based on player type.
 	IsPitcher bool
@@ -113,7 +117,7 @@ func CheckTrades(ft TradeClient, cacheDir string, pushoverUserKey, pushoverAPITo
 
 	var executedGrouped []Trade
 	if len(txs) > 0 {
-		executedGrouped = groupTrades(txs, lookup)
+		executedGrouped = groupTrades(txs, lookup, players)
 		fmt.Println(formatTrades("Recent Trades", executedGrouped, true))
 	}
 
@@ -151,7 +155,10 @@ func buildHKBLookup(players []hkb.Player) map[string]hkb.Player {
 }
 
 // groupTrades groups transaction rows by TradeGroupID into Trade structs.
-func groupTrades(txs []models.Transaction, lookup map[string]hkb.Player) []Trade {
+// players is the full HKB roster (not just the name lookup) because pick
+// pricing needs to scan every PICK asset for a year+round match rather than
+// join by name (rosterbot-uc3).
+func groupTrades(txs []models.Transaction, lookup map[string]hkb.Player, players []hkb.Player) []Trade {
 	groups := make(map[string][]models.Transaction)
 	for _, tx := range txs {
 		groups[tx.TradeGroupID] = append(groups[tx.TradeGroupID], tx)
@@ -159,7 +166,7 @@ func groupTrades(txs []models.Transaction, lookup map[string]hkb.Player) []Trade
 
 	var trades []Trade
 	for _, group := range groups {
-		t := buildTrade(group, lookup)
+		t := buildTrade(group, lookup, players)
 		trades = append(trades, t)
 	}
 	sort.Slice(trades, func(i, j int) bool {
@@ -169,7 +176,7 @@ func groupTrades(txs []models.Transaction, lookup map[string]hkb.Player) []Trade
 }
 
 // buildTrade constructs a Trade from a group of transactions sharing the same TradeGroupID.
-func buildTrade(group []models.Transaction, lookup map[string]hkb.Player) Trade {
+func buildTrade(group []models.Transaction, lookup map[string]hkb.Player, players []hkb.Player) Trade {
 	// Partition by direction: players moving to each team.
 	sides := make(map[string]*TradeSide)
 	var processedDate time.Time
@@ -187,7 +194,12 @@ func buildTrade(group []models.Transaction, lookup map[string]hkb.Player) Trade 
 			sides[key] = side
 		}
 
-		tp := newTradePlayer(tx.PlayerName, tx.PlayerPosition, lookup)
+		var tp TradePlayer
+		if tx.IsDraftPick {
+			tp = newDraftPickTradePlayer(tx, players)
+		} else {
+			tp = newTradePlayer(tx.PlayerName, tx.PlayerPosition, lookup)
+		}
 		side.Players = append(side.Players, tp)
 	}
 
@@ -232,11 +244,12 @@ func assetsOf(players []TradePlayer) []tradevalue.Asset {
 	assets := make([]tradevalue.Asset, 0, len(players))
 	for _, p := range players {
 		assets = append(assets, tradevalue.Asset{
-			Name:     p.Name,
-			Position: p.Position,
-			Value:    p.Value,
-			Priced:   p.Ranked,
-			IsPick:   p.IsPick,
+			Name:      p.Name,
+			Position:  p.Position,
+			Value:     p.Value,
+			Priced:    p.Ranked,
+			IsPick:    p.IsPick,
+			Estimated: p.Estimated,
 		})
 	}
 	return assets
@@ -365,12 +378,18 @@ func formatVerdict(v tradevalue.Verdict) string {
 // Unranked players collapse to a single line: `• Name (Pos) — unranked`.
 // indent should be NBSP-based so Pushover preserves it.
 func formatPlayer(b *strings.Builder, p TradePlayer, indent string, color bool) {
-	// A pick is unpriced for a different reason than an unranked player: HKB
-	// does price picks, we just cannot tell which one this is. Calling it
-	// "unranked" would read as "worth nothing" for an asset HKB values up to
-	// 1419, and the verdict line already explains the consequence.
+	// A pick with a recovered identity (rosterbot-uc3) prices at the average
+	// of HKB's Early/Mid/Late tiers for its year+round -- marked "~" and
+	// "avg" since it is a coarser estimate than a direct name match, not the
+	// player-line format below. An unidentified or already-drafted pick
+	// falls back to a bare name: HKB does price those picks, we just cannot
+	// tell which one this is or it no longer lists one to average.
 	if p.IsPick {
-		fmt.Fprintf(b, "• %s\n", p.Name)
+		if p.Ranked {
+			fmt.Fprintf(b, "• %s\n%s~%s (avg of Early/Mid/Late)\n", p.Name, indent, formatValue(p.Value))
+		} else {
+			fmt.Fprintf(b, "• %s\n", p.Name)
+		}
 		return
 	}
 	if !p.Ranked {
@@ -530,6 +549,22 @@ func newTradePlayer(name, position string, lookup map[string]hkb.Player) TradePl
 		OPS:            e.OPS,
 		ERA:            e.ERA,
 		WHIP:           e.WHIP,
+	}
+}
+
+// newDraftPickTradePlayer builds a TradePlayer for a row identified as a
+// draft pick (tx.IsDraftPick), using the identity go-fantrax recovered from
+// the row's draftPickDisplayParts (rosterbot-uc3) rather than the
+// "Draft pick (unidentified)" fallback newTradePlayer uses for a bare empty
+// name.
+func newDraftPickTradePlayer(tx models.Transaction, players []hkb.Player) TradePlayer {
+	a := tradevalue.NewDraftPickAsset(tx.DraftPickYear, tx.DraftPickRound, tx.DraftPickNumber, tx.DraftPickOriginalTeam, players)
+	return TradePlayer{
+		Name:      a.Name,
+		Value:     a.Value,
+		Ranked:    a.Priced,
+		IsPick:    true,
+		Estimated: a.Estimated,
 	}
 }
 

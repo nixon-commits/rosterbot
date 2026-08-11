@@ -164,7 +164,7 @@ func TestGroupTrades(t *testing.T) {
 		{Name: "Juan Soto", Value: 8782},
 	})
 
-	trades := groupTrades(txs, lookup)
+	trades := groupTrades(txs, lookup, nil)
 	if len(trades) != 1 {
 		t.Fatalf("expected 1 trade, got %d", len(trades))
 	}
