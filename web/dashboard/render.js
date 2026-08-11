@@ -98,5 +98,8 @@ function renderTable(rows) {
   }
   table.appendChild(tbody);
 
-  return table;
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  wrap.appendChild(table);
+  return wrap;
 }

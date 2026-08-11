@@ -172,7 +172,40 @@ thead th {
   letter-spacing: .03em;
   border-bottom: 2px solid var(--border);
 }
-.kv-table th { color: var(--muted); width: 12rem; }
+/* table-layout:fixed pins the value column's width to what's left after the
+   12rem label column, regardless of content. Needed because render.js's
+   renderKeyValue nests a renderTable() (wrapped in .table-wrap) inside a
+   <td> for any object value that's itself an array of objects (e.g. a
+   backtest run's {start,end,days:[...]} output) — under the default
+   table-layout:auto, a <td>'s width is sized to fit its content, so a wide
+   nested table drags the whole kv-table past its card no matter what
+   overflow rule the nested .table-wrap carries; a table cell only honors a
+   descendant's overflow-x:auto once the cell itself has a fixed width. */
+.kv-table { table-layout: fixed; }
+/* min(12rem, 40%): plain 12rem broke down under render.js's recursive
+   renderKeyValue — an object value containing an array (e.g. a backtest
+   run's {mae,bias,by_position:[...]}) nests a second kv-table inside the
+   first one's <td>, and every level after the first has less than 12rem of
+   actual width to give the label column. table-layout:fixed treats a
+   literal 12rem as non-negotiable regardless of how narrow its container
+   is, so the second-level table rendered wider than the space it was given
+   and dragged the page sideways with it; the percentage half of min() lets
+   the label column shrink with each level of nesting the way the fixed rem
+   value couldn't, while 12rem still wins at normal (unnested, or single
+   level) widths, where 40% would otherwise be needlessly wide. */
+.kv-table th { color: var(--muted); width: min(12rem, 40%); }
+/* A fixed-width column doesn't stop an unbreakable value (a run id, a token,
+   a long URL) from overflowing its cell — table-layout:fixed only allocates
+   the width, it doesn't make content wrap. Same fix as .infra-meta below. */
+.kv-table td { overflow-wrap: anywhere; }
+/* overflow-wrap is inherited, so without this a nested .table-wrap (a
+   renderTable() result sitting in a kv-table <td>, e.g. by_position inside a
+   backtest run's output) would break every cell's text one character per
+   line once the label column above it has squeezed the available width down
+   to a few dozen pixels. A nested table already has its own scroll handling
+   — it doesn't need to be legible at that width, just scrollable at its
+   natural one — so this resets the cascade at the boundary between the two. */
+.kv-table td .table-wrap { overflow-wrap: normal; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 table.data-table tbody tr:hover { background: color-mix(in srgb, var(--border) 40%, transparent); }
@@ -306,10 +339,21 @@ td.cov.warn { color: var(--danger); }
 }
 
 /* ---- Wide-table scroll container ---------------------------------------- */
-/* views.js and trades.js wrap their tables in this. It was referenced by
-   views.js before it was ever defined, so the readership table has been
-   pushing the page body sideways on a phone; the rule lands here rather than
-   in the trades block because both views need it. */
+/* Every table.data-table wraps in this: views.js, trades.js, projections.js,
+   value.js, runs.js, and render.js's generic renderTable (arbitrary JSON, so
+   its column count is unbounded). Without it, table{width:100%} can't shrink
+   a table below its intrinsic content width, so the overflow bubbles up
+   through <main>/<body> and widens the whole page's layout viewport on
+   narrow screens instead of staying inside the table — first caught when
+   views.js referenced this class before it was ever defined (the readership
+   table pushed the page sideways on a phone), then again on the Projections
+   tab's comparison/position/misses tables (rosterbot-81n, measured: 463px
+   effective width on a 390px device). .kv-table (2 columns, key/value) is
+   the one data table that stays unwrapped directly — it constrains its own
+   width via table-layout:fixed instead (see above), since it's the one
+   place a .table-wrap can itself end up nested inside another table's <td>
+   (render.js's renderKeyValue, for an object value that's itself an array),
+   where overflow-x:auto on the wrap alone isn't enough. */
 .table-wrap { overflow-x: auto; }
 
 /* ---- Signed deltas ------------------------------------------------------- */
