@@ -57,27 +57,60 @@ workflow_dispatch:              # manual runs
 
 ### Detection
 
-For each `origin/*` branch except `main`:
+For each `origin/*` branch except the bare `origin` HEAD alias and `BASE_REF`
+itself (default `origin/main`):
 
-1. `git diff --name-only origin/main...origin/$branch -- infra/ internal/opsalert/ opsnotify/`
-   — if empty, skip.
-2. `git log -1 --format=%ct origin/main..origin/$branch -- <those paths>` —
-   newest commit unique to the branch touching those paths.
-3. `age = now - that commit's timestamp`. `age > STALE_HOURS` (default 24,
-   env var) → add `(branch, age, files)` to the stale list.
+1. **Two-tree diff** — `git diff --name-only origin/main origin/$branch --
+   infra/ internal/opsalert/ opsnotify/`, filtered to `*.go` — "does the
+   branch's tree still differ from main's current tip on these paths."
+   Empty → skip. The `.go` filter matters: an unfiltered directory diff
+   false-positived on two ancient, unrelated branches whose `go.mod`/`go.sum`
+   had merely drifted from routine dependabot bumps on `main`, with no real
+   unlanded fix behind it. Only source changes are the actual signal.
+2. **Merge-base diff, intersected** — the two-tree diff alone is symmetric:
+   it can't tell "the branch introduced this" from "main moved forward on
+   this after the branch forked and never rebased," so on its own it
+   misattributes every file `main` has since touched to every stale,
+   never-rebased branch. The fix computes `git merge-base origin/main
+   origin/$branch`, then a second direct two-tree diff — `git diff --name-only
+   <merge_base> origin/$branch` (again `.go`-filtered, deliberately not
+   `merge_base...origin/$branch` triple-dot, to keep the same "two explicit
+   trees" shape as step 1 rather than reintroducing dot-notation ambiguity)
+   — to get the files the branch's *own* commits actually touched since it
+   forked, and intersects the two file lists (`comm -12` on sorted output).
+   Only a file that both still differs from `main` *and* was touched by the
+   branch's own history survives. Empty intersection → skip.
+3. `git log -1 --format=%ct <merge_base>..origin/$branch -- <surviving
+   files>` — newest commit, among the branch's own commits since its fork,
+   touching one of the surviving files.
+4. `age = now - that commit's timestamp`. `age > STALE_HOURS` (default 24,
+   env var) → add `(branch, age, files)` to the stale list, capped to the
+   first 4 files (`+N more` beyond that) so a long-abandoned branch with a
+   dozen-plus touched files can't blow the combined report past Pushover's
+   1024-character message cap.
 
-**Content diff, not commit-ancestry, is the load-bearing choice.** A survey of
-this repo's current branches found several (`fix/rosterbot-0gm-*`,
-`fix/rosterbot-abd-*`, `feat/trades-tab`, …) that show as permanently "ahead"
-of `main` by commit count after a squash-merge — different SHAs, same
-content, forever. Gating on `git diff --name-only` against the specific paths
-sidesteps that: once a squash-merged branch's critical-path content matches
-`main`, the diff is empty and it's correctly ignored, with no ancestry
-bookkeeping. Verified against the live repo: `ops-alerting-hardening` (a real,
-still-divergent branch touching 12 files across `infra/`, `internal/opsalert/`,
-`opsnotify/`) shows a non-empty diff and a last-touch timestamp of
-2026-08-04T00:28 UTC — ~7.5 days stale as of this writing — so the check has
-an immediate true positive on first run.
+**Content diff, not commit-ancestry, is the load-bearing choice — but it has
+to run in both directions.** A survey of this repo's current branches found
+several (`fix/rosterbot-0gm-*`, `fix/rosterbot-abd-*`, `feat/trades-tab`, …)
+that show as permanently "ahead" of `main` by commit count after a
+squash-merge — different SHAs, same content, forever. Gating on
+`git diff --name-only` against the specific paths sidesteps that: once a
+squash-merged branch's critical-path content matches `main` *at the moment of
+the merge*, the two-tree diff for that file is empty and it's correctly
+ignored, with no ancestry bookkeeping. That immunity is not permanent,
+though — it survives only until `main` next touches the same file for an
+unrelated reason, at which point the two-tree diff goes non-empty again; step
+2's intersection then decides whether the branch is still on the hook for it
+(only if the branch's own history also touched that file). A content diff
+alone, without the intersection, has the opposite failure: it flags every
+merely-behind branch for files it never touched, which is what step 2 exists
+to fix (steps 1+2 combined were verified against this repo's real branches —
+`feat/recap-access-logs` and `feat/recap-views-tab` went from ~20
+misattributed files each down to the 1 file each actually changed).
+`ops-alerting-hardening` (a real, still-divergent branch touching several
+files across `infra/`, `internal/opsalert/`, `opsnotify/`) remains a true
+positive under the fixed check — so it still has an immediate true positive
+on first run.
 
 ### Alerting
 
