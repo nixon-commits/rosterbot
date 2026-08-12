@@ -13,7 +13,16 @@ import (
 // Param describes one tunable flag the app can present as a form field and the
 // backend will validate before turning into argv. Type drives both rendering
 // and validation: bool (switch), int (stepper, Min/Max), enum (picker,
-// Options), text (validated against Pattern).
+// Options), text (validated against Pattern), date (a single calendar day),
+// daterange (a day or an inclusive span, joined with ":").
+//
+// date and daterange exist as their own types rather than as text with a
+// pattern because the pattern only ever described the shape. `2026-02-31` and
+// `2026-13-01` both match dateOrRange and both fail in the CLI several minutes
+// into an ECS task — so these two parse the value as a real calendar date, and
+// daterange additionally rejects a backwards span. They also give the client
+// something to render a native picker from, which is the difference between
+// typing a range by hand and choosing one.
 type Param struct {
 	Name    string   `json:"name"`
 	Label   string   `json:"label"`
@@ -46,9 +55,6 @@ type JobsResponse struct {
 
 func intp(n int) *int { return &n }
 
-// dateOrRange matches a single date or a YYYY-MM-DD:YYYY-MM-DD range.
-var dateOrRange = `^\d{4}-\d{2}-\d{2}(:\d{4}-\d{2}-\d{2})?$`
-
 // csvCodes matches a comma-separated list of alphanumeric codes (e.g. OF,SP).
 var csvCodes = `^[A-Za-z0-9]+(,[A-Za-z0-9]+)*$`
 
@@ -64,8 +70,8 @@ var jobSpecs = map[string]JobSpec{
 			{Name: "period", Label: "Period", Type: "enum", Default: "matchup",
 				Options: []string{"today", "matchup", "all", "custom"},
 				Help:    "today, the rest of this matchup week, the whole season, or a custom date/range"},
-			{Name: "dates", Label: "Custom date / range", Type: "text", Pattern: dateOrRange,
-				Help: "Used when Period = custom. e.g. 2026-04-01 or 2026-04-01:2026-04-07"},
+			{Name: "dates", Label: "Custom date / range", Type: "daterange",
+				Help: "Used when Period = custom"},
 			{Name: "projections", Label: "Projection system", Type: "enum", Options: projectionSystems},
 			{Name: "dry_run", Label: "Dry run (preview only)", Type: "bool"},
 		},
@@ -76,8 +82,8 @@ var jobSpecs = map[string]JobSpec{
 		Description: "Grade past lineups + projection accuracy. Read-only.",
 		base:        []string{"backtest"},
 		Params: []Param{
-			{Name: "dates", Label: "Window", Type: "text", Pattern: dateOrRange,
-				Help: "Date range to grade, e.g. 2026-04-13:2026-04-19 (default: last completed week)"},
+			{Name: "dates", Label: "Window", Type: "daterange",
+				Help: "Defaults to the last completed week"},
 			{Name: "skip_projections", Label: "Skip projection grading", Type: "bool"},
 			{Name: "recency_experiment", Label: "Recency strategy comparison", Type: "bool"},
 		},
@@ -127,6 +133,51 @@ var jobSpecs = map[string]JobSpec{
 		Name: "recap-site", Label: "Recap Site", Description: "Rebuild the weekly recap site.",
 		base: []string{"recap-site", "--out", "dist"},
 	},
+
+	// The jobs below run on their own EventBridge schedules and were previously
+	// only reachable by waiting for the next one. None of them touch Fantrax or
+	// send a push, so none is Mutating — matching `grade`, which likewise writes
+	// durable analysis data. `--dry-run` is a persistent root flag, so every
+	// command accepts it even where cobra declares no local flag of its own.
+	"team-values": {
+		Name: "team-values", Label: "Team Values",
+		Description: "Append today's per-team HKB dynasty value to the Team Value Store. Feeds the Value tab.",
+		base:        []string{"team-values"},
+		Params: []Param{
+			// --date only chooses the partition; the data captured is always
+			// current HKB + rosters, which is why this is not a backfill.
+			{Name: "date", Label: "Partition date", Type: "date",
+				Help: "Which day's partition to write. Data is always current, so this does not backfill the past."},
+			{Name: "dry_run", Label: "Dry run", Type: "bool"},
+		},
+	},
+	"archive": {
+		Name: "archive", Label: "Archive",
+		Description: "Snapshot today's HKB, projections, Savant and prospect data. Append-only, kept forever.",
+		base:        []string{"archive"},
+		Params: []Param{
+			{Name: "date", Label: "Capture date", Type: "date", Help: "Defaults to today (UTC)"},
+			{Name: "dry_run", Label: "Dry run (fetch and report sizes only)", Type: "bool"},
+		},
+	},
+	"shadow": {
+		Name: "shadow", Label: "Shadow Capture",
+		Description: "Capture projections from all four rest-of-season systems for the model comparison.",
+		base:        []string{"shadow"},
+		Params: []Param{
+			{Name: "dates", Label: "Capture date", Type: "date", Help: "Defaults to today"},
+		},
+	},
+	"projection-site": {
+		Name: "projection-site", Label: "Projection Site",
+		Description: "Rebuild the Projections, Value and Views data the dashboard reads.",
+		base:        []string{"projection-site"},
+	},
+	"version-check": {
+		Name: "version-check", Label: "Version Check",
+		Description: "Probe Fantrax with the pinned API version. Read-only; fails if the version has gone stale.",
+		base:        []string{"version-check"},
+	},
 }
 
 // genericBuild maps validated params onto base args via each param's flag form
@@ -173,8 +224,8 @@ func buildOptimize(spec JobSpec, params map[string]string) ([]string, error) {
 		args = append(args, "--dates", "all")
 	case "custom":
 		d := params["dates"]
-		if !regexp.MustCompile(dateOrRange).MatchString(d) {
-			return nil, fmt.Errorf("custom period needs a valid date or range (got %q)", d)
+		if err := checkDateRange(d); err != nil {
+			return nil, fmt.Errorf("custom period needs a valid date or range: %w", err)
 		}
 		args = append(args, "--dates", d)
 	default:
@@ -221,9 +272,51 @@ func validateParam(p Param, v string) (string, bool, error) {
 			return "", false, fmt.Errorf("%s has an invalid format", p.Name)
 		}
 		return v, true, nil
+	case "date":
+		if err := checkDate(v); err != nil {
+			return "", false, fmt.Errorf("%s: %w", p.Name, err)
+		}
+		return v, true, nil
+	case "daterange":
+		if err := checkDateRange(v); err != nil {
+			return "", false, fmt.Errorf("%s: %w", p.Name, err)
+		}
+		return v, true, nil
 	default:
 		return "", false, fmt.Errorf("unsupported param type %q", p.Type)
 	}
+}
+
+// checkDate parses v as a real calendar day. time.Parse is strict about
+// component ranges, so this rejects 2026-02-31 and 2026-13-01, which a shape
+// regex accepts and the CLI only discovers once the task is already running.
+func checkDate(v string) error {
+	if _, err := time.Parse("2006-01-02", v); err != nil {
+		return fmt.Errorf("%q is not a valid date (expected YYYY-MM-DD)", v)
+	}
+	return nil
+}
+
+// checkDateRange accepts a single day or "start:end". An end before its start
+// is rejected here rather than left to produce an empty result the caller would
+// read as "nothing happened that week".
+func checkDateRange(v string) error {
+	start, end, isRange := strings.Cut(v, ":")
+	if err := checkDate(start); err != nil {
+		return err
+	}
+	if !isRange {
+		return nil
+	}
+	if err := checkDate(end); err != nil {
+		return err
+	}
+	s, _ := time.Parse("2006-01-02", start)
+	e, _ := time.Parse("2006-01-02", end)
+	if e.Before(s) {
+		return fmt.Errorf("range ends (%s) before it starts (%s)", end, start)
+	}
+	return nil
 }
 
 func isTrue(v string) bool { return v == "true" || v == "1" }

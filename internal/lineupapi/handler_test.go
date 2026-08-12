@@ -333,8 +333,46 @@ func TestJobsSchemaEndpoint(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(got.Jobs) != 9 {
-		t.Fatalf("want 9 jobs, got %d", len(got.Jobs))
+
+	// Asserted as invariants rather than as a count. A bare `len(jobs) != 9`
+	// goes red on every legitimate job addition, which teaches you to bump the
+	// number without reading what changed — the same failure mode
+	// tradevalue/corpus_test.go documents for its trade corpus. What is worth
+	// pinning is that every advertised job is renderable and every param type
+	// is one the client knows how to draw.
+	if len(got.Jobs) == 0 {
+		t.Fatal("no jobs advertised")
+	}
+	renderable := map[string]bool{"bool": true, "int": true, "enum": true, "text": true, "date": true, "daterange": true}
+	seen := map[string]bool{}
+	for _, j := range got.Jobs {
+		if j.Name == "" || j.Label == "" {
+			t.Errorf("job %+v is missing a name or label", j)
+		}
+		if j.Description == "" {
+			t.Errorf("job %q has no description; the form has nothing to explain it", j.Name)
+		}
+		if seen[j.Name] {
+			t.Errorf("job %q advertised twice", j.Name)
+		}
+		seen[j.Name] = true
+		for _, p := range j.Params {
+			if p.Label == "" {
+				t.Errorf("job %q param %q has no label", j.Name, p.Name)
+			}
+			if !renderable[p.Type] {
+				t.Errorf("job %q param %q has type %q, which no client can render", j.Name, p.Name, p.Type)
+			}
+			if p.Type == "enum" && len(p.Options) == 0 {
+				t.Errorf("job %q param %q is an enum with no options", j.Name, p.Name)
+			}
+		}
+	}
+	// A couple of anchors, so an accidental deletion of the allowlist still fails.
+	for _, want := range []string{"optimize", "backtest"} {
+		if !seen[want] {
+			t.Errorf("job %q is missing from the schema", want)
+		}
 	}
 }
 
