@@ -7,6 +7,80 @@ export function escapeHtml(value) {
   return div.innerHTML;
 }
 
+// ---- Help bubbles ----------------------------------------------------------
+// The dashboard carries a lot of load-bearing explanation: why a verdict was
+// withheld, why a total is a floor, why a gap can never be refilled. All of it
+// was rendered permanently at full size, which is the right priority for the
+// first read and the wrong one for the next hundred.
+//
+// help() moves the *reasoning* one tap away while the fact it qualifies stays
+// on screen. Three rules, in order of how easily they get broken:
+//
+//  1. Tap, not hover. Hover does not exist on a phone, and the phone is where
+//     the screen is tightest — a hover-only bubble hides the text exactly where
+//     hiding it costs the most.
+//  2. The visible line must stand alone. What is hidden is *why*, never *what*:
+//     "Totals are a floor" stays visible, "because unmatched players are
+//     counted nowhere" goes in the bubble.
+//  3. Plain language, no shorthand. The reader may not be the person who wrote
+//     the pipeline.
+//
+// Built on the native popover API for light-dismiss, Escape handling and
+// top-layer stacking without a line of JS. Popovers without CSS anchor
+// positioning center in the viewport, which is deliberate here rather than
+// merely tolerated: centered reads as a sheet on a phone, and anchor
+// positioning is still Chromium-only.
+let helpSeq = 0;
+
+export function help(text, label = "Explain this") {
+  const id = `help-${++helpSeq}`;
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "help-btn";
+  btn.textContent = "?";
+  btn.setAttribute("aria-label", label);
+  btn.setAttribute("popovertarget", id);
+
+  const pop = document.createElement("div");
+  pop.className = "help-pop";
+  pop.id = id;
+  pop.setAttribute("popover", "auto");
+  pop.textContent = text;
+
+  const wrap = document.createElement("span");
+  wrap.className = "help-wrap";
+  wrap.append(btn, pop);
+  return wrap;
+}
+
+// caption builds the "short visible line + reasoning behind a tap" pair these
+// views need over and over. Returns a <span class="cap"> ready to append to a
+// heading or a row.
+export function caption(shortText, longText) {
+  const span = document.createElement("span");
+  span.className = "cap";
+  span.append(document.createTextNode(shortText));
+  if (longText) span.append(" ", help(longText));
+  return span;
+}
+
+// relativeTime renders a coarse "how long ago" for ledger timestamps. Shared by
+// the Runs table and the status line so the two never disagree about how old
+// the same run is.
+export function relativeTime(iso) {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return String(iso ?? "");
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
 export function renderAuto(data) {
   if (data === null || data === undefined) return textNode("(empty)");
   if (Array.isArray(data)) {

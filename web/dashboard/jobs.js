@@ -44,8 +44,12 @@ function jobCard(job) {
     const wrapper = document.createElement("div");
     const id = `${job.name}-${param.name}`;
 
+    // A label labels; an example demonstrates. Concatenating the two made the
+    // field's name and its usage hint one long string, so neither could be
+    // scanned — the hint now sits under the input where it is read at the point
+    // of typing rather than before it.
     const label = document.createElement("label");
-    label.textContent = param.help ? `${param.label} — ${param.help}` : param.label;
+    label.textContent = param.label;
     label.htmlFor = id;
 
     let input;
@@ -88,6 +92,14 @@ function jobCard(job) {
     inputs[param.name] = input;
 
     wrapper.append(label, input);
+    if (param.help) {
+      const hint = document.createElement("small");
+      hint.className = "field-hint";
+      hint.id = `${id}-hint`;
+      hint.textContent = param.help;
+      input.setAttribute("aria-describedby", hint.id);
+      wrapper.appendChild(hint);
+    }
     form.appendChild(wrapper);
   }
 

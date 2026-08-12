@@ -129,8 +129,21 @@ logoutBtn.addEventListener("click", async () => {
   showLogin();
 });
 
+// The More panel exists only in the mobile bottom-bar layout; on desktop the
+// button is display:none and this listener never fires.
+const nav = document.getElementById("nav");
+const navMore = document.getElementById("nav-more");
+navMore.addEventListener("click", () => {
+  const open = nav.classList.toggle("open");
+  navMore.setAttribute("aria-expanded", String(open));
+});
+
 function route() {
   const hash = window.location.hash || DEFAULT_ROUTE;
+  // Picking a destination closes the panel; leaving it open over the new view
+  // would hide the content the tap was for.
+  nav.classList.remove("open");
+  navMore.setAttribute("aria-expanded", "false");
   // Only ever dispatch to an own-property of ROUTES: a URL fragment like
   // "#constructor"/"#__proto__" must not resolve to an inherited Object method
   // and get invoked as a view renderer (CodeQL js/unvalidated-dynamic-method-call).

@@ -8,7 +8,31 @@
 // that writes it is the thing that died. So this view reads through, and
 // displays the server's generated_at to prove the reading is current.
 import { api } from "./api.js";
-import { escapeHtml } from "./render.js";
+import { escapeHtml, help } from "./render.js";
+
+// Cards are assembled as HTML strings, so help bubbles are attached in a pass
+// afterwards: the markup leaves a <span data-help="key"> placeholder and
+// attachHelp fills it from this table. Keeps the string-building style intact
+// without interpolating a DOM node into it.
+const HELP = {
+  nobackfill:
+    "These days cannot be recovered. HKB publishes only current rankings with " +
+    "no history, and the daily rosters they were joined against are not " +
+    "archived — so the composition of every team on those dates is unknowable " +
+    "now, and re-running the job would produce nothing.\n\n" +
+    "Every other gap on this page is a missing day the producing job can simply " +
+    "be re-run for.",
+  ephemeral:
+    "A cache, not a record. Anything here is re-fetchable from upstream, so age " +
+    "is not a health signal and losing it costs only the time to fetch again.",
+};
+
+function attachHelp(root) {
+  root.querySelectorAll("[data-help]").forEach((slot) => {
+    const text = HELP[slot.dataset.help];
+    if (text) slot.replaceWith(help(text));
+  });
+}
 
 const HEALTH = {
   ok: { label: "OK", cls: "health-ok" },
@@ -58,7 +82,7 @@ function artifactCard(a) {
   } else {
     bits.push(`<span class="muted">empty</span>`);
   }
-  if (!a.durable) bits.push(`<span class="muted">ephemeral</span>`);
+  if (!a.durable) bits.push(`<span class="muted">ephemeral</span> <span data-help="ephemeral"></span>`);
   if (a.producer) bits.push(`<span class="muted">← ${escapeHtml(a.producer)}</span>`);
 
   let detail = "";
@@ -86,8 +110,8 @@ function artifactCard(a) {
       ${a.gaps.length} missing day${a.gaps.length === 1 ? "" : "s"}: <span class="mono">${shown}</span>${more}
       ${
         permanent
-          ? `<div class="infra-warn">Cannot be backfilled — HKB has no history and rosters aren't archived, so these days are gone for good.</div>`
-          : `<div class="muted">Re-runnable.</div>`
+          ? `<div class="infra-warn">Gone for good <span data-help="nobackfill"></span></div>`
+          : `<div class="muted">Re-runnable</div>`
       }
     </div>`;
   }
@@ -139,5 +163,6 @@ export async function renderInfra(root) {
     <div class="infra-grid">${items.map(artifactCard).join("")}</div>
   `;
 
+  attachHelp(root);
   root.querySelector("#infra-refresh")?.addEventListener("click", () => renderInfra(root));
 }
