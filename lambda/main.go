@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +26,82 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
+	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 )
+
+// buildStores constructs every S3-backed store this function serves from, and
+// returns them as a partially-filled Config.
+//
+// It is a separate function from main so that the composition root is
+// testable. That is not incidental tidiness: Trades and TradeValues were
+// declared on Config, routed in handler.go, and granted IAM in infra.go, but
+// never set here — so GET /v1/trades and /v1/trades/values returned 501 in
+// production from the day the Trades tab shipped, while local `serve` (which
+// does wire them, cmd/serve.go) looked perfectly healthy. Nothing failed;
+// a field was simply absent from a struct literal. TestBuildStores_WiresEvery
+// StoreField in main_test.go is the guard, and it fails on the NEXT store
+// field added to Config until that field is wired here too.
+//
+// Fields owned elsewhere in main — Token, Jobs, WebAuthn, SessionSecret —
+// are deliberately left zero here and listed in that test's allowlist.
+func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
+	var cfg lineupapi.Config
+
+	// Prefixes come from internal/statestore/layout, the single declaration of
+	// the STATE_BUCKET key layout, rather than being retyped here. layout is a
+	// zero-dependency leaf, so importing it from this module costs nothing.
+	store := func(prefix string) (*s3lineup.Store, error) {
+		return s3lineup.New(ctx, bucket, prefix)
+	}
+
+	var err error
+	if cfg.Lineups, err = store(layout.Lineup.S3Prefix); err != nil {
+		return cfg, fmt.Errorf("init s3 lineup store: %w", err)
+	}
+	if cfg.Runs, err = s3lineup.NewRuns(ctx, bucket, layout.RunLedger.S3Prefix); err != nil {
+		return cfg, fmt.Errorf("init s3 runs store: %w", err)
+	}
+	if cfg.Notifications, err = s3lineup.NewNotifications(ctx, bucket, layout.Notification.S3Prefix); err != nil {
+		return cfg, fmt.Errorf("init s3 notifications store: %w", err)
+	}
+	if cfg.Output, err = s3lineup.NewOutput(ctx, bucket, layout.RunOutput.S3Prefix); err != nil {
+		return cfg, fmt.Errorf("init s3 output store: %w", err)
+	}
+	if cfg.Progress, err = s3lineup.NewProgress(ctx, bucket, layout.Progress.S3Prefix); err != nil {
+		return cfg, fmt.Errorf("init s3 progress store: %w", err)
+	}
+	if cfg.Infra, err = s3lineup.NewInfra(ctx, bucket); err != nil {
+		return cfg, fmt.Errorf("init s3 infra store: %w", err)
+	}
+	if cfg.Identities, err = s3lineup.NewIdentity(ctx, bucket, identityPrefix); err != nil {
+		return cfg, fmt.Errorf("init s3 identity store: %w", err)
+	}
+
+	// The Trades tab's two artifacts. Separate prefixes because they have
+	// different producers and cadences (see layout.go); both are passkey-gated
+	// rather than published to the world-readable report/ path, because a
+	// pending offer is not something to publish before deciding on it.
+	if cfg.Trades, err = store(layout.Trades.S3Prefix); err != nil {
+		return cfg, fmt.Errorf("init s3 trades store: %w", err)
+	}
+	if cfg.TradeValues, err = store(layout.TradeValues.S3Prefix); err != nil {
+		return cfg, fmt.Errorf("init s3 trade values store: %w", err)
+	}
+
+	// The three private dashboard reports. They live in the state bucket, not
+	// the dashboard bucket's world-readable report/ prefix, so serving them
+	// through this passkey-gated API is the only way the SPA can reach them.
+	if cfg.Reports, err = store(layout.Reports.S3Prefix); err != nil {
+		return cfg, fmt.Errorf("init s3 reports store: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// identityPrefix is the WebAuthn identity store's key prefix. It has no
+// layout.Artifact because it is not an operator-facing artifact — GET /v1/infra
+// deliberately does not list it, and the task role cannot read it.
+const identityPrefix = "webauthn/"
 
 func main() {
 	ctx := context.Background()
@@ -35,34 +111,9 @@ func main() {
 		log.Fatal("STATE_BUCKET is not set")
 	}
 
-	lineups, err := s3lineup.New(ctx, bucket, "lineup/")
+	apiCfg, err := buildStores(ctx, bucket)
 	if err != nil {
-		log.Fatalf("init s3 lineup store: %v", err)
-	}
-	runs, err := s3lineup.NewRuns(ctx, bucket, "runledger/")
-	if err != nil {
-		log.Fatalf("init s3 runs store: %v", err)
-	}
-	notifs, err := s3lineup.NewNotifications(ctx, bucket, "notifications/")
-	if err != nil {
-		log.Fatalf("init s3 notifications store: %v", err)
-	}
-	output, err := s3lineup.NewOutput(ctx, bucket, "runs/")
-	if err != nil {
-		log.Fatalf("init s3 output store: %v", err)
-	}
-	progressStore, err := s3lineup.NewProgress(ctx, bucket, "runs/")
-	if err != nil {
-		log.Fatalf("init s3 progress store: %v", err)
-	}
-	infra, err := s3lineup.NewInfra(ctx, bucket)
-	if err != nil {
-		log.Fatalf("init s3 infra store: %v", err)
-	}
-
-	identities, err := s3lineup.NewIdentity(ctx, bucket, "webauthn/")
-	if err != nil {
-		log.Fatalf("init s3 identity store: %v", err)
+		log.Fatal(err)
 	}
 
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
@@ -102,20 +153,14 @@ func main() {
 		log.Fatalf("init webauthn config: %v", err)
 	}
 
-	handler := lineupapi.Handler(lineupapi.Config{
-		Token:         token,
-		Lineups:       lineups,
-		Runs:          runs,
-		Jobs:          jobs,
-		Notifications: notifs,
-		Output:        output,
-		Progress:      progressStore,
-		Infra:         infra,
-		Identities:    identities,
-		WebAuthn:      wa,
-		SessionSecret: []byte(sessionSecret),
-	})
-	lambda.Start(adapt(handler))
+	// Only the four non-store fields are set here; every store came from
+	// buildStores above, where the guard test can see them.
+	apiCfg.Token = token
+	apiCfg.Jobs = jobs
+	apiCfg.WebAuthn = wa
+	apiCfg.SessionSecret = []byte(sessionSecret)
+
+	lambda.Start(adapt(lineupapi.Handler(apiCfg)))
 }
 
 // loadSSMParam reads a value from SSM Parameter Store. The parameter's name

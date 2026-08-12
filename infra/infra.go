@@ -278,6 +278,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	stateBucket.GrantRead(apiFn, jsii.String("notifications/*"))
 	stateBucket.GrantRead(apiFn, jsii.String("trades/*"))
 	stateBucket.GrantRead(apiFn, jsii.String("tradevalues/*"))
+	// reports/ holds the three private dashboard reports (model, gap, views).
+	// They are in THIS bucket rather than the dashboard bucket's report/ prefix
+	// precisely because no CloudFront distribution fronts the state bucket:
+	// serving them through this Lambda's passkey-gated /v1/reports/{name} is the
+	// only path to them (rosterbot-crq.3). value.json and football.json stay on
+	// the public prefix — league-wide standings, not one manager's performance.
+	stateBucket.GrantRead(apiFn, jsii.String("reports/*"))
 	// webauthn/ holds the single Identity record and is read-modify-written
 	// on every registration and login (sign-counter update).
 	stateBucket.GrantReadWrite(apiFn, jsii.String("webauthn/*"))
@@ -344,10 +351,16 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		},
 	})
 
-	// The bot task (projection-site) publishes report/model.json + report/value.json
-	// under DashboardBucket's "report/" prefix, so it needs write access here too
-	// (previously it only wrote to its own now-removed ReportBucket), plus
-	// permission to invalidate DashboardCdn after publishing.
+	// The bot task (projection-site) publishes report/value.json +
+	// report/football.json under DashboardBucket's "report/" prefix, so it needs
+	// write access here too (previously it only wrote to its own now-removed
+	// ReportBucket), plus permission to invalidate DashboardCdn after publishing.
+	//
+	// Only those two, deliberately. model.json, gap.json and views.json used to
+	// ride along here and were therefore world-readable through the default
+	// behavior below; they now go to StateBucket's reports/ prefix and are read
+	// back through /v1/reports/{name} (rosterbot-crq.3). Nothing published under
+	// this prefix should be anything a league rival could not already see.
 	dashboardBucket.GrantReadWrite(taskDef.TaskRole(), nil)
 	taskDef.TaskRole().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Actions:   jsii.Strings("cloudfront:CreateInvalidation"),

@@ -59,7 +59,70 @@ func ranAt(id, command string, ago time.Duration, status string) opsalert.Record
 	}
 }
 
+func ranAtU(id, command, user string, ago time.Duration, status string) opsalert.Record {
+	r := ranAt(id, command, ago, status)
+	r.UserID = user
+	return r
+}
+
 var dailySched = []opsalert.Schedule{{Command: "grade", MaxGapSeconds: 26 * 3600}}
+
+// Under per-tenant fan-out every tenant runs the same command string, so one
+// tenant running keeps the whole job looking alive. The tenant that stopped
+// launching must still be named — and named alone, or the alert is noise.
+func TestHandleHeartbeat_AlertsOnTheDarkTenantOnly(t *testing.T) {
+	freezeClock(t, hbNow)
+	withSchedules(t, dailySched)
+	timedLedger(t, []opsalert.Record{
+		ranAtU("a1", "grade", "alice", 3*time.Hour, opsalert.StatusSuccess),
+		ranAtU("b1", "grade", "bob", 40*time.Hour, opsalert.StatusSuccess),
+	})
+	got := capture(t)
+	fakeMarkers(t)
+
+	if err := handleHeartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("got %d sends, want 1 (bob only): %v", len(*got), *got)
+	}
+	if !strings.Contains((*got)[0], "bob") {
+		t.Errorf("send %q does not name the dark tenant", (*got)[0])
+	}
+	if strings.Contains((*got)[0], "alice") {
+		t.Errorf("send %q names the healthy tenant", (*got)[0])
+	}
+}
+
+// Two tenants dark on the same job are two outages. A marker key shared across
+// tenants would let the first tenant's marker suppress the second's alert —
+// dedup working exactly as designed, against the wrong identity.
+func TestHandleHeartbeat_OneTenantsMarkerDoesNotSuppressAnother(t *testing.T) {
+	freezeClock(t, hbNow)
+	withSchedules(t, dailySched)
+	timedLedger(t, []opsalert.Record{
+		ranAtU("a1", "grade", "alice", 40*time.Hour, opsalert.StatusSuccess),
+		ranAtU("b1", "grade", "bob", 40*time.Hour, opsalert.StatusSuccess),
+	})
+	got := capture(t)
+	fakeMarkers(t)
+
+	if err := handleHeartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 2 {
+		t.Fatalf("got %d sends, want 2 (one per tenant): %v", len(*got), *got)
+	}
+
+	// ...and the per-tenant dedup still holds on the next tick.
+	freezeClock(t, hbNow.Add(6*time.Hour))
+	if err := handleHeartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 2 {
+		t.Fatalf("got %d sends across two ticks, want 2: %v", len(*got), *got)
+	}
+}
 
 func TestHandleHeartbeat_QuietWhenEveryJobIsWithinCadence(t *testing.T) {
 	freezeClock(t, hbNow)

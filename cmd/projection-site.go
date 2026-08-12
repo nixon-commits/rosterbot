@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/dynasty"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/lineupgap"
 	"github.com/nixon-commits/rosterbot/internal/recaplog"
 	"github.com/nixon-commits/rosterbot/internal/report"
@@ -27,14 +29,20 @@ var projectionSiteCmd = &cobra.Command{
 	Short: "Render the projection-accuracy dashboard from the Analysis Store",
 	Long: `Reads the Graded Snapshots written by the grade command (analysis/grades/
 on S3 when STATE_BUCKET is set, else local .analysis/) and writes the
-aggregated model as JSON to <out>/model.json (fed to the dashboard SPA).
-Intended for daily deployment to its own S3+CloudFront, mirroring the recap site.`,
+aggregated model as JSON, fed to the dashboard SPA.
+
+Output is split by who may read it. The three private reports — model, gap and
+views — go to the state bucket's reports/ prefix (.reports/ locally), which no
+CloudFront distribution serves; the SPA reaches them through the passkey-gated
+GET /v1/reports/{name}. The league-wide artifacts — value.json and
+football.json — are written to <out> and published to the dashboard bucket's
+public report/ prefix.`,
 	RunE: runProjectionSite,
 }
 
 func init() {
-	projectionSiteCmd.Flags().StringVar(&projSiteOut, "out", "report", "output directory for the rendered dashboard")
-	projectionSiteCmd.Flags().BoolVar(&projSiteOpen, "open", false, "open the rendered model.json in the default handler")
+	projectionSiteCmd.Flags().StringVar(&projSiteOut, "out", "report", "output directory for the publicly-published artifacts (value.json, football.json)")
+	projectionSiteCmd.Flags().BoolVar(&projSiteOpen, "open", false, "open the rendered value.json in the default handler")
 	rootCmd.AddCommand(projectionSiteCmd)
 }
 
@@ -61,34 +69,46 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 
 	m := report.Aggregate(rows, time.Now().UTC(), seasonStart)
 
+	// The three private reports go to the state bucket's reports/ prefix, which
+	// no CloudFront distribution serves; the SPA reads them back through the
+	// passkey-gated GET /v1/reports/{name}. Opening the store is fatal here for
+	// the same reason writing model.json was: it is this command's primary
+	// output, and a run that cannot write it has done nothing.
+	reports, err := statestore.FromEnv().ReportsStore()
+	if err != nil {
+		return fmt.Errorf("init reports store: %w", err)
+	}
+	if err := publishReport(reports, lineupapi.ReportModelKey, m); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "Published report %q (%d graded rows, latest %s)\n",
+		lineupapi.ReportModelKey, len(rows), m.LatestDate)
+
 	if err := os.MkdirAll(projSiteOut, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", projSiteOut, err)
 	}
-	outPath := filepath.Join(projSiteOut, "model.json")
-	if err := writeJSONModel(outPath, m); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "Wrote %s (%d graded rows, latest %s)\n", outPath, len(rows), m.LatestDate)
 
 	// Emit value.json (team HKB value tracker) alongside the accuracy model.
 	// It reads its own store and is additive, so a team-value hiccup soft-fails
-	// rather than blocking the accuracy dashboard deploy.
+	// rather than blocking the accuracy dashboard deploy. It stays on the
+	// public report/ prefix: league-wide standings, not one manager's numbers.
 	if err := renderValueSite(projSiteOut); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: value.json not written: %v\n", err)
 	}
 
-	// Emit views.json (recap-site readership) on the same terms: its own source,
-	// additive, and soft-failing so a log-read hiccup never blocks the accuracy
-	// dashboard deploy.
-	if err := renderViewsSite(projSiteOut); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: views.json not written: %v\n", err)
+	// Emit the views report (recap-site readership) on the same terms: its own
+	// source, additive, and soft-failing so a log-read hiccup never blocks the
+	// accuracy dashboard deploy. Private — readership is the operator's.
+	if err := renderViewsSite(reports); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: views report not written: %v\n", err)
 	}
 
-	// Emit gap.json (realized-vs-hindsight lineup gap) on the same terms: its
-	// own store, additive, soft-failing so a gap hiccup never blocks the
-	// accuracy dashboard deploy.
-	if err := renderGapSite(projSiteOut); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: gap.json not written: %v\n", err)
+	// Emit the gap report (realized-vs-hindsight lineup gap) on the same terms:
+	// its own store, additive, soft-failing so a gap hiccup never blocks the
+	// accuracy dashboard deploy. Private — this is how many points the manager
+	// left on their own bench.
+	if err := renderGapSite(reports); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: gap report not written: %v\n", err)
 	}
 
 	// Emit football.json (dynasty football standings) on the same terms: its
@@ -99,10 +119,32 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: football.json not written: %v\n", err)
 	}
 
+	// --open points at value.json: the private reports are no longer files at a
+	// predictable path (the store owns their layout), and value.json is the one
+	// artifact this command still writes to <out>.
 	if projSiteOpen {
-		if err := openInBrowser(outPath); err != nil {
+		if err := openInBrowser(filepath.Join(projSiteOut, "value.json")); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		}
+	}
+	return nil
+}
+
+// publishReport marshals v the way writeJSONModel does — indented JSON, one
+// trailing newline — and stores it under key.
+//
+// Indentation is preserved from the file era on purpose: these bodies are
+// passed through GET /v1/reports/{name} untouched, so this is the exact text an
+// operator sees when they curl the endpoint to debug a tab.
+func publishReport(pub lineupapi.Publisher, key string, v any) error {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return fmt.Errorf("encode %s report: %w", key, err)
+	}
+	if err := pub.Publish(key, buf.Bytes()); err != nil {
+		return fmt.Errorf("publish %s report: %w", key, err)
 	}
 	return nil
 }
@@ -133,14 +175,15 @@ func renderValueSite(outDir string) error {
 // sample — and it bounds how many log objects ReadRecent has to open.
 const viewsLimit = 200
 
-// renderViewsSite reads the recap site's CloudFront access logs and writes
-// <outDir>/views.json.
+// renderViewsSite reads the recap site's CloudFront access logs and publishes
+// the views report.
 //
-// Skipped entirely (no file, no error) when RECAP_LOG_BUCKET is unset, which is
-// the normal local-dev case: CloudFront writes these logs only in AWS, so there
-// is nothing to read locally. A deployed run with no readers yet still writes a
-// valid empty model, so the tab can say "no reads yet" rather than erroring.
-func renderViewsSite(outDir string) error {
+// Skipped entirely (nothing published, no error) when RECAP_LOG_BUCKET is
+// unset, which is the normal local-dev case: CloudFront writes these logs only
+// in AWS, so there is nothing to read locally. A deployed run with no readers
+// yet still publishes a valid empty model, so the tab can say "no reads yet"
+// rather than erroring.
+func renderViewsSite(pub lineupapi.Publisher) error {
 	store, err := statestore.FromEnv().RecapLogReader()
 	if err != nil {
 		return fmt.Errorf("init recap-log reader: %w", err)
@@ -152,45 +195,41 @@ func renderViewsSite(outDir string) error {
 	if err != nil {
 		return fmt.Errorf("read recap logs: %w", err)
 	}
-	outPath := filepath.Join(outDir, "views.json")
-	if err := writeJSONModel(outPath, m); err != nil {
+	if err := publishReport(pub, lineupapi.ReportViewsKey, m); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "Wrote %s (%d recent page reads)\n", outPath, len(m.Hits))
+	fmt.Fprintf(os.Stderr, "Published report %q (%d recent page reads)\n",
+		lineupapi.ReportViewsKey, len(m.Hits))
 	return nil
 }
 
 // renderGapSite reads the Lineup Gap Store (S3 when STATE_BUCKET is set, else
-// local .lineupgap/) and writes <outDir>/gap.json.
-func renderGapSite(outDir string) error {
+// local .lineupgap/) and publishes the gap report.
+func renderGapSite(pub lineupapi.Publisher) error {
 	reader, err := statestore.FromEnv().LineupGapReader()
 	if err != nil {
 		return fmt.Errorf("init lineup gap reader: %w", err)
 	}
-	return writeGapModel(reader, outDir)
+	return writeGapModel(reader, pub)
 }
 
 // writeGapModel is the I/O-light half of renderGapSite, split out so the model
-// and file shape are testable against a local store with no environment.
+// and stored shape are testable against a local store with no environment.
 //
-// An empty store still writes a valid (empty) model rather than erroring: the
-// gap block is the first thing on the Projections tab, and a fresh deploy must
-// render "no data yet" rather than a broken headline.
-func writeGapModel(reader lineupgap.Reader, outDir string) error {
+// An empty store still publishes a valid (empty) model rather than erroring:
+// the gap block is the first thing on the Projections tab, and a fresh deploy
+// must render "no data yet" rather than a broken headline.
+func writeGapModel(reader lineupgap.Reader, pub lineupapi.Publisher) error {
 	rows, err := reader.ReadAll()
 	if err != nil {
 		return fmt.Errorf("read lineup gaps: %w", err)
 	}
 	m := lineupgap.BuildModel(rows, time.Now().UTC())
-
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", outDir, err)
-	}
-	outPath := filepath.Join(outDir, "gap.json")
-	if err := writeJSONModel(outPath, m); err != nil {
+	if err := publishReport(pub, lineupapi.ReportGapKey, m); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "Wrote %s (%d lineup-gap days)\n", outPath, len(rows))
+	fmt.Fprintf(os.Stderr, "Published report %q (%d lineup-gap days)\n",
+		lineupapi.ReportGapKey, len(rows))
 	return nil
 }
 

@@ -38,25 +38,43 @@ func (s Schedule) MaxGap() time.Duration {
 	return time.Duration(s.MaxGapSeconds) * time.Second
 }
 
-// Missed is one job that has not launched within its cadence.
+// Missed is one job, for one tenant, that has not launched within its cadence.
 //
-// Last is the newest run seen for the command and is the zero time when the
-// ledger held none within the horizon; LastID is that run's id.
+// Last is the newest run seen for that (command, tenant) and is the zero time
+// when the ledger held none within the horizon; LastID is that run's id. UserID
+// is empty for a job with no per-tenant runs on record — every job before
+// fan-out, and any job whose ledger history is untagged.
 type Missed struct {
 	Command string
+	UserID  string
 	LastID  string
 	Last    time.Time
 	Age     time.Duration
 	MaxGap  time.Duration
 }
 
-// MarkerKey identifies this job's alert state. One key per job, not per run:
-// deduplication compares the *token* stored under it (see NeedsAlert), because a
-// per-run key stops working the moment the run it names falls out of the
-// lookback horizon — which every long outage eventually does, and which would
-// then read as a brand new outage and push again.
+// MarkerKey identifies this job's alert state, per tenant. One key per (job,
+// tenant), not per run: deduplication compares the *token* stored under it (see
+// NeedsAlert), because a per-run key stops working the moment the run it names
+// falls out of the lookback horizon — which every long outage eventually does,
+// and which would then read as a brand new outage and push again.
+//
+// The tenant belongs in the key for the mirror-image reason. Two tenants dark on
+// the same job are two outages; sharing a key would let the first one's marker
+// suppress the second's alert — the dedup working exactly as designed, against
+// the wrong identity.
+//
+// The untagged key is deliberately byte-identical to the pre-fan-out one, so
+// markers already written keep deduplicating across the deploy instead of
+// re-alerting every outage in progress once. The separator is "@" rather than
+// "/" because the marker store's keys are flat under this prefix; a "/" would
+// silently nest them.
 func (m Missed) MarkerKey() string {
-	return "heartbeat/" + slug(m.Command)
+	k := "heartbeat/" + slug(m.Command)
+	if m.UserID != "" {
+		k += "@" + slug(m.UserID)
+	}
+	return k
 }
 
 // AlertToken is what an alert records under MarkerKey: the newest run at the
@@ -94,26 +112,65 @@ func (m Missed) NeedsAlert(prev string) bool {
 	}
 }
 
-// Overdue returns the schedules with no run within their own MaxGap, oldest
-// first, judged against recs.
+// runKey is what a run is judged under: one command, one tenant. Under
+// per-tenant fan-out the command alone is not an identity — N tenants run the
+// same command string — so keying on it makes "the Lineup job ran recently"
+// true for everyone the moment any one tenant runs, and a tenant whose task
+// stopped launching invisible. Permanently, and silently: exactly the blindness
+// this whole check exists to remove, one level down.
+type runKey struct{ command, userID string }
+
+// Overdue returns the (schedule, tenant) pairs with no run within the
+// schedule's own MaxGap, oldest first, judged against recs.
 //
 // Any status counts, including RUNNING. The question here is strictly "did the
 // job launch?" — whether it then succeeded is Streak's job, and treating a
 // failed run as a missed run would double-report every ordinary outage.
 //
+// **Which tenants a schedule is asserted on comes from the ledger, not from the
+// schedule.** Schedule carries a cadence, not a tenant roster, and this package
+// is a stdlib-only leaf with no way to enumerate users — so the honest set is
+// the tenants seen running that command within the horizon. Two consequences
+// are worth stating plainly:
+//
+//   - A command with no tenant-tagged records is asserted once, under the empty
+//     tenant. That is every job before fan-out and is byte-identical to the old
+//     behaviour, including the "no run on record" case that this check was built
+//     for.
+//   - A tenant that has *never* run within the horizon cannot be discovered here
+//     and is not reported. Detecting an onboarded tenant whose job never launched
+//     even once needs the tenant roster, which lives in the identity store; this
+//     function's guarantee is that a tenant which was running and *stopped* is
+//     always caught.
+//
+// At cutover a mixed ledger briefly holds both untagged and tagged records for
+// one command, so the untagged tenant is reported overdue once and then falls
+// out of the horizon. A one-off "this stopped running" — which is true — is the
+// right side to err on for a channel whose only failure mode that matters is
+// silence.
+//
 // recs need not be sorted or complete; the caller is responsible only for the
-// horizon (see the doc on Records below). A record with an unparseable
-// StartedAt is skipped rather than treated as the epoch, which would make every
-// job look permanently overdue.
+// horizon (see the doc on Horizon below). A record with an unparseable
+// StartedAt is skipped for freshness rather than treated as the epoch, which
+// would make every job look permanently overdue — but its tenant is still
+// remembered, since forgetting it would hide a job that has demonstrably been
+// launching.
 func Overdue(recs []Record, scheds []Schedule, now time.Time) []Missed {
-	newest := map[string]Record{}
+	newest := map[runKey]Record{}
+	tenants := map[string][]string{} // command -> tenants seen, first-seen order
+	seen := map[runKey]bool{}
 	for _, r := range recs {
+		k := runKey{r.Command, r.UserID}
+		if !seen[k] {
+			seen[k] = true
+			tenants[r.Command] = append(tenants[r.Command], r.UserID)
+		}
 		t := r.Started()
 		if t.IsZero() {
 			continue
 		}
-		if cur, ok := newest[r.Command]; !ok || t.After(cur.Started()) {
-			newest[r.Command] = r
+		if cur, ok := newest[k]; !ok || t.After(cur.Started()) {
+			newest[k] = r
 		}
 	}
 
@@ -122,15 +179,21 @@ func Overdue(recs []Record, scheds []Schedule, now time.Time) []Missed {
 		if s.MaxGapSeconds <= 0 {
 			continue // no declared cadence; nothing to assert
 		}
-		m := Missed{Command: s.Command, MaxGap: s.MaxGap()}
-		if r, ok := newest[s.Command]; ok {
-			m.LastID, m.Last = r.ID, r.Started()
-			m.Age = now.Sub(m.Last)
-			if m.Age <= m.MaxGap {
-				continue
-			}
+		users := tenants[s.Command]
+		if len(users) == 0 {
+			users = []string{""} // nothing has ever run it: one untagged assertion
 		}
-		out = append(out, m)
+		for _, u := range users {
+			m := Missed{Command: s.Command, UserID: u, MaxGap: s.MaxGap()}
+			if r, ok := newest[runKey{s.Command, u}]; ok {
+				m.LastID, m.Last = r.ID, r.Started()
+				m.Age = now.Sub(m.Last)
+				if m.Age <= m.MaxGap {
+					continue
+				}
+			}
+			out = append(out, m)
+		}
 	}
 
 	// Oldest first: when several jobs go dark at once — a disabled cluster, a
@@ -143,7 +206,10 @@ func Overdue(recs []Record, scheds []Schedule, now time.Time) []Missed {
 		if !out[i].Last.Equal(out[j].Last) {
 			return out[i].Last.Before(out[j].Last)
 		}
-		return out[i].Command < out[j].Command
+		if out[i].Command != out[j].Command {
+			return out[i].Command < out[j].Command
+		}
+		return out[i].UserID < out[j].UserID
 	})
 	return out
 }
@@ -174,12 +240,14 @@ func FormatMissed(m Missed) (title, body string) {
 	job := JobName(m.Command)
 	title = "Rosterbot: " + job + " has not run"
 
+	who := TenantTag(m.UserID)
+
 	if m.Last.IsZero() {
-		return title, fmt.Sprintf("🕳 %s · no run on record\nexpected every %s",
-			strings.TrimSpace(m.Command), humanDuration(m.MaxGap))
+		return title, fmt.Sprintf("🕳 %s%s · no run on record\nexpected every %s",
+			strings.TrimSpace(m.Command), who, humanDuration(m.MaxGap))
 	}
-	return title, fmt.Sprintf("🕳 %s · last ran %s ago\nexpected every %s · last run %s",
-		strings.TrimSpace(m.Command), humanDuration(m.Age), humanDuration(m.MaxGap),
+	return title, fmt.Sprintf("🕳 %s%s · last ran %s ago\nexpected every %s · last run %s",
+		strings.TrimSpace(m.Command), who, humanDuration(m.Age), humanDuration(m.MaxGap),
 		m.Last.Format("2006-01-02 15:04Z"))
 }
 

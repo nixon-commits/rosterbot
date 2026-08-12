@@ -52,9 +52,17 @@ func Marshal(r LineupResponse) ([]byte, error) {
 
 // Run is one execution of a backend job (scheduled or manually triggered), as
 // recorded in the run ledger and exposed by GET /v1/runs.
+//
+// UserID is whose run it was under per-tenant fan-out, where N tenants run the
+// same command string into this one ledger. It is omitempty and empty on every
+// record written before fan-out, which is exactly what lets internal/opsalert
+// key its decisions on (command, user_id) without re-grading history: see
+// opsalert.Record, whose duplication of these fields opsalert_contract_test.go
+// guards.
 type Run struct {
 	ID        string `json:"id"`
 	Command   string `json:"command"`
+	UserID    string `json:"user_id,omitempty"`   // empty = pre-fan-out single tenant
 	Status    string `json:"status"`              // RUNNING | SUCCESS | FAILED
 	ExitCode  *int   `json:"exit_code,omitempty"` // nil while RUNNING
 	StartedAt string `json:"started_at"`          // RFC3339 UTC

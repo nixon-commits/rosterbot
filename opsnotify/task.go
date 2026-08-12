@@ -76,6 +76,12 @@ func (d ecsTaskDetail) taskID() string {
 // already promises: at most one Pushover per stopped task. Version is kept on
 // the struct and written into the marker body, where it dates the delivery that
 // won without weakening the key.
+//
+// This needs no tenant dimension, unlike the heartbeat's per-job MarkerKey.
+// Fan-out runs one ECS task per tenant per job, so distinct tenants already
+// yield distinct task ids and cannot suppress each other here. That holds only
+// while the key stays derived from the task id, which is why
+// TestEcsTaskDetail_DedupeKeyIsPerTaskAndThereforePerTenant pins it.
 func (d ecsTaskDetail) dedupeKey() string {
 	return "task/" + d.taskID()
 }
@@ -143,7 +149,8 @@ func handleTask(ctx context.Context, detail json.RawMessage) error {
 	// at all — an image-pull failure that never ran the entrypoint in the
 	// first place. Those two outcomes are not the same and must not share a
 	// branch:
-	if !hasTerminalRecord(recs, d.taskID()) {
+	own, ok := terminalRecord(recs, d.taskID())
+	if !ok {
 		if d.failed() {
 			// No streak is computable for a run the ledger never finished
 			// describing, and this class of failure is severe and rare, so
@@ -167,12 +174,18 @@ func handleTask(ctx context.Context, detail json.RawMessage) error {
 	// recomputes the identical verdict and would push it again. Streak
 	// deduplicates across *runs*; only the marker deduplicates across
 	// deliveries of one run.
-	title, body := opsalert.FormatTask(opsalert.Streak(recs, command))
+	//
+	// The tenant comes from this run's own ledger record, not from the ECS
+	// event: the record is already in hand, and the event carries no tenant of
+	// its own. It is empty before per-tenant fan-out, which Streak reads as the
+	// single tenant the pre-fan-out ledger describes.
+	title, body := opsalert.FormatTask(opsalert.Streak(recs, command, own.UserID))
 	return sendOnce(ctx, markers, d.alert(title, body))
 }
 
-// hasTerminalRecord reports whether recs contains a SUCCESS or FAILED record
-// for id.
+// terminalRecord returns the SUCCESS or FAILED record for id, and whether recs
+// held one. The record is returned rather than just its existence because it
+// carries the tenant the streak must be judged under.
 //
 // A RUNNING record must NOT count as terminal here. entrypoint.sh writes
 // RUNNING at the start of a run and overwrites that same ledger key with the
@@ -180,16 +193,16 @@ func handleTask(ctx context.Context, detail json.RawMessage) error {
 // exactly one record behind and its status alone is what tells "still
 // writing this row" apart from "wrote it, then the terminal write never
 // landed". A run killed mid-flight leaves its RUNNING record sitting at that
-// key forever: if RUNNING counted as terminal here, hasTerminalRecord would
+// key forever: if RUNNING counted as terminal here, terminalRecord would
 // report true, the crash branch above would never fire, and Streak — which
 // itself filters RUNNING out when building its history — would have nothing
 // to see either. That is exactly how this class of failure went unalerted in
 // production: not "no record", but "a record that never became terminal".
-func hasTerminalRecord(recs []opsalert.Record, id string) bool {
+func terminalRecord(recs []opsalert.Record, id string) (opsalert.Record, bool) {
 	for _, r := range recs {
 		if r.ID == id && (r.Status == opsalert.StatusSuccess || r.Status == opsalert.StatusFailed) {
-			return true
+			return r, true
 		}
 	}
-	return false
+	return opsalert.Record{}, false
 }

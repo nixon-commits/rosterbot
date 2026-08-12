@@ -92,7 +92,23 @@ var (
 	Trades      = Artifact{Name: "Pending Offers", S3Prefix: "trades/", LocalDir: ".trades", Durable: true, MaxAge: 14 * time.Hour, Producer: "Lineup"}
 	TradeValues = Artifact{Name: "Trade Values Table", S3Prefix: "tradevalues/", LocalDir: ".tradevalues", Durable: true, MaxAge: 26 * time.Hour, Producer: "TeamValues"}
 	TradeOffers = Artifact{Name: "Trade Offer Log", S3Prefix: "analysis/trade-offers/", LocalDir: ".tradeoffers", Durable: true, MaxAge: 2 * Day, Producer: "Lineup", Partitioned: true, NoBackfill: true}
-	Session     = Artifact{Name: "Fantrax Session", S3Prefix: "session/", LocalDir: ".fantrax-cache", Durable: true, MaxAge: 7 * Day, Producer: ""}
+
+	// Reports holds the three private dashboard artifacts — model.json,
+	// gap.json, views.json — that projection-site used to publish to the
+	// dashboard bucket's report/ prefix, where CloudFront's default behavior
+	// served them to anyone with the distribution domain (rosterbot-crq.3).
+	// They live in the state bucket, which no distribution fronts, and reach
+	// the SPA through the passkey-gated GET /v1/reports/{name}. value.json and
+	// football.json stay on the public prefix: those are league-wide standings,
+	// not one manager's performance.
+	//
+	// One prefix for all three, unlike the Trades pair: same producer, same
+	// daily schedule, so the newest object's age is an honest reading for the
+	// set. The residual cost is that one of the three soft-failing in
+	// projection-site while the others succeed does not move this row.
+	Reports = Artifact{Name: "Private Dashboard Reports", S3Prefix: "reports/", LocalDir: ".reports", Durable: true, MaxAge: 26 * time.Hour, Producer: "ProjectionSite"}
+
+	Session = Artifact{Name: "Fantrax Session", S3Prefix: "session/", LocalDir: ".fantrax-cache", Durable: true, MaxAge: 7 * Day, Producer: ""}
 
 	// Progress shares the runs/ prefix with RunOutput; it is not a separate
 	// listing target, so it is deliberately absent from All().
@@ -114,7 +130,7 @@ var (
 func All() []Artifact {
 	return []Artifact{
 		TeamValues, TradeOffers, Analysis, LineupGaps, FootballValues, Archive, Backtest,
-		Lineup, Trades, TradeValues, RunLedger, RunOutput, Notification, Claims, Session,
-		Cache,
+		Lineup, Trades, TradeValues, Reports, RunLedger, RunOutput, Notification, Claims,
+		Session, Cache,
 	}
 }

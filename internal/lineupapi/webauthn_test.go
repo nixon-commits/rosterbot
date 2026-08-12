@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,26 +14,56 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
-// fakeIdentities is an in-memory IdentityStore for handler tests.
+// fakeIdentities is an in-memory IdentityStore for handler tests. It enforces
+// the same optimistic-concurrency contract as the real stores — a double that
+// accepted every write would let a handler regress to a blind overwrite while
+// every test here stayed green.
 type fakeIdentities struct {
-	id  *Identity
-	ok  bool
-	err error
+	id      *Identity
+	ok      bool
+	err     error
+	version int
 }
 
+func (f *fakeIdentities) currentVersion() IdentityVersion {
+	return IdentityVersion(strconv.Itoa(f.version))
+}
+
+// GetIdentity hands back a copy, as a store that deserializes fresh bytes does.
+// Sharing the live pointer would let a caller's in-place mutation take effect
+// without a write, which is precisely the bug being guarded against.
 func (f *fakeIdentities) GetIdentity(_ context.Context) (*Identity, bool, error) {
 	if f.err != nil {
 		return nil, false, f.err
 	}
-	return f.id, f.ok, nil
+	if !f.ok || f.id == nil {
+		return nil, false, nil
+	}
+	cp := *f.id
+	cp.Credentials = append([]webauthn.Credential(nil), f.id.Credentials...)
+	cp.Version = f.currentVersion()
+	return &cp, true, nil
 }
 
 func (f *fakeIdentities) PutIdentity(_ context.Context, id *Identity) error {
 	if f.err != nil {
 		return f.err
 	}
-	f.id = id
+	switch {
+	case id.Version == "" && f.ok:
+		return ErrIdentityConflict
+	case id.Version != "" && !f.ok:
+		return ErrIdentityConflict
+	case id.Version != "" && id.Version != f.currentVersion():
+		return ErrIdentityConflict
+	}
+	f.version++
+	cp := *id
+	cp.Credentials = append([]webauthn.Credential(nil), id.Credentials...)
+	cp.Version = f.currentVersion()
+	f.id = &cp
 	f.ok = true
+	id.Version = cp.Version
 	return nil
 }
 

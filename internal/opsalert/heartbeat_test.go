@@ -18,6 +18,13 @@ func ran(id, command string, ago time.Duration, status string) Record {
 	}
 }
 
+// ranU is ran for one tenant: the same command string, run by user.
+func ranU(id, command, user string, ago time.Duration, status string) Record {
+	r := ran(id, command, ago, status)
+	r.UserID = user
+	return r
+}
+
 func hourly(command string) Schedule  { return Schedule{Command: command, MaxGapSeconds: 13 * 3600} }
 func daily(command string) Schedule   { return Schedule{Command: command, MaxGapSeconds: 26 * 3600} }
 func weeklyS(command string) Schedule { return Schedule{Command: command, MaxGapSeconds: 8 * 86400} }
@@ -140,6 +147,87 @@ func commands(ms []Missed) []string {
 	return out
 }
 
+// Under fan-out N tenants run the same command string, so "the Lineup job ran
+// recently" becomes true for every tenant the moment *any* tenant runs. A
+// tenant whose task stopped launching is then invisible — permanently, and
+// silently, which is the exact blindness this whole check exists to remove.
+func TestOverdue_ReportsTheDarkTenantOnly(t *testing.T) {
+	recs := []Record{
+		ranU("a1", "optimize", "a", 1*time.Hour, StatusSuccess),
+		ranU("b1", "optimize", "b", 1*time.Hour, StatusSuccess),
+		ranU("c1", "optimize", "c", 30*time.Hour, StatusSuccess), // dark since yesterday
+	}
+	got := Overdue(recs, []Schedule{hourly("optimize")}, hbNow)
+	if len(got) != 1 {
+		t.Fatalf("got %d overdue %v, want 1 (tenant c)", len(got), tenantKeys(got))
+	}
+	if got[0].Command != "optimize" || got[0].UserID != "c" {
+		t.Errorf("overdue = %q/%q, want optimize/c", got[0].Command, got[0].UserID)
+	}
+	if got[0].LastID != "c1" {
+		t.Errorf("LastID = %q, want c1 (tenant c's own newest run)", got[0].LastID)
+	}
+}
+
+// Every tenant dark is every tenant reported, oldest first — the whole-cluster
+// outage must not collapse into a single line.
+func TestOverdue_ReportsEveryDarkTenant(t *testing.T) {
+	recs := []Record{
+		ranU("a1", "optimize", "a", 30*time.Hour, StatusSuccess),
+		ranU("b1", "optimize", "b", 50*time.Hour, StatusSuccess),
+	}
+	got := Overdue(recs, []Schedule{hourly("optimize")}, hbNow)
+	if len(got) != 2 || got[0].UserID != "b" || got[1].UserID != "a" {
+		t.Fatalf("got %v, want [b a] (oldest first)", tenantKeys(got))
+	}
+}
+
+// The tenant a job is judged for comes from the ledger, so a command whose
+// records are all untagged behaves exactly as it did before fan-out: one
+// judgement, empty tenant.
+func TestOverdue_UntaggedRecordsJudgeOneUntaggedTenant(t *testing.T) {
+	got := Overdue([]Record{ran("a", "grade", 30*time.Hour, StatusSuccess)},
+		[]Schedule{daily("grade")}, hbNow)
+	if len(got) != 1 {
+		t.Fatalf("got %d overdue, want 1", len(got))
+	}
+	if got[0].UserID != "" {
+		t.Errorf("UserID = %q, want empty", got[0].UserID)
+	}
+}
+
+// A schedule whose command has no records at all still reports once, with an
+// empty tenant — "nothing launched" is the case with no tenant to name, and it
+// is the case the check was built for.
+func TestOverdue_NoRecordsAtAllReportsTheUntaggedJob(t *testing.T) {
+	got := Overdue(nil, []Schedule{daily("grade")}, hbNow)
+	if len(got) != 1 || got[0].UserID != "" || !got[0].Last.IsZero() {
+		t.Fatalf("got %v, want one untagged never-ran entry", tenantKeys(got))
+	}
+}
+
+// A tenant whose only record carries an unusable timestamp must still be named.
+// Skipping it for freshness is right; forgetting the tenant exists would hide a
+// job that has demonstrably been launching.
+func TestOverdue_TenantWithOnlyAnUnusableTimestampIsStillReported(t *testing.T) {
+	recs := []Record{
+		ranU("a1", "optimize", "a", 1*time.Hour, StatusSuccess),
+		{ID: "b1", Command: "optimize", UserID: "b", Status: StatusSuccess, StartedAt: "not a time"},
+	}
+	got := Overdue(recs, []Schedule{hourly("optimize")}, hbNow)
+	if len(got) != 1 || got[0].UserID != "b" {
+		t.Fatalf("got %v, want [optimize/b]", tenantKeys(got))
+	}
+}
+
+func tenantKeys(ms []Missed) []string {
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = m.Command + "/" + m.UserID
+	}
+	return out
+}
+
 // A command carries spaces and dashes; a "/" in the key would silently nest the
 // marker under a sub-prefix the flat listing never sees.
 func TestMissedMarkerKey_IsOneFlatKeySegment(t *testing.T) {
@@ -158,6 +246,33 @@ func TestMissedMarkerKey_DoesNotVaryWithTheRun(t *testing.T) {
 	b := Missed{Command: "grade"} // same job, last run no longer visible
 	if a.MarkerKey() != b.MarkerKey() {
 		t.Errorf("key moved with the run: %q vs %q", a.MarkerKey(), b.MarkerKey())
+	}
+}
+
+// One marker key per (job, tenant). Sharing it would let the first tenant's
+// alert suppress every other tenant's for the same outage — the dedup working
+// exactly as designed, against the wrong identity.
+func TestMissedMarkerKey_IsPerTenant(t *testing.T) {
+	a := Missed{Command: "optimize", UserID: "u1"}
+	b := Missed{Command: "optimize", UserID: "u2"}
+	if a.MarkerKey() == b.MarkerKey() {
+		t.Errorf("two tenants share marker key %q", a.MarkerKey())
+	}
+	// Still one flat segment under the prefix: the marker store keys are flat
+	// and a "/" would silently nest them.
+	if got := strings.Count(a.MarkerKey(), "/"); got != 1 {
+		t.Errorf("MarkerKey() = %q has %d slashes, want 1", a.MarkerKey(), got)
+	}
+	// The untagged key is byte-identical to the pre-fan-out one, so markers
+	// already sitting in S3 keep deduplicating across the deploy rather than
+	// re-alerting every ongoing outage once.
+	if got := (Missed{Command: "grade"}).MarkerKey(); got != "heartbeat/grade" {
+		t.Errorf("untagged MarkerKey() = %q, want %q", got, "heartbeat/grade")
+	}
+	// A tenant id is opaque and may carry anything; it must be slugged like the
+	// command is.
+	if got := (Missed{Command: "grade", UserID: "a/b c"}).MarkerKey(); strings.Count(got, "/") != 1 {
+		t.Errorf("MarkerKey() = %q, want the tenant id slugged into one segment", got)
 	}
 }
 
@@ -234,6 +349,24 @@ func TestFormatMissed(t *testing.T) {
 		_, body := FormatMissed(Missed{Command: "grade", MaxGap: 26 * time.Hour})
 		if !contains(body, "no run on record") {
 			t.Errorf("body = %q", body)
+		}
+	})
+
+	// Two tenants dark on the same job produce two alerts whose only difference
+	// is whose job it is. If that is not in the message, the operator reads the
+	// second push as a duplicate of the first.
+	t.Run("names the tenant", func(t *testing.T) {
+		_, body := FormatMissed(Missed{Command: "grade", UserID: "u1abcdef", MaxGap: 26 * time.Hour})
+		if !contains(body, "u1abcdef") {
+			t.Errorf("body = %q, want it to name tenant u1abcdef", body)
+		}
+	})
+
+	// An untagged job's message is byte-identical to the pre-fan-out one.
+	t.Run("says nothing about a tenant when there is none", func(t *testing.T) {
+		_, body := FormatMissed(Missed{Command: "grade", MaxGap: 26 * time.Hour})
+		if contains(body, "user") {
+			t.Errorf("body = %q, want no tenant mention", body)
 		}
 	})
 }

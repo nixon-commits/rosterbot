@@ -244,8 +244,11 @@ rosterbot archive --date 2026-06-30
 rosterbot team-values --dry-run
 rosterbot team-values --date 2026-07-12
 
-# Render dashboard data from the stores: writes <out>/model.json (accuracy) + <out>/value.json (dynasty value).
-# The dashboard SPA fetches both and renders them client-side — projection-site writes no HTML.
+# Render dashboard data from the stores. Output is split by who may read it:
+#   private (state bucket's reports/ prefix, .reports/ locally, served only via
+#            the passkey-gated GET /v1/reports/{name}): model, gap, views
+#   public  (<out>, published to the dashboard bucket's report/ prefix): value.json, football.json
+# The dashboard SPA fetches both sets and renders them client-side — projection-site writes no HTML.
 rosterbot projection-site --out report
 rosterbot projection-site --out report --open
 ```
@@ -338,9 +341,11 @@ The bot's game day, ordered by clock (times shown in ET for reading; the authori
 | 7:00a Mon | Weekly recap site | `recap-site --out dist` | 7am ET Mondays |
 | 7:40p | Shadow capture | `shadow` | 23:40 UTC daily |
 
-`entrypoint.sh` publishes the recap site from `./dist` to `SITE_BUCKET`, and the dashboard data (`report/model.json` + `report/value.json` + `report/views.json` + `report/gap.json`) into `DASHBOARD_BUCKET`'s `report/` prefix — the same CloudFront distribution as the dashboard SPA. Any job can also be launched on demand as a one-off Fargate task (or via `POST /v1/jobs/{name}` — see below).
+`entrypoint.sh` publishes the recap site from `./dist` to `SITE_BUCKET`, and the **public** dashboard data (`report/value.json` + `report/football.json`) into `DASHBOARD_BUCKET`'s `report/` prefix — the same CloudFront distribution as the dashboard SPA. Any job can also be launched on demand as a one-off Fargate task (or via `POST /v1/jobs/{name}` — see below).
 
-For a local dashboard preview, render into the dashboard's own static dir so `serve` picks it up: `rosterbot projection-site --out web/dashboard/report` (delete that dir afterward — it isn't committed).
+The **private** dashboard data — the projection-accuracy model, the lineup gap and recap readership — does not go there. That prefix is served by CloudFront's default behavior with no auth, and those three are your own performance: how many points your lineup left on your bench, how your projections graded, who reads your site. They are written to `STATE_BUCKET`'s `reports/` prefix, which no distribution fronts, and reach the SPA through the passkey-gated `GET /v1/reports/{name}` — the same reasoning that put the Trades tab on `/v1/*`. Only league-wide standings, which every manager can already read off Fantrax and Sleeper, stay public.
+
+For a local dashboard preview, run `rosterbot projection-site --out web/dashboard/report` (delete that dir afterward — it isn't committed) and then `rosterbot serve`, which reads the private reports back out of `.reports/` and serves them on the same authenticated path the Lambda does.
 
 <details>
 <summary><b>Model auditing (Analysis Store + Athena)</b></summary>
@@ -414,9 +419,9 @@ Run **status** always comes from the run ledger; `/progress` only adds phase det
 <details>
 <summary><b>Web dashboard</b> — private SPA, passkey auth, live run status</summary>
 
-A private, single-user web UI over the API: today's lineup, a form to trigger any of the allowlisted jobs, run history with live status, and a viewer for each job's typed output. The **Projections** and **Value** tabs render natively from `projection-site`'s `model.json` / `value.json` (client-side Chart.js, no iframe). Static files live in [`web/dashboard/`](web/dashboard/) (no build step — plain ES modules) and deploy to their own CloudFront distribution (`DashboardUrl` stack output).
+A private, single-user web UI over the API: today's lineup, a form to trigger any of the allowlisted jobs, run history with live status, and a viewer for each job's typed output. The **Projections** and **Value** tabs render natively from `projection-site`'s output (client-side Chart.js, no iframe) — Projections and Views over the authenticated `GET /v1/reports/{name}`, Value over the public `report/value.json`. Static files live in [`web/dashboard/`](web/dashboard/) (no build step — plain ES modules) and deploy to their own CloudFront distribution (`DashboardUrl` stack output).
 
-The **Trades** tab answers one question: *should I take this offer?* Each pending offer is priced two ways — a plain sum of HKB dynasty values, and a sum that discounts every asset after the best — and a winner is named **only when the two agree**. On the live 2-for-1 that motivated the tab they name opposite sides, so it reports *too close to call* rather than picking one. An offer containing a draft pick gets no verdict at all: Fantrax identifies picks only as blank rows, and a pick can outweigh everything beside it. Below the verdict, *If you accept* shows what the trade does to your hitter/pitcher × MLB/minors value and your league rank in each — a trade can be dead even on value and still move you several places. The tab also carries the full league values table, filterable by player and owner. Unlike the other tabs it is served from `/v1/*` rather than the world-readable `report/` prefix, since an open offer shouldn't be public before you've decided on it.
+The **Trades** tab answers one question: *should I take this offer?* Each pending offer is priced two ways — a plain sum of HKB dynasty values, and a sum that discounts every asset after the best — and a winner is named **only when the two agree**. On the live 2-for-1 that motivated the tab they name opposite sides, so it reports *too close to call* rather than picking one. An offer containing a draft pick gets no verdict at all: Fantrax identifies picks only as blank rows, and a pick can outweigh everything beside it. Below the verdict, *If you accept* shows what the trade does to your hitter/pitcher × MLB/minors value and your league rank in each — a trade can be dead even on value and still move you several places. The tab also carries the full league values table, filterable by player and owner. Like the Projections and Views tabs it is served from `/v1/*` rather than the world-readable `report/` prefix, since an open offer shouldn't be public before you've decided on it.
 
 The **Projections** tab leads with a *Decision quality* block: points left on the bench versus the hindsight-optimal lineup, lineup efficiency, and within-day rank skill (mean Spearman rho, with standard error and days-positive) for hitters and pitchers separately. MAE, bias and RMSE remain below as calibration diagnostics, each MAE figure annotated with its skill score against a constant-at-sample-mean baseline.
 

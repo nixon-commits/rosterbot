@@ -13,6 +13,8 @@ package s3blobtest
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"io"
 	"sort"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 
 	"github.com/nixon-commits/rosterbot/internal/s3blob"
 )
@@ -71,24 +74,63 @@ func (f *Fake) Keys() []string {
 	return out
 }
 
+// etagOf reproduces the ETag real S3 reports for a single-part upload: the
+// quoted hex MD5 of the body. Content-derived is not an incidental detail —
+// rewriting identical bytes leaves the ETag unchanged on real S3 too, so a
+// conditional write that races against a no-op rewrite succeeds in both.
+func etagOf(data []byte) string {
+	sum := md5.Sum(data)
+	return `"` + hex.EncodeToString(sum[:]) + `"`
+}
+
 func (f *Fake) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	b, ok := f.Objects[*in.Key]
 	if !ok {
 		return nil, &types.NoSuchKey{}
 	}
-	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(b))}, nil
+	return &s3.GetObjectOutput{
+		Body: io.NopCloser(bytes.NewReader(b)),
+		ETag: aws.String(etagOf(b)),
+	}, nil
 }
 
+// PutObject honors IfNoneMatch and IfMatch, because a fake that accepts every
+// conditional write reports success for exactly the interleaving the condition
+// exists to reject — the failure would then only ever appear in production.
+// Rejections use the codes S3 documents: 412 PreconditionFailed when the
+// condition evaluates false, 404 NoSuchKey for an If-Match against a key that
+// is not there.
 func (f *Fake) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	if f.Objects == nil {
 		f.Objects = map[string][]byte{}
 	}
+	existing, exists := f.Objects[*in.Key]
+
+	if in.IfNoneMatch != nil {
+		// S3 accepts only "*" here; anything else is a malformed request
+		// rather than a condition, and the fake should not quietly allow it.
+		if *in.IfNoneMatch != "*" {
+			return nil, &smithy.GenericAPIError{Code: "NotImplemented", Message: "s3blobtest: only If-None-Match: * is supported"}
+		}
+		if exists {
+			return nil, &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "At least one of the pre-conditions you specified did not hold"}
+		}
+	}
+	if in.IfMatch != nil {
+		if !exists {
+			return nil, &types.NoSuchKey{}
+		}
+		if etagOf(existing) != *in.IfMatch {
+			return nil, &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "At least one of the pre-conditions you specified did not hold"}
+		}
+	}
+
 	b, err := io.ReadAll(in.Body)
 	if err != nil {
 		return nil, err
 	}
 	f.Objects[*in.Key] = b
-	return &s3.PutObjectOutput{}, nil
+	return &s3.PutObjectOutput{ETag: aws.String(etagOf(b))}, nil
 }
 
 func (f *Fake) DeleteObject(_ context.Context, in *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {

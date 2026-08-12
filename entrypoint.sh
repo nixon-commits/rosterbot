@@ -48,11 +48,18 @@ sync_down
 ID=$(run_id)
 STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 TRIGGER=${RUN_TRIGGER:-schedule}
+# Whose run this is, under per-tenant fan-out. Empty today (and therefore
+# omitted from the record entirely), which internal/opsalert reads as the one
+# pre-fan-out tenant. It has to be on the record rather than inferred later:
+# every tenant runs the *same command string*, so without it a tenant failing
+# every hour grades healthy on its neighbours' successes, and a tenant whose
+# task stops launching is invisible.
+RUN_USER=${RUN_USER_ID:-}
 CMD="$*"
 
 # Record the run as started (best-effort; never block the actual job on it).
 ./rosterbot run-ledger --id "$ID" --command "$CMD" --status RUNNING \
-  --started "$STARTED" --trigger "$TRIGGER" || true
+  --started "$STARTED" --trigger "$TRIGGER" --user "$RUN_USER" || true
 
 # Run the bot, mirroring output to both the container logs (CloudWatch) and a
 # file for the ledger's log_tail. The braces+echo capture the bot's real exit
@@ -68,7 +75,7 @@ STATUS=SUCCESS
 
 ./rosterbot run-ledger --id "$ID" --command "$CMD" --status "$STATUS" \
   --exit-code "$rc" --started "$STARTED" --ended "$ENDED" \
-  --trigger "$TRIGGER" --log-file /tmp/rosterbot.log || true
+  --trigger "$TRIGGER" --user "$RUN_USER" --log-file /tmp/rosterbot.log || true
 
 sync_up
 exit "$rc"

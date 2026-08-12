@@ -123,6 +123,48 @@ func TestFormatTask_StartedWithNilFailure(t *testing.T) {
 	}
 }
 
+// Under fan-out every tenant fails the same command string, so without the
+// tenant in the message two simultaneous outages render identically and the
+// second push reads as a duplicate of the first.
+func TestFormatTask_NamesTheTenant(t *testing.T) {
+	v := Verdict{
+		Kind:    Started,
+		Command: "optimize --matchup",
+		UserID:  "u1abcdef",
+		Streak:  1,
+		Failure: failed("optimize --matchup", "boom", 1),
+	}
+	_, body := FormatTask(v)
+	if !strings.Contains(body, "u1abcdef") {
+		t.Errorf("body = %q, want it to name tenant u1abcdef", body)
+	}
+
+	// And an untagged verdict renders exactly as it did before fan-out.
+	v.UserID = ""
+	if _, plain := FormatTask(v); strings.Contains(plain, "user") {
+		t.Errorf("untagged body = %q, want no tenant mention", plain)
+	}
+}
+
+// A tenant id is a WebAuthn user handle — 64 random bytes — and the whole
+// message is silently truncated at 1024 chars by SendPushover, so an unbounded
+// id would eat the cause it is supposed to sit beside.
+func TestFormatTask_TenantIDIsBounded(t *testing.T) {
+	_, body := FormatTask(Verdict{
+		Kind:    Started,
+		Command: "optimize",
+		UserID:  strings.Repeat("u", 500),
+		Streak:  1,
+		Failure: failed("optimize", "boom", 1),
+	})
+	if len(body) > 200 {
+		t.Errorf("body is %d chars; the tenant id is not bounded: %q", len(body), body)
+	}
+	if !strings.Contains(body, "boom") {
+		t.Errorf("the tenant id ate the cause: %q", body)
+	}
+}
+
 func TestFormatCrash(t *testing.T) {
 	title, body := FormatCrash("optimize --matchup", "abc123", "OutOfMemoryError: Container killed due to memory usage")
 	if title != "Rosterbot: optimize died" {
