@@ -3,6 +3,7 @@
 // progress.json), fires a toast when a run finishes, and badges the Runs nav.
 import { api, ApiError } from "./api.js";
 import { escapeHtml } from "./render.js";
+import { renderStatus, clearStatus } from "./status.js";
 
 const RUNS_POLL_MS = 5000;
 const PROG_POLL_MS = 2000;
@@ -64,6 +65,10 @@ async function pollRuns() {
   for (const id of lastStatus.keys()) {
     if (!seen.has(id)) lastStatus.delete(id);
   }
+  // The status line is derived from this same payload rather than fetching its
+  // own — job health and lineup freshness are both already in it.
+  renderStatus(runs);
+
   const live = runs.filter(isLive);
   const badge = badgeEl();
   if (badge) badge.classList.toggle("has-live", live.length > 0);
@@ -167,6 +172,7 @@ export function stopLive() {
   started = false;
   clearTimeout(runsTimer);
   clearHero(); // also clears progTimer, elapsedTimer, hero DOM, watchedId
+  clearStatus();
   const badge = badgeEl();
   if (badge) badge.classList.remove("has-live");
 }

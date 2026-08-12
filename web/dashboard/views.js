@@ -15,6 +15,7 @@
 // DOM text nodes removes that footgun entirely instead of depending on every
 // future edit getting the escaping right.
 import { api } from "./api.js";
+import { help } from "./render.js";
 
 // Edge codes are <AIRPORT><digits>[-P<n>], e.g. SFO5-P3. The airport prefix is
 // the only stable, meaningful part; the rest identifies the POP instance.
@@ -101,15 +102,27 @@ export async function renderViews(root) {
   }
 
   const uniqueIps = new Set(hits.map((h) => h.ip)).size;
+  // "Addresses, not people" stays visible because it is the difference between
+  // reading this table correctly and reading it as a headcount. The mechanics
+  // of why go behind the bubble.
   const box = card(root, "Recap readership", [
     `${hits.length.toLocaleString()} recent page read${hits.length === 1 ? "" : "s"} ` +
       `from ${uniqueIps.toLocaleString()} address${uniqueIps === 1 ? "" : "es"} · ` +
       `collected ${fmtWhen(model.generatedAt)}`,
-    "The recap site is public, so these are addresses rather than people — one " +
-      "household or shared network reads as a single address, and a phone on mobile " +
-      "data as a different one. Edge is the CloudFront POP that served the request, " +
-      "a rough metro hint only.",
   ]);
+
+  const note = document.createElement("p");
+  note.className = "sub muted";
+  note.append("Addresses, not people ", help(
+    "The recap site is public, so there is no sign-in to attribute a visit to — " +
+    "a network address is all the log records.\n\n" +
+    "One household or office reads as a single address no matter how many " +
+    "people opened it, and the same person on mobile data appears as a " +
+    "different one. Edge is the CloudFront location that served the request, a " +
+    "rough metro hint rather than the reader's location.",
+    "Why these are addresses, not people",
+  ));
+  box.appendChild(note);
 
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
