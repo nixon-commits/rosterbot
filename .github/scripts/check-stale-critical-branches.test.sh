@@ -35,6 +35,12 @@ setup_repo() {
     git config user.email test@example.com
     git config user.name Test
     git config commit.gpgsign false
+    # A fresh clone of an empty repo has an unborn HEAD, whose eventual branch
+    # name is decided by init.defaultBranch — "main" on this dev machine, but
+    # "master" (or anything else) wherever that isn't configured, e.g. the CI
+    # runner. Every push below hardcodes "main", so pin it explicitly here
+    # rather than depending on an ambient default the test can't see.
+    git symbolic-ref HEAD refs/heads/main
   )
   echo "$tmpdir"
 }
