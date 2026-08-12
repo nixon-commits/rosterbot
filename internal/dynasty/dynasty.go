@@ -76,9 +76,15 @@ func (r Row) ValueFor(format string) int {
 	}
 }
 
-// Writer persists a day's per-asset rows to the store.
+// Writer persists a day's per-asset rows and per-team coverage to the store.
 type Writer interface {
 	WriteValues(date time.Time, rows []Row) error
+	// WriteCoverage persists the per-team join-coverage diagnostic alongside
+	// that day's values.ndjson, as coverage.ndjson in the same partition.
+	// Row's per-asset grain can't reconstruct RosteredCount on its own (an
+	// unmatched player produces no Row), so the dashboard needs this to show
+	// coverage counts at all.
+	WriteCoverage(date time.Time, coverage []Coverage) error
 }
 
 // MarshalNDJSON serializes rows as newline-delimited JSON (one row per line).
@@ -87,8 +93,16 @@ func MarshalNDJSON(rows []Row) ([]byte, error) { return ndjsonstore.Marshal(rows
 // UnmarshalNDJSON parses newline-delimited JSON (one Row per line).
 func UnmarshalNDJSON(b []byte) ([]Row, error) { return ndjsonstore.Unmarshal[Row](b) }
 
+// coverageFilename is the leaf object name for the per-team coverage
+// diagnostic, written alongside valuesFilename in the same date partition.
+const coverageFilename = "coverage.ndjson"
+
 func objectKey(date time.Time) string {
 	return fmt.Sprintf("dt=%s/%s", date.UTC().Format("2006-01-02"), valuesFilename)
+}
+
+func coverageObjectKey(date time.Time) string {
+	return fmt.Sprintf("dt=%s/%s", date.UTC().Format("2006-01-02"), coverageFilename)
 }
 
 // ObjectKey is the store-relative partition key (dt=YYYY-MM-DD/values.ndjson).
@@ -107,9 +121,16 @@ func (w writer) WriteValues(date time.Time, rows []Row) error {
 	return ndjsonstore.Write(w.store, objectKey(date), rows)
 }
 
-// Reader loads rows from the Dynasty Value Store.
+func (w writer) WriteCoverage(date time.Time, coverage []Coverage) error {
+	return ndjsonstore.Write(w.store, coverageObjectKey(date), coverage)
+}
+
+// Reader loads rows and coverage from the Dynasty Value Store.
 type Reader interface {
 	ReadAll() ([]Row, error)
+	// ReadAllCoverage reads every date's coverage.ndjson, chronologically.
+	// Callers wanting "today's" coverage take the rows sharing the max Dt.
+	ReadAllCoverage() ([]Coverage, error)
 }
 
 type reader struct{ store ndjsonstore.Store }
@@ -123,4 +144,8 @@ func NewFileReader(root string) Reader { return NewReader(ndjsonstore.NewFileSto
 
 func (r reader) ReadAll() ([]Row, error) {
 	return ndjsonstore.ReadAll[Row](r.store, "", valuesFilename, nil)
+}
+
+func (r reader) ReadAllCoverage() ([]Coverage, error) {
+	return ndjsonstore.ReadAll[Coverage](r.store, "", coverageFilename, nil)
 }

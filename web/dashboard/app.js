@@ -11,6 +11,7 @@ import { renderValue } from "./value.js";
 import { renderTrades } from "./trades.js";
 import { renderViews } from "./views.js";
 import { renderInfra } from "./infra.js";
+import { renderFootball } from "./football.js";
 import { startLive, stopLive } from "./live.js";
 
 const ROUTES = {
@@ -23,6 +24,7 @@ const ROUTES = {
   "#trades": renderTrades,
   "#views": renderViews,
   "#infra": renderInfra,
+  "#football": renderFootball,
 };
 const DEFAULT_ROUTE = "#lineup";
 

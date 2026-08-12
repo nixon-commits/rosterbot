@@ -72,3 +72,40 @@ func TestReadAll_EmptyStoreIsNotAnError(t *testing.T) {
 		t.Errorf("got %d rows from an empty store, want 0", len(rows))
 	}
 }
+
+func TestWriteCoverageThenReadAllCoverage_RoundTrip(t *testing.T) {
+	store := ndjsonstore.NewMemStore()
+	w := NewWriter(store)
+
+	d1 := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
+	d2 := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	if err := w.WriteCoverage(d1, []Coverage{
+		{Dt: "2026-08-11", TeamID: "1", TeamName: "A", RosteredCount: 35, MatchedCount: 33, Unmatched: []string{"X"}},
+	}); err != nil {
+		t.Fatalf("WriteCoverage d1: %v", err)
+	}
+	if err := w.WriteCoverage(d2, []Coverage{
+		{Dt: "2026-08-12", TeamID: "1", TeamName: "A", RosteredCount: 36, MatchedCount: 34},
+	}); err != nil {
+		t.Fatalf("WriteCoverage d2: %v", err)
+	}
+
+	got, err := NewReader(store).ReadAllCoverage()
+	if err != nil {
+		t.Fatalf("ReadAllCoverage: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2", len(got))
+	}
+	// dt= partitions sort lexically, which is chronological.
+	if got[0].Dt != "2026-08-11" || got[1].Dt != "2026-08-12" {
+		t.Errorf("coverage out of chronological order: %q, %q", got[0].Dt, got[1].Dt)
+	}
+	if got[0].RosteredCount != 35 || got[0].MatchedCount != 33 {
+		t.Errorf("got[0] = %+v, round-trip mismatch", got[0])
+	}
+	// Unmatched must NOT round-trip -- it is a diagnostic, not durable schema.
+	if got[0].Unmatched != nil {
+		t.Errorf("Unmatched = %v, want nil after round-trip (json:\"-\")", got[0].Unmatched)
+	}
+}

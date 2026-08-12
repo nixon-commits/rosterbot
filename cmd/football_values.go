@@ -100,6 +100,12 @@ func runFootballValues(cmd *cobra.Command, args []string) error {
 	if err := w.WriteValues(date, rows); err != nil {
 		return fmt.Errorf("write football values: %w", err)
 	}
+	// Written alongside values.ndjson so the dashboard can show coverage
+	// counts at all -- Row's per-asset grain can't reconstruct RosteredCount
+	// on its own, since an unmatched player produces no Row.
+	if err := w.WriteCoverage(date, coverage); err != nil {
+		return fmt.Errorf("write football coverage: %w", err)
+	}
 	fmt.Printf("Wrote %d rows to %s (dt=%s)\n", len(rows), dest, date.Format("2006-01-02"))
 	return nil
 }

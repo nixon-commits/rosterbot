@@ -10,20 +10,24 @@ import (
 )
 
 // Coverage is a per-team join-coverage diagnostic produced alongside the
-// per-asset rows -- mirrors teamvalue.Row's Rostered/MatchedCount +
-// Unmatched fields, reported separately here because Row's grain is
-// per-asset, not per-team (there is no natural "per-team row" to attach it
-// to at this grain).
+// per-asset rows -- mirrors teamvalue.Row's Rostered/MatchedCount fields,
+// reported as a separate type here because Row's grain is per-asset, not
+// per-team (there is no natural "per-team row" to attach it to at this
+// grain). Persisted alongside Row (coverage.ndjson in the same date
+// partition, see WriteCoverage) precisely so the dashboard can show it --
+// Row's per-asset rows alone cannot reconstruct RosteredCount, since an
+// unmatched player produces no Row at all.
 type Coverage struct {
-	TeamID        string
-	TeamName      string
-	RosteredCount int
-	MatchedCount  int
-	// Unmatched lists rostered player names with no StatsGuy value in the
-	// run that built this Coverage -- diagnostic only, never persisted (the
-	// durable Row schema has no room for a per-run list; see teamvalue.Row.Unmatched
-	// for the precedent).
-	Unmatched []string
+	Dt            string `json:"dt"`
+	TeamID        string `json:"team_id"`
+	TeamName      string `json:"team_name"`
+	RosteredCount int    `json:"rostered_count"`
+	MatchedCount  int    `json:"matched_count"`
+	// Unmatched lists rostered player names with no StatsGuy value in the run
+	// that built this Coverage. json:"-" because it is a diagnostic for the
+	// run that computed it, not part of the durable schema -- same discipline
+	// as teamvalue.Row.Unmatched.
+	Unmatched []string `json:"-"`
 }
 
 // TeamNames maps each roster to its display name: user.Metadata.TeamName,
@@ -75,7 +79,7 @@ func AggregatePlayers(date time.Time, league *sleeper.League, rosters []sleeper.
 	for _, r := range rosters {
 		teamID := strconv.Itoa(r.RosterID)
 		teamName := names[r.RosterID]
-		cov := Coverage{TeamID: teamID, TeamName: teamName}
+		cov := Coverage{Dt: dt, TeamID: teamID, TeamName: teamName}
 		starters := SelectStarters(r, wantStarters, players)
 
 		for _, playerID := range r.Players {
