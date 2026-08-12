@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -141,6 +142,100 @@ func (c *Client) backfillDailyFPts(days []DayRoster) error {
 	fmt.Fprintf(os.Stderr, "mlb backfill: %d flagged, %d resolved, %d no-game, %d failed\n",
 		len(targets), resolvedCount, noGameCount, failedCount)
 	return nil
+}
+
+// MLBPlayerRef identifies one player for a roster-independent MLB game-log
+// read. PlayerID is the Fantrax ID, carried through so returned rows key the
+// same way DailyFantasyPoints' rows do; Name is what resolves to an MLBAM ID.
+type MLBPlayerRef struct {
+	PlayerID  string
+	Name      string
+	IsPitcher bool
+}
+
+// MLBDailyFPts returns per-day FPts for the given players over [start, end],
+// read from their MLB statsapi game logs and scored with the league's weights.
+//
+// It is the roster-independent sibling of DailyFantasyPoints: that method
+// answers "what did MY team score on this day" by diffing our own roster
+// snapshots, and is therefore blind to anything a player did before we acquired
+// them — correct for recap/backtest/grade, which must not credit us with
+// production earned on someone else's roster, and wrong for a recency window,
+// which is asking about the player's recent form regardless of who rostered
+// them. Days on which a player did not appear are omitted rather than reported
+// as zero, matching the DayRoster shape the recency collapse expects.
+func (c *Client) MLBDailyFPts(players []MLBPlayerRef, start, end time.Time) ([]DayRoster, error) {
+	if len(players) == 0 || end.Before(start) {
+		return nil, nil
+	}
+
+	seen := map[string]bool{}
+	var names []string
+	for _, p := range players {
+		if p.Name == "" || seen[p.Name] {
+			continue
+		}
+		seen[p.Name] = true
+		names = append(names, p.Name)
+	}
+	resolved, err := resolveBackfillNames(names, c.cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve MLB IDs: %w", err)
+	}
+	hitterWeights, err := c.GetScoringWeights()
+	if err != nil {
+		return nil, fmt.Errorf("hitter scoring weights: %w", err)
+	}
+	pitcherWeights, err := c.GetPitcherScoringWeights()
+	if err != nil {
+		return nil, fmt.Errorf("pitcher scoring weights: %w", err)
+	}
+
+	byDate := map[time.Time][]DayPlayerFP{}
+	for _, p := range players {
+		// An unresolvable name is skipped, not fatal: the caller keeps whatever
+		// roster-derived signal it already had for that player.
+		mlbID, ok := resolved.ByName[playername.Normalize(p.Name)]
+		if !ok || mlbID == 0 {
+			continue
+		}
+		group := "hitting"
+		if p.IsPitcher {
+			group = "pitching"
+		}
+		// The game log is fetched per season, so a window straddling New Year
+		// needs both. In practice a 30-day in-season window never does.
+		for season := start.Year(); season <= end.Year(); season++ {
+			log, err := c.fetchMLBGameLog(mlbID, group, season)
+			if err != nil {
+				continue
+			}
+			for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+				if d.Year() != season {
+					continue
+				}
+				fpts, hadGame := computeFPtsFromGameLog(log, d, p.IsPitcher, hitterWeights, pitcherWeights)
+				if !hadGame {
+					continue
+				}
+				byDate[d] = append(byDate[d], DayPlayerFP{
+					PlayerID:  p.PlayerID,
+					Name:      p.Name,
+					FPts:      fpts,
+					HadGame:   true,
+					Active:    true,
+					IsPitcher: p.IsPitcher,
+				})
+			}
+		}
+	}
+
+	out := make([]DayRoster, 0, len(byDate))
+	for d, ps := range byDate {
+		out = append(out, DayRoster{Date: d, Players: ps})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Date.Before(out[j].Date) })
+	return out, nil
 }
 
 // backfillTarget points at a single flagged DayPlayerFP row that the backfill

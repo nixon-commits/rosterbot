@@ -592,3 +592,146 @@ func TestBackfillDailyFPts_NoTargets(t *testing.T) {
 		t.Error("non-flagged rows should be untouched")
 	}
 }
+
+// MLBDailyFPts is the roster-independent sibling of DailyFantasyPoints: it
+// reports what a player actually produced on each date, regardless of which
+// fantasy team rostered them, so a mid-window acquisition's recency window can
+// be built from real games instead of roster tenure (rosterbot-6tw).
+func TestMLBDailyFPts_BuildsSeriesFromGameLog(t *testing.T) {
+	dir := t.TempDir()
+	leagueID := "TESTLG"
+	hitterW := ScoringWeights{
+		"1B": 1, "2B": 2, "TB": 1, "XBH": 2,
+		"R": 1, "RBI": 1, "BB": 1, "SB": 4, "SO": -1, "GIDP": -1, "HBP": 1,
+	}
+	writeScoringCache(t, dir, leagueID, hitterW, ScoringWeights{})
+
+	srv := gameLogServer(t, map[string]map[string]any{
+		"2026-05-20": {"hits": 1, "runs": 1},
+		// 2026-05-21 absent → a real off day, must not appear in the series
+		"2026-05-22": {"hits": 1, "runs": 1, "baseOnBalls": 1},
+	})
+	defer srv.Close()
+
+	prevURL := mlbBackfillGameLogURL
+	mlbBackfillGameLogURL = srv.URL + "/people/%d/stats?stats=gameLog&group=%s&season=%d&sportId=1"
+	defer func() { mlbBackfillGameLogURL = prevURL }()
+
+	prevResolver := resolveBackfillNames
+	resolveBackfillNames = func(_ []string, _ string) (*playername.ResolvedPlayers, error) {
+		return &playername.ResolvedPlayers{
+			ByName: map[string]int{playername.Normalize("Gabriel Moreno"): 672515},
+			ByID:   map[int]string{672515: "Gabriel Moreno"},
+		}, nil
+	}
+	defer func() { resolveBackfillNames = prevResolver }()
+
+	c := newTestBackfillClient(t, dir, leagueID)
+	start, _ := time.Parse("2006-01-02", "2026-05-19")
+	end, _ := time.Parse("2006-01-02", "2026-05-23")
+
+	days, err := c.MLBDailyFPts([]MLBPlayerRef{{PlayerID: "p1", Name: "Gabriel Moreno"}}, start, end)
+	if err != nil {
+		t.Fatalf("MLBDailyFPts: %v", err)
+	}
+	if len(days) != 2 {
+		t.Fatalf("got %d days, want 2 (only dates with a game)", len(days))
+	}
+	byDate := map[string]DayPlayerFP{}
+	for _, d := range days {
+		if len(d.Players) != 1 {
+			t.Fatalf("day %s: got %d players, want 1", d.Date.Format("2006-01-02"), len(d.Players))
+		}
+		byDate[d.Date.Format("2006-01-02")] = d.Players[0]
+	}
+
+	// 05-20: 1B=1 → +1, TB=1 → +1, R=1 → +1 = 3
+	if got := byDate["2026-05-20"].FPts; got != 3 {
+		t.Errorf("2026-05-20 FPts = %v, want 3", got)
+	}
+	// 05-22: 1B=1, TB=1, R=1, BB=1 = 4
+	if got := byDate["2026-05-22"].FPts; got != 4 {
+		t.Errorf("2026-05-22 FPts = %v, want 4", got)
+	}
+	if _, ok := byDate["2026-05-21"]; ok {
+		t.Error("2026-05-21 had no game and must not appear in the series")
+	}
+	if p := byDate["2026-05-20"]; p.PlayerID != "p1" || !p.HadGame || p.IsPitcher {
+		t.Errorf("row = %+v, want PlayerID=p1 HadGame=true IsPitcher=false", p)
+	}
+}
+
+// Games outside the requested range belong to a different window and must be
+// dropped, so a caller's window bounds are honoured rather than the game log's.
+func TestMLBDailyFPts_ExcludesGamesOutsideRange(t *testing.T) {
+	dir := t.TempDir()
+	leagueID := "TESTLG"
+	writeScoringCache(t, dir, leagueID, ScoringWeights{"1B": 1, "TB": 1}, ScoringWeights{})
+
+	srv := gameLogServer(t, map[string]map[string]any{
+		"2026-05-01": {"hits": 1}, // before range
+		"2026-05-20": {"hits": 1}, // inside
+		"2026-06-15": {"hits": 1}, // after range
+	})
+	defer srv.Close()
+
+	prevURL := mlbBackfillGameLogURL
+	mlbBackfillGameLogURL = srv.URL + "/people/%d/stats?stats=gameLog&group=%s&season=%d&sportId=1"
+	defer func() { mlbBackfillGameLogURL = prevURL }()
+
+	prevResolver := resolveBackfillNames
+	resolveBackfillNames = func(_ []string, _ string) (*playername.ResolvedPlayers, error) {
+		return &playername.ResolvedPlayers{
+			ByName: map[string]int{playername.Normalize("Gabriel Moreno"): 672515},
+		}, nil
+	}
+	defer func() { resolveBackfillNames = prevResolver }()
+
+	c := newTestBackfillClient(t, dir, leagueID)
+	start, _ := time.Parse("2006-01-02", "2026-05-10")
+	end, _ := time.Parse("2006-01-02", "2026-05-25")
+
+	days, err := c.MLBDailyFPts([]MLBPlayerRef{{PlayerID: "p1", Name: "Gabriel Moreno"}}, start, end)
+	if err != nil {
+		t.Fatalf("MLBDailyFPts: %v", err)
+	}
+	if len(days) != 1 || days[0].Date.Format("2006-01-02") != "2026-05-20" {
+		var got []string
+		for _, d := range days {
+			got = append(got, d.Date.Format("2006-01-02"))
+		}
+		t.Errorf("dates = %v, want [2026-05-20]", got)
+	}
+}
+
+// An unresolvable name is skipped rather than failing the batch — the caller
+// falls back to the roster-derived signal for that player.
+func TestMLBDailyFPts_SkipsUnresolvableNameWithoutFailing(t *testing.T) {
+	dir := t.TempDir()
+	leagueID := "TESTLG"
+	writeScoringCache(t, dir, leagueID, ScoringWeights{"1B": 1, "TB": 1}, ScoringWeights{})
+
+	srv := gameLogServer(t, map[string]map[string]any{"2026-05-20": {"hits": 1}})
+	defer srv.Close()
+	prevURL := mlbBackfillGameLogURL
+	mlbBackfillGameLogURL = srv.URL + "/people/%d/stats?stats=gameLog&group=%s&season=%d&sportId=1"
+	defer func() { mlbBackfillGameLogURL = prevURL }()
+
+	prevResolver := resolveBackfillNames
+	resolveBackfillNames = func(_ []string, _ string) (*playername.ResolvedPlayers, error) {
+		return &playername.ResolvedPlayers{ByName: map[string]int{}}, nil // resolves nothing
+	}
+	defer func() { resolveBackfillNames = prevResolver }()
+
+	c := newTestBackfillClient(t, dir, leagueID)
+	start, _ := time.Parse("2006-01-02", "2026-05-10")
+	end, _ := time.Parse("2006-01-02", "2026-05-25")
+
+	days, err := c.MLBDailyFPts([]MLBPlayerRef{{PlayerID: "p1", Name: "Nobody Known"}}, start, end)
+	if err != nil {
+		t.Fatalf("MLBDailyFPts should not fail on an unresolvable name: %v", err)
+	}
+	if len(days) != 0 {
+		t.Errorf("got %d days, want 0", len(days))
+	}
+}
