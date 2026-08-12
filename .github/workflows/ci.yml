@@ -46,3 +46,6 @@ jobs:
 
       - name: Test
         run: go test ./internal/...
+
+      - name: Test stale-branch detection script
+        run: bash .github/scripts/check-stale-critical-branches.test.sh

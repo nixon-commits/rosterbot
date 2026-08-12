@@ -30,7 +30,7 @@ func TestBuildTrade_ThreeTeamTradeKeepsEverySide(t *testing.T) {
 		{TradeGroupID: "g1", PlayerName: "Beta Bat", ToTeamName: "Team B"},
 		{TradeGroupID: "g1", PlayerName: "Gamma Glove", ToTeamName: "Team C"},
 	}
-	tr := buildTrade(group, testLookup())
+	tr := buildTrade(group, testLookup(), nil)
 
 	if len(tr.Sides) != 3 {
 		t.Fatalf("got %d sides, want 3: %+v", len(tr.Sides), tr.Sides)
@@ -64,14 +64,14 @@ func TestBuildTrade_SideOrderIsStableAcrossRuns(t *testing.T) {
 		{TradeGroupID: "g1", PlayerName: "Beta Bat", ToTeamName: "Alfa"},
 		{TradeGroupID: "g1", PlayerName: "Gamma Glove", ToTeamName: "Mike"},
 	}
-	first := formatTrades("Recent Trades", []Trade{buildTrade(group, testLookup())}, false)
+	first := formatTrades("Recent Trades", []Trade{buildTrade(group, testLookup(), nil)}, false)
 	for i := 0; i < 50; i++ {
-		if got := formatTrades("Recent Trades", []Trade{buildTrade(group, testLookup())}, false); got != first {
+		if got := formatTrades("Recent Trades", []Trade{buildTrade(group, testLookup(), nil)}, false); got != first {
 			t.Fatalf("run %d differs from run 0:\n--- run 0 ---\n%s\n--- run %d ---\n%s", i, first, i, got)
 		}
 	}
 	// Sorted by team name, so the order is predictable and not merely stable.
-	sides := buildTrade(group, testLookup()).Sides
+	sides := buildTrade(group, testLookup(), nil).Sides
 	if sides[0].TeamName != "Alfa" || sides[1].TeamName != "Mike" || sides[2].TeamName != "Zulu" {
 		t.Errorf("sides not name-ordered: %s, %s, %s", sides[0].TeamName, sides[1].TeamName, sides[2].TeamName)
 	}
@@ -89,7 +89,7 @@ func TestBuildTrade_ReportsRawAndAdjustedTotals(t *testing.T) {
 		{TradeGroupID: "g1", PlayerName: "Gamma Glove", ToTeamName: "Team B"}, // 1000
 		{TradeGroupID: "g1", PlayerName: "Delta Depth", ToTeamName: "Team B"}, // 400
 	}
-	tr := buildTrade(group, testLookup())
+	tr := buildTrade(group, testLookup(), nil)
 	byName := map[string]TradeSide{}
 	for _, s := range tr.Sides {
 		byName[s.TeamName] = s
@@ -128,7 +128,7 @@ func TestBuildTrade_WithholdsTheCallWhenTheTwoMethodsDisagree(t *testing.T) {
 		{TradeGroupID: "g1", PlayerName: "Beta Bat", ToTeamName: "Team B"},     // 3000
 		{TradeGroupID: "g1", PlayerName: "Epsilon Edge", ToTeamName: "Team B"}, // 2500
 	}
-	tr := buildTrade(group, testLookup())
+	tr := buildTrade(group, testLookup(), nil)
 
 	if tr.Verdict.Status != tradevalue.StatusTooClose {
 		t.Fatalf("verdict = %+v, want too-close", tr.Verdict)
@@ -164,7 +164,7 @@ func TestBuildTrade_DraftPickIsNamedAndSuppressesTheVerdict(t *testing.T) {
 		{TradeGroupID: "g1", PlayerName: "Alpha Ace", ToTeamName: "Team A"},
 		{TradeGroupID: "g1", PlayerName: "", ToTeamName: "Team B"},
 	}
-	tr := buildTrade(group, testLookup())
+	tr := buildTrade(group, testLookup(), nil)
 
 	if tr.Verdict.Status != tradevalue.StatusIncomplete {
 		t.Errorf("verdict = %q, want incomplete", tr.Verdict.Status)
@@ -187,7 +187,7 @@ func TestFormatTrades_PairwiseDiffOnlyAppearsForTwoSides(t *testing.T) {
 	two := buildTrade([]models.Transaction{
 		{TradeGroupID: "g", PlayerName: "Alpha Ace", ToTeamName: "Team A"},
 		{TradeGroupID: "g", PlayerName: "Beta Bat", ToTeamName: "Team B"},
-	}, testLookup())
+	}, testLookup(), nil)
 	if out := formatTrades("h", []Trade{two}, false); !strings.Contains(out, "(+2,000)") {
 		t.Errorf("two-sided trade lost its diff:\n%s", out)
 	}
@@ -196,9 +196,96 @@ func TestFormatTrades_PairwiseDiffOnlyAppearsForTwoSides(t *testing.T) {
 		{TradeGroupID: "g", PlayerName: "Alpha Ace", ToTeamName: "Team A"},
 		{TradeGroupID: "g", PlayerName: "Beta Bat", ToTeamName: "Team B"},
 		{TradeGroupID: "g", PlayerName: "Gamma Glove", ToTeamName: "Team C"},
-	}, testLookup())
+	}, testLookup(), nil)
 	out := formatTrades("h", []Trade{three}, false)
 	if strings.Contains(out, "(+") || strings.Contains(out, "(-") {
 		t.Errorf("three-sided trade shows a meaningless pairwise diff:\n%s", out)
+	}
+}
+
+func testPickHKBPlayers() []hkb.Player {
+	return []hkb.Player{
+		{Name: "2027 Early 1st", AssetType: "PICK", Value: 1456},
+		{Name: "2027 Mid 1st", AssetType: "PICK", Value: 821},
+		{Name: "2027 Late 1st", AssetType: "PICK", Value: 778},
+	}
+}
+
+// rosterbot-uc3: a pick row with IsDraftPick set gets a recovered name and,
+// when HKB still lists the year+round, a priced value -- so the verdict
+// fires instead of being suppressed the way an unidentified pick used to
+// suppress it unconditionally.
+func TestBuildTrade_IdentifiedDraftPick_IsNamedAndPricedAndVerdictFires(t *testing.T) {
+	group := []models.Transaction{
+		{TradeGroupID: "g1", PlayerName: "Alpha Ace", ToTeamName: "Team A"}, // 5000
+		{
+			TradeGroupID:          "g1",
+			ToTeamName:            "Team B",
+			IsDraftPick:           true,
+			DraftPickYear:         2027,
+			DraftPickRound:        1,
+			DraftPickOriginalTeam: "Houston Swang and Bang",
+		},
+	}
+	tr := buildTrade(group, testLookup(), testPickHKBPlayers())
+
+	var teamB TradeSide
+	for _, s := range tr.Sides {
+		if s.TeamName == "Team B" {
+			teamB = s
+		}
+	}
+	if len(teamB.Players) != 1 || !teamB.Players[0].IsPick {
+		t.Fatalf("Team B side = %+v, want one IsPick player", teamB)
+	}
+	pick := teamB.Players[0]
+	wantAvg := (1456 + 821 + 778) / 3
+	if !pick.Ranked || pick.Value != wantAvg || !pick.Estimated {
+		t.Errorf("pick = %+v, want Ranked, Value %d, Estimated", pick, wantAvg)
+	}
+	if pick.Name != "2027 1st Round Pick (Houston Swang and Bang)" {
+		t.Errorf("pick.Name = %q", pick.Name)
+	}
+	if teamB.Total != wantAvg {
+		t.Errorf("Team B total = %d, want %d", teamB.Total, wantAvg)
+	}
+	if tr.Verdict.Status == tradevalue.StatusIncomplete {
+		t.Errorf("verdict = incomplete, want a verdict now that the pick is priced: %+v", tr.Verdict)
+	}
+
+	out := formatTrades("h", []Trade{tr}, false)
+	if !strings.Contains(out, "2027 1st Round Pick (Houston Swang and Bang)") {
+		t.Errorf("report does not name the pick:\n%s", out)
+	}
+	if !strings.Contains(out, "avg of Early/Mid/Late") {
+		t.Errorf("report does not flag the estimate:\n%s", out)
+	}
+}
+
+// A pick from a draft that has already happened (a resolved slot number, no
+// original team) is still identified and named, but HKB no longer lists it
+// as an upcoming asset, so it stays unpriced and keeps suppressing the
+// verdict -- recovering identity does not fabricate a price where none
+// exists.
+func TestBuildTrade_ResolvedDraftPick_NamedButStillUnpriced(t *testing.T) {
+	group := []models.Transaction{
+		{TradeGroupID: "g1", PlayerName: "Alpha Ace", ToTeamName: "Team A"},
+		{
+			TradeGroupID:    "g1",
+			ToTeamName:      "Team B",
+			IsDraftPick:     true,
+			DraftPickYear:   2026,
+			DraftPickRound:  1,
+			DraftPickNumber: 6,
+		},
+	}
+	tr := buildTrade(group, testLookup(), testPickHKBPlayers())
+
+	if tr.Verdict.Status != tradevalue.StatusIncomplete {
+		t.Errorf("verdict = %q, want incomplete", tr.Verdict.Status)
+	}
+	out := formatTrades("h", []Trade{tr}, false)
+	if !strings.Contains(out, "2026 1st Round Pick (Pick 6)") {
+		t.Errorf("report does not name the resolved pick:\n%s", out)
 	}
 }
