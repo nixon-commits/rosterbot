@@ -102,6 +102,8 @@ rosterbot scoring                     # print the league's scoring weights
 > [!TIP]
 > Every command that changes state supports `--dry-run`. Drop the flag to apply for real. `make run-all` sweeps every command in dry-run / read-only mode — the fastest end-to-end sanity check.
 
+Working from [Claude Code on the web](https://code.claude.com/docs/en/claude-code-on-the-web) instead of a local checkout? See **[docs/cloud-sessions.md](docs/cloud-sessions.md)** for the network allowlist this repo's data sources need, the setup script, and what a cloud session cannot do.
+
 ---
 
 ## Command reference
