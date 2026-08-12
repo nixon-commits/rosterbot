@@ -146,6 +146,7 @@ func TestTransactionsParsesResponseAndWeekPath(t *testing.T) {
 			{"transaction_id": "t1", "type": "trade", "status": "complete", "roster_ids": [1, 2],
 			 "adds": {"4984": 1}, "drops": {"1234": 2},
 			 "draft_picks": [{"season": "2027", "round": 1, "roster_id": 1, "previous_owner_id": 1, "owner_id": 2}],
+			 "waiver_budget": [{"sender": 2, "receiver": 1, "amount": 15}],
 			 "created": 1723334400000}
 		]`))
 	}))
@@ -161,6 +162,9 @@ func TestTransactionsParsesResponseAndWeekPath(t *testing.T) {
 	}
 	if len(txns) != 1 || txns[0].Type != "trade" || txns[0].Adds["4984"] != 1 || len(txns[0].DraftPicks) != 1 {
 		t.Errorf("txns = %+v, unexpected shape", txns)
+	}
+	if len(txns[0].WaiverBudget) != 1 || txns[0].WaiverBudget[0].Sender != 2 || txns[0].WaiverBudget[0].Receiver != 1 || txns[0].WaiverBudget[0].Amount != 15 {
+		t.Errorf("WaiverBudget = %+v, unexpected shape", txns[0].WaiverBudget)
 	}
 }
 

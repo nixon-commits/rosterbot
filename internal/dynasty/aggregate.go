@@ -26,7 +26,11 @@ type Coverage struct {
 	Unmatched []string
 }
 
-func teamNames(rosters []sleeper.Roster, users []sleeper.User) map[int]string {
+// TeamNames maps each roster to its display name: user.Metadata.TeamName,
+// falling back to user.DisplayName, falling back to "Team <roster_id>". Shared
+// by Aggregate/AggregatePicks and the football-trades command so a trade
+// alert and the value store never disagree on a team's display name.
+func TeamNames(rosters []sleeper.Roster, users []sleeper.User) map[int]string {
 	byUser := make(map[string]sleeper.User, len(users))
 	for _, u := range users {
 		byUser[u.UserID] = u
@@ -62,7 +66,7 @@ func teamNames(rosters []sleeper.Roster, users []sleeper.User) map[int]string {
 // construction, the exact rosterbot-hx5 failure this design avoids.
 func AggregatePlayers(date time.Time, league *sleeper.League, rosters []sleeper.Roster, users []sleeper.User, players map[string]sleeper.Player, bundle *statsguy.Bundle) ([]Row, []Coverage) {
 	dt := date.UTC().Format("2006-01-02")
-	names := teamNames(rosters, users)
+	names := TeamNames(rosters, users)
 	wantStarters := StarterSlotCount(league.RosterPositions)
 
 	var rows []Row

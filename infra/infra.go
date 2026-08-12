@@ -670,9 +670,10 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// real worst case is the 11h overnight gap, and a "1h" tolerance would page
 	// every single morning.
 	const (
-		hourlyGap = 13 * time.Hour     // 11h overnight window + 2h slack
-		dailyGap  = 26 * time.Hour     // 24h + 2h slack
-		weeklyGap = 8 * 24 * time.Hour // 7d + 1d slack
+		hourlyGap    = 13 * time.Hour     // 11h overnight window + 2h slack
+		sixHourlyGap = 8 * time.Hour      // 6h nominal + 2h slack; runs all day, no Lineup-style window
+		dailyGap     = 26 * time.Hour     // 24h + 2h slack
+		weeklyGap    = 8 * 24 * time.Hour // 7d + 1d slack
 	)
 	type job struct {
 		id, cron string
@@ -708,6 +709,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// (14:15) and TeamValues (14:30), before ProjectionSite (15:00) reads it,
 		// the same staging as TeamValues -- football's Sleeper/StatsGuy analog.
 		{"FootballValues", "cron(45 14 * * ? *)", jsii.Strings("football-values"), dailyGap},
+		// Polls Sleeper league transactions for newly completed trades and
+		// pushes a graded Pushover alert. Every 6 hours (offset :45, off the
+		// top of the hour the daily jobs crowd) -- trades don't happen on a
+		// predictable schedule, so this is a poll, not a once-daily capture
+		// like TeamValues/FootballValues. Idempotent via a per-transaction_id
+		// dedup marker, so overlapping polls never double-alert.
+		{"FootballTrades", "cron(45 */6 * * ? *)", jsii.Strings("football-trades"), sixHourlyGap},
 		// Shadow captures every projection system's lineup projection for the
 		// model-comparison report. It runs at 23:40 UTC (~late ET evening, same
 		// UTC/ET calendar day so the snapshot's generated_at passes the backtest

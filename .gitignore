@@ -7,6 +7,8 @@ rosterbot
 .backtest/
 .analysis/
 .teamvalue/
+.footballvalue/
+.football/
 .lineupgap/
 .trades/
 .tradevalues/

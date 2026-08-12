@@ -97,6 +97,13 @@ var (
 	// Progress shares the runs/ prefix with RunOutput; it is not a separate
 	// listing target, so it is deliberately absent from All().
 	Progress = Artifact{Name: "Run Progress", S3Prefix: "runs/", LocalDir: ".lineup/progress", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
+
+	// FootballTrades holds one dedup marker object per Sleeper trade
+	// transaction_id (check -> send -> mark, rosterbot-chs). Deliberately no
+	// MaxAge and absent from All(), like Progress: markers are written only
+	// when a trade happens, so a quiet league writes nothing for weeks and
+	// any age check would misread the normal case as stale.
+	FootballTrades = Artifact{Name: "Football Trade Markers", S3Prefix: "football/trades/", LocalDir: ".football/trades", Durable: true, Producer: "FootballTrades"}
 )
 
 // All returns every artifact worth listing, in the order the status page shows

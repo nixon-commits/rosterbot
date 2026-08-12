@@ -43,19 +43,20 @@ import (
 type artifact struct{ s3Prefix, localDir string }
 
 var (
-	cacheArtifact         = artifact{layout.Cache.S3Prefix, ""} // local: default fsStore, dir unused
-	analysisArtifact      = artifact{"analysis/", layout.Analysis.LocalDir}
-	teamValueArtifact     = artifact{layout.TeamValues.S3Prefix, layout.TeamValues.LocalDir}
-	footballValueArtifact = artifact{layout.FootballValues.S3Prefix, layout.FootballValues.LocalDir}
-	lineupGapArtifact     = artifact{layout.LineupGaps.S3Prefix, layout.LineupGaps.LocalDir}
-	runLedgerArtifact     = artifact{layout.RunLedger.S3Prefix, layout.RunLedger.LocalDir}
-	runOutputArtifact     = artifact{layout.RunOutput.S3Prefix, layout.RunOutput.LocalDir}
-	notificationArtifact  = artifact{layout.Notification.S3Prefix, layout.Notification.LocalDir}
-	progressArtifact      = artifact{layout.Progress.S3Prefix, layout.Progress.LocalDir}
-	lineupArtifact        = artifact{layout.Lineup.S3Prefix, layout.Lineup.LocalDir}
-	tradesArtifact        = artifact{layout.Trades.S3Prefix, layout.Trades.LocalDir}
-	tradeValuesArtifact   = artifact{layout.TradeValues.S3Prefix, layout.TradeValues.LocalDir}
-	tradeOfferArtifact    = artifact{layout.TradeOffers.S3Prefix, layout.TradeOffers.LocalDir}
+	cacheArtifact          = artifact{layout.Cache.S3Prefix, ""} // local: default fsStore, dir unused
+	analysisArtifact       = artifact{"analysis/", layout.Analysis.LocalDir}
+	teamValueArtifact      = artifact{layout.TeamValues.S3Prefix, layout.TeamValues.LocalDir}
+	footballValueArtifact  = artifact{layout.FootballValues.S3Prefix, layout.FootballValues.LocalDir}
+	lineupGapArtifact      = artifact{layout.LineupGaps.S3Prefix, layout.LineupGaps.LocalDir}
+	runLedgerArtifact      = artifact{layout.RunLedger.S3Prefix, layout.RunLedger.LocalDir}
+	runOutputArtifact      = artifact{layout.RunOutput.S3Prefix, layout.RunOutput.LocalDir}
+	notificationArtifact   = artifact{layout.Notification.S3Prefix, layout.Notification.LocalDir}
+	progressArtifact       = artifact{layout.Progress.S3Prefix, layout.Progress.LocalDir}
+	lineupArtifact         = artifact{layout.Lineup.S3Prefix, layout.Lineup.LocalDir}
+	tradesArtifact         = artifact{layout.Trades.S3Prefix, layout.Trades.LocalDir}
+	tradeValuesArtifact    = artifact{layout.TradeValues.S3Prefix, layout.TradeValues.LocalDir}
+	tradeOfferArtifact     = artifact{layout.TradeOffers.S3Prefix, layout.TradeOffers.LocalDir}
+	footballTradesArtifact = artifact{layout.FootballTrades.S3Prefix, layout.FootballTrades.LocalDir}
 )
 
 // Bucket is the single os.Getenv("STATE_BUCKET") read in the codebase. Empty
@@ -276,6 +277,15 @@ func (s *Selector) TradesStore() (lineupapi.BlobStore, error) {
 // rewritten daily by the TeamValues job.
 func (s *Selector) TradeValuesStore() (lineupapi.BlobStore, error) {
 	return blobStore(s, tradeValuesArtifact, "tradevalues-")
+}
+
+// FootballTradeMarkers is one dedup marker object per Sleeper trade
+// transaction_id, keyed with no namePrefix -- the transaction_id alone is the
+// key, since the football/trades/ prefix (.football/trades/ locally) holds
+// nothing else. Get is the "already alerted?" check; Publish is the mark,
+// called only after a confirmed send (check -> send -> mark, rosterbot-chs).
+func (s *Selector) FootballTradeMarkers() (lineupapi.BlobStore, error) {
+	return blobStore(s, footballTradesArtifact, "")
 }
 
 // TradeOfferWriter is the write side of the durable Trade Offer Log.

@@ -21,6 +21,24 @@ func testBundleWithPicks() *statsguy.Bundle {
 	}
 }
 
+func TestMidVariantPrice_FindsMidTierIgnoringOthers(t *testing.T) {
+	bundle := testBundleWithPicks()
+	v, ok := MidVariantPrice(bundle, 2027, 1)
+	if !ok {
+		t.Fatal("MidVariantPrice(2027, 1): not found")
+	}
+	if v.SFDynasty != 3000 {
+		t.Errorf("SFDynasty = %d, want 3000 (mid variant, not early/late/slot)", v.SFDynasty)
+	}
+}
+
+func TestMidVariantPrice_MissingRoundReportsNotFound(t *testing.T) {
+	bundle := testBundleWithPicks()
+	if _, ok := MidVariantPrice(bundle, 2027, 99); ok {
+		t.Error("MidVariantPrice(2027, 99): want not found, got a price")
+	}
+}
+
 func TestAggregatePicks_DefaultOwnershipIsIdentity(t *testing.T) {
 	league := &sleeper.League{Settings: map[string]int{"draft_rounds": 2}}
 	rosters := []sleeper.Roster{{RosterID: 1, OwnerID: "u1"}, {RosterID: 2, OwnerID: "u2"}}

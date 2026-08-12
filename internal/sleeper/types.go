@@ -52,6 +52,15 @@ type TransactionDraftPick struct {
 	OwnerID         int    `json:"owner_id"`
 }
 
+// WaiverBudgetTransfer is one FAAB budget movement attached to a transaction
+// (a trade can include cash considerations alongside or instead of players
+// and picks).
+type WaiverBudgetTransfer struct {
+	Sender   int `json:"sender"`
+	Receiver int `json:"receiver"`
+	Amount   int `json:"amount"`
+}
+
 // Transaction is one league transaction (trade, waiver claim, or free-agent
 // add/drop) for a given week ("round" in Sleeper's API).
 type Transaction struct {
@@ -62,6 +71,7 @@ type Transaction struct {
 	Adds          map[string]int         `json:"adds"`
 	Drops         map[string]int         `json:"drops"`
 	DraftPicks    []TransactionDraftPick `json:"draft_picks"`
+	WaiverBudget  []WaiverBudgetTransfer `json:"waiver_budget"`
 	Created       int64                  `json:"created"` // epoch millis
 }
 

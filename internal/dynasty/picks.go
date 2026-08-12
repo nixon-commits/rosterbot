@@ -30,19 +30,13 @@ import (
 // StatsGuy's priced grid, but an unpriced round must not crash the run).
 func AggregatePicks(date time.Time, league *sleeper.League, rosters []sleeper.Roster, users []sleeper.User, tradedPicks []sleeper.TradedPick, bundle *statsguy.Bundle) []Row {
 	dt := date.UTC().Format("2006-01-02")
-	names := teamNames(rosters, users)
+	names := TeamNames(rosters, users)
 	draftRounds := league.Settings["draft_rounds"]
 	if draftRounds <= 0 {
 		return nil
 	}
 
 	years := distinctPickYears(bundle)
-	midPrice := make(map[[2]int]statsguy.FormatValues) // [year, round] -> mid-variant value
-	for _, p := range bundle.Picks {
-		if p.Variant == "mid" {
-			midPrice[[2]int{p.Year, p.Round}] = p.Value
-		}
-	}
 
 	// override[year][round][originalRosterID] = currentOwnerRosterID
 	type pickKey struct {
@@ -65,7 +59,7 @@ func AggregatePicks(date time.Time, league *sleeper.League, rosters []sleeper.Ro
 				if owner, ok := override[pickKey{year, round, r.RosterID}]; ok {
 					currentOwner = owner
 				}
-				value, ok := midPrice[[2]int{year, round}]
+				value, ok := MidVariantPrice(bundle, year, round)
 				if !ok {
 					continue // unpriced round: skip, don't crash
 				}
@@ -98,6 +92,21 @@ func AggregatePicks(date time.Time, league *sleeper.League, rosters []sleeper.Ro
 		return rows[i].AssetID < rows[j].AssetID
 	})
 	return rows
+}
+
+// MidVariantPrice looks up a round's generic "mid" tier price for the given
+// year -- the price used for an unresolved future pick, where there is no
+// draft order yet and so no team standing to prefer "early"/"late" over
+// "mid". Reused by AggregatePicks (season-wide reconstruction) and the
+// football-trades command (pricing a specific pick asset in one transaction),
+// so the two can never price the same pick differently.
+func MidVariantPrice(bundle *statsguy.Bundle, year, round int) (statsguy.FormatValues, bool) {
+	for _, p := range bundle.Picks {
+		if p.Variant == "mid" && p.Year == year && p.Round == round {
+			return p.Value, true
+		}
+	}
+	return statsguy.FormatValues{}, false
 }
 
 func distinctPickYears(bundle *statsguy.Bundle) []int {
