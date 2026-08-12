@@ -79,8 +79,13 @@ func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) h
 		// The Trades artifacts live in their own local dirs (matching their
 		// own S3 prefixes) rather than under lineupDir, so `serve` reads
 		// exactly what the producers wrote.
-		Trades:        lineupapi.NewFileBlobStore(layout.Trades.LocalDir, "trades-"),
-		TradeValues:   lineupapi.NewFileBlobStore(layout.TradeValues.LocalDir, "tradevalues-"),
+		Trades:      lineupapi.NewFileBlobStore(layout.Trades.LocalDir, "trades-"),
+		TradeValues: lineupapi.NewFileBlobStore(layout.TradeValues.LocalDir, "tradevalues-"),
+		// Same arrangement for the private reports: projection-site writes
+		// .reports/{model,gap,views}.json, and `serve` reads exactly those
+		// bytes, so the Projections and Views tabs work locally against the
+		// authenticated path rather than a static file the SPA no longer fetches.
+		Reports:       lineupapi.NewFileBlobStore(layout.Reports.LocalDir, ""),
 		WebAuthn:      wa,
 		SessionSecret: sessionSecret,
 		// Jobs is nil locally: triggering real ECS tasks only makes sense on AWS.

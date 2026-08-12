@@ -56,6 +56,7 @@ var (
 	tradesArtifact         = artifact{layout.Trades.S3Prefix, layout.Trades.LocalDir}
 	tradeValuesArtifact    = artifact{layout.TradeValues.S3Prefix, layout.TradeValues.LocalDir}
 	tradeOfferArtifact     = artifact{layout.TradeOffers.S3Prefix, layout.TradeOffers.LocalDir}
+	reportsArtifact        = artifact{layout.Reports.S3Prefix, layout.Reports.LocalDir}
 	footballTradesArtifact = artifact{layout.FootballTrades.S3Prefix, layout.FootballTrades.LocalDir}
 )
 
@@ -277,6 +278,18 @@ func (s *Selector) TradesStore() (lineupapi.BlobStore, error) {
 // rewritten daily by the TeamValues job.
 func (s *Selector) TradeValuesStore() (lineupapi.BlobStore, error) {
 	return blobStore(s, tradeValuesArtifact, "tradevalues-")
+}
+
+// ReportsStore holds the three private dashboard reports (reports/model.json,
+// reports/gap.json, reports/views.json), rewritten daily by the ProjectionSite
+// job and served only through the passkey-gated GET /v1/reports/{name}.
+//
+// No namePrefix: the reports/ prefix (.reports/ locally) holds nothing else, so
+// the key alone names the file and the local layout matches the S3 one
+// one-for-one — which is what makes a local `serve` read exactly the bytes a
+// deployed Lambda would.
+func (s *Selector) ReportsStore() (lineupapi.BlobStore, error) {
+	return blobStore(s, reportsArtifact, "")
 }
 
 // FootballTradeMarkers is one dedup marker object per Sleeper trade

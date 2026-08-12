@@ -65,6 +65,14 @@ func main() {
 		log.Fatalf("init s3 identity store: %v", err)
 	}
 
+	// The three private dashboard reports. They live in the state bucket, not
+	// the dashboard bucket's world-readable report/ prefix, so serving them
+	// through this passkey-gated API is the only way the SPA can reach them.
+	reports, err := s3lineup.New(ctx, bucket, "reports/")
+	if err != nil {
+		log.Fatalf("init s3 reports store: %v", err)
+	}
+
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		log.Fatalf("load aws config: %v", err)
@@ -111,6 +119,7 @@ func main() {
 		Output:        output,
 		Progress:      progressStore,
 		Infra:         infra,
+		Reports:       reports,
 		Identities:    identities,
 		WebAuthn:      wa,
 		SessionSecret: []byte(sessionSecret),

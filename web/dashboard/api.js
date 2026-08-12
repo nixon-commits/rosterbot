@@ -64,11 +64,18 @@ export const api = {
   trades: () => request("GET", "/v1/trades"),
   tradeValues: () => request("GET", "/v1/trades/values"),
 
-  // Report JSON is served from the CloudFront root, not /v1.
-  reportModel: () => request("GET", "/report/model.json"),
+  // The private reports go through /v1 for the same reason pending offers do:
+  // the report/ prefix is served from the CloudFront root with no auth, and
+  // these three are the manager's own performance — bench points left on the
+  // table, projection grades, who reads their site. In a multi-tenant league
+  // they are per-manager data, and the tenants are competitors.
+  reportModel: () => request("GET", "/v1/reports/model"),
+  reportViews: () => request("GET", "/v1/reports/views"),
+  reportGap: () => request("GET", "/v1/reports/gap"),
+
+  // League-wide standings stay on the public report/ prefix — every manager can
+  // already read these numbers off Fantrax and Sleeper.
   reportValue: () => request("GET", "/report/value.json"),
-  reportViews: () => request("GET", "/report/views.json"),
-  reportGap: () => request("GET", "/report/gap.json"),
   reportFootball: () => request("GET", "/report/football.json"),
   runProgress: (id) => request("GET", `/v1/runs/${encodeURIComponent(id)}/progress`),
 };
