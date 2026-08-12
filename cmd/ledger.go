@@ -14,6 +14,7 @@ import (
 var (
 	ledgerID       string
 	ledgerCommand  string
+	ledgerUser     string
 	ledgerStatus   string
 	ledgerExitCode int
 	ledgerStarted  string
@@ -36,6 +37,11 @@ func init() {
 	f := ledgerCmd.Flags()
 	f.StringVar(&ledgerID, "id", "", "run id (ECS task id)")
 	f.StringVar(&ledgerCommand, "command", "", "command that ran")
+	// Empty until per-tenant fan-out sets RUN_USER_ID; it is what lets
+	// internal/opsalert tell N tenants running the same command apart, since a
+	// command-only key grades a permanently-failing tenant as healthy on its
+	// neighbours' successes.
+	f.StringVar(&ledgerUser, "user", "", "tenant this run belongs to (empty = single tenant)")
 	f.StringVar(&ledgerStatus, "status", "", "RUNNING | SUCCESS | FAILED")
 	f.IntVar(&ledgerExitCode, "exit-code", -1, "process exit code (-1 = unset, for RUNNING)")
 	f.StringVar(&ledgerStarted, "started", "", "RFC3339 start time")
@@ -54,6 +60,7 @@ func runLedger(cmd *cobra.Command, args []string) error {
 		Run: lineupapi.Run{
 			ID:        ledgerID,
 			Command:   ledgerCommand,
+			UserID:    ledgerUser,
 			Status:    ledgerStatus,
 			StartedAt: ledgerStarted,
 			EndedAt:   ledgerEnded,

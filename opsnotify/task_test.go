@@ -473,6 +473,78 @@ func TestHandleTask_ADifferentTaskStillAlerts(t *testing.T) {
 	}
 }
 
+// runU is run for one tenant: the same command string, a different tenant.
+func runU(id, command, user, status string, exit int) opsalert.Record {
+	r := run(id, command, status, exit)
+	r.UserID = user
+	return r
+}
+
+// The whole point of the (command, user_id) key, driven end to end through the
+// Lambda. Three tenants run the same command string into one ledger; bob fails
+// every round while alice and carol succeed. Keyed on the command alone, bob's
+// streak is broken by his neighbours' successes on every single round and the
+// third failure — the one that should escalate — grades as a first failure at
+// most, usually as nothing at all.
+//
+// The tenant is taken from bob's own terminal ledger record rather than from the
+// ECS event: the record is already fetched here, and the event shape carries no
+// tenant of its own.
+func TestHandleTask_TenantsDoNotContaminateEachOther(t *testing.T) {
+	var recs []opsalert.Record
+	prepend := func(r opsalert.Record) { recs = append([]opsalert.Record{r}, recs...) }
+	for i := 0; i < 3; i++ {
+		prepend(runU(fmt.Sprintf("a%d", i), optimizeCmd, "alice", opsalert.StatusSuccess, 0))
+		prepend(runU(fmt.Sprintf("b%d", i), optimizeCmd, "bob", opsalert.StatusFailed, 1))
+		prepend(runU(fmt.Sprintf("c%d", i), optimizeCmd, "carol", opsalert.StatusSuccess, 0))
+	}
+	fakeLedger(t, recs)
+	got := capture(t)
+	fakeMarkers(t)
+
+	one := 1
+	if err := handleTask(context.Background(),
+		ecsDetail("b2", "STOPPED", "", &one, strings.Fields(optimizeCmd))); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("got %d sends, want 1: %v", len(*got), *got)
+	}
+	for _, want := range []string{"still failing", "3", "bob"} {
+		if !strings.Contains((*got)[0], want) {
+			t.Errorf("send %q missing %q", (*got)[0], want)
+		}
+	}
+
+	// And a healthy tenant's stopped task stays quiet, rather than inheriting
+	// bob's failures as its own streak.
+	zero := 0
+	if err := handleTask(context.Background(),
+		ecsDetail("a2", "STOPPED", "", &zero, strings.Fields(optimizeCmd))); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("got %d sends, want still 1: %v", len(*got), *got)
+	}
+}
+
+// Two tenants' tasks are two distinct ECS tasks, so the task-scoped dedup key is
+// already per-tenant — but only as long as it stays derived from the task id.
+// Pinned here because the property is load-bearing and invisible: nothing else
+// in this package mentions a tenant.
+func TestEcsTaskDetail_DedupeKeyIsPerTaskAndThereforePerTenant(t *testing.T) {
+	var a, b ecsTaskDetail
+	if err := json.Unmarshal(ecsDetail("taskA", "STOPPED", "", nil, strings.Fields(optimizeCmd)), &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(ecsDetail("taskB", "STOPPED", "", nil, strings.Fields(optimizeCmd)), &b); err != nil {
+		t.Fatal(err)
+	}
+	if a.dedupeKey() == b.dedupeKey() {
+		t.Errorf("two tenants' tasks share dedupe key %q", a.dedupeKey())
+	}
+}
+
 // A silent verdict must not claim the task's marker: if the same task is later
 // re-delivered in a state that does warrant an alert, the marker left by the
 // quiet pass would suppress it.

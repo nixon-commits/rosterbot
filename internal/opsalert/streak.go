@@ -26,9 +26,18 @@ const (
 // did this job last launch?" — see heartbeat.go. Streak ignores it: a streak is
 // ordering, and the ledger's inverted-timestamp keys already deliver records in
 // order, so parsing a timestamp to re-derive that would only add a failure mode.
+//
+// UserID is which tenant's run this was, and is empty for every record written
+// before per-tenant fan-out. Both decisions in this package key on
+// (Command, UserID) rather than on Command alone, because under fan-out N
+// tenants run the *same command string* and a command-only key silently
+// inverts: see the Streak and Overdue docs. The empty value is a tenant like
+// any other, so the whole pre-fan-out ledger keeps grading as the single tenant
+// it describes.
 type Record struct {
 	ID        string `json:"id"`
 	Command   string `json:"command"`
+	UserID    string `json:"user_id,omitempty"`
 	Status    string `json:"status"`
 	StartedAt string `json:"started_at"`
 	ExitCode  *int   `json:"exit_code,omitempty"`
@@ -78,19 +87,32 @@ func (k Kind) String() string {
 // escalates exactly once.
 const EscalateAt = 3
 
-// Verdict is the decision for one command. Failure is the record that triggered
-// a Started or Escalated verdict, so the caller can quote its log tail; it is
-// nil for None and Recovered.
+// Verdict is the decision for one (command, tenant). Failure is the record that
+// triggered a Started or Escalated verdict, so the caller can quote its log
+// tail; it is nil for None and Recovered.
 type Verdict struct {
 	Kind    Kind
 	Command string
+	UserID  string
 	Streak  int
 	Failure *Record
 }
 
-// Streak decides what to say about the newest run of command, given recs in
-// newest-first order (the run ledger's inverted-timestamp keys list that way
-// natively).
+// Streak decides what to say about the newest run of command for tenant userID,
+// given recs in newest-first order (the run ledger's inverted-timestamp keys
+// list that way natively).
+//
+// The history is keyed on (command, userID), not on command alone. Under
+// per-tenant fan-out every tenant runs the same command string into the same
+// ledger, so a command-only history interleaves them — and since a SUCCESS
+// breaks the streak, a tenant failing *every* run grades as healthy on its
+// neighbours' successes. That failure is silent by construction: the code
+// compiles, runs, and reports green.
+//
+// userID is empty for every record written before fan-out, and empty is treated
+// as an ordinary tenant value rather than a wildcard, so the existing ledger
+// grades exactly as it did. During cutover a mixed ledger holds both, and the
+// two histories stay separate in both directions.
 //
 // Only terminal records count. RUNNING is the start-of-run write that the
 // end-of-run write later overwrites at the same key, so an in-flight sibling
@@ -99,10 +121,10 @@ type Verdict struct {
 // The whole decision is derived from the ledger, which is why there is no
 // counter object to keep consistent and no cooldown to tune: streak
 // transitions deduplicate themselves.
-func Streak(recs []Record, command string) Verdict {
+func Streak(recs []Record, command, userID string) Verdict {
 	var hist []Record
 	for _, r := range recs {
-		if r.Command != command {
+		if r.Command != command || r.UserID != userID {
 			continue
 		}
 		if r.Status != StatusSuccess && r.Status != StatusFailed {
@@ -110,20 +132,21 @@ func Streak(recs []Record, command string) Verdict {
 		}
 		hist = append(hist, r)
 	}
+	none := Verdict{Command: command, UserID: userID}
 	if len(hist) == 0 {
-		return Verdict{Command: command}
+		return none
 	}
 
 	if hist[0].Status == StatusSuccess {
 		n := leadingFailures(hist[1:])
 		if n == 0 {
-			return Verdict{Command: command}
+			return none
 		}
-		return Verdict{Kind: Recovered, Command: command, Streak: n}
+		return Verdict{Kind: Recovered, Command: command, UserID: userID, Streak: n}
 	}
 
 	n := leadingFailures(hist)
-	v := Verdict{Command: command, Streak: n, Failure: &hist[0]}
+	v := Verdict{Command: command, UserID: userID, Streak: n, Failure: &hist[0]}
 	switch n {
 	case 1:
 		v.Kind = Started

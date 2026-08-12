@@ -85,13 +85,15 @@ func handleHeartbeat(ctx context.Context) error {
 		// which run the last alert was about.
 		prev, _ := markers.token(ctx, m.MarkerKey())
 		if !m.NeedsAlert(prev) {
-			log.Printf("heartbeat: %s still overdue, already reported (%s)", logSafe(m.Command), logSafe(prev))
+			log.Printf("heartbeat: %s%s still overdue, already reported (%s)",
+				logSafe(m.Command), logSafe(opsalert.TenantTag(m.UserID)), logSafe(prev))
 			continue
 		}
 		title, body := opsalert.FormatMissed(m)
 		a := alert{key: m.MarkerKey(), note: m.AlertToken(), title: title, body: body}
 		if err := send1(ctx, markers, a); err != nil {
-			log.Printf("heartbeat send %s: %v", logSafe(m.Command), err)
+			log.Printf("heartbeat send %s%s: %v",
+				logSafe(m.Command), logSafe(opsalert.TenantTag(m.UserID)), err)
 		}
 	}
 	return nil
