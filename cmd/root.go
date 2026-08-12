@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
@@ -88,6 +89,28 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("fantrax client: %w", err)
 	}
+	if err := initShared(); err != nil {
+		return nil, nil, err
+	}
+	if !noCache {
+		ft.SetCache(cacheDir)
+	}
+	return cfg, ft, nil
+}
+
+// initShared wires the sport-agnostic middle every command shares regardless
+// of which upstream (Fantrax, Sleeper) it talks to: the cache store, the
+// cache-notify stale-fallback alert, and the three activity recorders.
+// Fantrax-specific setup (config.Load's required-var validation,
+// fantrax.NewClient, ft.SetCache) stays in initApp; Sleeper-specific setup
+// lives in initFootball. Both call this first so football commands need no
+// FANTRAX_* env vars.
+func initShared() error {
+	// Load .env if present (local dev); ignore error if missing (GHA/Fargate
+	// use env directly). config.Load also does this, but initFootball never
+	// calls config.Load, so this package needs its own entry point.
+	_ = godotenv.Load()
+
 	if !noCache {
 		// On Fargate, back the Cache with S3 directly (per-key) instead of
 		// local files, so no bulk .cache sync is needed. statestore owns the
@@ -95,18 +118,17 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 		// default fsStore).
 		st, err := statestore.FromEnv().CacheStore()
 		if err != nil {
-			return nil, nil, fmt.Errorf("init cache store: %w", err)
+			return fmt.Errorf("init cache store: %w", err)
 		}
 		if st != nil {
 			cache.SetDefaultStore(st)
 		}
-		ft.SetCache(cacheDir)
 	}
 	// Surface stale-cache fallbacks (fresh fetch failed, serving cached copy)
 	// as a Pushover push when creds are present. Console logging happens
 	// unconditionally inside the cache package.
-	if cfg.PushoverUserKey != "" && cfg.PushoverAPIToken != "" {
-		userKey, apiToken := cfg.PushoverUserKey, cfg.PushoverAPIToken
+	userKey, apiToken := os.Getenv("PUSHOVER_USER_KEY"), os.Getenv("PUSHOVER_API_TOKEN")
+	if userKey != "" && apiToken != "" {
 		cache.Notify = func(title, message string) {
 			if err := notify.SendPushover(userKey, apiToken, title, message); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: cache notify push failed: %v\n", err)
@@ -122,5 +144,5 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 	// Persist optimize's phase transitions under RUN_ID so the app can show a
 	// live progress bar (GET /v1/runs/{id}/progress).
 	installProgressRecorder()
-	return cfg, ft, nil
+	return nil
 }

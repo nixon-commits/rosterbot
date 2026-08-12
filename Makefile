@@ -104,6 +104,8 @@ run-all:
 	@echo "=== grade --dry-run ===";                     time go run . grade --dry-run;                                  echo
 	@echo "=== archive --dry-run ===";                   time go run . archive --dry-run;                                echo
 	@echo "=== team-values --dry-run ===";               time go run . team-values --dry-run;                            echo
+	@echo "=== football-values --dry-run ===";           time go run . football-values --dry-run;                       echo
+	@echo "=== football-trades --dry-run ===";           time go run . football-trades --dry-run;                       echo
 	@echo "=== backtest ===";                             time go run . backtest;                                         echo
 	@echo "=== backtest --recency-experiment ===";        time go run . backtest --recency-experiment --dates 2026-05-01:2026-05-07 || true; echo
 	@echo "=== recap --out /tmp/recap.html ===";          time go run . recap --out /tmp/recap.html;                      echo

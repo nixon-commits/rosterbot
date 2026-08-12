@@ -1,6 +1,6 @@
 # rosterbot
 
-Domain glossary for the fantasy-baseball automation. Terms are added lazily as design decisions resolve them — this file is not exhaustive.
+Domain glossary for the fantasy automation. Originally fantasy-baseball-only; the **Dynasty Football** section below covers the second sport (Sleeper + StatsGuy). Unqualified terms above it are baseball-specific (Fantrax); terms below it are football-specific (Sleeper) unless noted. Terms are added lazily as design decisions resolve them — this file is not exhaustive.
 
 ## Language
 
@@ -86,3 +86,27 @@ _Avoid_: warehouse, archive, history DB, datalake.
 **Graded Snapshot**:
 The materialized fact behind the Analysis Store: one row per (date, player) pairing the projected Expected Points with the actual Single-Game FPts and their signed error, plus dimensions — Eligibility Bucket, role, was-started. Computed by reusing `internal/backtest`'s projection grading. The grain model-audit queries aggregate.
 _Avoid_: grade row, result, scorecard.
+
+## Dynasty Football
+
+Sleeper (league/roster state, public read-only API, no key) + StatsGuy (dynasty valuations, `api.statsguyfantasy.com`, no key). Read-only throughout: Sleeper has no lineup-write endpoint, so the optimize-and-apply spine (Slot, Weekly Period, ApplyLineup, …) has no football counterpart — football's two commands are a value store and a trade monitor, not an optimizer.
+
+**Asset**:
+A player or a draft pick — the two things a Sleeper roster or trade can hold. `dynasty.Row.AssetType` is `"player"` or `"pick"`; `dynasty.TradeAsset` is the same distinction inside one trade. A pick's identity is `(year, round)`, priced generically (see _Pick Price_) since it has no draft-slot standing yet.
+_Avoid_: item, entry, piece.
+
+**Dynasty Value**:
+An Asset's StatsGuy value in one of four formats (`sf_dynasty` / `non_sf_dynasty` / `sf_redraft` / `non_sf_redraft`). Every `dynasty.Row` carries all four leaves — not just the league's configured format — so the dashboard derives the format toggle client-side without re-aggregating, the same pattern `teamvalue.Row` uses for hitter/pitcher × MLB/minors. `DYNASTY_FORMAT` (default `sf_dynasty`) picks which leaf a command's own summary/headline reads.
+_Avoid_: player value, score, rating.
+
+**Starters Value**:
+The Dynasty Value of a roster's starting lineup only (`Row.IsStarter == true`), as opposed to the full-roster total. **The headline number**, not the full-roster total — the 2026-08-10 coverage-gate spike measured starters coverage near-100% across the league (StatsGuy's ~13% player universe still covers nearly every real starter) against a full-roster coverage spread of 21.1pp (best 100.0%, worst 78.9%) that fails a 10pp target. Reporting the full-roster total as-is would silently understate rosters with more unvalued bench/depth players, without saying so — the same shape of failure as rosterbot-hx5 (a metric that can only emit one value on the data that matters isn't a measurement). The full-roster total still ships, but visually demoted and always beside its matched/rostered coverage counts. See bd memory `dynasty-football-coverage-gate-2026-08-10`.
+_Avoid_: total value, roster value (ambiguous between starters and full roster — say which).
+
+**Coverage Spread**:
+The gap between the best and worst team's full-roster StatsGuy join-coverage percentage (`matched / rostered`) across the league — the metric the 2026-08-10 gate measured (21.1pp) to decide whether the full-roster total was trustworthy enough to headline. Distinct from a single team's *Coverage* (`dynasty.Coverage`: one team's `RosteredCount`/`MatchedCount`/`Unmatched`) — Spread is the league-wide range across every team's coverage, not one team's count.
+_Avoid_: match rate, join rate (say *which* team's, or say Coverage Spread if it's the league-wide range).
+
+**Pick Price**:
+An unresolved future draft pick's generic per-round value: StatsGuy's `"mid"` variant tier for that `(year, round)`, ignoring the `"early"`/`"late"` tiers and the resolved-slot entries (`"2027 1.01"`) a settled draft order would use instead. There is no team standing yet to prefer `"early"` or `"late"` over `"mid"`, so every unresolved pick — in the Dynasty Value Store and in a trade — prices the same way (`dynasty.MidVariantPrice`, one function, so the store and a trade alert can never disagree). Every priced pick is flagged `Estimated: true` for this reason.
+_Avoid_: pick value (say Pick Price when specifically the mid-tier estimate), draft value.

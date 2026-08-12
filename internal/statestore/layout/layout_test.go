@@ -67,7 +67,7 @@ func TestAll_ProducersAreRealSchedules(t *testing.T) {
 	valid := map[string]bool{
 		"Lineup": true, "Prospects": true, "GsCheck": true, "Waivers": true,
 		"Transactions": true, "Claims": true, "Backtest": true, "Grade": true,
-		"ProjectionSite": true, "Archive": true, "TeamValues": true, "Shadow": true,
+		"ProjectionSite": true, "Archive": true, "TeamValues": true, "Shadow": true, "FootballValues": true,
 		"": true, // no single producer (e.g. session/, written by every task)
 	}
 	for _, a := range All() {

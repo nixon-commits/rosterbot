@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/dynasty"
 	"github.com/nixon-commits/rosterbot/internal/lineupgap"
 	"github.com/nixon-commits/rosterbot/internal/recaplog"
 	"github.com/nixon-commits/rosterbot/internal/report"
@@ -88,6 +89,14 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 	// accuracy dashboard deploy.
 	if err := renderGapSite(projSiteOut); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: gap.json not written: %v\n", err)
+	}
+
+	// Emit football.json (dynasty football standings) on the same terms: its
+	// own store, additive, soft-failing so a football hiccup never blocks the
+	// accuracy dashboard deploy. projection-site never calls initApp (pure
+	// statestore reads), so there is no Fantrax coupling to work around here.
+	if err := renderFootballSite(projSiteOut); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: football.json not written: %v\n", err)
 	}
 
 	if projSiteOpen {
@@ -182,6 +191,31 @@ func writeGapModel(reader lineupgap.Reader, outDir string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "Wrote %s (%d lineup-gap days)\n", outPath, len(rows))
+	return nil
+}
+
+// renderFootballSite reads the Dynasty Value Store (S3 when STATE_BUCKET is
+// set, else local .footballvalue/) and writes <outDir>/football.json. An
+// empty store still writes a valid (empty) model rather than erroring.
+func renderFootballSite(outDir string) error {
+	reader, err := statestore.FromEnv().FootballValueReader()
+	if err != nil {
+		return fmt.Errorf("init football-value reader: %w", err)
+	}
+	rows, err := reader.ReadAll()
+	if err != nil {
+		return fmt.Errorf("read football values: %w", err)
+	}
+	coverage, err := reader.ReadAllCoverage()
+	if err != nil {
+		return fmt.Errorf("read football coverage: %w", err)
+	}
+	fm := dynasty.BuildModel(rows, coverage, time.Now())
+	outPath := filepath.Join(outDir, "football.json")
+	if err := writeJSONModel(outPath, fm); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "Wrote %s (%d football rows, %d teams)\n", outPath, len(rows), len(fm.Teams))
 	return nil
 }
 
