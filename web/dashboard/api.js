@@ -69,5 +69,6 @@ export const api = {
   reportValue: () => request("GET", "/report/value.json"),
   reportViews: () => request("GET", "/report/views.json"),
   reportGap: () => request("GET", "/report/gap.json"),
+  reportFootball: () => request("GET", "/report/football.json"),
   runProgress: (id) => request("GET", `/v1/runs/${encodeURIComponent(id)}/progress`),
 };

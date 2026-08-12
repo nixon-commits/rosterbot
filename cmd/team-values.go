@@ -238,9 +238,15 @@ func printTeamValueSummary(date time.Time, rows []teamvalue.Row) {
 	fmt.Printf("league join coverage: %d/%d players matched to HKB\n", totMatched, totRostered)
 }
 
+// truncate cuts s to at most n runes, appending an ellipsis if it was cut.
+// Rune-aware, not byte-aware: a byte-slice cut (s[:n-1]) can land mid-codepoint
+// on any multi-byte UTF-8 character (e.g. a curly apostrophe in a Sleeper
+// display name), producing the U+FFFD replacement character instead of the
+// intended glyph.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	return string(r[:n-1]) + "…"
 }
