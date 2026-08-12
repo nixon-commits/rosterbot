@@ -300,7 +300,7 @@ func TestBackfillDailyFPts_NewPlayerHitter(t *testing.T) {
 		}},
 	}
 
-	if err := c.backfillDailyFPts(days); err != nil {
+	if _, err := c.backfillDailyFPts(days); err != nil {
 		t.Fatalf("backfillDailyFPts: %v", err)
 	}
 
@@ -353,7 +353,7 @@ func TestBackfillDailyFPts_TwoWayPitchingCross(t *testing.T) {
 		}},
 	}
 
-	if err := c.backfillDailyFPts(days); err != nil {
+	if _, err := c.backfillDailyFPts(days); err != nil {
 		t.Fatalf("backfillDailyFPts: %v", err)
 	}
 
@@ -396,7 +396,7 @@ func TestBackfillDailyFPts_OffDay(t *testing.T) {
 		}},
 	}
 
-	if err := c.backfillDailyFPts(days); err != nil {
+	if _, err := c.backfillDailyFPts(days); err != nil {
 		t.Fatalf("backfillDailyFPts: %v", err)
 	}
 
@@ -432,7 +432,7 @@ func TestBackfillDailyFPts_NameResolveMiss(t *testing.T) {
 		}},
 	}
 
-	if err := c.backfillDailyFPts(days); err != nil {
+	if _, err := c.backfillDailyFPts(days); err != nil {
 		t.Fatalf("backfillDailyFPts should soft-fail, got error: %v", err)
 	}
 
@@ -585,7 +585,7 @@ func TestBackfillDailyFPts_NoTargets(t *testing.T) {
 			{PlayerID: "x", Name: "Healthy", FPts: 10, Active: true, needsBackfill: false},
 		}},
 	}
-	if err := c.backfillDailyFPts(days); err != nil {
+	if _, err := c.backfillDailyFPts(days); err != nil {
 		t.Fatalf("backfillDailyFPts with no targets should be a no-op, got: %v", err)
 	}
 	if days[0].Players[0].FPts != 10 {
@@ -733,5 +733,56 @@ func TestMLBDailyFPts_SkipsUnresolvableNameWithoutFailing(t *testing.T) {
 	}
 	if len(days) != 0 {
 		t.Errorf("got %d days, want 0", len(days))
+	}
+}
+
+// The backfill counted "no MLBAM ID for this name" and "the game-log fetch
+// failed" with the same failedCount, so the one operator-facing log line could
+// not distinguish a poisoned name resolution from an upstream outage. That is
+// why rosterbot-i52's throttling hypothesis looked supported for months — the
+// evidence to refute it was never recorded (rosterbot-i52 defect 3).
+func TestBackfillDailyFPts_SeparatesUnresolvedFromFetchFailure(t *testing.T) {
+	dir := t.TempDir()
+	leagueID := "TESTLG"
+	writeScoringCache(t, dir, leagueID, ScoringWeights{"1B": 1, "TB": 1}, ScoringWeights{})
+
+	// The game-log endpoint fails for every request, so the player who DOES
+	// resolve still can't be backfilled.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "upstream down", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	prevURL := mlbBackfillGameLogURL
+	mlbBackfillGameLogURL = srv.URL + "/people/%d/stats?stats=gameLog&group=%s&season=%d&sportId=1"
+	defer func() { mlbBackfillGameLogURL = prevURL }()
+
+	prevResolver := resolveBackfillNames
+	resolveBackfillNames = func(_ []string, _ string) (*playername.ResolvedPlayers, error) {
+		// "Known Player" resolves; "Ghost Player" does not.
+		return &playername.ResolvedPlayers{
+			ByName: map[string]int{playername.Normalize("Known Player"): 672515},
+		}, nil
+	}
+	defer func() { resolveBackfillNames = prevResolver }()
+
+	c := newTestBackfillClient(t, dir, leagueID)
+	date, _ := time.Parse("2006-01-02", "2026-05-21")
+	days := []DayRoster{{Date: date, Players: []DayPlayerFP{
+		{PlayerID: "p1", Name: "Known Player", needsBackfill: true},
+		{PlayerID: "p2", Name: "Ghost Player", needsBackfill: true},
+	}}}
+
+	stats, err := c.backfillDailyFPts(days)
+	if err != nil {
+		t.Fatalf("backfillDailyFPts: %v", err)
+	}
+	if stats.Unresolved != 1 {
+		t.Errorf("Unresolved = %d, want 1 (Ghost Player had no MLBAM ID)", stats.Unresolved)
+	}
+	if stats.FetchFailed != 1 {
+		t.Errorf("FetchFailed = %d, want 1 (Known Player resolved but the game log 503'd)", stats.FetchFailed)
+	}
+	if stats.Flagged != 2 {
+		t.Errorf("Flagged = %d, want 2", stats.Flagged)
 	}
 }

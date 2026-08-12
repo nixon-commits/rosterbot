@@ -82,11 +82,13 @@ type mlbGameLogDay struct {
 // Hard errors (e.g., ResolveMLBAMIDs returns an error) cause the function
 // to return early with the error; DailyFantasyPoints logs and proceeds —
 // the un-backfilled rows are the same defensive zero the recap had before.
-func (c *Client) backfillDailyFPts(days []DayRoster) error {
+func (c *Client) backfillDailyFPts(days []DayRoster) (backfillStats, error) {
+	var stats backfillStats
 	targets := collectBackfillTargets(days)
 	if len(targets) == 0 {
-		return nil
+		return stats, nil
 	}
+	stats.Flagged = len(targets)
 
 	// Resolve all unique names in one batch.
 	nameSet := map[string]bool{}
@@ -100,23 +102,22 @@ func (c *Client) backfillDailyFPts(days []DayRoster) error {
 	}
 	resolved, err := resolveBackfillNames(names, c.cacheDir)
 	if err != nil {
-		return fmt.Errorf("resolve MLB IDs: %w", err)
+		return stats, fmt.Errorf("resolve MLB IDs: %w", err)
 	}
 
 	hitterWeights, err := c.GetScoringWeights()
 	if err != nil {
-		return fmt.Errorf("hitter scoring weights: %w", err)
+		return stats, fmt.Errorf("hitter scoring weights: %w", err)
 	}
 	pitcherWeights, err := c.GetPitcherScoringWeights()
 	if err != nil {
-		return fmt.Errorf("pitcher scoring weights: %w", err)
+		return stats, fmt.Errorf("pitcher scoring weights: %w", err)
 	}
 
-	var resolvedCount, noGameCount, failedCount int
 	for _, t := range targets {
 		mlbID, ok := resolved.ByName[playername.Normalize(t.Name)]
 		if !ok || mlbID == 0 {
-			failedCount++
+			stats.Unresolved++
 			continue
 		}
 		group := "hitting"
@@ -125,7 +126,8 @@ func (c *Client) backfillDailyFPts(days []DayRoster) error {
 		}
 		log, err := c.fetchMLBGameLog(mlbID, group, t.Date.Year())
 		if err != nil {
-			failedCount++
+			stats.FetchFailed++
+			stats.LastFetchErr = err
 			continue
 		}
 		fpts, hadGame := computeFPtsFromGameLog(log, t.Date, t.IsPitcher, hitterWeights, pitcherWeights)
@@ -133,15 +135,43 @@ func (c *Client) backfillDailyFPts(days []DayRoster) error {
 		days[t.DayIdx].Players[t.PlayerIdx].HadGame = hadGame
 		days[t.DayIdx].Players[t.PlayerIdx].needsBackfill = false
 		if hadGame {
-			resolvedCount++
+			stats.Resolved++
 		} else {
-			noGameCount++
+			stats.NoGame++
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "mlb backfill: %d flagged, %d resolved, %d no-game, %d failed\n",
-		len(targets), resolvedCount, noGameCount, failedCount)
-	return nil
+	fmt.Fprintln(os.Stderr, stats.String())
+	return stats, nil
+}
+
+// backfillStats is the outcome of one backfill pass.
+//
+// Unresolved and FetchFailed are counted SEPARATELY on purpose. They were one
+// `failed` counter, which made the operator-facing log line unable to
+// distinguish a name that resolved to no MLBAM ID — the poisoned-resolution
+// failure of rosterbot-i52 — from an upstream game-log outage. The two have
+// opposite fixes, and for months the log could not tell them apart, which is
+// exactly why the throttling hypothesis went untested (rosterbot-i52 defect 3).
+type backfillStats struct {
+	Flagged     int
+	Resolved    int
+	NoGame      int
+	Unresolved  int // name → MLBAM ID lookup produced nothing; no request was made
+	FetchFailed int // had an ID, but the game-log request failed
+
+	// LastFetchErr is reported alongside the counts so a fetch failure names its
+	// cause instead of only its count.
+	LastFetchErr error
+}
+
+func (s backfillStats) String() string {
+	msg := fmt.Sprintf("mlb backfill: %d flagged, %d resolved, %d no-game, %d unresolved-name, %d fetch-failed",
+		s.Flagged, s.Resolved, s.NoGame, s.Unresolved, s.FetchFailed)
+	if s.LastFetchErr != nil {
+		msg += fmt.Sprintf(" (last fetch error: %v)", s.LastFetchErr)
+	}
+	return msg
 }
 
 // MLBPlayerRef identifies one player for a roster-independent MLB game-log
