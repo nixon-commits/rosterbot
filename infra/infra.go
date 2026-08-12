@@ -215,6 +215,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			"PUSHOVER_USER_KEY":    secret("PUSHOVER_USER_KEY"),
 			"PUSHOVER_GROUP_KEY":   secret("PUSHOVER_GROUP_KEY"),
 			"PUSHOVER_API_TOKEN":   secret("PUSHOVER_API_TOKEN"),
+			// SLEEPER_LEAGUE_ID is the one hard requirement football-values/
+			// football-trades have (loadFootballConfig errors without it,
+			// unlike DYNASTY_FORMAT and FOOTBALL_PUSHOVER_*, which fall back
+			// safely in code) — without this the FootballValues/FootballTrades
+			// EventBridge schedules fail every run with "missing required env
+			// var: SLEEPER_LEAGUE_ID" once deployed.
+			"SLEEPER_LEAGUE_ID": secret("SLEEPER_LEAGUE_ID"),
 		},
 	})
 
