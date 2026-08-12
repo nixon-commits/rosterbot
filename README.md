@@ -253,6 +253,24 @@ rosterbot projection-site --out report --open
 </details>
 
 <details>
+<summary><b>Dynasty football</b> — <code>football-values</code> · <code>football-trades</code> (Sleeper + StatsGuy)</summary>
+
+The bot's second sport. Read-only: Sleeper's public API has no lineup-write endpoint, so there's no `optimize`/apply equivalent here — just a value store and a trade monitor. Needs only `SLEEPER_LEAGUE_ID`, not any `FANTRAX_*` credential.
+
+```bash
+# Append today's per-player dynasty value rows (players + owned future picks) to the Dynasty Value Store
+rosterbot football-values --dry-run
+rosterbot football-values --date 2026-08-11
+
+# Poll Sleeper for newly completed trades and push a graded Pushover alert
+rosterbot football-trades --dry-run
+```
+
+Starters value is the headline (not the full-roster total) — starters coverage against StatsGuy's value grid is consistently near-complete, full-roster coverage isn't. The full-roster total still prints, alongside its own matched/rostered coverage counts. Trade grading is a local sum over the same StatsGuy bundle the value store reads (no package-decay adjustment — measured: StatsGuy applies none); a trade with any unpriced asset (an unresolvable pick round, a FAAB-only side — StatsGuy prices players and picks, not cash) suppresses the verdict rather than reporting a partial total. `football-trades` is idempotent across repeated runs via a per-trade dedup marker.
+
+</details>
+
+<details>
 <summary><b>Serve</b> — <code>serve</code> (read-only lineup API + web dashboard)</summary>
 
 ```bash
@@ -421,7 +439,9 @@ open http://localhost:8080/        # bootstrap: paste "test", register a passkey
 
 ## Configuration
 
-Required (via `.env` locally, SSM `/rosterbot/*` on AWS): `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
+Required for the baseball (Fantrax) commands (via `.env` locally, SSM `/rosterbot/*` on AWS): `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
+
+Required for the dynasty football (Sleeper) commands — `football-values`, `football-trades` — and *only* those; no `FANTRAX_*` var is needed to run them: `SLEEPER_LEAGUE_ID`.
 
 Optional:
 
@@ -435,7 +455,10 @@ Optional:
 | `PROSPECT_UPGRADE_RANK_THRESHOLD` | `20` | Prospect rank threshold for upgrade alerts. |
 | `PUSHOVER_USER_KEY` | — | Personal channel (trades, lineup, ops alerts). |
 | `PUSHOVER_GROUP_KEY` | — | Group channel (GS violation alerts). |
-| `PUSHOVER_API_TOKEN` | — | Pushover application token. |
+| `PUSHOVER_API_TOKEN` | — | Pushover application token — shared by every Pushover send, baseball or football. |
+| `DYNASTY_FORMAT` | `sf_dynasty` | Which StatsGuy format (`sf_dynasty`/`non_sf_dynasty`/`sf_redraft`/`non_sf_redraft`) a football command's own printed summary reads. The Dynasty Value Store itself always records all four. |
+| `FOOTBALL_PUSHOVER_USER_KEY` | `PUSHOVER_USER_KEY` | Personal channel for `football-trades` alerts. |
+| `FOOTBALL_PUSHOVER_GROUP_KEY` | `PUSHOVER_GROUP_KEY` | Reserved for a future football group broadcast; not currently sent to. |
 
 ---
 
