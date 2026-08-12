@@ -45,6 +45,17 @@
   --c6: #edc948;
   --c7: #b07aa1;
   --c8: #ff9da7;
+
+  /* Heatmap hues for the lineup's age and HKB-value columns — the base of one
+     sequential ramp each (see the heatmap block near .lineup-age). Deliberately
+     not --danger/--success: those are reserved for state, and neither age nor
+     dynasty value is a state. --heat-value tracks --accent, so it follows the
+     dark override below on its own. Age takes the teal rather than a warmer
+     hue because the tinted cell sits inside rows that can carry the pink alert
+     background, and a mauve or amber pill on a pink row reads as part of the
+     alert instead of as a reading. */
+  --heat-age: var(--c5);
+  --heat-value: var(--accent);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -55,6 +66,12 @@
     --accent: #60a5fa;
     --danger: #f87171;
     --success: #4ade80;
+
+    /* The dark ramp is picked, not inherited: --c5 at a low tint disappears
+       against #14161a, so the age hue steps lighter here to keep the same
+       number of distinguishable steps. --heat-value needs no entry — it tracks
+       --accent, which is already re-picked for dark just above. */
+    --heat-age: #9fdcd7;
 
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.3);
   }
@@ -556,7 +573,7 @@ td.cov.warn { color: var(--danger); }
 
 .lineup-row {
   display: grid;
-  grid-template-columns: 2.75rem minmax(0, 1fr) auto 3.25rem;
+  grid-template-columns: 2.75rem minmax(0, 1fr) auto 2.75rem 3.75rem 3.25rem;
   align-items: center;
   gap: var(--s2);
   padding: var(--s2) var(--s3);
@@ -565,6 +582,22 @@ td.cov.warn { color: var(--danger); }
   font-size: .88rem;
 }
 .lineup-row:last-child { border-bottom: none; }
+
+/* The column header carries the labels for the two numeric columns the legend
+   colors. It sits in the same grid as the data rows so the labels land over the
+   numbers they name. */
+.lineup-colhead {
+  min-height: 0;
+  padding-top: var(--s1);
+  padding-bottom: var(--s1);
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--border) 25%, transparent);
+}
+.lineup-colhead .lineup-name { font-weight: 700; }
 
 .lineup-slot {
   font-size: .7rem;
@@ -588,6 +621,67 @@ td.cov.warn { color: var(--danger); }
 .lineup-pos::before { content: " · "; }
 .lineup-proj { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 
+/* ---- Age / HKB value heatmap -------------------------------------------- */
+/* Two sequential single-hue ramps, one per column, both running the same way:
+   more is darker. The step is an alpha tint of one hue over the row surface,
+   set per cell by lineup.js as --heat-pct, so the ramp stays monotonic in
+   lightness by construction rather than by a hand-picked list of steps that
+   could drift out of order.
+
+   Each ramp keeps its own hue so the two columns never read as one scale: age
+   takes a palette hue with no status meaning anywhere else in the dashboard,
+   value takes the accent already used for "this is the quantity that matters"
+   (tr.best, .lead). Neither uses --danger or --success — those are reserved for
+   state, and an expensive 33-year-old is not an error.
+
+   The text stays in normal ink at every step: at a 26% ceiling the tint moves
+   the surface far too little to threaten the 4.5:1 the label needs, in either
+   theme. The dark mode is chosen rather than inherited — see --heat-age under
+   prefers-color-scheme: dark. */
+.lineup-age,
+.lineup-value {
+  --heat-pct: 0%;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  padding: 2px var(--s1);
+  border-radius: 4px;
+}
+.lineup-age { background: color-mix(in srgb, var(--heat-age) var(--heat-pct), transparent); }
+.lineup-value { background: color-mix(in srgb, var(--heat-value) var(--heat-pct), transparent); }
+/* The header and the empty-slot dashes are not readings, so they are never
+   shaded — a tinted "—" would claim a magnitude that does not exist. */
+.lineup-colhead .lineup-age,
+.lineup-colhead .lineup-value,
+.lineup-age.muted,
+.lineup-value.muted { background: none; padding-left: 0; padding-right: 0; }
+
+.lineup-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+  margin: var(--s2) 0;
+  font-size: .75rem;
+  color: var(--muted);
+}
+.lineup-key { display: inline-flex; align-items: center; gap: var(--s2); }
+.lineup-ramp {
+  width: 46px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.lineup-ramp.ramp-age {
+  background: linear-gradient(to right,
+    color-mix(in srgb, var(--heat-age) 0%, transparent),
+    color-mix(in srgb, var(--heat-age) 26%, transparent));
+}
+.lineup-ramp.ramp-value {
+  background: linear-gradient(to right,
+    color-mix(in srgb, var(--heat-value) 0%, transparent),
+    color-mix(in srgb, var(--heat-value) 26%, transparent));
+}
+
 /* The stripe is the anomaly marker — it reads down the left edge, so spotting
    the three rows that need attention among nineteen takes no reading at all. */
 .lineup-row.alert {
@@ -595,10 +689,27 @@ td.cov.warn { color: var(--danger); }
   box-shadow: inset 3px 0 0 var(--danger);
 }
 
-@media (max-width: 420px) {
+@media (max-width: 560px) {
   /* Position eligibility is the least-scanned field here and the first to go
-     when the row gets tight; team and projection both stay. */
+     when the row gets tight; team, both dynasty columns and the projection all
+     stay. Six columns fit only once the widest optional one is gone. */
   .lineup-pos { display: none; }
+}
+@media (max-width: 420px) {
+  /* Below this the six columns cannot all hold their width, and squeezing them
+     truncates the name — the one field with nothing to fall back on. Age is
+     dropped rather than HKB value because value is the field with the wider
+     spread and therefore the one the heatmap is actually read for; the legend
+     drops its age key to match, so the page never explains a column it is not
+     showing. */
+  .lineup-row { grid-template-columns: 2.5rem minmax(0, 1fr) auto 3.5rem 3rem; }
+  .lineup-age { display: none; }
+  /* Separate rule on purpose: one invalid selector invalidates its whole
+     selector list, so pairing :has() with .lineup-age would take the column
+     hide down with it on a browser without :has — leaving six items in a
+     five-column grid. Alone, it degrades to a legend key for a hidden column,
+     which is untidy rather than broken. */
+  .lineup-key:has(.ramp-age) { display: none; }
 }
 
 /* ---- Wide-table scroll container ---------------------------------------- */

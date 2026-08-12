@@ -455,6 +455,21 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		return result, err
 	}
 	prog.Done("Optimize", "done")
+
+	// --- Dynasty enrichment for the published lineup JSON ---
+	// Gated on the same condition publishToday applies, so a run that never
+	// publishes (shadow, an ordinary dry-run) does not pay for an HKB fetch it
+	// will throw away. Soft-fail: this is display enrichment on a lineup the
+	// optimizer has already decided, so an HKB outage costs the age/value
+	// columns and nothing else.
+	var hkbMeta map[string]lineupapi.Dynasty
+	if opts.Publisher != nil && (!cfg.DryRun || opts.PublishLineupFlag) {
+		var err error
+		if hkbMeta, err = LoadHKBMeta(cacheDir); err != nil {
+			prog.Logf("WARNING: HKB values unavailable — publishing lineup without age/value: %v", err)
+		}
+	}
+
 	prog.Finish()
 
 	// --- Emit: snapshot, publish, print, apply, notify ---
@@ -474,6 +489,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		PitchersNoData: pitLoadResult.NoData,
 		PublishLineup:  opts.PublishLineupFlag,
 		Publisher:      opts.Publisher,
+		HKB:            hkbMeta,
 		Cfg:            cfg,
 		Out:            out,
 		Notify: func(message string) {

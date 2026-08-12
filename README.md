@@ -382,7 +382,8 @@ GROUP BY system ORDER BY mae ASC;
   "league_id": "...", "team_id": "...",
   "slots": [
     { "slot": "C",  "player": { "id": "...", "name": "...", "team": "NYY",
-                                "pos": ["C"], "proj": 3.4, "status": "OK" } },
+                                "pos": ["C"], "age": 27.3, "hkb_value": 5210,
+                                "proj": 3.4, "status": "OK" } },
     { "slot": "BN", "player": null }        // empty/open slots are null
   ],
   "projected_points": 41.7,
@@ -391,6 +392,8 @@ GROUP BY system ORDER BY mae ASC;
 ```
 
 `player.status` is `OK`, `LOCKED` (game in progress/final), or `BENCHED` (out of the real MLB lineup). Requests carry `Authorization: Bearer <ROSTERBOT_API_TOKEN>`. On AWS it's a Go Lambda behind a Function URL (`LineupApiUrl` stack output; token at SSM `/rosterbot/ROSTERBOT_API_TOKEN`).
+
+`age` and `hkb_value` are the dynasty enrichment, joined from the HKB rankings by normalized name. **Both are optional and both are absent — not zero — when HKB has no row for the player**, which happens routinely for a recent call-up and for every player if the scrape itself fails. The enrichment is deliberately soft: `optimize` publishes the lineup without it rather than failing, so a client must treat a missing field as *unknown* rather than as an age of 0 or a worthless asset.
 
 <details>
 <summary><b>Control endpoints (AWS only)</b> — run ledger + on-demand job triggering</summary>
@@ -419,7 +422,7 @@ Run **status** always comes from the run ledger; `/progress` only adds phase det
 <details>
 <summary><b>Web dashboard</b> — private SPA, passkey auth, live run status</summary>
 
-A private, single-user web UI over the API: today's lineup, a form to trigger any of the allowlisted jobs, run history with live status, and a viewer for each job's typed output. The **Projections** and **Value** tabs render natively from `projection-site`'s output (client-side Chart.js, no iframe) — Projections and Views over the authenticated `GET /v1/reports/{name}`, Value over the public `report/value.json`. Static files live in [`web/dashboard/`](web/dashboard/) (no build step — plain ES modules) and deploy to their own CloudFront distribution (`DashboardUrl` stack output).
+A private, single-user web UI over the API: today's lineup, a form to trigger any of the allowlisted jobs, run history with live status, and a viewer for each job's typed output. The lineup rows carry each player's age and HKB dynasty value, each shaded on its own single-hue heatmap scaled to that day's lineup — age proportionally, value on a square root, since dynasty values are top-heavy enough that a proportional ramp leaves everyone below the best player the same shade. The number is always printed, so the shading is a scanning aid rather than the only way to read the column. The **Projections** and **Value** tabs render natively from `projection-site`'s output (client-side Chart.js, no iframe) — Projections and Views over the authenticated `GET /v1/reports/{name}`, Value over the public `report/value.json`. Static files live in [`web/dashboard/`](web/dashboard/) (no build step — plain ES modules) and deploy to their own CloudFront distribution (`DashboardUrl` stack output).
 
 The **Trades** tab answers one question: *should I take this offer?* Each pending offer is priced two ways — a plain sum of HKB dynasty values, and a sum that discounts every asset after the best — and a winner is named **only when the two agree**. On the live 2-for-1 that motivated the tab they name opposite sides, so it reports *too close to call* rather than picking one. An offer containing a draft pick gets no verdict at all: Fantrax identifies picks only as blank rows, and a pick can outweigh everything beside it. Below the verdict, *If you accept* shows what the trade does to your hitter/pitcher × MLB/minors value and your league rank in each — a trade can be dead even on value and still move you several places. The tab also carries the full league values table, filterable by player and owner. Like the Projections and Views tabs it is served from `/v1/*` rather than the world-readable `report/` prefix, since an open offer shouldn't be public before you've decided on it.
 
