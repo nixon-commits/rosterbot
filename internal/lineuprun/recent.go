@@ -2,6 +2,9 @@ package lineuprun
 
 import (
 	"fmt"
+	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
@@ -80,5 +83,92 @@ func windowedHitterRecent(ft recentStatsClient, teamID string, today, seasonStar
 	if err != nil {
 		return nil, err
 	}
-	return collapseHitterWindow(days, today), nil
+	return coverImportedHitters(ft, days, start, end, today), nil
+}
+
+// shortCoverageHitters returns the hitters whose roster-derived series starts
+// after the trailing window does — the signature of a mid-window acquisition.
+//
+// The threshold is the start of the 30-day WINDOW, not of the 35-day fetch: the
+// extra lookback days exist only to populate the window's far edge, so a player
+// first seen at today-32 is fully covered for scoring purposes and must not
+// trigger a lookup.
+func shortCoverageHitters(days []fantrax.DayRoster, fetchStart, asOf time.Time) []fantrax.MLBPlayerRef {
+	coverageStart := asOf.AddDate(0, 0, -recencyWindowDays)
+	if fetchStart.After(coverageStart) {
+		coverageStart = fetchStart
+	}
+
+	firstSeen := map[string]time.Time{}
+	names := map[string]string{}
+	for _, d := range days {
+		for _, p := range d.Players {
+			if p.IsPitcher {
+				continue
+			}
+			if seen, ok := firstSeen[p.PlayerID]; !ok || d.Date.Before(seen) {
+				firstSeen[p.PlayerID] = d.Date
+				names[p.PlayerID] = p.Name
+			}
+		}
+	}
+
+	var out []fantrax.MLBPlayerRef
+	for id, first := range firstSeen {
+		if first.After(coverageStart) {
+			out = append(out, fantrax.MLBPlayerRef{PlayerID: id, Name: names[id]})
+		}
+	}
+	// Deterministic order: the refs reach an upstream fetch and appear in logs.
+	sort.Slice(out, func(i, j int) bool { return out[i].PlayerID < out[j].PlayerID })
+	return out
+}
+
+// coverImportedHitters collapses the roster-derived series, then replaces the
+// entry of any mid-window acquisition with one rebuilt from that player's MLB
+// game log, so their recency reflects the games they actually played rather
+// than the days we happened to roster them (rosterbot-6tw).
+//
+// The MLB entry REPLACES rather than merges with the roster-derived one: the
+// game log already covers the overlapping days, so splicing would double-count
+// them.
+//
+// SOFT-FAIL by design, matching DailyFantasyPoints' own backfill contract — a
+// statsapi hiccup leaves the (truncated but real) roster signal standing rather
+// than failing the lineup run.
+func coverImportedHitters(ft recentStatsClient, days []fantrax.DayRoster, start, end, asOf time.Time) map[string]fantrax.RecentStat {
+	recent := collapseHitterWindow(days, asOf)
+
+	refs := shortCoverageHitters(days, start, asOf)
+	if len(refs) == 0 {
+		return recent
+	}
+	mlbDays, err := ft.MLBDailyFPts(refs, start, end)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: MLB recency coverage for %d newly acquired hitter(s) unavailable (%v) — using roster-tenure window\n", len(refs), err)
+		return recent
+	}
+	fromMLB := collapseHitterWindow(mlbDays, asOf)
+	var covered int
+	var unmatched []string
+	for _, r := range refs {
+		if rs, ok := fromMLB[r.PlayerID]; ok {
+			recent[r.PlayerID] = rs
+			covered++
+		} else {
+			unmatched = append(unmatched, r.Name)
+		}
+	}
+	// Reported unconditionally, including the zero case: a silently truncated
+	// window is precisely what made rosterbot-6tw invisible for a season.
+	fmt.Fprintf(os.Stderr, "mlb recency coverage: %d newly acquired hitter(s), %d covered from game log, %d unmatched\n",
+		len(refs), covered, len(unmatched))
+	// Naming them is the difference between "some player is on a truncated
+	// window" and knowing whether that is a prospect with no MLB games (correct)
+	// or a name the MLBAM resolver missed (a real gap) — the same reason
+	// teamvalue prints its unmatched roster names rather than only a ratio.
+	if len(unmatched) > 0 {
+		fmt.Fprintf(os.Stderr, "  unmatched (kept roster-tenure window): %s\n", strings.Join(unmatched, ", "))
+	}
+	return recent
 }

@@ -120,6 +120,12 @@ func (f *fakeBlendClient) DailyFantasyPoints(_ string, start, end, seasonStart t
 	return f.days, f.daysErr
 }
 
+// These tests exercise BlendSources' fallback policy, not the MLB coverage
+// backfill, so every player in f.days is fully covered and this is never called.
+func (f *fakeBlendClient) MLBDailyFPts(_ []fantrax.MLBPlayerRef, _, _ time.Time) ([]fantrax.DayRoster, error) {
+	return nil, nil
+}
+
 func (f *fakeBlendClient) GetRecentPitcherStats(period fantrax.DailyPeriod, n int) (map[string]fantrax.RecentStat, error) {
 	f.pitcherCall.called = true
 	f.pitcherCall.period, f.pitcherCall.n = period, n
