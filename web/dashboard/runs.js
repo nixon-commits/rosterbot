@@ -1,7 +1,7 @@
 // runs.js — run history (polls faster while anything is RUNNING, slower while
 // idle), a per-run detail + output viewer, and the notifications activity feed.
 import { api, ApiError } from "./api.js";
-import { renderAuto, escapeHtml } from "./render.js";
+import { renderAuto, escapeHtml, relativeTime } from "./render.js";
 
 const POLL_MS = 5000;
 const IDLE_POLL_MS = 30000;
@@ -80,7 +80,13 @@ async function loadRuns(container, detailSection, silent) {
   }
   const table = document.createElement("table");
   table.className = "data-table";
-  table.innerHTML = "<thead><tr><th>Command</th><th>Status</th><th>Started</th><th>Duration</th><th>Trigger</th></tr></thead>";
+  // Duration and Trigger are marked secondary: on a phone the five columns
+  // needed 447px inside a 343px window, so the table scrolled sideways and you
+  // could never see a command and its status at once. Both are shown in the
+  // run detail that a tap on the row already opens, so hiding them narrow
+  // costs nothing — where dropping Command or Status would.
+  table.innerHTML = "<thead><tr><th>Command</th><th>Status</th><th>Started</th>" +
+    "<th class=\"col-secondary\">Duration</th><th class=\"col-secondary\">Trigger</th></tr></thead>";
   const tbody = document.createElement("tbody");
   for (const run of runs) {
     const tr = document.createElement("tr");
@@ -89,8 +95,8 @@ async function loadRuns(container, detailSection, silent) {
       <td>${escapeHtml(run.command)}</td>
       <td><span class="badge badge-${escapeHtml(run.status.toLowerCase())}">${escapeHtml(run.status)}</span></td>
       <td>${escapeHtml(relativeTime(run.started_at))}</td>
-      <td>${escapeHtml(runDuration(run))}</td>
-      <td>${escapeHtml(run.trigger)}</td>
+      <td class="col-secondary">${escapeHtml(runDuration(run))}</td>
+      <td class="col-secondary">${escapeHtml(run.trigger)}</td>
     `;
     tr.addEventListener("click", () => showDetail(detailSection, run.id));
     tbody.appendChild(tr);
@@ -129,21 +135,6 @@ function runDuration(run) {
   const ended = Date.parse(run.ended_at);
   if (Number.isNaN(ended)) return "";
   return formatDuration(ended - started);
-}
-
-// Coarse relative time for the "Started" column ("just now" / "N min ago" /
-// "N hr ago" / "N days ago").
-function relativeTime(iso) {
-  const then = Date.parse(iso);
-  if (Number.isNaN(then)) return String(iso ?? "");
-  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hr ago`;
-  const days = Math.floor(hours / 24);
-  return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 async function showDetail(section, id) {

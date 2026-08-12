@@ -19,6 +19,21 @@
   --radius: 8px;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.04);
 
+  /* Every top-level band (header, status line, live hero, main) shares one
+     content width via --gutter below, so they line up down the left edge. They
+     did not before: main was `max-width:960px; margin:0 auto` while the hero
+     sat outside it and ran full-bleed, which put two different alignments on
+     screen at once on any viewport wider than 960px.
+     --prose is separate and much narrower on purpose — a container wide enough
+     for a 7-column table is far too wide for a paragraph, so explanatory text
+     is capped independently rather than inheriting the table's width. */
+  --container: 1200px;
+  --prose: 68ch;
+
+  /* Bottom-bar height on mobile, reserved as body padding so a fixed nav never
+     covers the last row of a table. */
+  --navbar-h: 52px;
+
   /* Chart palette — read by chart.js:themeColors() via --c1..--c8. Same 8
      hex values in light and dark (colorblind-conscious categorical set;
      reads fine on both backgrounds so it isn't re-themed below). */
@@ -101,18 +116,33 @@ body {
 
 #shell[hidden] { display: none; }
 
+/* Shared content edges for every top-level band. max() collapses to the plain
+   --s4 gutter whenever the viewport is narrower than --container, so this is a
+   no-op on mobile and a centering rule on desktop. */
+header, #status-line, #live-hero, main {
+  --gutter: max(var(--s4), calc((100% - var(--container)) / 2));
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
 header {
   display: flex;
   align-items: center;
   gap: var(--s4);
-  padding: var(--s3) var(--s4);
+  padding-top: var(--s3);
+  padding-bottom: var(--s3);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
 
 header h1 { font-size: 1.1rem; margin: 0; font-weight: 700; letter-spacing: -.01em; }
 
-nav { display: flex; gap: var(--s3); flex-wrap: wrap; }
+nav { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; }
+
+/* display:contents dissolves the two mobile groups on desktop, so all ten
+   links lay out as direct flex children of nav — one flat row, as before. */
+.nav-primary, .nav-secondary { display: contents; }
+#nav-more { display: none; }
 
 nav a {
   position: relative;
@@ -131,6 +161,10 @@ nav a.active {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   font-weight: 600;
 }
+
+/* Keyboard focus must stay visible everywhere — the nav is the one surface
+   where losing it makes the whole app unnavigable. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Runs nav item badges itself with a dot while a run is live (live.js). */
 nav a.has-live::after {
@@ -151,11 +185,36 @@ nav a.has-live::after {
   cursor: pointer;
 }
 
-main { padding: var(--s4); max-width: 960px; margin: 0 auto; }
+/* Horizontal padding comes from the shared band rule above; only the vertical
+   rhythm belongs here. */
+main { padding-top: var(--s4); padding-bottom: var(--s4); }
 
 main h2 { font-size: 1.05rem; font-weight: 650; margin: var(--s5) 0 var(--s3); }
 main h2:first-child { margin-top: 0; }
 main h3 { font-size: .95rem; font-weight: 650; margin: 0 0 var(--s2); }
+
+/* Explanatory text is capped well short of --container. A line of prose stops
+   being readable long before a table does. */
+main p, .sub, .insights li { max-width: var(--prose); }
+
+/* A caption that sits inside a heading must not be read as part of it. These
+   carry the window/role/method notes that projections.js and value.js append
+   to their <h2>s; without the size and weight drop they wrap to three lines at
+   heading size on a phone and the caveat looks like the title. */
+h2 .cap, h3 .cap {
+  display: block;
+  font-size: .8rem;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: 0;
+  color: var(--muted);
+  margin-top: .15rem;
+  max-width: var(--prose);
+}
+@media (min-width: 640px) {
+  /* Wide enough to sit on the heading's own line without wrapping it. */
+  h2 .cap, h3 .cap { display: inline; margin-top: 0; margin-left: var(--s2); }
+}
 
 table {
   border-collapse: collapse;
@@ -237,10 +296,15 @@ td.cov.warn { color: var(--danger); }
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 600;
+  white-space: nowrap;
+  /* Default styling so a status the CSS has never heard of (a new Fantrax
+     roster state, say) still reads as a badge rather than as bare text. */
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: var(--muted);
 }
 .badge-ok, .badge-success { background: color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); }
 .badge-locked, .badge-running { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
-.badge-benched, .badge-failed, .badge-failure { background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
+.badge-benched, .badge-failed, .badge-failure, .badge-il { background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
 .badge-info { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--muted); }
 
 .swatch {
@@ -250,6 +314,71 @@ td.cov.warn { color: var(--danger); }
   border-radius: 2px;
   margin-right: .35rem;
   vertical-align: middle;
+}
+
+/* ---- Help bubbles (render.js help/caption) ------------------------------- */
+
+.help-wrap { display: inline; white-space: nowrap; }
+
+.help-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: .7rem;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: baseline;
+  transition: color .15s ease, border-color .15s ease;
+}
+.help-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* The tap target is grown past the visible circle rather than the circle being
+   drawn at 44px — a 44px dot beside 12px caption text would dominate the line
+   it is annotating. */
+.help-btn::after {
+  content: "";
+  position: absolute;
+  min-width: 44px;
+  min-height: 44px;
+  transform: translate(-50%, -50%);
+}
+.help-btn { position: relative; }
+
+.help-pop {
+  /* Popovers with no anchor positioning are centered in the viewport by the
+     UA; only sizing and skin are needed here. */
+  max-width: min(34rem, calc(100vw - 2rem));
+  padding: var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18), var(--shadow);
+  font-size: .875rem;
+  font-weight: 400;
+  line-height: 1.5;
+  /* pre-line, not normal: the help strings use a blank line to separate
+     paragraphs, and they are set with textContent (never innerHTML) because
+     several of them quote values that came from Fantrax. pre-line is what
+     preserves those breaks while still wrapping each paragraph normally. */
+  white-space: pre-line;
+  text-align: left;
+  letter-spacing: 0;
+}
+.help-pop::backdrop { background: rgba(0, 0, 0, .35); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .help-pop { transition: opacity .12s ease, overlay .12s allow-discrete, display .12s allow-discrete; }
+  .help-pop:not(:popover-open) { opacity: 0; }
+  @starting-style { .help-pop:popover-open { opacity: 0; } }
 }
 
 /* ---- Toggle groups (window/role/system/metric segmented controls) ------ */
@@ -317,6 +446,59 @@ td.cov.warn { color: var(--danger); }
    unbounded. */
 .chart-box { position: relative; height: 220px; margin: var(--s3) 0; }
 
+/* ---- Collapsible drawers (projections.js diagnostics) -------------------- */
+/* Native <details>, so keyboard operation, find-in-page and the open/closed
+   state all come from the platform. Styled to match .card exactly: a drawer is
+   a card whose contents you asked for. */
+
+.drawer {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  background: var(--bg);
+  margin-bottom: var(--s4);
+  padding: 0 var(--s4);
+}
+.drawer[open] { padding-bottom: var(--s4); }
+
+.drawer > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s3) 0;
+  min-height: 44px;
+  cursor: pointer;
+  list-style: none;
+}
+.drawer > summary::-webkit-details-marker { display: none; }
+.drawer > summary::before {
+  content: "";
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform .15s ease;
+}
+.drawer[open] > summary::before { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  .drawer > summary::before { transition: none; }
+}
+.drawer > summary:hover { color: var(--accent); }
+.drawer > summary h3 { margin: 0; flex: 1 1 auto; font-weight: 650; }
+
+.drawer-count:not(:empty) {
+  display: inline-block;
+  margin-left: var(--s2);
+  padding: .05rem .4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 600;
+}
+
 /* ---- Insights list ------------------------------------------------------- */
 .insights { list-style: none; padding: 0; margin: var(--s2) 0; display: flex; flex-direction: column; gap: var(--s2); }
 .insights li {
@@ -332,10 +514,91 @@ td.cov.warn { color: var(--danger); }
 .team { display: flex; align-items: center; gap: var(--s2); }
 .logo { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
 
-.slot-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+/* ---- Lineup (#lineup) ---------------------------------------------------- */
+/* One row per slot instead of one card per slot. The grid is fixed at four
+   columns so slot codes, projections and the alert stripe all line up down the
+   page — the scan you actually do here is vertical, down the projection
+   column, and a wrapping card grid makes that impossible. */
+
+.lineup-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   gap: var(--s3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s3);
+}
+.lineup-head h2 { margin: 0; }
+.lineup-total { display: flex; align-items: baseline; gap: var(--s2); }
+.lineup-total strong { font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+.lineup-total span { font-size: .8rem; }
+
+.lineup-warnings {
+  border-left: 3px solid #d97706;
+  background: color-mix(in srgb, #d97706 10%, transparent);
+  border-radius: var(--radius);
+  padding: var(--s2) var(--s3);
+  margin-bottom: var(--s3);
+  max-width: var(--prose);
+}
+.lineup-warnings ul { margin: 0; padding-left: 1.1rem; }
+.lineup-warnings li { font-size: .85rem; }
+.lineup-warnings li + li { margin-top: var(--s1); }
+
+.lineup-list {
+  list-style: none;
+  margin: var(--s2) 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.lineup-row {
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr) auto 3.25rem;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--border);
+  min-height: 44px;
+  font-size: .88rem;
+}
+.lineup-row:last-child { border-bottom: none; }
+
+.lineup-slot {
+  font-size: .7rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.lineup-name {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+  font-weight: 600;
+}
+/* The name is the only field allowed to truncate; everything else is short and
+   fixed, so a long name must not push the projection off the row. */
+.lineup-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lineup-empty { font-weight: 400; font-style: italic; color: var(--muted); }
+.lineup-meta { font-size: .78rem; color: var(--muted); white-space: nowrap; }
+.lineup-pos::before { content: " · "; }
+.lineup-proj { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* The stripe is the anomaly marker — it reads down the left edge, so spotting
+   the three rows that need attention among nineteen takes no reading at all. */
+.lineup-row.alert {
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+@media (max-width: 420px) {
+  /* Position eligibility is the least-scanned field here and the first to go
+     when the row gets tight; team and projection both stay. */
+  .lineup-pos { display: none; }
 }
 
 /* ---- Wide-table scroll container ---------------------------------------- */
@@ -355,6 +618,13 @@ td.cov.warn { color: var(--danger); }
    (render.js's renderKeyValue, for an object value that's itself an array),
    where overflow-x:auto on the wrap alone isn't enough. */
 .table-wrap { overflow-x: auto; }
+
+/* Columns a table can afford to drop on a phone. Applied where the same value
+   is reachable one tap away (the Runs table's Duration/Trigger both appear in
+   the run detail), never where dropping it would leave the row ambiguous. */
+@media (max-width: 600px) {
+  .col-secondary { display: none; }
+}
 
 /* ---- Signed deltas ------------------------------------------------------- */
 /* Bare .good/.bad, as opposed to the .stat-tile .delta.good pair above, so a
@@ -438,14 +708,20 @@ td.cov.warn { color: var(--danger); }
 
 form.job-form { display: flex; flex-direction: column; gap: var(--s3); max-width: 420px; }
 form.job-form > div { display: flex; flex-direction: column; gap: var(--s1); }
-form.job-form label { font-size: 0.85rem; color: var(--muted); }
+form.job-form label { font-size: 0.85rem; font-weight: 600; color: var(--fg); }
 form.job-form input, form.job-form select {
   padding: var(--s2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);
+  /* 16px stops iOS Safari zooming the viewport on focus, which on a phone
+     leaves the form scrolled sideways after every tap into a field. */
+  font-size: 16px;
+  min-height: 44px;
 }
+form.job-form input[type="checkbox"] { min-height: 0; width: 1.15rem; height: 1.15rem; align-self: flex-start; }
+.field-hint { font-size: .78rem; color: var(--muted); }
 
 button.primary {
   padding: var(--s2) var(--s4);
@@ -479,6 +755,43 @@ pre {
   overflow-y: auto;
 }
 
+/* ---- Status line (status.js) ---------------------------------------------
+   One line under the header answering "is everything fine?" before any
+   scrolling. It reads the runs ledger that live.js already polls, so job
+   health and lineup freshness cost no extra request; only the pending-offer
+   count is its own fetch. */
+
+#status-line:empty { display: none; }
+#status-line { padding-top: var(--s2); padding-bottom: var(--s2); }
+
+.status {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  font-size: .85rem;
+  line-height: 1.4;
+}
+.status-dot {
+  width: .55rem;
+  height: .55rem;
+  border-radius: 50%;
+  flex: none;
+  align-self: center;
+}
+.status-dot.ok { background: var(--success); }
+.status-dot.warn { background: #d97706; }
+.status-dot.bad { background: var(--danger); }
+.status-dot.idle { background: var(--muted); }
+
+.status-main { font-weight: 600; }
+.status-main.bad { color: var(--danger); }
+.status-rest { color: var(--muted); }
+/* Separates the facts without a bullet character between every pair. */
+.status-rest > * + *::before { content: " · "; }
+
+.status a { color: inherit; }
+
 /* ---- Live run hero + progress (live.js) ---------------------------------- */
 
 .hero { display: flex; flex-direction: column; gap: var(--s2); }
@@ -500,9 +813,91 @@ pre {
 .toast-ok { border-left: 3px solid var(--success); }
 .toast-fail { border-left: 3px solid var(--danger); }
 
-@media (max-width: 600px) {
-  header { flex-direction: column; align-items: flex-start; }
+/* ---- Mobile: nav becomes a bottom bar --------------------------------------
+   Breakpoint is 950px because that is where the desktop row stops fitting:
+   measured, the header needs 946px to hold the title, ten links and the logout
+   button on one line. Below that the old rule let nav wrap to three rows,
+   which cost 202px of header and pushed content to y=314 on a 375x812 phone —
+   39% of the screen gone before any data, on every tab.
+
+   Moving nav to the bottom does two things at once: it takes that 202px back,
+   and it puts navigation in thumb reach on a device held one-handed. */
+@media (max-width: 950px) {
+  header {
+    gap: var(--s2);
+    padding-top: var(--s2);
+    padding-bottom: var(--s2);
+  }
+  header h1 { flex: 1 1 auto; }
   #logout-btn { margin-left: 0; }
+
+  /* column-reverse puts .nav-secondary (second in the DOM) visually above
+     .nav-primary, so the four-item thumb row keeps the bottom edge and the
+     More panel opens upward over the content. */
+  nav {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 40;
+    flex-direction: column-reverse;
+    flex-wrap: nowrap;
+    gap: 0;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .nav-primary {
+    display: flex;
+    gap: 0;
+  }
+  .nav-primary > * { flex: 1 1 0; }
+
+  .nav-secondary {
+    display: none;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--s1);
+    padding: var(--s2);
+    border-bottom: 1px solid var(--border);
+  }
+  nav.open .nav-secondary { display: grid; }
+
+  nav a, #nav-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* 44px is the minimum comfortable touch target; the old 0.25rem padding
+       produced rows around 28px. */
+    min-height: 44px;
+    padding: var(--s1);
+    border-radius: 0;
+    font-size: .78rem;
+    text-align: center;
+  }
+  .nav-secondary a { border-radius: var(--radius); font-size: .8rem; }
+
+  nav a.active {
+    background: transparent;
+    color: var(--accent);
+    box-shadow: inset 0 2px 0 var(--accent);
+  }
+  .nav-secondary a.active { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: none; }
+  nav a:hover { background: transparent; }
+
+  #nav-more {
+    display: flex;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-family: inherit;
+    cursor: pointer;
+  }
+  nav.open #nav-more { color: var(--accent); }
+
+  /* Reserve the bar's height so a fixed nav never covers the last table row. */
+  body { padding-bottom: calc(var(--navbar-h) + env(safe-area-inset-bottom, 0px)); }
+
+  /* Toasts must clear the bar too. */
+  #toasts { bottom: calc(var(--navbar-h) + env(safe-area-inset-bottom, 0px) + var(--s2)); }
 }
 
 /* --- Infra status (#infra) --------------------------------------------- */
