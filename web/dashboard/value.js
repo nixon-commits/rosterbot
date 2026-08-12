@@ -8,7 +8,7 @@
 // from raw player/roster data.
 import { api } from "./api.js";
 import { lineChart, themeColors } from "./chart.js";
-import { escapeHtml } from "./render.js";
+import { escapeHtml, help } from "./render.js";
 
 // Keys + formulas mirror the template's METRICS table exactly, against
 // valuereport.Model's SeriesRow JSON tags (h_mlb/h_min/p_mlb/p_min).
@@ -74,9 +74,9 @@ function buildLayout(root, model) {
     </section>
 
     <section class="card">
-      <h2>Standings — ${escapeHtml(model.last_date)} <span class="muted">(HKB dynasty value)</span></h2>
+      <h2>Standings — ${escapeHtml(model.last_date)}
+        <span class="cap" data-ref="standingsNote"></span></h2>
       <div class="table-wrap" data-ref="standings"></div>
-      <p class="sub muted">Matched = players joined to an HKB value / total rostered. A shortfall means the value totals undercount by the unmatched players.</p>
     </section>
   `;
   root.appendChild(wrap);
@@ -84,6 +84,24 @@ function buildLayout(root, model) {
   const el = {};
   wrap.querySelectorAll("[data-ref]").forEach((n) => { el[n.dataset.ref] = n; });
   el.charts = {};
+
+  // The caveat stays on screen because it changes how the column beside it
+  // reads: forget it and every total looks like a total rather than a floor.
+  // Only the reason why moves behind the bubble.
+  el.standingsNote.append(
+    "HKB dynasty value · totals are a floor ",
+    help(
+      "Matched counts the rostered players that could be joined to an HKB " +
+      "dynasty value by name. Anyone who could not be matched — a call-up too " +
+      "new for HKB's rankings, or a name spelled differently across the two " +
+      "sources — carries no value and is counted nowhere.\n\n" +
+      "So every team total is a floor: the real figure is higher by however " +
+      "much the unmatched players are worth. A team showing fewer matched than " +
+      "rostered is undercounted by that many players.",
+      "Why totals are a floor",
+    ),
+  );
+
   return el;
 }
 

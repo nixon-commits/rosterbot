@@ -14,6 +14,7 @@
 // context — the same footgun views.js documents. DOM text nodes remove it
 // entirely rather than relying on every future edit getting escaping right.
 import { api } from "./api.js";
+import { help } from "./render.js";
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -50,21 +51,46 @@ function verdictBadge(v, myTeam) {
   return el("span", "badge badge-info", "Cannot be priced");
 }
 
+// The verdict line is split in two: the numbers stay visible because they are
+// the answer, and the reasoning about *why* two methods are used at all — which
+// you need once, not on every offer — goes behind the bubble.
 function verdictExplain(v, myTeam) {
   if (v.status === "favors") {
     const who = v.favored_team === myTeam ? "your side" : v.favored_team;
-    return `Both pricing methods agree this favors ${who} — by ${v.raw_pct.toFixed(1)}% ` +
-      `on raw value and ${v.adj_pct.toFixed(1)}% once multi-asset packages are discounted.`;
+    return {
+      short: `Both methods agree — ${v.raw_pct.toFixed(1)}% raw, ${v.adj_pct.toFixed(1)}% adjusted.`,
+      long:
+        `Each side is priced twice. Raw value is a straight sum of HKB dynasty ` +
+        `values. Adjusted value discounts every asset after the best one, because ` +
+        `a package of good players is worth less than their sum — you can only ` +
+        `field so many.\n\nBoth readings favour ${who} here, which is what makes ` +
+        `the call safe to state.`,
+    };
   }
   if (v.status === "too-close") {
-    return `Raw value favors ${v.raw_leader} by ${v.raw_pct.toFixed(1)}%, but discounting ` +
-      `the extra assets flips it to ${v.adj_leader} by ${v.adj_pct.toFixed(1)}%. ` +
-      `The gap is inside the model's own uncertainty, so neither reading earns the call.`;
+    return {
+      short: `Too close — raw favours ${v.raw_leader} by ${v.raw_pct.toFixed(1)}%, ` +
+        `adjusted favours ${v.adj_leader} by ${v.adj_pct.toFixed(1)}%.`,
+      long:
+        `Each side is priced twice. Raw value is a straight sum of HKB dynasty ` +
+        `values. Adjusted value discounts every asset after the best one, because ` +
+        `a package of good players is worth less than their sum.\n\nHere the two ` +
+        `methods name opposite winners, so the trade sits inside the model's own ` +
+        `uncertainty and no verdict is stated. A single number would have been ` +
+        `confidently wrong — on the 2-for-1 that prompted this feature, raw ` +
+        `favoured one side by 12.7% while adjusted favoured the other.`,
+    };
   }
   const n = v.unpriced_assets || 0;
-  return `${n} asset${n === 1 ? "" : "s"} could not be priced — Fantrax identifies draft ` +
-    `picks only as blank rows, and a pick can be worth more than everything beside it. ` +
-    `No verdict is stated rather than one computed from a partial total.`;
+  return {
+    short: `${n} asset${n === 1 ? "" : "s"} could not be priced, so no verdict is stated.`,
+    long:
+      `Fantrax sends some draft picks as rows with no name, and a pick can be ` +
+      `worth more than everything else in the trade — HKB prices them up to 1419.\n\n` +
+      `Rather than compute a verdict from a total that is missing an unknown ` +
+      `amount, none is offered. The priced assets are still listed below so you ` +
+      `can judge the rest yourself.`,
+  };
 }
 
 function sidePanel(side, myTeam) {
@@ -141,7 +167,11 @@ function offerCard(offer, myTeam) {
   head.appendChild(el("h2", null, "Offer"));
   head.appendChild(verdictBadge(offer.verdict, myTeam));
   card.appendChild(head);
-  card.appendChild(el("p", "sub muted", verdictExplain(offer.verdict, myTeam)));
+
+  const { short, long } = verdictExplain(offer.verdict, myTeam);
+  const line = el("p", "sub muted");
+  line.append(short, " ", help(long, "How this verdict is reached"));
+  card.appendChild(line);
 
   const grid = el("div", "trade-grid");
   for (const s of offer.sides || []) grid.appendChild(sidePanel(s, myTeam));
@@ -165,10 +195,19 @@ function valuesSection(table, myTeam) {
   card.appendChild(el("h2", null, "League values"));
 
   const coverPct = table.rostered ? (table.matched / table.rostered) * 100 : 0;
-  card.appendChild(el("p", "sub muted",
-    `${num(table.rostered)} rostered players, ${num(table.matched)} matched to an HKB value ` +
-    `(${coverPct.toFixed(1)}%) · built ${fmtWhen(table.generated_at)}. ` +
-    `Unmatched players show no value and are counted nowhere — every team total is a floor by that much.`));
+  const cover = el("p", "sub muted");
+  cover.append(
+    `${num(table.matched)} of ${num(table.rostered)} rostered players priced ` +
+    `(${coverPct.toFixed(1)}%) · built ${fmtWhen(table.generated_at)} `,
+    help(
+      "Players are joined to an HKB dynasty value by name. Anyone who cannot be " +
+      "matched — usually a call-up too recent for HKB's rankings — shows no value " +
+      "and is counted nowhere, so any total built from this table is a floor " +
+      "rather than a total.",
+      "What priced coverage means",
+    ),
+  );
+  card.appendChild(cover);
 
   const teams = [...new Set((table.players || []).map((p) => p.owner_name))].sort();
 
@@ -213,11 +252,16 @@ function valuesSection(table, myTeam) {
   paint();
 
   if ((table.picks || []).length) {
-    card.appendChild(el("h3", null, "Draft picks"));
-    card.appendChild(el("p", "sub muted",
-      "HKB prices picks, but Fantrax never says who holds which one, so these are a " +
-      "reference list rather than owned assets. A pick inside an offer is why a verdict " +
-      "gets withheld."));
+    const picksHead = el("h3", null, "Draft picks");
+    picksHead.append(" ", help(
+      "HKB prices picks by projected slot, but Fantrax never says who holds " +
+      "which one — so this is a league-wide reference list, not a list of " +
+      "anybody's assets.\n\nIt is also why a verdict gets withheld: an " +
+      "unidentified pick inside an offer cannot be priced, and a pick can be " +
+      "worth more than everything beside it.",
+      "Why picks are unattributed",
+    ));
+    card.appendChild(picksHead);
     const pw = el("div", "table-wrap");
     pw.appendChild(pickTable(table.picks));
     card.appendChild(pw);

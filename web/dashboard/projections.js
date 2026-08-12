@@ -7,7 +7,40 @@
 // precomputed values into DOM + Chart.js (via the Task-6 chart.js wrappers).
 import { api } from "./api.js";
 import { lineChart, scatterChart, barChart, themeColors } from "./chart.js";
-import { escapeHtml } from "./render.js";
+import { escapeHtml, help } from "./render.js";
+
+// Methodology text. It lives here as data rather than inline in the markup
+// because each entry is a fact about the model that outlives any one layout —
+// and because keeping the short line and its explanation adjacent is what stops
+// them drifting apart.
+const EXPLAIN = {
+  rankSkill:
+    "Rank skill is the average day-by-day Spearman correlation between what a " +
+    "projection said and what actually happened. It answers the only question " +
+    "the lineup optimizer asks — did the projection put the right players at " +
+    "the top of the list — rather than how close each number was.\n\n" +
+    "It is never combined across hitters and pitchers. A pooled figure would " +
+    "mostly reflect that starting pitchers outscore bench catchers, which the " +
+    "optimizer never exploits, because it fills the two sides in separate passes.",
+  best:
+    "A system is only marked best when it leads the runner-up by more than the " +
+    "two standard errors combined. Below that the difference is inside the " +
+    "measurement's own noise, so the panel says it is too close to call rather " +
+    "than naming a winner it cannot support.",
+  calibration:
+    "Average error per player-day is dominated by single-game variance rather " +
+    "than by model skill — a projection of 8 against an actual of 0 or 30 is an " +
+    "ordinary baseball outcome, not a bad forecast.\n\n" +
+    "Measured on production data, hitter error is very slightly worse than " +
+    "simply guessing the sample average every time, which is why these numbers " +
+    "sit here as a calibration check instead of leading the page. The metrics " +
+    "that actually track lineup decisions are in Decision quality above.",
+  gap:
+    "The difference between what the lineup you fielded scored and the best " +
+    "score available from the players you had that day, judged with hindsight.\n\n" +
+    "It measures the whole pipeline — projections, the games-started gate, " +
+    "slot eligibility, whatever was locked — not any single projection system.",
+};
 
 const WINDOW_LABELS = { 7: "7d", 14: "14d", 30: "30d", 0: "Season" };
 const ROLE_LABELS = { all: "All", hitters: "Hitters", pitchers: "Pitchers" };
@@ -72,13 +105,13 @@ function buildLayout(root) {
     </div>
 
     <section class="card">
-      <h2>Decision quality <span class="muted" data-ref="headlineSub"></span></h2>
+      <h2>Decision quality <span class="cap" data-ref="headlineSub"></span></h2>
       <div class="stat-row" data-ref="headline"></div>
       <div class="chart-box"><canvas data-ref="gapChart"></canvas></div>
     </section>
 
     <section class="card">
-      <h2>Projection system comparison <span class="muted" data-ref="compareSub"></span></h2>
+      <h2>Projection system comparison <span class="cap" data-ref="compareSub"></span></h2>
       <div class="table-wrap" data-ref="compareTable"></div>
       <div class="chart-box"><canvas data-ref="compareChart"></canvas></div>
     </section>
@@ -89,35 +122,36 @@ function buildLayout(root) {
     <h2>Detail — <span data-ref="detailSysLabel"></span></h2>
     <div class="sub muted" data-ref="detailSub"></div>
 
-    <h3>Calibration diagnostics</h3>
-    <p class="muted">Error magnitude at player-day grain is mostly single-game variance, not model skill. Kept for calibration; see Decision quality above for the metrics that drive lineups.</p>
-    <div class="stat-row" data-ref="scorecard"></div>
+    <!-- Everything below the two headline cards is diagnostics: you open it
+         when the headline looks wrong, not on every visit. Collapsed by
+         default, it takes the tab from 5.9 phone-screens to roughly one, and
+         <details> gives keyboard support and find-in-page for free. -->
+    <details class="drawer">
+      <summary><h3>Calibration diagnostics <span class="cap" data-ref="calibNote"></span></h3></summary>
+      <div class="stat-row" data-ref="scorecard"></div>
+      <div class="chart-box"><canvas data-ref="calibChart"></canvas></div>
+    </details>
 
-    <section class="card">
-      <h2 data-ref="trendTitle"></h2>
+    <details class="drawer">
+      <summary><h3 data-ref="trendTitle"></h3></summary>
       <div class="chart-box"><canvas data-ref="trendChart"></canvas></div>
-    </section>
+    </details>
 
-    <section class="card">
-      <h2>Accuracy by position</h2>
+    <details class="drawer">
+      <summary><h3>Accuracy by position</h3></summary>
       <div class="chart-box"><canvas data-ref="posChart"></canvas></div>
       <div class="table-wrap" data-ref="posTable"></div>
-    </section>
+    </details>
 
-    <section class="card">
-      <h2>Calibration — projected vs actual</h2>
-      <div class="chart-box"><canvas data-ref="calibChart"></canvas></div>
-    </section>
-
-    <section class="card">
-      <h2>Insights</h2>
+    <details class="drawer">
+      <summary><h3>Insights <span class="drawer-count" data-ref="insightCount"></span></h3></summary>
       <ul class="insights" data-ref="insightList"></ul>
-    </section>
+    </details>
 
-    <section class="card">
-      <h2>Worst misses</h2>
+    <details class="drawer">
+      <summary><h3>Worst misses</h3></summary>
       <div class="table-wrap" data-ref="missTable"></div>
-    </section>
+    </details>
   `;
   root.appendChild(wrap);
 
@@ -126,6 +160,18 @@ function buildLayout(root) {
   el.charts = {};
   el.lastMisses = [];
   el.missState = { key: null, dir: "desc" };
+
+  // A chart built inside a closed <details> is laid out against a zero-sized
+  // container, so it needs a nudge the first time its drawer opens. Chart.js
+  // observes its container, but the observer can fire before the element has
+  // its final box; resizing on toggle is the reliable trigger.
+  wrap.querySelectorAll("details.drawer").forEach((d) => {
+    d.addEventListener("toggle", () => {
+      if (!d.open) return;
+      for (const chart of Object.values(el.charts)) chart.resize();
+    });
+  });
+
   return el;
 }
 
@@ -175,6 +221,11 @@ function paint(el, model, gap, state) {
   el.detailSub.textContent = state.system === model.detailSystem
     ? "The bot's production projection, broken down below."
     : "Captured for comparison — not used in production lineups.";
+
+  el.calibNote.replaceChildren(
+    document.createTextNode("Calibration only, not a scoreboard "),
+    help(EXPLAIN.calibration, "Why error magnitude is not the headline"),
+  );
 
   const view = (model.views && model.views[detailKey(state)]) || EMPTY_VIEW;
   renderScorecard(el, view);
@@ -233,8 +284,13 @@ function renderHeadline(el, model, gap, state) {
   tiles += rhoTile("Pitcher rank skill", pv.rho);
 
   el.headline.innerHTML = tiles;
-  el.headlineSub.textContent =
-    "· " + winLabel(state.window) + " · rank skill is measured within each day, never pooled across roles";
+  // The window is already stated by the toggle directly above, so repeating it
+  // here said nothing. What the caption owes the reader is what the numbers
+  // mean, and that goes behind the bubble.
+  el.headlineSub.replaceChildren(
+    document.createTextNode("Rank skill, measured within each day "),
+    help(EXPLAIN.rankSkill, "How rank skill is measured"),
+  );
 
   renderGapChart(el, gap, state);
 }
@@ -320,18 +376,22 @@ function renderCompare(el, model, state) {
   // Compare is nil for role "all" — a pooled cross-role ranking has no
   // defensible order (see internal/report/model.go), so render the two role
   // tables stacked instead.
+  const sub = () => el.compareSub.replaceChildren(
+    document.createTextNode("Ranked by rank skill — higher is better "),
+    help(EXPLAIN.best, "How the best system is chosen"),
+  );
+
   if (state.role === "all") {
     renderCompareTable(el, model, state, "hitters");
     renderCompareTable(el, model, state, "pitchers", true);
     renderCompareChart(el, model, state);
-    el.compareSub.textContent = "· ranked by within-day rank skill · " + winLabel(state.window);
+    sub();
     return;
   }
   el.compareTable.innerHTML = "";
   renderCompareTable(el, model, state, state.role);
   renderCompareChart(el, model, state);
-  el.compareSub.textContent =
-    "· ranked by within-day rank skill (higher = better) · " + winLabel(state.window) + " · " + state.role;
+  sub();
 }
 
 // renderCompareTable appends one role's ranked table. append=false resets the
@@ -511,6 +571,9 @@ function renderCalib(el, view) {
 
 function renderInsights(el, view) {
   const insights = view.insights || [];
+  // The count rides on the collapsed summary so a drawer worth opening is
+  // distinguishable from an empty one without opening it.
+  el.insightCount.textContent = insights.length ? String(insights.length) : "";
   if (insights.length === 0) {
     el.insightList.innerHTML = `<li class="flat">No notable signals in this window.</li>`;
     return;
