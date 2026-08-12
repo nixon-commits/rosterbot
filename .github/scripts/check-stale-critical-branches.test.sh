@@ -28,10 +28,21 @@ setup_repo() {
   bare="$tmpdir/origin.git"
   work="$tmpdir/work"
 
-  git init --bare -q "$bare"
+  # The branch name is pinned explicitly rather than inherited from
+  # init.defaultBranch. That setting is a per-machine preference: a developer
+  # who has set it to "main" sees this pass, while a runner using git's
+  # built-in default puts the first commit on "master" and every
+  # `git push origin main` below fails with "src refspec main does not match
+  # any" — green locally, red in CI, for a reason nothing in the output names.
+  #
+  # -b covers the clone (which adopts the bare repo's HEAD), and the
+  # symbolic-ref covers the work tree directly, so neither depends on the
+  # other's behaviour on an empty repository.
+  git init --bare -q -b main "$bare"
   git clone -q "$bare" "$work"
   (
     cd "$work"
+    git symbolic-ref HEAD refs/heads/main
     git config user.email test@example.com
     git config user.name Test
     git config commit.gpgsign false
