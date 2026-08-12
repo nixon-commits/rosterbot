@@ -2,6 +2,7 @@ package s3blob_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -178,5 +179,66 @@ func TestKeyJoinsThePrefix(t *testing.T) {
 	}
 	if got := b.Bucket(); got != "bkt" {
 		t.Errorf("Bucket = %q, want bkt", got)
+	}
+}
+
+func TestPutJSONIfAbsent_OnlyCreates(t *testing.T) {
+	f := s3blobtest.New()
+	b := f.Blob("bkt", "webauthn/")
+	ctx := context.Background()
+
+	etag, err := b.PutJSONIfAbsent(ctx, "identity.json", []byte(`{"a":1}`))
+	if err != nil {
+		t.Fatalf("PutJSONIfAbsent on an empty key: %v", err)
+	}
+	if etag == "" {
+		t.Fatal("PutJSONIfAbsent returned no ETag — the caller needs it as its next write's precondition")
+	}
+
+	if _, err := b.PutJSONIfAbsent(ctx, "identity.json", []byte(`{"a":2}`)); !errors.Is(err, s3blob.ErrPrecondition) {
+		t.Fatalf("PutJSONIfAbsent over an existing object = %v, want ErrPrecondition", err)
+	}
+	if got := string(f.Objects["webauthn/identity.json"]); got != `{"a":1}` {
+		t.Fatalf("stored body = %s, want the original — the losing create overwrote it", got)
+	}
+}
+
+func TestPutJSONIfMatch_RejectsAStaleETag(t *testing.T) {
+	f := s3blobtest.New()
+	b := f.Blob("bkt", "webauthn/")
+	ctx := context.Background()
+
+	if _, err := b.PutJSONIfAbsent(ctx, "identity.json", []byte(`{"a":1}`)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, stale, _, err := b.GetWithETag(ctx, "identity.json")
+	if err != nil {
+		t.Fatalf("GetWithETag: %v", err)
+	}
+
+	fresh, err := b.PutJSONIfMatch(ctx, "identity.json", stale, []byte(`{"a":2}`))
+	if err != nil {
+		t.Fatalf("PutJSONIfMatch with the current ETag: %v", err)
+	}
+	if fresh == stale {
+		t.Fatal("ETag unchanged after writing different content")
+	}
+
+	if _, err := b.PutJSONIfMatch(ctx, "identity.json", stale, []byte(`{"a":3}`)); !errors.Is(err, s3blob.ErrPrecondition) {
+		t.Fatalf("PutJSONIfMatch with a stale ETag = %v, want ErrPrecondition", err)
+	}
+	if got := string(f.Objects["webauthn/identity.json"]); got != `{"a":2}` {
+		t.Fatalf("stored body = %s, want the winner's body", got)
+	}
+}
+
+// A vanished object comes back as a 404 rather than a 412, but it fails the
+// caller's assertion just the same, so it must not escape as an opaque S3
+// error the caller has no way to classify.
+func TestPutJSONIfMatch_TreatsAVanishedObjectAsAPreconditionFailure(t *testing.T) {
+	b := s3blobtest.New().Blob("bkt", "webauthn/")
+	_, err := b.PutJSONIfMatch(context.Background(), "identity.json", `"some-etag"`, []byte(`{}`))
+	if !errors.Is(err, s3blob.ErrPrecondition) {
+		t.Fatalf("PutJSONIfMatch against a missing key = %v, want ErrPrecondition", err)
 	}
 }

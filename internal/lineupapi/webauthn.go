@@ -78,12 +78,32 @@ func (cfg Config) canRegister(r *http.Request) bool {
 	return hasValidSession(r, cfg.SessionSecret) || authorized(r, cfg.Token)
 }
 
+// identityMutateAttempts bounds the optimistic-concurrency retry loop. Losing
+// a race means someone else's write landed between our read and our write; the
+// contended resource is one small object touched by hand-driven browser
+// ceremonies, so a handful of attempts is generous and an unbounded loop would
+// only turn a stuck store into a hung request.
+const identityMutateAttempts = 5
+
+// errNoIdentity reports that a mutation was asked for against a record that
+// does not exist. Every caller establishes the record first (register via
+// loadOrCreateIdentity, login/revoke via a preceding GetIdentity), so this
+// means the record was deleted mid-request, not that the caller skipped a step.
+var errNoIdentity = errors.New("lineupapi: no identity record to update")
+
 // loadOrCreateIdentity returns the existing Identity, or creates and
 // immediately persists a brand new one if none exists yet. Persisting before
 // returning is required: register/begin and register/finish each call this
 // independently, and the WebAuthnUserID must be identical across both calls
 // (it's baked into the ceremony's session data) or go-webauthn's
 // CreateCredential rejects the finish with an "ID mismatch" error.
+//
+// The create is conditional on absence, and losing that race is resolved by
+// adopting the winner's record rather than retrying our own. That is not
+// merely politeness: each concurrent caller mints an independent random
+// WebAuthnUserID, so overwriting the winner would invalidate the ceremony
+// already running against it — the same "ID mismatch" failure, arrived at from
+// the other direction.
 func (cfg Config) loadOrCreateIdentity(ctx context.Context) (*Identity, error) {
 	id, ok, err := cfg.Identities.GetIdentity(ctx)
 	if err != nil {
@@ -96,11 +116,59 @@ func (cfg Config) loadOrCreateIdentity(ctx context.Context) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Version is the zero value, which asserts "no record exists yet".
 	id = &Identity{WebAuthnUserID: handle}
-	if err := cfg.Identities.PutIdentity(ctx, id); err != nil {
+	err = cfg.Identities.PutIdentity(ctx, id)
+	if errors.Is(err, ErrIdentityConflict) {
+		id, ok, err = cfg.Identities.GetIdentity(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errNoIdentity
+		}
+		return id, nil
+	}
+	if err != nil {
 		return nil, err
 	}
 	return id, nil
+}
+
+// mutateIdentity runs one read-modify-write against the Identity record under
+// optimistic concurrency: read the current record, apply mutate to it, write
+// conditional on the version it was read at, and on conflict start over
+// against a freshly-read record.
+//
+// mutate is therefore called once per attempt and must be safe to re-apply to
+// a record it has not seen before — it receives the *current* record, never a
+// stale copy of its own earlier work. That is what makes a concurrent
+// registration and login both survive: the loser re-reads the record including
+// the winner's change and layers its own on top, instead of writing back a
+// snapshot that never contained it (rosterbot-crq.2).
+func (cfg Config) mutateIdentity(ctx context.Context, mutate func(*Identity) error) (*Identity, error) {
+	var lastErr error
+	for attempt := 0; attempt < identityMutateAttempts; attempt++ {
+		current, ok, err := cfg.Identities.GetIdentity(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errNoIdentity
+		}
+		if err := mutate(current); err != nil {
+			return nil, err
+		}
+		err = cfg.Identities.PutIdentity(ctx, current)
+		if err == nil {
+			return current, nil
+		}
+		if !errors.Is(err, ErrIdentityConflict) {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 func (cfg Config) handleAuthRegisterBegin(w http.ResponseWriter, r *http.Request) {
@@ -146,8 +214,13 @@ func (cfg Config) handleAuthRegisterFinish(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusBadRequest, "passkey registration failed")
 		return
 	}
-	identity.Credentials = append(identity.Credentials, *cred)
-	if err := cfg.Identities.PutIdentity(r.Context(), identity); err != nil {
+	// The credential is already minted; re-applying the append to whatever the
+	// record looks like now is exactly right, and is what keeps a concurrent
+	// login's sign-counter update from being clobbered (and vice versa).
+	if _, err := cfg.mutateIdentity(r.Context(), func(cur *Identity) error {
+		cur.Credentials = append(cur.Credentials, *cred)
+		return nil
+	}); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not save passkey")
 		return
 	}
@@ -195,13 +268,18 @@ func (cfg Config) handleAuthLoginFinish(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Persist the updated sign counter / clone-warning flag. Best-effort: a
-	// store failure here shouldn't fail a login that already verified.
-	for i := range identity.Credentials {
-		if bytes.Equal(identity.Credentials[i].ID, cred.ID) {
-			identity.Credentials[i] = *cred
+	// store failure here shouldn't fail a login that already verified. The
+	// mutation is applied to the record as it stands at write time, so a
+	// passkey registered concurrently is not rolled back by this write; a
+	// credential revoked concurrently simply isn't found and is left revoked.
+	_, _ = cfg.mutateIdentity(r.Context(), func(cur *Identity) error {
+		for i := range cur.Credentials {
+			if bytes.Equal(cur.Credentials[i].ID, cred.ID) {
+				cur.Credentials[i] = *cred
+			}
 		}
-	}
-	_ = cfg.Identities.PutIdentity(r.Context(), identity)
+		return nil
+	})
 
 	clearCeremonyCookie(w)
 	setSessionCookie(w, cfg.SessionSecret, time.Now())
@@ -241,19 +319,20 @@ func (cfg Config) handleRevokePasskey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid passkey id")
 		return
 	}
-	identity, ok, err := cfg.Identities.GetIdentity(r.Context())
-	if err != nil || !ok {
-		writeErr(w, http.StatusNotFound, "no passkeys registered")
-		return
-	}
-	kept := identity.Credentials[:0]
-	for _, c := range identity.Credentials {
-		if !bytes.Equal(c.ID, targetID) {
-			kept = append(kept, c)
+	if _, err := cfg.mutateIdentity(r.Context(), func(cur *Identity) error {
+		kept := cur.Credentials[:0]
+		for _, c := range cur.Credentials {
+			if !bytes.Equal(c.ID, targetID) {
+				kept = append(kept, c)
+			}
 		}
-	}
-	identity.Credentials = kept
-	if err := cfg.Identities.PutIdentity(r.Context(), identity); err != nil {
+		cur.Credentials = kept
+		return nil
+	}); err != nil {
+		if errors.Is(err, errNoIdentity) {
+			writeErr(w, http.StatusNotFound, "no passkeys registered")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "could not revoke passkey")
 		return
 	}

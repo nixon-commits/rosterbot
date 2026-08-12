@@ -23,12 +23,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 )
 
 // API is the slice of the S3 client a Blob drives. It is an interface so tests
@@ -86,21 +89,33 @@ func (b *Blob) Key(key string) string { return b.prefix + key }
 // an error: absence is a normal outcome for every caller here — a cache miss, a
 // run with no captured output yet, an unregistered passkey.
 func (b *Blob) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	data, _, found, err := b.GetWithETag(ctx, key)
+	return data, found, err
+}
+
+// GetWithETag is Get plus the object's current ETag, which is the token
+// PutIfMatch conditions on. Callers that only read use Get; callers running a
+// read-modify-write cycle need the ETag to make their write conditional.
+func (b *Blob) GetWithETag(ctx context.Context, key string) ([]byte, string, bool, error) {
 	out, err := b.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &b.bucket, Key: ptr(b.Key(key)),
 	})
 	if err != nil {
 		if isNotFound(err) {
-			return nil, false, nil
+			return nil, "", false, nil
 		}
-		return nil, false, err
+		return nil, "", false, err
 	}
 	defer out.Body.Close()
 	data, err := io.ReadAll(out.Body)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
-	return data, true, nil
+	var etag string
+	if out.ETag != nil {
+		etag = *out.ETag
+	}
+	return data, etag, true, nil
 }
 
 // Put writes data at key with no explicit content type.
@@ -121,6 +136,57 @@ func (b *Blob) put(ctx context.Context, key string, data []byte, contentType *st
 		ContentType: contentType,
 	})
 	return err
+}
+
+// ErrPrecondition reports that a conditional write did not happen because the
+// object was not in the state the caller asserted: it already existed for
+// PutJSONIfAbsent, or its ETag had moved (or the object was deleted) for
+// PutJSONIfMatch. It is the ordinary outcome of losing a race, not a fault —
+// callers re-read and retry.
+var ErrPrecondition = errors.New("s3blob: conditional write precondition failed")
+
+// PutJSONIfAbsent writes data at key tagged application/json only if no object
+// exists there (If-None-Match: *), returning the new object's ETag. An existing
+// object yields ErrPrecondition.
+//
+// Only the JSON variants are conditional: the sole caller today is the WebAuthn
+// identity record, and a conditional Put for every content type would be four
+// more methods with no caller to keep them honest.
+func (b *Blob) PutJSONIfAbsent(ctx context.Context, key string, data []byte) (string, error) {
+	return b.putConditional(ctx, key, data, &s3.PutObjectInput{IfNoneMatch: ptr("*")})
+}
+
+// PutJSONIfMatch writes data at key tagged application/json only if the object
+// there still has the given ETag, returning the new object's ETag. A moved ETag
+// — or a deleted object, which S3 reports as a 404 and which is equally a
+// failure of the caller's assertion that something was there — yields
+// ErrPrecondition.
+func (b *Blob) PutJSONIfMatch(ctx context.Context, key, etag string, data []byte) (string, error) {
+	return b.putConditional(ctx, key, data, &s3.PutObjectInput{IfMatch: ptr(etag)})
+}
+
+// putConditional fills in the common fields of a conditional PutObject and
+// normalizes its failure modes onto ErrPrecondition.
+func (b *Blob) putConditional(ctx context.Context, key string, data []byte, in *s3.PutObjectInput) (string, error) {
+	in.Bucket = &b.bucket
+	in.Key = ptr(b.Key(key))
+	in.Body = bytes.NewReader(data)
+	in.ContentType = ptr("application/json")
+
+	out, err := b.client.PutObject(ctx, in)
+	if err != nil {
+		// An If-Match against a key that no longer exists comes back as a 404,
+		// not a 412; from the caller's side both mean "the state you asserted
+		// is not the state that is there".
+		if isPreconditionFailed(err) || (in.IfMatch != nil && isMissingKey(err)) {
+			return "", ErrPrecondition
+		}
+		return "", err
+	}
+	if out.ETag == nil {
+		return "", nil
+	}
+	return *out.ETag, nil
 }
 
 // Delete removes the object at key. Deleting a key that isn't there is not an
@@ -197,6 +263,49 @@ func isNotFound(err error) bool {
 	var nsk *types.NoSuchKey
 	var nf *types.NotFound
 	return errors.As(err, &nsk) || errors.As(err, &nf)
+}
+
+// isMissingKey is isNotFound widened by the unmodeled shapes a *conditional
+// PutObject* returns when the key is gone. It is deliberately not folded into
+// isNotFound: Get must keep reporting a 404 NoSuchBucket as an error rather
+// than silently as "absent", and a bare status check cannot tell the two apart.
+func isMissingKey(err error) bool {
+	return isNotFound(err) || apiErrorCode(err) == "NoSuchKey"
+}
+
+// isPreconditionFailed recognizes the two responses S3 documents for a
+// conditional write that did not take: 412 PreconditionFailed (the condition
+// evaluated false) and 409 ConditionalRequestConflict (a conflicting write was
+// in flight, which the docs tell you to handle by re-reading the ETag and
+// retrying — the same recovery). Neither is a modeled error type in the current
+// SDK, so they arrive as a generic APIError and are matched on code, with the
+// HTTP status as a backstop.
+func isPreconditionFailed(err error) bool {
+	switch apiErrorCode(err) {
+	case "PreconditionFailed", "ConditionalRequestConflict":
+		return true
+	}
+	switch httpStatus(err) {
+	case http.StatusPreconditionFailed, http.StatusConflict:
+		return true
+	}
+	return false
+}
+
+func apiErrorCode(err error) string {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.ErrorCode()
+	}
+	return ""
+}
+
+func httpStatus(err error) int {
+	var respErr *awshttp.ResponseError
+	if errors.As(err, &respErr) {
+		return respErr.HTTPStatusCode()
+	}
+	return 0
 }
 
 func ptr(s string) *string { return &s }
