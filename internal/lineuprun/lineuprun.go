@@ -116,6 +116,7 @@ type Result struct {
 type recentStatsClient interface {
 	GetSeasonDateRange() (time.Time, time.Time, error)
 	DailyFantasyPoints(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.DayRoster, error)
+	MLBDailyFPts(players []fantrax.MLBPlayerRef, start, end time.Time) ([]fantrax.DayRoster, error)
 }
 
 // LineupClient is the narrow subset of *fantrax.Client that Run needs. It

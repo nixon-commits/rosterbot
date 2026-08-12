@@ -170,7 +170,7 @@ func (c *Client) DailyFantasyPoints(
 	// so the returned rows never leak needsBackfill to callers. Soft-fail: a
 	// statsapi/name-resolution hiccup must never break a recap or backtest — the
 	// un-backfilled rows keep the same defensive zero they had before.
-	if err := c.backfillDailyFPts(days); err != nil {
+	if _, err := c.backfillDailyFPts(days); err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: MLB backfill: %v\n", err)
 	}
 	return days, nil
