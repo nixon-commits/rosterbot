@@ -276,9 +276,172 @@ test_purely_behind_branch_not_flagged() {
   echo "PASS: test_purely_behind_branch_not_flagged"
 }
 
+# Shared fixture bodies for the two content-attribution tests below. Written
+# as realistic Go with stable context either side of the edit point — see the
+# comment in test_landed_branch_not_reflagged_when_main_touches_same_file.
+FIXTURE_BASE='package main
+
+func Stack() {
+	grantA()
+	grantB()
+	grantC()
+
+	sched("Lineup")
+	sched("Grade")
+}'
+
+FIXTURE_WITH_TRADES='package main
+
+func Stack() {
+	grantA()
+	grantB()
+	grantC()
+	grantTrades()
+	grantTradeValues()
+
+	sched("Lineup")
+	sched("Grade")
+}'
+
+FIXTURE_WITH_TRADES_AND_FOOTBALL='package main
+
+func Stack() {
+	grantA()
+	grantB()
+	grantC()
+	grantTrades()
+	grantTradeValues()
+
+	sched("Lineup")
+	sched("Grade")
+	sched("FootballValues")
+	sched("FootballTrades")
+}'
+
+# main moved the file forward but NEVER took the branch's grants.
+FIXTURE_FOOTBALL_ONLY='package main
+
+func Stack() {
+	grantA()
+	grantB()
+	grantC()
+
+	sched("Lineup")
+	sched("Grade")
+	sched("FootballValues")
+	sched("FootballTrades")
+}'
+
+test_landed_branch_not_reflagged_when_main_touches_same_file() {
+  # Regression test for the production false positive diagnosed 2026-08-13:
+  # feat/trades-tab alerted every 6h ("87h stale — infra/infra.go") for four
+  # days after its content had already landed on main.
+  #
+  # This is the exact shape the two existing guards each half-cover and
+  # neither closes. The squash-merge guard (still_differs) clears a landed
+  # branch only while main leaves the file alone; the direction guard
+  # (branch_changed) excludes only files the branch never touched. When BOTH
+  # sides have touched the same file, the file survives both filters forever
+  # — because the intersection is computed over FILE NAMES, while the
+  # question it stands in for is about CONTENT.
+  #
+  # Proven in production by holding the branch constant and moving only main:
+  # at 312a90f~1 the check passed, at origin/main it alerted, with no commit
+  # to the branch in between. The reported age is the branch's own last-touch,
+  # which never changes, so the alert fires 4x/day indefinitely.
+  local tmpdir work
+  tmpdir=$(setup_repo)
+  work="$tmpdir/work"
+
+  # The file bodies are deliberately realistic rather than one-liners: the
+  # attribution test is a content comparison, and on a degenerate 1-2 line
+  # file a change is indistinguishable from a wholesale rewrite for any
+  # algorithm (both a reverse-apply and a three-way merge legitimately report
+  # a conflict there). infra/infra.go is 700+ lines with the change mid-file,
+  # so the fixture mirrors that: the branch's edit sits between stable
+  # context, and main's later edit lands elsewhere in the same file.
+  commit_file "$work" "infra/infra.go" "$FIXTURE_BASE" "$(epoch_hours_ago 96)"
+  (cd "$work" && git push -q origin main)
+
+  # The branch adds its own lines — the analog of feat/trades-tab's two
+  # GrantRead lines.
+  (cd "$work" && git checkout -q -b landed-branch)
+  commit_file "$work" "infra/infra.go" "$FIXTURE_WITH_TRADES" "$(epoch_hours_ago 87)"
+  (cd "$work" && git push -q origin landed-branch)
+
+  # main takes that content under a different SHA (squash merge) ...
+  (cd "$work" && git checkout -q main)
+  commit_file "$work" "infra/infra.go" "$FIXTURE_WITH_TRADES" "$(epoch_hours_ago 80)"
+  # ... and then moves the SAME file forward for an unrelated reason, the way
+  # the dynasty-football commits did to infra/infra.go on 2026-08-12.
+  commit_file "$work" "infra/infra.go" "$FIXTURE_WITH_TRADES_AND_FOOTBALL" "$(epoch_hours_ago 30)"
+  (cd "$work" && git push -q origin main)
+
+  (cd "$work" && git fetch -q origin)
+
+  local output status
+  set +e
+  output=$(cd "$work" && STALE_HOURS=24 CRITICAL_PATHS="infra/ internal/opsalert/ opsnotify/" BASE_REF=origin/main "$SCRIPT" 2>&1)
+  status=$?
+  set -e
+
+  rm -rf "$tmpdir"
+
+  [ "$status" -eq 0 ] || fail "expected exit 0 -- the branch's own change (L2) is already on main, so nothing is unlanded. Got $status. Output:\n$output"
+  echo "$output" | grep -q "landed-branch" && fail "landed-branch must not be flagged: its content landed, main merely moved the same file forward afterward. Output:\n$output"
+
+  echo "PASS: test_landed_branch_not_reflagged_when_main_touches_same_file"
+}
+
+test_unlanded_work_still_flagged_when_main_touches_same_file() {
+  # The false-negative guard, and the reason the content check is a
+  # per-file three-state test rather than "skip any file main also touched".
+  #
+  # Same shape as the test above — branch and main both edit one
+  # critical-path file — except the branch's own change was NEVER taken.
+  # This must still alert. Suppressing every file both sides touched would
+  # make this case silent, which is the exact blindness rosterbot-v4l exists
+  # to prevent: alerting infra that sits unlanded is invisible precisely when
+  # the outage it guards against happens.
+  local tmpdir work
+  tmpdir=$(setup_repo)
+  work="$tmpdir/work"
+
+  commit_file "$work" "infra/infra.go" "$FIXTURE_BASE" "$(epoch_hours_ago 96)"
+  (cd "$work" && git push -q origin main)
+
+  # Branch adds its grants — genuinely unlanded work.
+  (cd "$work" && git checkout -q -b unlanded-branch)
+  commit_file "$work" "infra/infra.go" "$FIXTURE_WITH_TRADES" "$(epoch_hours_ago 87)"
+  (cd "$work" && git push -q origin unlanded-branch)
+
+  # main moves the SAME file forward, but never takes the branch's grants.
+  (cd "$work" && git checkout -q main)
+  commit_file "$work" "infra/infra.go" "$FIXTURE_FOOTBALL_ONLY" "$(epoch_hours_ago 30)"
+  (cd "$work" && git push -q origin main)
+
+  (cd "$work" && git fetch -q origin)
+
+  local output status
+  set +e
+  output=$(cd "$work" && STALE_HOURS=24 CRITICAL_PATHS="infra/ internal/opsalert/ opsnotify/" BASE_REF=origin/main "$SCRIPT" 2>&1)
+  status=$?
+  set -e
+
+  rm -rf "$tmpdir"
+
+  [ "$status" -eq 1 ] || fail "expected exit 1 -- the branch's grants never landed on main. Got $status. Output:\n$output"
+  echo "$output" | grep -q "unlanded-branch" || fail "unlanded-branch must be flagged: its own change is absent from main. Output:\n$output"
+  echo "$output" | grep -q "infra/infra.go" || fail "expected infra/infra.go in the report. Output:\n$output"
+
+  echo "PASS: test_unlanded_work_still_flagged_when_main_touches_same_file"
+}
+
 test_flags_and_filters_correctly
 test_clean_when_nothing_stale
 test_stale_go_masked_by_recent_non_go
 test_excludes_files_the_branch_never_touched
 test_purely_behind_branch_not_flagged
+test_landed_branch_not_reflagged_when_main_touches_same_file
+test_unlanded_work_still_flagged_when_main_touches_same_file
 echo "All tests passed."
