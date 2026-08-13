@@ -22,6 +22,50 @@ now=$(date +%s)
 stale_found=0
 report=""
 
+# Answers, for ONE file, whether the branch's own change to it is still
+# absent from main. This is the content question that the two file-name
+# filters below can only approximate.
+#
+# Each of those filters closes half of the attribution problem and neither
+# closes the case where both sides touched the same file: the branch's change
+# can already be on main under a different SHA (squash merge) while main has
+# since moved that same file forward for unrelated reasons. The file then
+# survives both filters permanently. That is what made feat/trades-tab alert
+# every 6h for four days from 2026-08-12 ("87h stale - infra/infra.go") after
+# its two GrantRead lines were already on main: holding the branch constant
+# and moving only the base from 312a90f~1 to origin/main flipped the verdict,
+# with no commit to the branch in between. Because the reported age is the
+# branch's own last-touch, which never moves, such an alert never ages out.
+#
+# The test is a reverse-apply: if the branch's own patch for this file backs
+# out cleanly against main's copy, then main already carries that content.
+# Comparing content rather than SHAs is what makes it survive squash merges,
+# and scoping to one file at a time is what keeps main's unrelated edits
+# elsewhere in the file from defeating it.
+#
+# Returns: 0 = unlanded (flag it), 1 = landed (skip it), 2 = indeterminate.
+branch_change_landed_status() {
+  local branch="$1" merge_base="$2" file="$3" tmp
+  tmp=$(mktemp -d)
+  mkdir -p "${tmp}/$(dirname "$file")"
+
+  # A file main does not have at all plainly is not carrying the branch's
+  # change — a new critical-path file is exactly the unlanded case.
+  if ! git show "${BASE_REF}:${file}" > "${tmp}/${file}" 2>/dev/null; then
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  if git diff "${merge_base}" "${branch}" -- "$file" \
+    | (cd "$tmp" && git apply --reverse --check -p1 - 2>/dev/null); then
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  rm -rf "$tmp"
+  return 2
+}
+
 # shellcheck disable=SC2086
 for branch in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin \
   | grep -v -F -x -e 'origin' -e "${BASE_REF}"); do
@@ -60,6 +104,29 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin
   branch_changed=$(git diff --name-only "${merge_base}" "${branch}" -- ${CRITICAL_PATHS} 2>/dev/null | grep -E '\.go$' | sort || true)
   # comm -12 requires both inputs sorted, hence the `sort` above on both sides.
   diff_files=$(comm -12 <(printf '%s\n' "$still_differs") <(printf '%s\n' "$branch_changed") | grep -v '^$' || true)
+  if [ -z "$diff_files" ]; then
+    continue
+  fi
+
+  # Both filters above are file-name set operations; narrow the survivors to
+  # the files whose CONTENT is genuinely still missing from main.
+  #
+  # An indeterminate result (the patch neither reverse-applies nor is clearly
+  # absent — heavy drift, a conflicting rewrite) is reported rather than
+  # dropped. This alert exists because nothing paged through the 54-run
+  # 08-01..08-03 outage (rosterbot-v4l), so its failure mode has to be a
+  # duplicate, never a silence — the same posture as check-pins refusing to
+  # skip on missing jq (rosterbot-00e) and the opsalert marker store degrading
+  # to a repeat alert rather than a dropped one (rosterbot-chs).
+  unlanded_files=""
+  for f in $diff_files; do
+    rc=0
+    branch_change_landed_status "${branch}" "${merge_base}" "$f" || rc=$?
+    if [ "$rc" -ne 1 ]; then
+      unlanded_files="${unlanded_files}${f}"$'\n'
+    fi
+  done
+  diff_files=$(printf '%s' "$unlanded_files" | grep -v '^$' || true)
   if [ -z "$diff_files" ]; then
     continue
   fi
