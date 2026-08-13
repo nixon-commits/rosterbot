@@ -58,17 +58,36 @@ FANTRAX_IL_SLOTS=3
 FANTRAX_MINORS_SLOTS=5
 ```
 
+`FANTRAX_USERNAME` and `FANTRAX_PASSWORD` are deliberately **not** in that list.
+
 > [!WARNING]
 > **Cloud environments have no secrets store.** Anthropic's docs say plainly
 > that anyone who uses the environment can read the values and not to put
-> credentials there. `FANTRAX_USERNAME` / `FANTRAX_PASSWORD` are credentials.
-> Adding them is what makes `optimize`, `gs-check`, `waivers`, `claims`,
-> `transactions`, `recap` and `archive` runnable in a cloud session, and it is
-> a real trade — a personal environment on your own account is a much smaller
-> exposure than a shared one, but it is not zero, and a Fantrax password is
-> reusable. Leaving them out costs only the live-Fantrax commands: everything
-> else in this repo (build, vet, the full test suite, the dashboard, every pure
-> package) works without them.
+> credentials there. `FANTRAX_USERNAME` / `FANTRAX_PASSWORD` are credentials —
+> and a Fantrax password is a *reusable primary* one: Fantrax issues no scoped
+> API tokens, so the only revocation is changing the password everywhere.
+
+**The decision for this repo is to leave them out**, because the cost of doing
+so is much smaller than it first appears. The two constraints are independent,
+and it is the **allowlist**, not the password, that unlocks most of a cloud
+session:
+
+| Needs only the network allowlist | Needs Fantrax credentials |
+|---|---|
+| `archive` (HKB, FanGraphs, Savant, prospects — **verified running with no credentials at all**), plus build, `go vet`, the full test suite, the dashboard, and every pure package | `optimize`, `gs-check`, `waivers`, `claims`, `transactions`, `recap` |
+
+Every upstream except Fantrax is unauthenticated. So a credential-free cloud
+session can still develop and exercise anything built on HKB, FanGraphs,
+Savant or MLB statsapi — which is most of this repo's data surface.
+
+What remains behind the password is the set of commands that read live league
+state or write to a live roster, and those are the ones worth running where
+you can see the result. This branch is the worked example: the verification
+that actually mattered — the live HKB join — needed the allowlist and no
+credentials, while the Fantrax-dependent half was better done locally anyway.
+
+If you decide otherwise, do it in a *personal* environment on your own account,
+never a shared one, and treat the password as disclosed the moment it goes in.
 
 ## Setup script
 
@@ -84,7 +103,7 @@ apt-get install -y -qq libicu-dev || true
 
 # The bd build is the long pole (~200 MB binary), so start it and warm the
 # module cache alongside it.
-go install github.com/steveyegge/beads/cmd/bd@vX.Y.Z &
+go install github.com/steveyegge/beads/cmd/bd@v1.0.4 &
 BD=$!
 for d in /home/user/rosterbot /workspace/rosterbot; do
   if [ -f "$d/go.mod" ]; then (cd "$d" && go mod download) || true; break; fi
@@ -99,7 +118,8 @@ GOBIN="$(go env GOPATH)/bin"
 exit 0
 ```
 
-**Pin `vX.Y.Z` to the version your laptop runs** (`bd version`). `@latest`
+**The pin is `v1.0.4`** — the version this repo's operator runs locally, and the
+one to re-check with `bd version` if it ever drifts. `@latest`
 installed v1.2.1 here, which is newer than the Dolt data on this repo's
 `refs/dolt/data`; `bd bootstrap` then refuses to hydrate and `bd init` offers
 to migrate a database shared with every other clone. Matching the version

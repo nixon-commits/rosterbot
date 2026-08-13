@@ -22,9 +22,9 @@ else
   echo "      File follow-up work in your reply instead of dropping it."
   echo "      To install it, add this to the cloud environment's setup script:"
   echo "        apt-get install -y libicu-dev   # Dolt needs ICU headers to build"
-  echo "        go install github.com/steveyegge/beads/cmd/bd@vX.Y.Z"
+  echo "        go install github.com/steveyegge/beads/cmd/bd@v1.0.4"
   echo "        ln -sf \"\$(go env GOPATH)/bin/bd\" /usr/local/bin/bd   # GOPATH/bin is not on PATH"
-  echo "      Pin vX.Y.Z to the version your laptop runs (bd version). @latest can"
+  echo "      v1.0.4 is this repo's pin — the version the operator runs. @latest can"
   echo "      be newer than the Dolt data on refs/dolt/data, and bd then refuses to"
   echo "      hydrate rather than migrating a database shared with your other clones."
 fi
