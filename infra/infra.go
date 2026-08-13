@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfront"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfrontorigins"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscodebuild"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsec2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsecr"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsecs"
@@ -17,6 +18,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsglue"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awskms"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
@@ -133,6 +135,45 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	})
 	cluster := awsecs.NewCluster(stack, jsii.String("Cluster"), &awsecs.ClusterProps{Vpc: vpc})
 
+	// --- Multi-tenant identity (rosterbot-crq.6) ---
+	//
+	// The one store in this tree that is small, hot, mutable and contended:
+	// users, their passkey credentials, their Fantrax connection, and the
+	// single-use enrollment tokens. ADR-0001 rules S3 for key->blob and asks
+	// that a database not be re-proposed "without a new access pattern that
+	// needs queries". This is that access pattern's opposite twin, and the
+	// reason is not queries: what S3 cannot give is an atomic compare-and-set
+	// on a mutable record and a uniqueness constraint on create, both of which
+	// this data needs on every write. rosterbot-crq.2 is the bug that proves
+	// it — a concurrent login and registration silently losing a passkey.
+	//
+	// Single table, PK/SK strings; the key layout lives in the design doc.
+	identityTable := awsdynamodb.NewTableV2(stack, jsii.String("IdentityTable"), &awsdynamodb.TablePropsV2{
+		PartitionKey: &awsdynamodb.Attribute{Name: jsii.String("pk"), Type: awsdynamodb.AttributeType_STRING},
+		SortKey:      &awsdynamodb.Attribute{Name: jsii.String("sk"), Type: awsdynamodb.AttributeType_STRING},
+		Billing:      awsdynamodb.Billing_OnDemand(nil),
+		// ENROLL# items carry an absolute expiry and DynamoDB reaps them, so an
+		// unredeemed invite cannot linger as a live credential.
+		TimeToLiveAttribute: jsii.String("expires_at"),
+		// The only store here whose contents cannot be regenerated from an
+		// upstream. Losing the cache costs a refetch; losing this locks every
+		// user out of the dashboard and orphans their Fantrax connection.
+		PointInTimeRecoverySpecification: &awsdynamodb.PointInTimeRecoverySpecification{
+			PointInTimeRecoveryEnabled: jsii.Bool(true),
+		},
+		RemovalPolicy: awscdk.RemovalPolicy_RETAIN,
+	})
+
+	// The CMK that wraps each tenant's Fantrax credentials. Its purpose is the
+	// ASYMMETRIC grant made further down (where apiFn is created), not the
+	// encryption itself — DynamoDB is already encrypted at rest, so a key both
+	// roles could use would add close to nothing.
+	fantraxCredKey := awskms.NewKey(stack, jsii.String("FantraxCredKey"), &awskms.KeyProps{
+		Description:       jsii.String("rosterbot: envelope key for per-tenant Fantrax credentials"),
+		EnableKeyRotation: jsii.Bool(true),
+		RemovalPolicy:     awscdk.RemovalPolicy_RETAIN,
+	})
+
 	taskDef := awsecs.NewFargateTaskDefinition(stack, jsii.String("Task"), &awsecs.FargateTaskDefinitionProps{
 		Cpu:            jsii.Number(1024), // 1 vCPU
 		MemoryLimitMiB: jsii.Number(2048), // 2 GB
@@ -204,6 +245,10 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			"SITE_CF_DIST_ID":     dist.DistributionId(),
 			"CLAIMS_CURSOR_PATH":  jsii.String(".waivers/last-claims.json"),
 			"GS_TRACKING_ENABLED": jsii.String("true"),
+			// Named rather than retyped in each module, so a rename cannot
+			// leave one composition root pointing at a table that is gone.
+			"IDENTITY_TABLE":   identityTable.TableName(),
+			"FANTRAX_CRED_KEY": fantraxCredKey.KeyArn(),
 		},
 		Secrets: &map[string]awsecs.Secret{
 			"FANTRAX_USERNAME":     secret("FANTRAX_USERNAME"),
@@ -288,6 +333,53 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// webauthn/ holds the single Identity record and is read-modify-written
 	// on every registration and login (sign-counter update).
 	stateBucket.GrantReadWrite(apiFn, jsii.String("webauthn/*"))
+
+	// --- The split that makes credential custody survivable (decision 6) ---
+	//
+	// Both principals read and write the identity table. Only ONE of them can
+	// decrypt a Fantrax password:
+	//
+	//	apiFn         kms:Encrypt   — it accepts the credential from the browser
+	//	taskDef role  kms:Decrypt   — it is the only thing that ever uses one
+	//
+	// This asymmetry is the whole security argument for storing passwords at
+	// all. apiFn sits behind a Function URL with AuthType: NONE — the one
+	// component in this stack reachable from the open internet. If it could
+	// decrypt, every authentication bug in internal/lineupapi would also be a
+	// third-party-password disclosure bug, and a dashboard compromise would
+	// cost twelve people their Fantrax accounts. With the split, a full
+	// compromise of the public surface yields ciphertext and no key.
+	//
+	// The cost is a real design constraint, stated here so it is not quietly
+	// "fixed" later: the API can never verify a credential synchronously.
+	// Verification happens in the connect ECS task, which is why that flow is
+	// asynchronous and polls for progress (rosterbot-crq.12). Granting apiFn
+	// kms:Decrypt to make connect feel snappier would trade the property away.
+	identityTable.GrantReadWriteData(apiFn)
+	identityTable.GrantReadWriteData(taskDef.TaskRole())
+	fantraxCredKey.GrantDecrypt(taskDef.TaskRole())
+
+	// NOT fantraxCredKey.GrantEncrypt(apiFn). That helper grants kms:Encrypt,
+	// kms:GenerateDataKey* AND kms:ReEncrypt* — and ReEncrypt* covers
+	// ReEncryptFrom, which is a decryption primitive wearing a disguise: a
+	// principal holding it can re-encrypt our ciphertext under a key THEY
+	// control (their own key policy supplies the matching ReEncryptTo) and
+	// then decrypt it there at leisure. KMS never returns plaintext during the
+	// call, so it reads as harmless; the end state is indistinguishable from
+	// having granted kms:Decrypt. That is precisely the property this whole
+	// block exists to deny the internet-facing Lambda, so the grant is written
+	// out by hand instead.
+	//
+	// kms:Encrypt alone is sufficient: KMS encrypts up to 4 KB directly and a
+	// Fantrax credential pair is far under that, so there is no data key to
+	// generate and no reason for GenerateDataKey* either.
+	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions:   jsii.Strings("kms:Encrypt"),
+		Resources: &[]*string{fantraxCredKey.KeyArn()},
+	}))
+
+	apiFn.AddEnvironment(jsii.String("IDENTITY_TABLE"), identityTable.TableName(), nil)
+	apiFn.AddEnvironment(jsii.String("FANTRAX_CRED_KEY"), fantraxCredKey.KeyArn(), nil)
 	// GET /v1/infra reports the health of every prefix in the state bucket, so
 	// it needs to LIST the whole bucket — but only list. It reports object
 	// counts, sizes, last-modified times and dt= partition names, all of which
