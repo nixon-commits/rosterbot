@@ -318,6 +318,37 @@ func Stack() {
 	sched("FootballTrades")
 }'
 
+# main took the branch's grants AND then inserted a line immediately adjacent
+# to them, inside the patch's context window. This is the live shape from
+# 2026-08-13: crq.3 added reports/ grants at infra/infra.go:269 while
+# feat/trades-tab's two lines sat at 279-280.
+FIXTURE_WITH_REPORTS_AND_TRADES='package main
+
+func Stack() {
+	grantA()
+	grantB()
+	grantC()
+	grantReports()
+	grantTrades()
+	grantTradeValues()
+
+	sched("Lineup")
+	sched("Grade")
+}'
+
+# Branch adds nothing but a closing brace — a line main trivially also has.
+FIXTURE_BRACE_ONLY='package main
+
+func Stack() {
+	grantA()
+	grantB()
+	grantC()
+
+	sched("Lineup")
+	sched("Grade")
+}
+}'
+
 # main moved the file forward but NEVER took the branch's grants.
 FIXTURE_FOOTBALL_ONLY='package main
 
@@ -437,6 +468,95 @@ test_unlanded_work_still_flagged_when_main_touches_same_file() {
   echo "PASS: test_unlanded_work_still_flagged_when_main_touches_same_file"
 }
 
+test_landed_branch_not_reflagged_when_main_drifts_adjacent() {
+  # The residual gap in rosterbot-rx4, hit in production within the hour.
+  #
+  # rx4's reverse-apply answers "does main already carry this change" only
+  # while the surrounding context still matches. Merging the crq epic put
+  # grantReports-equivalent lines immediately above feat/trades-tab's two
+  # GrantRead lines, inside the patch's context window. The lines themselves
+  # were still on main at 279-280 -- the branch was landed -- but the patch
+  # stopped reverse-applying, so the check returned indeterminate and the
+  # fail-closed policy alerted anyway. Same false positive, different route.
+  #
+  # The fallback: when the reverse-apply is inconclusive, ask the weaker but
+  # position-independent question -- is every line the branch ADDED present
+  # in main's copy of the file? Only when some are missing is it genuinely
+  # indeterminate.
+  local tmpdir work
+  tmpdir=$(setup_repo)
+  work="$tmpdir/work"
+
+  commit_file "$work" "infra/infra.go" "$FIXTURE_BASE" "$(epoch_hours_ago 96)"
+  (cd "$work" && git push -q origin main)
+
+  (cd "$work" && git checkout -q -b drifted-branch)
+  commit_file "$work" "infra/infra.go" "$FIXTURE_WITH_TRADES" "$(epoch_hours_ago 87)"
+  (cd "$work" && git push -q origin drifted-branch)
+
+  # main takes the grants AND inserts an adjacent line, breaking patch context.
+  (cd "$work" && git checkout -q main)
+  commit_file "$work" "infra/infra.go" "$FIXTURE_WITH_REPORTS_AND_TRADES" "$(epoch_hours_ago 30)"
+  (cd "$work" && git push -q origin main)
+
+  (cd "$work" && git fetch -q origin)
+
+  local output status
+  set +e
+  output=$(cd "$work" && STALE_HOURS=24 CRITICAL_PATHS="infra/ internal/opsalert/ opsnotify/" BASE_REF=origin/main "$SCRIPT" 2>&1)
+  status=$?
+  set -e
+
+  rm -rf "$tmpdir"
+
+  [ "$status" -eq 0 ] || fail "expected exit 0 -- both grants are on main, only the surrounding context moved. Got $status. Output:\n$output"
+  echo "$output" | grep -q "drifted-branch" && fail "drifted-branch must not be flagged: its lines are present in main, the patch merely no longer applies. Output:\n$output"
+
+  echo "PASS: test_landed_branch_not_reflagged_when_main_drifts_adjacent"
+}
+
+test_trivial_only_additions_stay_indeterminate() {
+  # Guard on the fallback's own failure direction. Line-presence is a weaker
+  # test than a patch apply: a line can appear in main for reasons that have
+  # nothing to do with the branch. A branch whose additions are ALL trivial
+  # (blank, or punctuation like a lone brace) would otherwise be declared
+  # landed on a coincidence, and this alert must never conclude "landed" by
+  # accident -- silence is its one unacceptable failure mode.
+  #
+  # Such a branch must stay indeterminate and therefore still be reported.
+  local tmpdir work
+  tmpdir=$(setup_repo)
+  work="$tmpdir/work"
+
+  commit_file "$work" "infra/infra.go" "$FIXTURE_BASE" "$(epoch_hours_ago 96)"
+  (cd "$work" && git push -q origin main)
+
+  (cd "$work" && git checkout -q -b brace-branch)
+  commit_file "$work" "infra/infra.go" "$FIXTURE_BRACE_ONLY" "$(epoch_hours_ago 87)"
+  (cd "$work" && git push -q origin brace-branch)
+
+  # main drifts adjacent so the reverse-apply is inconclusive and the
+  # fallback is the thing under test.
+  (cd "$work" && git checkout -q main)
+  commit_file "$work" "infra/infra.go" "$FIXTURE_WITH_REPORTS_AND_TRADES" "$(epoch_hours_ago 30)"
+  (cd "$work" && git push -q origin main)
+
+  (cd "$work" && git fetch -q origin)
+
+  local output status
+  set +e
+  output=$(cd "$work" && STALE_HOURS=24 CRITICAL_PATHS="infra/ internal/opsalert/ opsnotify/" BASE_REF=origin/main "$SCRIPT" 2>&1)
+  status=$?
+  set -e
+
+  rm -rf "$tmpdir"
+
+  [ "$status" -eq 1 ] || fail "expected exit 1 -- a brace-only addition must not be read as landed on a coincidental line match. Got $status. Output:\n$output"
+  echo "$output" | grep -q "brace-branch" || fail "brace-branch must still be reported. Output:\n$output"
+
+  echo "PASS: test_trivial_only_additions_stay_indeterminate"
+}
+
 test_flags_and_filters_correctly
 test_clean_when_nothing_stale
 test_stale_go_masked_by_recent_non_go
@@ -444,4 +564,6 @@ test_excludes_files_the_branch_never_touched
 test_purely_behind_branch_not_flagged
 test_landed_branch_not_reflagged_when_main_touches_same_file
 test_unlanded_work_still_flagged_when_main_touches_same_file
+test_landed_branch_not_reflagged_when_main_drifts_adjacent
+test_trivial_only_additions_stay_indeterminate
 echo "All tests passed."

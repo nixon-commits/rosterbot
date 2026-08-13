@@ -62,7 +62,36 @@ branch_change_landed_status() {
     return 1
   fi
 
+  # The reverse-apply is context-sensitive, so main moving a line NEAR the
+  # branch's edit defeats it even when the branch's own lines are plainly
+  # still there. That is not hypothetical: hours after the original fix
+  # merged, crq.3 landed grants immediately above feat/trades-tab's two
+  # GrantRead lines, the patch stopped applying, and the identical false
+  # positive returned by a new route (indeterminate -> fail-closed -> alert).
+  #
+  # So ask the weaker but position-independent question: is every line the
+  # branch ADDED already present in main's copy of this file?
+  local added substantive=0 missing=0 line
+  added=$(git diff "${merge_base}" "${branch}" -- "$file" \
+    | grep '^+' | grep -v '^+++' | sed 's/^+//')
+
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    # A line of pure punctuation (a lone brace) is no evidence of anything:
+    # main having one says nothing about the branch's change. Require at
+    # least one line with real content before concluding "landed", because
+    # concluding it wrongly is this alert's one unacceptable failure.
+    if printf '%s' "$line" | tr -d '[:space:][:punct:]' | grep -q .; then
+      substantive=$((substantive + 1))
+    fi
+    grep -qxF -- "$line" "${tmp}/${file}" || missing=$((missing + 1))
+  done <<< "$added"
+
   rm -rf "$tmp"
+
+  if [ "$substantive" -gt 0 ] && [ "$missing" -eq 0 ]; then
+    return 1
+  fi
   return 2
 }
 
