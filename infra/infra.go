@@ -643,18 +643,25 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				"SECURITY_GROUPS": {Value: taskSg.SecurityGroupId()},
 			},
 		})
-		// Serialize builds. Two pushes close together produced three distinct
-		// failures in one day (rosterbot-ill): a cdk deploy refused because the
-		// other build held the CloudFormation stack, and a build that could not
-		// PROVISION a container at all. Neither had anything to do with the code
-		// being built, and both were indistinguishable from a real failure at a
-		// glance — main showed red and Pushover fired for a build that executed
-		// nothing.
+		// NO ConcurrentBuildLimit here, deliberately — it was set to 1 and reverted
+		// the same day (rosterbot-ill).
 		//
-		// A limit of 1 queues the second build instead, which is the correct
-		// behaviour anyway: two concurrent deploys of one stack cannot both win.
-		project.Node().DefaultChild().(awscodebuild.CfnProject).
-			AddPropertyOverride(jsii.String("ConcurrentBuildLimit"), jsii.Number(1))
+		// The intent was to stop two close-together pushes racing the CloudFormation
+		// stack. But CodeBuild's limit does not QUEUE the excess build, it THROTTLES
+		// it: "new builds are throttled and are not run." A push landing during an
+		// in-flight build therefore never builds at all — main sits deployed-behind
+		// with no failed build, no Pushover, and nothing red anywhere. Observed
+		// immediately: the fix for the Analysis Store prefix was pushed, silently
+		// never built, and only noticed because someone went looking for the build.
+		//
+		// A racing build fails LOUDLY and the next push retries it. A dropped build
+		// is silent and permanent. Given the choice, take the noisy failure — which
+		// is the same reasoning as every other guard in this repo.
+		//
+		// The other half of rosterbot-ill (set -e in the buildspec's cdk block, so a
+		// failed deploy is reported at the deploy instead of blamed on the next
+		// step) is kept: it makes the loud failure legible, which is the part that
+		// was actually costing time.
 		repo.GrantPullPush(project)
 		// Let the build launch the projection-site task (ecs:RunTask + the
 		// iam:PassRole on the task's execution/task roles that RunTask requires).
