@@ -112,6 +112,64 @@ function heatCell(cls, value, scale, format) {
 const fmtAge = (v) => v.toFixed(1);
 const fmtValue = (v) => v.toLocaleString();
 
+// ---- Sorting ---------------------------------------------------------------
+// One table drives both the header and the comparator, so a column cannot be
+// rendered without being sortable or sorted without being rendered.
+//
+// `get` returns the value to order by, and returning `undefined` is how a cell
+// declares itself UNKNOWN. Which zeros count as unknown differs by column, and
+// the split is the same one heatCell already makes:
+//
+//   age, hkb_value  0 means "HKB has no row for this player" (see
+//                   lineupapi.Player — both fields are omitempty), which is a
+//                   missing measurement, not a low one. The cell renders as a
+//                   muted dash, so it sorts as unknown.
+//   proj            0 is a genuine reading — a player whose team has no game
+//                   today. The cell prints "0.0", so it sorts as the low
+//                   number it is. Only a slot with no player at all is unknown.
+//   slot            never unknown; it is the row's index in the published
+//                   lineup, so ascending reproduces the lineup card exactly
+//                   and doubles as the reset back to the default view.
+// `num` picks the comparison, `first` the direction of the FIRST click on that
+// column. The two are deliberately separate: numeric columns open biggest-first
+// because that is the question being asked of them, but Slot is numeric and
+// must open ascending — ascending Slot IS the published lineup, and opening it
+// reversed would make the one control that gets you back to the default view
+// the one that does not.
+const COLUMNS = [
+  { key: "slot",  label: "Slot",   cls: "lineup-slot",  num: true,  first: "asc",  get: (s, i) => i },
+  { key: "name",  label: "Player", cls: "lineup-name",  num: false, first: "asc",  get: (s) => s.player?.name },
+  { key: "team",  label: "Team",   cls: "lineup-meta",  num: false, first: "asc",  get: (s) => s.player?.team },
+  { key: "age",   label: "Age",    cls: "lineup-age",   num: true,  first: "desc", get: (s) => s.player?.age || undefined },
+  { key: "value", label: "HKB",    cls: "lineup-value", num: true,  first: "desc", get: (s) => s.player?.hkb_value || undefined },
+  { key: "proj",  label: "Proj",   cls: "lineup-proj",  num: true,  first: "desc", get: (s) => s.player?.proj },
+];
+
+// compareValues orders two cells of one column. It is the whole sort rule.
+//
+// Contract:
+//   - Return <0 to put `a` above `b`, >0 to put it below, 0 for a tie.
+//     Array.prototype.sort is stable, so ties keep lineup order for free.
+//   - `dir` is "asc" or "desc", and flips the order of two KNOWN values.
+//   - `undefined` is unknown: a missing HKB row, a missing age, or an empty
+//     slot. An unknown always sorts BELOW a known value in BOTH directions,
+//     so the top of the list stays meaningful whichever way you sort. Two
+//     unknowns tie.
+//   - `num` picks the comparison: numeric subtraction, or localeCompare for
+//     the text columns (Player, Team).
+function compareValues(a, b, num, dir) {
+  // Unknowns are settled BEFORE `dir` is consulted, and these returns are not
+  // flipped. Folding them into the flipped comparison below is the one bug this
+  // function can have: it would send every dash to the top of a descending sort
+  // and silently invert the rule.
+  const aKnown = a !== undefined && a !== null;
+  const bKnown = b !== undefined && b !== null;
+  if (!aKnown || !bKnown) return aKnown === bKnown ? 0 : (aKnown ? -1 : 1);
+
+  const c = num ? a - b : String(a).localeCompare(String(b));
+  return dir === "asc" ? c : -c;
+}
+
 function slotRow(slot, scales) {
   const state = slotState(slot);
   const row = el("li", `lineup-row${slotNeedsAttention(slot) ? " alert" : ""}`);
@@ -123,7 +181,7 @@ function slotRow(slot, scales) {
     row.appendChild(el("span", "lineup-age muted", "—"));
     row.appendChild(el("span", "lineup-value muted", "—"));
     row.appendChild(el("span", "lineup-proj", "—"));
-    return row;
+    return gridRow(row);
   }
 
   const p = slot.player;
@@ -149,6 +207,16 @@ function slotRow(slot, scales) {
   const proj = el("span", "lineup-proj", p.proj.toFixed(1));
   if (!p.proj) proj.classList.add("muted");
   row.appendChild(proj);
+  return gridRow(row);
+}
+
+// The list is an <ol> of <li> on a CSS grid, not a <table>, so aria-sort on a
+// header cell means nothing to a screen reader without an explicit grid role
+// around it. Declaring the roles here is what makes the sort state in
+// headerRow announceable; partial ARIA would be worse than none.
+function gridRow(row) {
+  row.setAttribute("role", "row");
+  for (const cell of row.children) cell.setAttribute("role", "cell");
   return row;
 }
 
@@ -156,14 +224,29 @@ function slotRow(slot, scales) {
 // caption, so the two new numeric columns are labelled where they are read.
 // Without it "27.4" and "5,210" sit side by side with nothing saying which is
 // which.
-function headerRow() {
+//
+// Each label is a real <button> rather than a click handler on the span: the
+// control has to be reachable by keyboard and announced as pressable, and a
+// bare span with a listener is neither. The arrow is a child span so the
+// button's accessible name stays the plain column label — "Proj ▼" read aloud
+// is worse than "Proj" plus the aria-sort the cell already carries.
+function headerRow(sort, onSort) {
   const row = el("li", "lineup-row lineup-colhead");
-  row.appendChild(el("span", "lineup-slot", "Slot"));
-  row.appendChild(el("span", "lineup-name", "Player"));
-  row.appendChild(el("span", "lineup-meta", "Team"));
-  row.appendChild(el("span", "lineup-age", "Age"));
-  row.appendChild(el("span", "lineup-value", "HKB"));
-  row.appendChild(el("span", "lineup-proj", "Proj"));
+  row.setAttribute("role", "row");
+  for (const col of COLUMNS) {
+    const cell = el("span", col.cls);
+    cell.setAttribute("role", "columnheader");
+    const active = sort.key === col.key;
+    cell.setAttribute("aria-sort",
+      active ? (sort.dir === "asc" ? "ascending" : "descending") : "none");
+
+    const btn = el("button", `lineup-sort${active ? " active" : ""}`, col.label);
+    btn.type = "button";
+    if (active) btn.appendChild(el("span", "lineup-arrow", sort.dir === "asc" ? "▲" : "▼"));
+    btn.addEventListener("click", () => onSort(col));
+    cell.appendChild(btn);
+    row.appendChild(cell);
+  }
   return row;
 }
 
@@ -238,10 +321,46 @@ export async function renderLineup(root) {
   // lineup predates the enrichment and carries neither field.
   if (scales.age || scales.value) root.appendChild(legend(scales));
 
+  // Sorting re-orders the rows already on the page: it changes no membership,
+  // so `scales` is computed once here and never recomputed. Shading is derived
+  // from who is in the lineup, not from what order they are in — re-deriving it
+  // per sort would make the same player change color for no reason.
+  //
+  // A null key is the published lineup order, which is also what Slot-ascending
+  // reproduces; the default view therefore needs no sort applied at all.
+  const sort = { key: null, dir: "asc" };
   const list = el("ol", "lineup-list");
-  list.appendChild(headerRow());
-  for (const slot of data.slots) list.appendChild(slotRow(slot, scales));
+  list.setAttribute("role", "table");
+  list.setAttribute("aria-label", `Lineup for ${data.date}`);
   root.appendChild(list);
+
+  const drawList = () => {
+    const rows = (data.slots || []).map((slot, i) => ({ slot, i }));
+    if (sort.key) {
+      const col = COLUMNS.find((c) => c.key === sort.key);
+      rows.sort((x, y) => compareValues(
+        col.get(x.slot, x.i), col.get(y.slot, y.i), col.num, sort.dir));
+    }
+    list.replaceChildren(headerRow(sort, onSort));
+    for (const r of rows) list.appendChild(slotRow(r.slot, scales));
+  };
+
+  const onSort = (col) => {
+    if (sort.key === col.key) {
+      sort.dir = sort.dir === "asc" ? "desc" : "asc";
+    } else {
+      sort.key = col.key;
+      sort.dir = col.first;
+    }
+    drawList();
+    // replaceChildren threw away the button that was just clicked, so focus
+    // would fall back to <body> and a keyboard user would lose their place
+    // mid-sort. Put it back on the equivalent button in the new header.
+    const i = COLUMNS.indexOf(col);
+    list.querySelectorAll(".lineup-sort")[i]?.focus();
+  };
+
+  drawList();
 }
 
 function errorCard(err) {

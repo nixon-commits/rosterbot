@@ -605,6 +605,43 @@ td.cov.warn { color: var(--danger); }
 }
 .lineup-colhead .lineup-name { font-weight: 700; }
 
+/* Sortable column headers. This list is a grid of <li>, not a <table>, so the
+   th.sortable rule above does not reach it and the affordance is rebuilt here.
+
+   display:block + width:100% rather than inline-flex, so each button inherits
+   the text-align of the column it sits in — the three numeric columns are
+   right-aligned, and a flex button would need its own justify-content to match,
+   which is a second place for the alignment to drift out of sync. The button is
+   stripped back to its parent's typography (font, color, letter-spacing,
+   text-transform) so turning a label into a control changed nothing visible
+   about the label. */
+.lineup-sort {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  user-select: none;
+}
+.lineup-sort:hover { color: var(--fg); }
+.lineup-sort.active { color: var(--fg); }
+.lineup-sort:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+/* The arrow is the only thing marking the active column, so it must not be the
+   first thing to fall off a narrow screen — it rides in the same inline flow as
+   the label and shrinks with it. */
+.lineup-arrow { font-size: .85em; margin-left: .25em; }
+
 .lineup-slot {
   font-size: .7rem;
   font-weight: 700;
