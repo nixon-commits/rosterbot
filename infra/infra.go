@@ -668,7 +668,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		TableInput: &awsglue.CfnTable_TableInputProperty{
 			Name:          jsii.String("grades"),
 			TableType:     jsii.String("EXTERNAL_TABLE"),
-			PartitionKeys: &[]interface{}{col("dt", "string"), col("system", "string")},
+			PartitionKeys: &[]interface{}{col("user", "string"), col("dt", "string"), col("system", "string")},
 			Parameters: &map[string]*string{
 				"classification":              jsii.String("json"),
 				"projection.enabled":          jsii.String("true"),
@@ -681,9 +681,16 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				// systems. Legacy objects without a system= path segment predate
 				// this partition and are not visible to Athena (the report reads
 				// them via the store readers, which attribute them to depthcharts-ros).
-				"projection.system.type":    jsii.String("enum"),
-				"projection.system.values":  jsii.String("steamer-ros,depthcharts-ros,thebatx-ros,atc-ros"),
-				"storage.location.template": awscdk.Fn_Join(jsii.String(""), &[]*string{gradesLoc, jsii.String("dt=${dt}/system=${system}/")}),
+				"projection.system.type":   jsii.String("enum"),
+				"projection.system.values": jsii.String("steamer-ros,depthcharts-ros,thebatx-ros,atc-ros"),
+				// user is INJECTED rather than enum: tenant ids are opaque 64-byte
+				// handles that cannot be enumerated in a template, and an enum
+				// would need a stack deploy on every signup. Injected means every
+				// query must name the tenant in its WHERE clause, which is a
+				// constraint worth having — it makes an accidental cross-tenant
+				// scan impossible to write by omission.
+				"projection.user.type":      jsii.String("injected"),
+				"storage.location.template": awscdk.Fn_Join(jsii.String(""), &[]*string{gradesLoc, jsii.String("user=${user}/dt=${dt}/system=${system}/")}),
 			},
 			StorageDescriptor: &awsglue.CfnTable_StorageDescriptorProperty{
 				Location:     gradesLoc,
