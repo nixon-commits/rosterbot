@@ -7,7 +7,6 @@ import (
 	"github.com/pmurley/go-fantrax/models"
 
 	"github.com/nixon-commits/rosterbot/internal/hkb"
-	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/positions"
 )
 
@@ -52,7 +51,15 @@ func Aggregate(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb.Player
 		}
 		r.RosteredCount++
 
-		hp, ok := lookup[playername.Normalize(pp.Name)]
+		// The hint matters most here of anywhere: this store is NoBackfill
+		// (docs/adr/0002), so a namesake resolved wrong is persisted forever
+		// rather than corrected tomorrow. The pool row carries both signals a
+		// collision needs, and a refusal lands in Unmatched — visible in the
+		// Matched column instead of hiding inside a plausible total.
+		hp, ok := lookup.FindFor(pp.Name, hkb.Hint{
+			MLBTeam:        pp.MLBTeamShortName,
+			MinorsEligible: pp.MinorsEligible,
+		})
 		if !ok {
 			r.Unmatched = append(r.Unmatched, pp.Name)
 			continue // unmatched: counted as rostered, contributes no value

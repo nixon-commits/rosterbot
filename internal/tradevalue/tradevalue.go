@@ -253,7 +253,7 @@ func pctDiff(a, b float64) float64 {
 // already recovered a pick's identity (see NewDraftPickAsset) should call
 // that instead, since the identity lives in a different part of the row
 // than the player scorer this function reads.
-func NewAsset(name, position string, lookup map[string]hkb.Player) Asset {
+func NewAsset(name, position string, lookup hkb.Lookup) Asset {
 	if name == "" {
 		return Asset{Name: "Draft pick (unidentified)", IsPick: true}
 	}

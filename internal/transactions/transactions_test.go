@@ -37,10 +37,13 @@ func TestBuildHKBLookup(t *testing.T) {
 	}
 	lookup := buildHKBLookup(players)
 
-	if p, ok := lookup["bobby witt"]; !ok || p.Value != 10000 {
+	// Find, not an index: the suffix-stripping that makes "Bobby Witt Jr."
+	// resolve is also what lets two different players share a key, so the
+	// lookup declines a contested name instead of picking one (rosterbot-5z7).
+	if p, ok := lookup.Find("Bobby Witt Jr."); !ok || p.Value != 10000 {
 		t.Error("expected Bobby Witt Jr. lookup to work")
 	}
-	if p, ok := lookup["juan soto"]; !ok || p.Value != 8782 {
+	if p, ok := lookup.Find("Juan Soto"); !ok || p.Value != 8782 {
 		t.Error("expected Juan Soto lookup to work")
 	}
 }
