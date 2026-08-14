@@ -579,7 +579,7 @@ td.cov.warn { color: var(--danger); }
 
 .lineup-row {
   display: grid;
-  grid-template-columns: 2.75rem minmax(0, 1fr) auto 2.75rem 3.75rem 3.25rem;
+  grid-template-columns: 2.75rem minmax(0, 1fr) 2rem auto 2.75rem 3.75rem 3.25rem;
   align-items: center;
   gap: var(--s2);
   padding: var(--s2) var(--s3);
@@ -604,6 +604,11 @@ td.cov.warn { color: var(--danger); }
   background: color-mix(in srgb, var(--border) 25%, transparent);
 }
 .lineup-colhead .lineup-name { font-weight: 700; }
+/* Both cells carry their own font-size for the data rows, which would otherwise
+   beat the header row's .68rem and leave POS visibly larger than the labels
+   beside it. The header is one type size across all seven columns. */
+.lineup-colhead .lineup-pos,
+.lineup-colhead .lineup-club { font-size: inherit; color: inherit; }
 
 /* Sortable column headers. This list is a grid of <li>, not a <table>, so the
    th.sortable rule above does not reach it and the affordance is rebuilt here.
@@ -660,8 +665,28 @@ td.cov.warn { color: var(--danger); }
    fixed, so a long name must not push the projection off the row. */
 .lineup-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lineup-empty { font-weight: 400; font-style: italic; color: var(--muted); }
-.lineup-meta { font-size: .78rem; color: var(--muted); white-space: nowrap; }
-.lineup-pos::before { content: " · "; }
+/* The club is a logo, not a text abbreviation: it is recognised faster than
+   three letters are read, and at eighteen rows that is the difference between
+   scanning the column and reading it. The abbreviation survives as alt/title
+   and as the visible fallback, so nothing depends on recognising the mark.
+
+   text-align rather than flex, so the header button — which inherits its
+   parent's alignment — centres over the logos without needing its own
+   justify-content, the same reason .lineup-sort is display:block. */
+.lineup-club { text-align: center; }
+.lineup-logo {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  vertical-align: middle;
+}
+.lineup-club-text { font-size: .7rem; color: var(--muted); white-space: nowrap; }
+.lineup-pos {
+  font-size: .78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  text-align: right;
+}
 .lineup-proj { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 
 /* ---- Age / HKB value heatmap -------------------------------------------- */
@@ -739,10 +764,11 @@ td.cov.warn { color: var(--danger); }
 }
 
 @media (max-width: 560px) {
-  /* Position eligibility is the least-scanned field here and the first to go
-     when the row gets tight; team, both dynasty columns and the projection all
-     stay. Six columns fit only once the widest optional one is gone. */
-  .lineup-pos { display: none; }
+  /* Position used to be dropped here as "the least-scanned field". It is now a
+     column you can sort on, and stripping the universal UT shortened it from
+     "2B/SS/INF/UT" to "2B/SS/INF" — often just "OF" or "P" — so it earns its
+     place down to the next breakpoint. The fixed columns tighten instead. */
+  .lineup-row { grid-template-columns: 2.5rem minmax(0, 1fr) 1.9rem auto 2.6rem 3.4rem 2.9rem; }
 }
 @media (max-width: 420px) {
   /* Below this the six columns cannot all hold their width, and squeezing them
@@ -751,8 +777,12 @@ td.cov.warn { color: var(--danger); }
      spread and therefore the one the heatmap is actually read for; the legend
      drops its age key to match, so the page never explains a column it is not
      showing. */
-  .lineup-row { grid-template-columns: 2.5rem minmax(0, 1fr) auto 3.5rem 3rem; }
+  .lineup-row { grid-template-columns: 2.5rem minmax(0, 1fr) 1.9rem 3.4rem 2.9rem; }
   .lineup-age { display: none; }
+  /* Position goes here rather than at 560px: below this width the name starts
+     truncating, and the club logo says more per pixel than the eligibility
+     list does. */
+  .lineup-pos { display: none; }
   /* Separate rule on purpose: one invalid selector invalidates its whole
      selector list, so pairing :has() with .lineup-age would take the column
      hide down with it on a browser without :has — leaving six items in a

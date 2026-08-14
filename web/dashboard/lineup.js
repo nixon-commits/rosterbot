@@ -112,6 +112,96 @@ function heatCell(cls, value, scale, format) {
 const fmtAge = (v) => v.toFixed(1);
 const fmtValue = (v) => v.toLocaleString();
 
+// ---- MLB club logos --------------------------------------------------------
+// Ported from mlbTeamAbbrevToID in internal/recap/render.go, which is the Go
+// side's source for the same logos on the recap site. Both the canonical
+// abbreviation and the common upstream variants (CWS, OAK, AZ, …) are here, so
+// a club resolves whichever spelling Fantrax emits.
+//
+// This is a copy rather than a shared artifact on purpose: it is 30 stable
+// rows, and the alternative is publishing a table through the API to save
+// duplicating a constant that changes when a franchise relocates.
+const MLB_TEAM_IDS = {
+  LAA: 108,
+  ARI: 109, AZ: 109,
+  BAL: 110,
+  BOS: 111,
+  CHC: 112,
+  CIN: 113,
+  CLE: 114,
+  COL: 115,
+  DET: 116,
+  HOU: 117,
+  KC: 118, KCR: 118,
+  LAD: 119,
+  WSH: 120, WSN: 120, WAS: 120,
+  NYM: 121,
+  ATH: 133, OAK: 133,
+  PIT: 134,
+  SD: 135, SDP: 135,
+  SEA: 136,
+  SF: 137, SFG: 137,
+  STL: 138,
+  TB: 139, TBR: 139,
+  TEX: 140,
+  TOR: 141,
+  MIN: 142,
+  PHI: 143,
+  ATL: 144,
+  CHW: 145, CWS: 145,
+  MIA: 146,
+  NYY: 147,
+  MIL: 158,
+};
+
+const teamLogoURL = (abbrev) => {
+  const id = MLB_TEAM_IDS[String(abbrev || "").trim().toUpperCase()];
+  return id ? `https://midfield.mlbstatic.com/v1/team/${id}/spots/96` : "";
+};
+
+// clubCell renders the club as a logo, falling back to the abbreviation as
+// text. Two independent failures need that fallback and only one of them is
+// knowable up front: Fantrax can emit an abbreviation the map has never seen
+// (checked before we build the <img>), and the CDN can fail or be blocked for
+// an abbreviation we mapped correctly (only observable as a load error). The
+// abbreviation stays the img's alt/title either way, so the club is still
+// identifiable when the logo is missing, decorative, or being read aloud.
+function clubCell(abbrev) {
+  const cell = el("span", "lineup-club");
+  if (!abbrev) return cell;
+  const url = teamLogoURL(abbrev);
+  if (!url) {
+    cell.appendChild(el("span", "lineup-club-text", abbrev));
+    return cell;
+  }
+  const img = document.createElement("img");
+  img.className = "lineup-logo";
+  img.src = url;
+  img.alt = abbrev;
+  img.title = abbrev;
+  // Not loading="lazy": every one of these is a ~2 KB mark in the first screen
+  // or just below it, and deferring them measurably left the column blank on
+  // first paint while the row heights were already reserved. Lazy loading pays
+  // off for images you may never scroll to, which is not this.
+  img.addEventListener("error",
+    () => img.replaceWith(el("span", "lineup-club-text", abbrev)), { once: true });
+  cell.appendChild(img);
+  return cell;
+}
+
+// Every hitter in this league is UT-eligible, so printing UT on every row
+// spends a column's width to say nothing that distinguishes one player from
+// another. It is stripped — except where it is a player's ONLY eligibility,
+// which is the one case where it carries information. That is Fantrax's own
+// convention: it hides the UT flex slot except where it is all a player has
+// (see positionDisplay on the trades pool).
+function displayPositions(pos) {
+  const list = (pos || []).filter((p) => p !== "UT");
+  return list.length ? list : (pos || []);
+}
+
+const positionText = (p) => (p ? displayPositions(p.pos).join("/") : "");
+
 // ---- Sorting ---------------------------------------------------------------
 // One table drives both the header and the comparator, so a column cannot be
 // rendered without being sortable or sorted without being rendered.
@@ -139,7 +229,11 @@ const fmtValue = (v) => v.toLocaleString();
 const COLUMNS = [
   { key: "slot",  label: "Slot",   cls: "lineup-slot",  num: true,  first: "asc",  get: (s, i) => i },
   { key: "name",  label: "Player", cls: "lineup-name",  num: false, first: "asc",  get: (s) => s.player?.name },
-  { key: "team",  label: "Team",   cls: "lineup-meta",  num: false, first: "asc",  get: (s) => s.player?.team },
+  // The club column is logo-width, which "TEAM" does not fit, so the visible
+  // label is abbreviated and `aria` carries the full name for the button's
+  // accessible name — the shorthand is visual only.
+  { key: "team",  label: "Tm", aria: "Team", cls: "lineup-club", num: false, first: "asc", get: (s) => s.player?.team || undefined },
+  { key: "pos",   label: "Pos",    cls: "lineup-pos",   num: false, first: "asc",  get: (s) => positionText(s.player) || undefined },
   { key: "age",   label: "Age",    cls: "lineup-age",   num: true,  first: "desc", get: (s) => s.player?.age || undefined },
   { key: "value", label: "HKB",    cls: "lineup-value", num: true,  first: "desc", get: (s) => s.player?.hkb_value || undefined },
   { key: "proj",  label: "Proj",   cls: "lineup-proj",  num: true,  first: "desc", get: (s) => s.player?.proj },
@@ -177,7 +271,8 @@ function slotRow(slot, scales) {
 
   if (!slot.player) {
     row.appendChild(el("span", "lineup-name lineup-empty", "empty"));
-    row.appendChild(el("span", "lineup-meta"));
+    row.appendChild(el("span", "lineup-club"));
+    row.appendChild(el("span", "lineup-pos"));
     row.appendChild(el("span", "lineup-age muted", "—"));
     row.appendChild(el("span", "lineup-value muted", "—"));
     row.appendChild(el("span", "lineup-proj", "—"));
@@ -196,10 +291,8 @@ function slotRow(slot, scales) {
   }
   row.appendChild(nameCell);
 
-  const meta = el("span", "lineup-meta");
-  meta.appendChild(el("span", "lineup-team", p.team));
-  meta.appendChild(el("span", "lineup-pos", (p.pos || []).join("/")));
-  row.appendChild(meta);
+  row.appendChild(clubCell(p.team));
+  row.appendChild(el("span", "lineup-pos", positionText(p)));
 
   row.appendChild(heatCell("lineup-age", p.age, scales.age, fmtAge));
   row.appendChild(heatCell("lineup-value", p.hkb_value, scales.value, fmtValue));
@@ -242,6 +335,7 @@ function headerRow(sort, onSort) {
 
     const btn = el("button", `lineup-sort${active ? " active" : ""}`, col.label);
     btn.type = "button";
+    if (col.aria) btn.setAttribute("aria-label", col.aria);
     if (active) btn.appendChild(el("span", "lineup-arrow", sort.dir === "asc" ? "▲" : "▼"));
     btn.addEventListener("click", () => onSort(col));
     cell.appendChild(btn);
