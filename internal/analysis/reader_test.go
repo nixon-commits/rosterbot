@@ -4,6 +4,7 @@ package analysis
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,6 +72,28 @@ func TestFileReader_LegacyPartition(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].System != LegacySystem {
 		t.Fatalf("want 1 legacy row under %q, got %+v", LegacySystem, rows)
+	}
+	// LegacySystem is the same string as the real production system, so System
+	// alone cannot tell a pre-migration row from a current one. Consumers that
+	// must (the head-to-head comparison in internal/report) read Legacy.
+	if !rows[0].Legacy {
+		t.Error("legacy row not marked Legacy: System is indistinguishable from a " +
+			"real depthcharts-ros row, so provenance has to be carried separately")
+	}
+}
+
+// Legacy is derived from the object key, exactly like System, and must never
+// enter the durable NDJSON body — Athena projects partitions from the path.
+func TestGradeRow_LegacyIsKeyDerivedAndNotSerialized(t *testing.T) {
+	b, err := MarshalNDJSON([]GradeRow{{Dt: "2026-06-10", PlayerID: "9", System: LegacySystem, Legacy: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "legacy") {
+		t.Errorf("Legacy leaked into the durable row: %s", b)
+	}
+	if strings.Contains(string(b), "system") {
+		t.Errorf("System leaked into the durable row: %s", b)
 	}
 }
 

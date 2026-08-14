@@ -165,20 +165,22 @@ func Aggregate(rows []analysis.GradeRow, generatedAt, seasonStart time.Time) *Mo
 	// Comparison panel: every captured system, ranked head-to-head per
 	// window×role by rank skill.
 	//
-	// Compare is deliberately left nil for role == "all" — ranking systems on a
-	// pooled cross-role rho has no defensible order, so the panel reads the
-	// hitters and pitchers keys and stacks two tables. CompareTrends stays
-	// populated for all three roles: an MAE trend line remains a legitimate
-	// diagnostic under any role filter.
+	// Legacy rows are dropped for the whole panel — both the ranking and the
+	// overlaid trend lines. They are attributed to the production system (see
+	// dropLegacy) and predate every challenger, so leaving them in draws the
+	// incumbent's trend line back across a stretch where it is the only series
+	// on the chart, inviting exactly the comparison the ranking refuses to
+	// make. The detail Views above still see them.
+	cmpRows := dropLegacy(rows)
 	for _, role := range stdRoles {
 		for _, w := range stdWindows {
 			key := viewKey(w, role)
 			if role != "all" {
-				m.Compare[key] = rankSystems(rows, m.Systems, latest, w, role)
+				m.Compare[key] = rankSystems(cmpRows, m.Systems, latest, w, role)
 			}
 			trends := map[string][]TrendPoint{}
 			for _, sys := range m.Systems {
-				sysRole := filterRole(filterSystem(rows, sys), role)
+				sysRole := filterRole(filterSystem(cmpRows, sys), role)
 				trends[sys] = windowTrend(sysRole, latest, w)
 			}
 			m.CompareTrends[key] = trends

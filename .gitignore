@@ -14,7 +14,11 @@ rosterbot
 .tradevalues/
 .tradeoffers/
 .reports/
-report/
+# Anchored: the dashboard publish dir is ./report at the repo root. Unanchored,
+# this also matched internal/report/, silently ignoring every NEW file added to
+# that package (already-tracked files were unaffected, which is why it went
+# unnoticed).
+/report/
 .waivers/
 .lineup/
 .superpowers/

@@ -61,6 +61,17 @@ type GradeRow struct {
 	Bucket    string  `json:"bucket"`
 	IsPitcher bool    `json:"is_pitcher"`
 	Source    string  `json:"source"`
+
+	// Legacy marks a row read from a pre-migration partition (no system=
+	// segment). Like System it is owned by the object key, never by the body.
+	//
+	// It exists because LegacySystem is the string "depthcharts-ros" — the same
+	// value a real production row carries — so System cannot distinguish the
+	// two. Consumers that merely display history do not care; the head-to-head
+	// system comparison in internal/report does, because attributing 14
+	// pre-shadow days to the incumbent credits it with a window no challenger
+	// was allowed to compete in.
+	Legacy bool `json:"-"`
 }
 
 // Writer persists a day's graded rows for one projection system to the store,
@@ -121,13 +132,28 @@ func ObjectKey(date time.Time, system string) string { return objectKey(date, sy
 // SystemFromKey extracts the projection system from a grades object key. Keys
 // carrying a `system=Y` segment return Y; legacy keys without one return
 // LegacySystem so pre-migration partitions read back as depth-charts RoS.
+//
+// The returned string cannot tell those two cases apart — LegacySystem IS
+// "depthcharts-ros". Callers needing the distinction use SystemAndOriginFromKey.
 func SystemFromKey(key string) string {
+	sys, _ := SystemAndOriginFromKey(key)
+	return sys
+}
+
+// SystemAndOriginFromKey returns the key's projection system and whether it
+// came from a legacy (pre-system-dimension) partition.
+//
+// Splitting the two answers is what lets a consumer choose: the detail
+// dashboard wants legacy rows attributed to the production system so its
+// pre-migration history survives, while the head-to-head comparison must drop
+// them, because they were recorded before any challenger existed.
+func SystemAndOriginFromKey(key string) (system string, legacy bool) {
 	for _, seg := range strings.Split(key, "/") {
 		if v, ok := strings.CutPrefix(seg, "system="); ok {
-			return v
+			return v, false
 		}
 	}
-	return LegacySystem
+	return LegacySystem, true
 }
 
 type writer struct{ store ndjsonstore.Store }

@@ -221,11 +221,17 @@ func TestAggregate_RhoIsNilForAllRole(t *testing.T) {
 
 func TestRankSystems_OrdersByRhoDescending(t *testing.T) {
 	// good orders every day correctly (+1); bad inverts every day (-1).
+	//
+	// The day count is minCompareDays, not the 6 this fixture used before that
+	// floor existed: a leader now has to clear a minimum common sample as well
+	// as the combined-SE separation, and 6 days would be blocked by the gate
+	// rather than by the ordering this test is about. The floor itself is
+	// pinned by TestFlagBest_RequiresMinCompareDaysCommonSample.
 	rows := append(
-		rhoDays("good-sys", false, 6, 8, true),
-		rhoDays("bad-sys", false, 6, 8, false)...,
+		rhoDays("good-sys", false, minCompareDays, 8, true),
+		rhoDays("bad-sys", false, minCompareDays, 8, false)...,
 	)
-	latest := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+	latest := time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC)
 	got := rankSystems(rows, []string{"bad-sys", "good-sys"}, latest, 30, "hitters")
 
 	if len(got) != 2 {
@@ -261,22 +267,49 @@ func TestRankSystems_NoBestWhenWithinCombinedSE(t *testing.T) {
 	}
 }
 
-// A runner-up with real rows but no day reaching minDayRows is a materially
-// different case from a runner-up with zero rows: there IS a competitor, its
-// rho just can't be computed. flagBest must not treat that as "no
-// competitor" and crown the leader unopposed — the SE comparison the
-// function exists to enforce is simply not evaluable, so it does not hold,
-// and nobody may be flagged Best. This pins the fix for the bug where
-// out[1].Rho == nil was conflated with out[1].N == 0.
+// flatDays mirrors rhoDays but projects the SAME value for every player, so
+// the projection vector has no variance and spearman is undefined — a system
+// with plenty of rows whose rho still cannot be computed. Actuals keep their
+// spread so only the projection side is degenerate.
+func flatDays(system string, days, n int) []analysis.GradeRow {
+	var out []analysis.GradeRow
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	for d := 0; d < days; d++ {
+		dt := base.AddDate(0, 0, d).Format("2006-01-02")
+		for i := 1; i <= n; i++ {
+			out = append(out, analysis.GradeRow{
+				Dt: dt, System: system, PlayerID: string(rune('a' + i)),
+				Projected: 5, Actual: float64(i), Diff: float64(i) - 5,
+			})
+		}
+	}
+	return out
+}
+
+// A runner-up with real rows but no computable rho is a materially different
+// case from a runner-up with zero rows: there IS a competitor, its rho just
+// can't be computed. flagBest must not treat that as "no competitor" and crown
+// the leader unopposed — the SE comparison the function exists to enforce is
+// simply not evaluable, so it does not hold, and nobody may be flagged Best.
+// This pins the fix for the bug where out[1].Rho == nil was conflated with
+// out[1].N == 0.
+//
+// The runner-up is degenerate by having FLAT projections rather than too few
+// rows per day. Under the paired comparison a too-thin competitor no longer
+// isolates this branch: pairing intersects on (date, player), so a rival
+// grading 2 players/day drags the leader down to those same 2 players and both
+// rhos become uncomputable together. Flat projections keep the player-days
+// identical — so pairing is a no-op and the leader keeps a real rho — while
+// still leaving the runner-up's correlation undefined.
 func TestRankSystems_NoBestWhenRunnerUpRhoUncomputable(t *testing.T) {
 	rows := append(
 		// good-sys: 8 rows/day, well above minDayRows(3) -> a real, computable rho.
-		rhoDays("good-sys", false, 6, 8, true),
-		// thin-sys: 2 rows/day, every day below minDayRows(3) -> N > 0 but Rho nil.
-		rhoDays("thin-sys", false, 6, 2, true)...,
+		rhoDays("good-sys", false, minCompareDays, 8, true),
+		// flat-sys: same 8 player-days, but zero projection variance -> N > 0, Rho nil.
+		flatDays("flat-sys", minCompareDays, 8)...,
 	)
-	latest := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
-	got := rankSystems(rows, []string{"thin-sys", "good-sys"}, latest, 30, "hitters")
+	latest := time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC)
+	got := rankSystems(rows, []string{"flat-sys", "good-sys"}, latest, 30, "hitters")
 
 	if len(got) != 2 {
 		t.Fatalf("got %d scores, want 2", len(got))
@@ -284,14 +317,14 @@ func TestRankSystems_NoBestWhenRunnerUpRhoUncomputable(t *testing.T) {
 	if got[0].System != "good-sys" || got[0].Rho == nil {
 		t.Fatalf("leader must be good-sys with a real, computable rho: %+v", got[0])
 	}
-	// Guard the test itself: if thin-sys ever stopped having real rows (N==0),
+	// Guard the test itself: if flat-sys ever stopped having real rows (N==0),
 	// this would silently exercise the already-covered "no competitor" branch
 	// instead of the "uncomputable competitor" branch this test targets.
-	if got[1].System != "thin-sys" || got[1].N == 0 {
-		t.Fatalf("runner-up must be thin-sys with N > 0 (real rows), got %+v", got[1])
+	if got[1].System != "flat-sys" || got[1].N == 0 {
+		t.Fatalf("runner-up must be flat-sys with N > 0 (real rows), got %+v", got[1])
 	}
 	if got[1].Rho != nil {
-		t.Fatalf("runner-up rho must be nil (no day reached minDayRows), got %+v", got[1].Rho)
+		t.Fatalf("runner-up rho must be nil (flat projections have no variance), got %+v", got[1].Rho)
 	}
 	if got[0].Best {
 		t.Error("leader must not be flagged Best when the runner-up's rho is uncomputable, not absent")

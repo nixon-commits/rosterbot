@@ -23,10 +23,16 @@ const EXPLAIN = {
     "mostly reflect that starting pitchers outscore bench catchers, which the " +
     "optimizer never exploits, because it fills the two sides in separate passes.",
   best:
+    "Every system is scored on the same player-days — the ones all of them " +
+    "graded. Systems started capturing on different dates, so comparing each " +
+    "on its own full history would reward whichever ran longest rather than " +
+    "whichever forecasts better. The sample column shows the shared total, and " +
+    "in brackets each system's own wider coverage that was set aside.\n\n" +
     "A system is only marked best when it leads the runner-up by more than the " +
-    "two standard errors combined. Below that the difference is inside the " +
-    "measurement's own noise, so the panel says it is too close to call rather " +
-    "than naming a winner it cannot support.",
+    "two standard errors combined, on at least ten shared days. Below either " +
+    "threshold the difference is inside the measurement's own noise, so the " +
+    "panel says it is too close to call rather than naming a winner it cannot " +
+    "support.",
   calibration:
     "Average error per player-day is dominated by single-game variance rather " +
     "than by model skill — a projection of 8 against an actual of 0 or 30 is an " +
@@ -413,7 +419,7 @@ function renderCompareTable(el, model, state, role, append = false) {
   }
 
   const anyBest = withData.some((s) => s.best);
-  const head = `<tr><th>System</th><th class="num">Rank skill</th><th class="num">MAE</th><th class="num">Bias</th><th class="num">RMSE</th><th class="num">Sample</th></tr>`;
+  const head = `<tr><th>System</th><th class="num">Rank skill</th><th class="num">MAE</th><th class="num">Bias</th><th class="num">RMSE</th><th class="num">Shared sample</th></tr>`;
   const body = scores.map((s) => {
     if (s.n === 0) return "";
     const prod = s.system === model.detailSystem ? ` <span class="badge">prod</span>` : "";
@@ -422,17 +428,26 @@ function renderCompareTable(el, model, state, role, append = false) {
     const rho = s.rho && s.rho.days
       ? `${s.rho.rho >= 0 ? "+" : ""}${fmt(s.rho.rho, 3)} <span class="muted">±${fmt(s.rho.se, 3)}</span>`
       : "—";
+    // Every system is scored on the shared player-days, so n is identical down
+    // the column. The bracketed figure is what pairing set aside for THIS
+    // system — the coverage difference that used to decide the ranking.
+    const setAside = s.totalN > s.n
+      ? ` <span class="muted">(of ${s.totalN.toLocaleString()})</span>`
+      : "";
     return `<tr class="${s.best ? "best" : ""}"><td>${sw}${escapeHtml(sysLabel(s.system))}${prod}${best}</td>` +
       `<td class="num">${rho}</td>` +
       `<td class="num">${fmt(s.mae, 2)}</td>` +
       `<td class="num">${s.bias > 0 ? "+" : ""}${fmt(s.bias, 2)}</td>` +
       `<td class="num">${fmt(s.rmse, 2)}</td>` +
-      `<td class="num">${s.n.toLocaleString()}</td></tr>`;
+      `<td class="num">${s.n.toLocaleString()}${setAside}</td></tr>`;
   }).join("");
 
   // No system separated from the runner-up by more than the combined standard
-  // error, so naming a winner would be reporting noise.
-  const note = anyBest ? "" : `<p class="muted">Too close to call — no system leads by more than the combined standard error.</p>`;
+  // error on an adequate shared sample, so naming a winner would be reporting
+  // noise.
+  const days = withData.find((s) => s.rho && s.rho.days);
+  const dayNote = days ? ` Compared on ${days.rho.days} shared graded days.` : "";
+  const note = anyBest ? "" : `<p class="muted">Too close to call — no system leads by more than the combined standard error.${dayNote}</p>`;
   el.compareTable.insertAdjacentHTML("beforeend",
     heading + `<table class="data-table"><thead>${head}</thead><tbody>${body}</tbody></table>` + note);
 }

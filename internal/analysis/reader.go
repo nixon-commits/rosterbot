@@ -21,9 +21,10 @@ func NewFileReader(root string) Reader { return NewReader(ndjsonstore.NewFileSto
 
 func (r reader) ReadAll() ([]GradeRow, error) {
 	return ndjsonstore.ReadAll[GradeRow](r.store, gradesPrefix, gradesFilename, func(key string, rows []GradeRow) {
-		system := SystemFromKey(key)
+		system, legacy := SystemAndOriginFromKey(key)
 		for i := range rows {
 			rows[i].System = system
+			rows[i].Legacy = legacy
 		}
 	})
 }

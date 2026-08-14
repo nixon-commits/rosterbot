@@ -127,6 +127,14 @@ type SystemScore struct {
 	N      int      `json:"n"`
 	Rho    *RhoStat `json:"rho,omitempty"`
 	Best   bool     `json:"best"`
+
+	// TotalN is the system's own row count in the window, before pairing.
+	// Every other field is computed on the common player-days shared with the
+	// systems it is compared against, so TotalN - N is what the pairing
+	// discarded. It is reported rather than dropped because a comparison that
+	// silently throws away half a system's coverage repeats, one level down,
+	// the invisibility that made the unpaired ranking wrong.
+	TotalN int `json:"totalN"`
 }
 
 // normalizeSystems returns a copy of rows with any empty System attributed to
@@ -159,6 +167,24 @@ func distinctSystems(rows []analysis.GradeRow) []string {
 	return out
 }
 
+// dropLegacy removes rows read from pre-migration partitions.
+//
+// They are kept in the detail Views — they are the only record of the
+// pre-migration season — but must not enter a head-to-head ranking. They
+// carry System == LegacySystem == "depthcharts-ros", so pooled they credit
+// the incumbent with days recorded before any challenger existed: measured in
+// production 2026-08-14, 14 such days at MAE 4.8915 (n=298) against the real
+// system's 5.1007, dragging the reported figure to 5.0457.
+func dropLegacy(rows []analysis.GradeRow) []analysis.GradeRow {
+	out := make([]analysis.GradeRow, 0, len(rows))
+	for _, r := range rows {
+		if !r.Legacy {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 func filterSystem(rows []analysis.GradeRow, system string) []analysis.GradeRow {
 	out := make([]analysis.GradeRow, 0, len(rows))
 	for _, r := range rows {
@@ -169,19 +195,83 @@ func filterSystem(rows []analysis.GradeRow, system string) []analysis.GradeRow {
 	return out
 }
 
+// playerDay is the join key of the paired comparison: one player on one date.
+type playerDay struct{ dt, playerID string }
+
+// commonPlayerDays returns the (date, player) keys every COMPETING system
+// graded — the only ground on which a head-to-head comparison is honest.
+//
+// A system with no rows in the window is not competing, and is skipped rather
+// than intersected: intersecting against an empty set would erase the
+// comparison instead of narrowing it, so one system that has not started
+// capturing yet would blank the whole panel.
+func commonPlayerDays(systems []string, slices map[string][]analysis.GradeRow) map[playerDay]bool {
+	var common map[playerDay]bool
+	for _, sys := range systems {
+		rs := slices[sys]
+		if len(rs) == 0 {
+			continue
+		}
+		seen := make(map[playerDay]bool, len(rs))
+		for _, r := range rs {
+			seen[playerDay{r.Dt, r.PlayerID}] = true
+		}
+		if common == nil {
+			common = seen
+			continue
+		}
+		for k := range common {
+			if !seen[k] {
+				delete(common, k)
+			}
+		}
+	}
+	return common
+}
+
+func filterPlayerDays(rows []analysis.GradeRow, keep map[playerDay]bool) []analysis.GradeRow {
+	out := make([]analysis.GradeRow, 0, len(rows))
+	for _, r := range rows {
+		if keep[playerDay{r.Dt, r.PlayerID}] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // rankSystems scores each system over the window×role slice and returns them
 // ordered by within-day rank skill descending (best first).
+//
+// Every score is computed on the INTERSECTION of (date, player) keys across
+// the competing systems, so no system is credited with days its rivals never
+// had a chance to compete on. Without the pairing the panel compared
+// unequal samples and the wider-covered system won on coverage rather than
+// skill: measured in production 2026-08-14, depthcharts-ros posted pitcher
+// rho +0.3323 over 29 days against rivals' 19, and once paired fell to
+// +0.1555 and from first place to last. Each system's own pre-pairing count
+// survives as TotalN so the discarded rows stay visible.
+//
+// Legacy rows are excluded upstream (see Aggregate): they predate every
+// challenger, so pooling them into the incumbent credited it with 14 days
+// nobody else ran on.
 //
 // Callers pass a single role — never "all". Systems with no rows in the window
 // sort last (N 0) and are never marked Best.
 func rankSystems(rows []analysis.GradeRow, systems []string, latest time.Time, window int, role string) []SystemScore {
+	slices := make(map[string][]analysis.GradeRow, len(systems))
+	for _, sys := range systems {
+		slices[sys] = windowRows(filterRole(filterSystem(rows, sys), role), latest, window)
+	}
+	common := commonPlayerDays(systems, slices)
+
 	out := make([]SystemScore, 0, len(systems))
 	for _, sys := range systems {
-		slice := windowRows(filterRole(filterSystem(rows, sys), role), latest, window)
+		full := slices[sys]
+		slice := filterPlayerDays(full, common)
 		m := computeMetrics(slice)
 		out = append(out, SystemScore{
 			System: sys, MAE: m.MAE, Bias: m.Bias, RMSE: m.RMSE, N: m.N,
-			Rho: withinDayRho(slice),
+			Rho: withinDayRho(slice), TotalN: len(full),
 		})
 	}
 
@@ -209,8 +299,32 @@ func rankSystems(rows []analysis.GradeRow, systems []string, latest time.Time, w
 	return out
 }
 
+// minCompareDays is the smallest number of common graded days a system needs
+// before it can be crowned Best.
+//
+// It exists because the combined-SE gate INVERTS on a thin sample rather than
+// tightening. withinDayRho can only compute a standard deviation from two or
+// more daily correlations (rank.go), so a one-day sample leaves SE at 0; the
+// separation term is then sqrt(0+0) = 0 and every difference, however small,
+// clears it. Reproduced against the production Analysis Store on 2026-08-14:
+// restricted to a single day the gate crowned steamer-ros at rho +0.0000 over
+// atc-ros at -0.6000 — a system with no measured skill at all, wearing the
+// "best" badge. The gate built to prevent over-precision was at its most
+// permissive exactly where the sample was thinnest.
+//
+// 10 is a FLOOR, not a fitted optimum. The standard error the gate divides by
+// is itself estimated from d days, with relative uncertainty ~1/sqrt(2(d-1)):
+// +/-100% at 2 days, +/-50% at 3, +/-35% at 5, +/-24% at 10. Ten is where the
+// quantity doing the gating is known well enough to gate with. It does not
+// bind on current data — paired coverage on 2026-08-14 is 35 common days for
+// hitters and 19 for pitchers — so this changes no verdict today and exists to
+// catch the thin-sample band, whether that arrives through a new system, a
+// short window, or an outage thinning the intersection.
+const minCompareDays = 10
+
 // flagBest marks the leader only when its rho beats the runner-up's by more
-// than the combined standard error. Anything closer is indistinguishable from
+// than the combined standard error, on a common sample large enough for that
+// standard error to mean anything. Anything closer is indistinguishable from
 // noise, and crowning it would restate the over-precision problem this metric
 // was introduced to fix.
 //
@@ -221,15 +335,18 @@ func rankSystems(rows []analysis.GradeRow, systems []string, latest time.Time, w
 // never cleared minDayRows on any single day — the SE inequality this
 // function exists to enforce simply cannot be evaluated, so per its own
 // prose ("otherwise") it does not hold, and no system is flagged.
+//
+// The minCompareDays floor applies to the leader BEFORE the unopposed branch:
+// winning by default still requires a sample worth reporting.
 func flagBest(out []SystemScore) {
-	if len(out) == 0 || out[0].N == 0 || out[0].Rho == nil {
+	if len(out) == 0 || out[0].N == 0 || out[0].Rho == nil || out[0].Rho.Days < minCompareDays {
 		return
 	}
 	if len(out) == 1 || out[1].N == 0 {
 		out[0].Best = true
 		return
 	}
-	if out[1].Rho == nil {
+	if out[1].Rho == nil || out[1].Rho.Days < minCompareDays {
 		return
 	}
 	lead, next := out[0].Rho, out[1].Rho
