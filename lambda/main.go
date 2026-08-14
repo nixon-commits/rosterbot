@@ -26,6 +26,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/kmscreds"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 )
@@ -102,6 +103,19 @@ func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
 	}
 	cfg.Users = userStore
 	cfg.Enrollments = userStore
+	cfg.Connections = userStore
+
+	// Sealer only — never an Opener. The IAM grants this function kms:Encrypt
+	// and not kms:Decrypt, and the type mirrors it so the same mistake is a
+	// compile error rather than a runtime AccessDenied nobody sees until it
+	// happens.
+	if key := os.Getenv("FANTRAX_CRED_KEY"); key != "" {
+		sealer, err := kmscreds.NewSealer(ctx, key)
+		if err != nil {
+			return cfg, fmt.Errorf("init credential sealer: %w", err)
+		}
+		cfg.Sealer = sealer
+	}
 
 	// The Trades tab's two artifacts. Separate prefixes because they have
 	// different producers and cadences (see layout.go); both are passkey-gated

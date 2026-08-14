@@ -52,8 +52,15 @@ type Config struct {
 	// The bearer token path reads NEITHER, so a deployment with these nil (or
 	// with DynamoDB unreachable) is still reachable by an operator holding the
 	// token. That is the recovery path for every failure in this layer.
-	Users         UserStore
-	Enrollments   EnrollmentStore
+	Users       UserStore
+	Enrollments EnrollmentStore
+
+	// Connections and Sealer back POST /v1/connect. Sealer is the ENCRYPT-ONLY
+	// half (see credentials.go): this config never holds an Opener, so no
+	// handler can read a tenant's Fantrax password back — which is exactly why
+	// verification is asynchronous rather than inline.
+	Connections   ConnectionStore
+	Sealer        Sealer
 	WebAuthn      *webauthn.WebAuthn
 	SessionSecret []byte
 }
@@ -88,6 +95,8 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/trades/values", cfg.handleTradeValues)
 	mux.HandleFunc("GET /v1/reports/{name}", cfg.handleReport)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
+	mux.HandleFunc("POST /v1/connect", cfg.handleConnect)
+	mux.HandleFunc("GET /v1/connect", cfg.handleConnectStatus)
 
 	// Auth routes gate themselves (open login, session-or-token register,
 	// session-only passkey management in Task 5) instead of the blanket
