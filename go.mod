@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.20.60
 	github.com/aws/aws-sdk-go-v2/service/cloudfront v1.67.4
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.63.2
+	github.com/aws/aws-sdk-go-v2/service/kms v1.55.5
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.0
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.73.4
 	github.com/aws/smithy-go v1.27.7
