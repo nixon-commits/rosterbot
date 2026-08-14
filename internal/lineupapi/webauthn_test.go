@@ -1,7 +1,6 @@
 package lineupapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"net/http"
@@ -90,29 +89,80 @@ func TestRegisterBegin_RejectsWithoutSessionOrToken(t *testing.T) {
 	}
 }
 
-func TestRegisterBegin_AcceptsBootstrapToken(t *testing.T) {
-	h := Handler(Config{Token: "secret-token", Identities: &fakeIdentities{}, WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
+// TestRegisterBegin_RejectsBootstrapToken inverts an earlier test that
+// asserted the bearer token COULD start a registration.
+//
+// That was correct while there was one identity: the token proved you were the
+// operator, and the operator was the only account. With several users it
+// becomes a god token — its holder could add a passkey to anybody's account,
+// because the ceremony had no notion of whose account it was for. Enrollment is
+// now authorized by a user-scoped enrollment link or an existing session.
+//
+// The token remains an admin break-glass for the rest of the API. It is no
+// longer a way to become someone.
+func TestRegisterBegin_RejectsBootstrapToken(t *testing.T) {
+	users := NewFileUserStore(t.TempDir())
+	h := Handler(Config{Token: "secret-token", Users: users, Enrollments: users,
+		WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
 	req.Header.Set("Authorization", "Bearer secret-token")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 — the bootstrap token must no longer enroll "+
+			"a passkey against an arbitrary account, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRegisterBegin_AcceptsEnrollmentToken is the replacement path: a
+// single-use link, scoped to one user.
+func TestRegisterBegin_AcceptsEnrollmentToken(t *testing.T) {
+	users := NewFileUserStore(t.TempDir())
+	ctx := context.Background()
+	u := &User{ID: "alice", Email: "a@example.test", Role: RoleMember, Status: UserActive}
+	if err := users.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	tok, hash, err := MintEnrollmentToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := users.CreateEnrollment(ctx, hash, Enrollment{UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	h := Handler(Config{Token: "secret-token", Users: users, Enrollments: users,
+		WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin?token="+string(tok), nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
-	var gotCeremonyCookie bool
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == ceremonyCookieName {
-			gotCeremonyCookie = true
-		}
+
+	// The link must still be unspent: an abandoned ceremony (user closes the tab
+	// at the Touch ID prompt) has to leave it usable, or a single-use recovery
+	// link is destroyed by a ceremony that never completed.
+	e, ok, err := users.GetEnrollment(ctx, hash)
+	if err != nil || !ok {
+		t.Fatalf("GetEnrollment: ok=%v err=%v", ok, err)
 	}
-	if !gotCeremonyCookie {
-		t.Fatal("want a ceremony cookie set on a successful register/begin")
+	if e.Redeemed() {
+		t.Fatal("register/begin redeemed the enrollment link; redemption must happen " +
+			"at finish, so an abandoned ceremony can be retried")
 	}
 }
 
 func TestRegisterBegin_AcceptsValidSession(t *testing.T) {
 	secret := []byte("s")
-	h := Handler(Config{Token: "secret-token", Identities: &fakeIdentities{}, WebAuthn: testWebAuthn(t), SessionSecret: secret})
+	users := NewFileUserStore(t.TempDir())
+	if err := users.CreateUser(context.Background(), &User{
+		ID: "alice", Email: "a@example.test", Role: RoleMember, Status: UserActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := Handler(Config{Token: "secret-token", Users: users, Enrollments: users,
+		WebAuthn: testWebAuthn(t), SessionSecret: secret})
 
 	// Mint a valid session cookie the same way login/finish would.
 	sessionRec := httptest.NewRecorder()
@@ -130,13 +180,29 @@ func TestRegisterBegin_AcceptsValidSession(t *testing.T) {
 }
 
 func TestRegisterFinish_RejectsWithoutCeremonyCookie(t *testing.T) {
-	h := Handler(Config{Token: "secret-token", Identities: &fakeIdentities{}, WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
+	secret := []byte("s")
+	users := NewFileUserStore(t.TempDir())
+	if err := users.CreateUser(context.Background(), &User{
+		ID: "alice", Email: "a@example.test", Role: RoleMember, Status: UserActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := Handler(Config{Token: "secret-token", Users: users, Enrollments: users,
+		WebAuthn: testWebAuthn(t), SessionSecret: secret})
+
+	// An authorized caller with no in-progress ceremony. The authorization has
+	// to come first — otherwise this would answer 400 to someone who was never
+	// entitled to ask, which is the same ordering mistake handleJob had.
+	sessionRec := httptest.NewRecorder()
+	setSessionCookie(sessionRec, secret, "alice", 0, time.Now())
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/finish", strings.NewReader("{}"))
-	req.Header.Set("Authorization", "Bearer secret-token")
+	for _, c := range sessionRec.Result().Cookies() {
+		req.AddCookie(c)
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (no in-progress ceremony)", rec.Code)
+		t.Fatalf("status = %d, want 400 (no in-progress ceremony), body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -150,39 +216,29 @@ func TestRegisterFinish_RejectsWithoutSessionOrToken(t *testing.T) {
 	}
 }
 
-// TestLoadOrCreateIdentity_StableAcrossCalls guards against a regression
-// where the very-first-passkey bootstrap flow always failed: begin and
-// finish each call loadOrCreateIdentity independently, and if the freshly
-// generated identity isn't persisted immediately, each call draws its own
-// independent random WebAuthnUserID. go-webauthn bakes the identity's
-// WebAuthnUserID from the begin call into the ceremony session, then
-// requires it to match the identity's WebAuthnUserID on finish — two
-// independent 64-byte crypto/rand draws are equal with probability ~0, so
-// an unpersisted identity fails the ceremony deterministically.
-func TestLoadOrCreateIdentity_StableAcrossCalls(t *testing.T) {
-	cfg := Config{Identities: &fakeIdentities{}}
-
-	first, err := cfg.loadOrCreateIdentity(context.Background())
-	if err != nil {
-		t.Fatalf("first loadOrCreateIdentity: %v", err)
-	}
-	second, err := cfg.loadOrCreateIdentity(context.Background())
-	if err != nil {
-		t.Fatalf("second loadOrCreateIdentity: %v", err)
-	}
-
-	if !bytes.Equal(first.WebAuthnUserID, second.WebAuthnUserID) {
-		t.Fatalf("WebAuthnUserID changed across calls: first=%x second=%x", first.WebAuthnUserID, second.WebAuthnUserID)
-	}
-}
-
-func TestLoginBegin_NotFoundWhenNoPasskeysRegistered(t *testing.T) {
+// TestLoginBegin_DoesNotRevealWhetherAnyoneIsRegistered replaces an earlier
+// test that expected 404 when the store held no passkeys.
+//
+// That behaviour was a property of the OLD single-user login, which loaded the
+// one identity up front and put its credential ids in allowCredentials — so the
+// server necessarily knew, before the user had said anything, whether an
+// account existed. Discoverable login inverts that: the authenticator picks a
+// resident credential and only then tells us whose it is.
+//
+// The consequence is worth keeping deliberately rather than incidentally: an
+// unauthenticated caller can no longer distinguish "nobody is registered" from
+// "someone is", so login/begin is not a user-enumeration oracle.
+func TestLoginBegin_DoesNotRevealWhetherAnyoneIsRegistered(t *testing.T) {
 	h := Handler(Config{Token: "t", Identities: &fakeIdentities{}, WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login/begin", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404, body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a challenge regardless of who exists), body=%s",
+			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "challenge") {
+		t.Fatalf("no challenge in response: %s", rec.Body.String())
 	}
 }
 
@@ -242,11 +298,9 @@ func TestListPasskeys_RequiresSession(t *testing.T) {
 
 func TestListPasskeys_ReturnsRegisteredIDs(t *testing.T) {
 	secret := []byte("s")
-	identities := &fakeIdentities{ok: true, id: &Identity{
-		WebAuthnUserID: []byte("h"),
-		Credentials:    []webauthn.Credential{{ID: []byte("cred-1")}},
-	}}
-	h := Handler(Config{Token: "t", Identities: identities, WebAuthn: testWebAuthn(t), SessionSecret: secret})
+	users := seedUserWithCredential(t, "alice", "cred-1")
+	h := Handler(Config{Token: "t", Users: users, Enrollments: users,
+		WebAuthn: testWebAuthn(t), SessionSecret: secret})
 
 	sessionRec := httptest.NewRecorder()
 	setSessionCookie(sessionRec, secret, "alice", 0, time.Now())
@@ -267,19 +321,14 @@ func TestListPasskeys_ReturnsRegisteredIDs(t *testing.T) {
 
 func TestRevokePasskey_RemovesMatchingCredential(t *testing.T) {
 	secret := []byte("s")
-	identities := &fakeIdentities{ok: true, id: &Identity{
-		WebAuthnUserID: []byte("h"),
-		Credentials: []webauthn.Credential{
-			{ID: []byte("keep-me")},
-			{ID: []byte("revoke-me")},
-		},
-	}}
-	h := Handler(Config{Token: "t", Identities: identities, WebAuthn: testWebAuthn(t), SessionSecret: secret})
+	users := seedUserWithCredential(t, "alice", "cred-1")
+	h := Handler(Config{Token: "t", Users: users, Enrollments: users,
+		WebAuthn: testWebAuthn(t), SessionSecret: secret})
 
 	sessionRec := httptest.NewRecorder()
 	setSessionCookie(sessionRec, secret, "alice", 0, time.Now())
-	targetID := base64.RawURLEncoding.EncodeToString([]byte("revoke-me"))
-	req := httptest.NewRequest(http.MethodDelete, "/v1/auth/passkeys/"+targetID, nil)
+	id := base64.RawURLEncoding.EncodeToString([]byte("cred-1"))
+	req := httptest.NewRequest(http.MethodDelete, "/v1/auth/passkeys/"+id, nil)
 	for _, c := range sessionRec.Result().Cookies() {
 		req.AddCookie(c)
 	}
@@ -288,9 +337,37 @@ func TestRevokePasskey_RemovesMatchingCredential(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204, body=%s", rec.Code, rec.Body.String())
 	}
-	if len(identities.id.Credentials) != 1 || string(identities.id.Credentials[0].ID) != "keep-me" {
-		t.Fatalf("credentials after revoke = %+v, want only keep-me left", identities.id.Credentials)
+
+	creds, err := users.Credentials(context.Background(), "alice")
+	if err != nil {
+		t.Fatal(err)
 	}
+	if len(creds) != 0 {
+		t.Fatalf("got %d credentials after revoke, want 0", len(creds))
+	}
+	// The reverse index must go too. A credential that still resolves to its
+	// owner is still usable for the non-discoverable login path, so leaving it
+	// behind makes "revoked" a label rather than a fact.
+	if _, ok, _ := users.UserByCredential(context.Background(), []byte("cred-1")); ok {
+		t.Fatal("revoked credential still resolves through the lookup index")
+	}
+}
+
+// seedUserWithCredential builds a store holding one active member with one
+// passkey, the shape the passkey-management routes operate on.
+func seedUserWithCredential(t *testing.T, id UserID, credID string) *FileUserStore {
+	t.Helper()
+	users := NewFileUserStore(t.TempDir())
+	ctx := context.Background()
+	if err := users.CreateUser(ctx, &User{
+		ID: id, Email: string(id) + "@example.test", Role: RoleMember, Status: UserActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := users.PutCredential(ctx, id, webauthn.Credential{ID: []byte(credID), PublicKey: []byte("pk")}); err != nil {
+		t.Fatal(err)
+	}
+	return users
 }
 
 func TestLogout_ClearsSessionCookie(t *testing.T) {

@@ -3,7 +3,6 @@
 package lineupapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -71,117 +70,79 @@ func clearCeremonyCookie(w http.ResponseWriter) {
 	})
 }
 
-// canRegister allows enrolling a new passkey either from an already-logged-in
-// session (adding a second device) or via the one-time bootstrap token (the
-// very first passkey, or recovery if every passkey was ever lost/revoked).
-func (cfg Config) canRegister(r *http.Request) bool {
-	return hasValidSession(r, cfg.SessionSecret) || authorized(r, cfg.Token)
+// registrationSubject decides WHO a registration ceremony is for, and whether
+// it is allowed at all.
+//
+// Two routes in, and they answer different questions:
+//
+//	an enrollment token  -> "this specific person may create their first passkey"
+//	a live session       -> "this logged-in user may add another device"
+//
+// The global bootstrap token is deliberately NOT one of them any more. It
+// authorized enrolment against an identity model with no notion of whose —
+// harmless with one operator, and a god token the moment there are several,
+// since its holder could add a passkey to anybody's account. It remains an
+// admin break-glass for the rest of the API; it is no longer a way to become
+// someone.
+//
+// The token is read but NOT redeemed here. Redemption happens at finish, so an
+// abandoned ceremony — a user who closes the tab at the Touch ID prompt —
+// leaves the link usable. Burning it at begin would spend a single-use
+// recovery link on a ceremony that never completed, with no way to retry.
+func (cfg Config) registrationSubject(r *http.Request, token string) (*User, bool) {
+	ctx := r.Context()
+	if cfg.Users == nil {
+		return nil, false
+	}
+	if token != "" && cfg.Enrollments != nil {
+		e, ok, err := cfg.Enrollments.GetEnrollment(ctx, HashEnrollmentToken(EnrollmentToken(token)))
+		if err != nil || !ok || e.Redeemed() || e.Expired(time.Now()) {
+			return nil, false
+		}
+		u, ok, err := cfg.Users.GetUser(ctx, e.UserID)
+		if err != nil || !ok {
+			return nil, false
+		}
+		return u, true
+	}
+	if p, err := sessionFromRequest(r, cfg.SessionSecret); err == nil {
+		u, ok, err := cfg.Users.GetUser(ctx, p.Sub)
+		if err != nil || !ok || p.Ver != u.TokenVersion {
+			return nil, false
+		}
+		return u, true
+	}
+	return nil, false
 }
 
-// identityMutateAttempts bounds the optimistic-concurrency retry loop. Losing
-// a race means someone else's write landed between our read and our write; the
-// contended resource is one small object touched by hand-driven browser
-// ceremonies, so a handful of attempts is generous and an unbounded loop would
-// only turn a stuck store into a hung request.
-const identityMutateAttempts = 5
-
-// errNoIdentity reports that a mutation was asked for against a record that
-// does not exist. Every caller establishes the record first (register via
-// loadOrCreateIdentity, login/revoke via a preceding GetIdentity), so this
-// means the record was deleted mid-request, not that the caller skipped a step.
-var errNoIdentity = errors.New("lineupapi: no identity record to update")
-
-// loadOrCreateIdentity returns the existing Identity, or creates and
-// immediately persists a brand new one if none exists yet. Persisting before
-// returning is required: register/begin and register/finish each call this
-// independently, and the WebAuthnUserID must be identical across both calls
-// (it's baked into the ceremony's session data) or go-webauthn's
-// CreateCredential rejects the finish with an "ID mismatch" error.
-//
-// The create is conditional on absence, and losing that race is resolved by
-// adopting the winner's record rather than retrying our own. That is not
-// merely politeness: each concurrent caller mints an independent random
-// WebAuthnUserID, so overwriting the winner would invalidate the ceremony
-// already running against it — the same "ID mismatch" failure, arrived at from
-// the other direction.
-func (cfg Config) loadOrCreateIdentity(ctx context.Context) (*Identity, error) {
-	id, ok, err := cfg.Identities.GetIdentity(ctx)
-	if err != nil {
-		return nil, err
+// enrollmentToken pulls the token from the request body, falling back to a
+// query parameter so an invite link can carry it directly.
+func enrollmentToken(r *http.Request) string {
+	if t := r.URL.Query().Get("token"); t != "" {
+		return t
 	}
-	if ok {
-		return id, nil
+	var body struct {
+		Token string `json:"token"`
 	}
-	handle, err := newWebAuthnUserID()
-	if err != nil {
-		return nil, err
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
-	// Version is the zero value, which asserts "no record exists yet".
-	id = &Identity{WebAuthnUserID: handle}
-	err = cfg.Identities.PutIdentity(ctx, id)
-	if errors.Is(err, ErrIdentityConflict) {
-		id, ok, err = cfg.Identities.GetIdentity(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, errNoIdentity
-		}
-		return id, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return id, nil
-}
-
-// mutateIdentity runs one read-modify-write against the Identity record under
-// optimistic concurrency: read the current record, apply mutate to it, write
-// conditional on the version it was read at, and on conflict start over
-// against a freshly-read record.
-//
-// mutate is therefore called once per attempt and must be safe to re-apply to
-// a record it has not seen before — it receives the *current* record, never a
-// stale copy of its own earlier work. That is what makes a concurrent
-// registration and login both survive: the loser re-reads the record including
-// the winner's change and layers its own on top, instead of writing back a
-// snapshot that never contained it (rosterbot-crq.2).
-func (cfg Config) mutateIdentity(ctx context.Context, mutate func(*Identity) error) (*Identity, error) {
-	var lastErr error
-	for attempt := 0; attempt < identityMutateAttempts; attempt++ {
-		current, ok, err := cfg.Identities.GetIdentity(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, errNoIdentity
-		}
-		if err := mutate(current); err != nil {
-			return nil, err
-		}
-		err = cfg.Identities.PutIdentity(ctx, current)
-		if err == nil {
-			return current, nil
-		}
-		if !errors.Is(err, ErrIdentityConflict) {
-			return nil, err
-		}
-		lastErr = err
-	}
-	return nil, lastErr
+	return body.Token
 }
 
 func (cfg Config) handleAuthRegisterBegin(w http.ResponseWriter, r *http.Request) {
-	if !cfg.canRegister(r) {
+	u, ok := cfg.registrationSubject(r, enrollmentToken(r))
+	if !ok {
 		writeErr(w, http.StatusForbidden, "not authorized to register a passkey")
 		return
 	}
-	identity, err := cfg.loadOrCreateIdentity(r.Context())
+	creds, err := cfg.Users.Credentials(r.Context(), u.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "identity store unavailable")
+		writeErr(w, http.StatusInternalServerError, "user store unavailable")
 		return
 	}
-	creation, session, err := cfg.WebAuthn.BeginRegistration(identityUser{id: identity},
+	creation, session, err := cfg.WebAuthn.BeginRegistration(
+		UserCredentials{User: u, Credentials: creds},
 		webauthn.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not begin registration")
@@ -195,7 +156,9 @@ func (cfg Config) handleAuthRegisterBegin(w http.ResponseWriter, r *http.Request
 }
 
 func (cfg Config) handleAuthRegisterFinish(w http.ResponseWriter, r *http.Request) {
-	if !cfg.canRegister(r) {
+	token := enrollmentToken(r)
+	u, ok := cfg.registrationSubject(r, token)
+	if !ok {
 		writeErr(w, http.StatusForbidden, "not authorized to register a passkey")
 		return
 	}
@@ -204,53 +167,52 @@ func (cfg Config) handleAuthRegisterFinish(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusBadRequest, "registration session expired, try again")
 		return
 	}
-	identity, err := cfg.loadOrCreateIdentity(r.Context())
+	creds, err := cfg.Users.Credentials(r.Context(), u.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "identity store unavailable")
+		writeErr(w, http.StatusInternalServerError, "user store unavailable")
 		return
 	}
-	cred, err := cfg.WebAuthn.FinishRegistration(identityUser{id: identity}, *session, r)
+	cred, err := cfg.WebAuthn.FinishRegistration(
+		UserCredentials{User: u, Credentials: creds}, *session, r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "passkey registration failed")
 		return
 	}
-	// The credential is already minted; re-applying the append to whatever the
-	// record looks like now is exactly right, and is what keeps a concurrent
-	// login's sign-counter update from being clobbered (and vice versa).
-	if _, err := cfg.mutateIdentity(r.Context(), func(cur *Identity) error {
-		cur.Credentials = append(cur.Credentials, *cred)
-		return nil
-	}); err != nil {
+
+	// Redeem only now that the ceremony has actually produced a credential, and
+	// BEFORE writing it: if redemption loses a race the passkey must not exist,
+	// or a link could yield two credentials.
+	if token != "" && cfg.Enrollments != nil {
+		if _, err := cfg.Enrollments.RedeemEnrollment(r.Context(),
+			HashEnrollmentToken(EnrollmentToken(token)), time.Now()); err != nil {
+			writeErr(w, http.StatusForbidden, "enrollment link is no longer valid")
+			return
+		}
+	}
+
+	// One credential, one key — no read-modify-write, so a concurrent login's
+	// sign-counter update on another credential cannot lose this one.
+	if err := cfg.Users.PutCredential(r.Context(), u.ID, *cred); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not save passkey")
 		return
 	}
-	uid, err := cfg.ensureUserForIdentity(r.Context(), identity)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not create user record")
-		return
-	}
+
 	clearCeremonyCookie(w)
-	// The session names WHO it belongs to (rosterbot-crq.8). Until the handlers
-	// move onto the user store (rosterbot-crq.10) the subject is derived from
-	// the singleton identity's handle — which is exactly the id
-	// migrate-identity writes, so a session minted before the cutover names the
-	// same user afterwards. TokenVersion is 0 because the singleton record has
-	// no such field; it becomes user.TokenVersion when the store is wired.
-	setSessionCookie(w, cfg.SessionSecret, uid, 0, time.Now())
+	setSessionCookie(w, cfg.SessionSecret, u.ID, u.TokenVersion, time.Now())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "registered"})
 }
 
+// handleAuthLoginBegin starts a DISCOVERABLE (usernameless) assertion.
+//
+// The old flow loaded the one identity and passed it to BeginLogin, which sent
+// its credential ids in allowCredentials — workable for a single operator and
+// impossible for several, since the server would have to know who is logging in
+// before they have said. Discoverable login inverts that: the authenticator
+// picks a resident credential and tells us which user it belongs to.
+//
+// It also means this endpoint no longer reveals whether anyone is registered.
 func (cfg Config) handleAuthLoginBegin(w http.ResponseWriter, r *http.Request) {
-	identity, ok, err := cfg.Identities.GetIdentity(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "identity store unavailable")
-		return
-	}
-	if !ok || len(identity.Credentials) == 0 {
-		writeErr(w, http.StatusNotFound, "no passkeys registered yet")
-		return
-	}
-	assertion, session, err := cfg.WebAuthn.BeginLogin(identityUser{id: identity})
+	assertion, session, err := cfg.WebAuthn.BeginDiscoverableLogin()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not begin login")
 		return
@@ -262,43 +224,81 @@ func (cfg Config) handleAuthLoginBegin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, assertion)
 }
 
+// discoverableUser resolves the handle an authenticator asserts into the user
+// it names, plus their credentials.
+//
+// userHandle IS the UserID (see lineupapi.UserID) — the same 64 bytes, so this
+// is a direct key-get with no index. rawID is unused for that reason; it is
+// only needed by the non-discoverable fallback, which resolves through
+// UserByCredential instead.
+//
+// Returning an error for an unknown handle is what makes a forged or stale
+// handle fail the ceremony rather than authenticate as nobody.
+func (cfg Config) discoverableUser(_ []byte, userHandle []byte) (webauthn.User, error) {
+	if cfg.Users == nil {
+		return nil, errors.New("no user store configured")
+	}
+	ctx := context.Background()
+	uid := NewUserID(userHandle)
+	u, ok, err := cfg.Users.GetUser(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.New("unknown user handle")
+	}
+	creds, err := cfg.Users.Credentials(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+	return UserCredentials{User: u, Credentials: creds}, nil
+}
+
 func (cfg Config) handleAuthLoginFinish(w http.ResponseWriter, r *http.Request) {
 	session, err := ceremonySessionFromRequest(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "login session expired, try again")
 		return
 	}
-	identity, ok, err := cfg.Identities.GetIdentity(r.Context())
-	if err != nil || !ok {
-		writeErr(w, http.StatusUnauthorized, "login failed")
-		return
-	}
-	cred, err := cfg.WebAuthn.FinishLogin(identityUser{id: identity}, *session, r)
-	if err != nil {
-		writeErr(w, http.StatusUnauthorized, "login failed")
-		return
-	}
-	// Persist the updated sign counter / clone-warning flag. Best-effort: a
-	// store failure here shouldn't fail a login that already verified. The
-	// mutation is applied to the record as it stands at write time, so a
-	// passkey registered concurrently is not rolled back by this write; a
-	// credential revoked concurrently simply isn't found and is left revoked.
-	_, _ = cfg.mutateIdentity(r.Context(), func(cur *Identity) error {
-		for i := range cur.Credentials {
-			if bytes.Equal(cur.Credentials[i].ID, cred.ID) {
-				cur.Credentials[i] = *cred
-			}
-		}
-		return nil
-	})
 
-	uid, uerr := cfg.ensureUserForIdentity(r.Context(), identity)
-	if uerr != nil {
-		writeErr(w, http.StatusInternalServerError, "could not resolve user record")
+	// FinishPasskeyLogin rather than FinishDiscoverableLogin, because it RETURNS
+	// the resolved user. The alternative — reading session.UserID — is a trap:
+	// BeginDiscoverableLogin calls beginLogin(nil, nil, ...), so that field is
+	// nil for the whole ceremony, and deriving a user id from it yields the
+	// empty id and a 401 on every single login.
+	authed, cred, err := cfg.WebAuthn.FinishPasskeyLogin(cfg.discoverableUser, *session, r)
+	if err != nil {
+		// One message for every failure — unknown handle, bad signature,
+		// revoked credential. Distinguishing them would tell an unauthenticated
+		// caller which user handles exist.
+		writeErr(w, http.StatusUnauthorized, "login failed")
 		return
 	}
+	// The value came back from cfg.discoverableUser, so this assertion holds by
+	// construction; failing closed rather than panicking keeps a future change
+	// to that handler from turning a type error into a crash on the login path.
+	uc, ok := authed.(UserCredentials)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "login failed")
+		return
+	}
+	uid, u := uc.User.ID, uc.User
+	if u.Status != UserActive {
+		writeErr(w, http.StatusForbidden, "account is not active")
+		return
+	}
+
+	// Persist the sign counter to THIS CREDENTIAL'S OWN KEY. That is the
+	// contention-free property the key layout exists for: a concurrent
+	// registration writes a different sort key and cannot be lost by this
+	// write, so no read-modify-write and no retry are involved.
+	//
+	// Best-effort, as before: a store failure must not fail a login that has
+	// already verified cryptographically.
+	_ = cfg.Users.PutCredential(r.Context(), uid, *cred)
+
 	clearCeremonyCookie(w)
-	setSessionCookie(w, cfg.SessionSecret, uid, 0, time.Now())
+	setSessionCookie(w, cfg.SessionSecret, uid, u.TokenVersion, time.Now())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -306,27 +306,45 @@ type passkeyOut struct {
 	ID string `json:"id"`
 }
 
+// sessionUser resolves the logged-in user for the passkey-management routes.
+// They are session-only: the bearer token authenticates an operator rather than
+// a person, so it has no passkeys to list and no business revoking anyone's.
+func (cfg Config) sessionUser(r *http.Request) (*User, bool) {
+	if cfg.Users == nil {
+		return nil, false
+	}
+	p, err := sessionFromRequest(r, cfg.SessionSecret)
+	if err != nil {
+		return nil, false
+	}
+	u, ok, err := cfg.Users.GetUser(r.Context(), p.Sub)
+	if err != nil || !ok || p.Ver != u.TokenVersion {
+		return nil, false
+	}
+	return u, true
+}
+
 func (cfg Config) handleListPasskeys(w http.ResponseWriter, r *http.Request) {
-	if !hasValidSession(r, cfg.SessionSecret) {
+	u, ok := cfg.sessionUser(r)
+	if !ok {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	identity, ok, err := cfg.Identities.GetIdentity(r.Context())
+	creds, err := cfg.Users.Credentials(r.Context(), u.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "identity store unavailable")
+		writeErr(w, http.StatusInternalServerError, "user store unavailable")
 		return
 	}
 	out := []passkeyOut{}
-	if ok {
-		for _, c := range identity.Credentials {
-			out = append(out, passkeyOut{ID: base64.RawURLEncoding.EncodeToString(c.ID)})
-		}
+	for _, c := range creds {
+		out = append(out, passkeyOut{ID: base64.RawURLEncoding.EncodeToString(c.ID)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"passkeys": out})
 }
 
 func (cfg Config) handleRevokePasskey(w http.ResponseWriter, r *http.Request) {
-	if !hasValidSession(r, cfg.SessionSecret) {
+	u, ok := cfg.sessionUser(r)
+	if !ok {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -335,20 +353,10 @@ func (cfg Config) handleRevokePasskey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid passkey id")
 		return
 	}
-	if _, err := cfg.mutateIdentity(r.Context(), func(cur *Identity) error {
-		kept := cur.Credentials[:0]
-		for _, c := range cur.Credentials {
-			if !bytes.Equal(c.ID, targetID) {
-				kept = append(kept, c)
-			}
-		}
-		cur.Credentials = kept
-		return nil
-	}); err != nil {
-		if errors.Is(err, errNoIdentity) {
-			writeErr(w, http.StatusNotFound, "no passkeys registered")
-			return
-		}
+	// Scoped to the caller's own credentials by construction: the key is
+	// (their user id, this credential id), so revoking cannot reach across
+	// tenants even if a caller supplies someone else's credential id.
+	if err := cfg.Users.DeleteCredential(r.Context(), u.ID, targetID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not revoke passkey")
 		return
 	}
