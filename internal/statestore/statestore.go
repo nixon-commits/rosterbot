@@ -40,24 +40,37 @@ import (
 // analysis/grades/ subtree — the writer is constructed at the root and appends
 // grades/dt=.../ itself, whereas the status page lists the leaf where the
 // objects actually land.
-type artifact struct{ s3Prefix, localDir string }
+type artifact struct {
+	s3Prefix, localDir string
+	perTenant          bool
+}
+
+// of builds an artifact view from the layout table, so PerTenant is read from
+// the single declaration rather than restated here — a second copy is exactly
+// what layout exists to prevent.
+func of(a layout.Artifact) artifact {
+	return artifact{a.S3Prefix, a.LocalDir, a.PerTenant}
+}
 
 var (
-	cacheArtifact          = artifact{layout.Cache.S3Prefix, ""} // local: default fsStore, dir unused
-	analysisArtifact       = artifact{"analysis/", layout.Analysis.LocalDir}
-	teamValueArtifact      = artifact{layout.TeamValues.S3Prefix, layout.TeamValues.LocalDir}
-	footballValueArtifact  = artifact{layout.FootballValues.S3Prefix, layout.FootballValues.LocalDir}
-	lineupGapArtifact      = artifact{layout.LineupGaps.S3Prefix, layout.LineupGaps.LocalDir}
-	runLedgerArtifact      = artifact{layout.RunLedger.S3Prefix, layout.RunLedger.LocalDir}
-	runOutputArtifact      = artifact{layout.RunOutput.S3Prefix, layout.RunOutput.LocalDir}
-	notificationArtifact   = artifact{layout.Notification.S3Prefix, layout.Notification.LocalDir}
-	progressArtifact       = artifact{layout.Progress.S3Prefix, layout.Progress.LocalDir}
-	lineupArtifact         = artifact{layout.Lineup.S3Prefix, layout.Lineup.LocalDir}
-	tradesArtifact         = artifact{layout.Trades.S3Prefix, layout.Trades.LocalDir}
-	tradeValuesArtifact    = artifact{layout.TradeValues.S3Prefix, layout.TradeValues.LocalDir}
-	tradeOfferArtifact     = artifact{layout.TradeOffers.S3Prefix, layout.TradeOffers.LocalDir}
-	reportsArtifact        = artifact{layout.Reports.S3Prefix, layout.Reports.LocalDir}
-	footballTradesArtifact = artifact{layout.FootballTrades.S3Prefix, layout.FootballTrades.LocalDir}
+	cacheArtifact = artifact{layout.Cache.S3Prefix, "", false} // local: default fsStore, dir unused
+	// analysisArtifact uses the analysis/ ROOT while layout.Analysis names the
+	// analysis/grades/ subtree, so it cannot come from of(): the writer appends
+	// grades/dt=.../ itself. PerTenant is carried across by hand for that reason.
+	analysisArtifact       = artifact{"analysis/", layout.Analysis.LocalDir, layout.Analysis.PerTenant}
+	teamValueArtifact      = of(layout.TeamValues)
+	footballValueArtifact  = of(layout.FootballValues)
+	lineupGapArtifact      = of(layout.LineupGaps)
+	runLedgerArtifact      = of(layout.RunLedger)
+	runOutputArtifact      = of(layout.RunOutput)
+	notificationArtifact   = of(layout.Notification)
+	progressArtifact       = of(layout.Progress)
+	lineupArtifact         = of(layout.Lineup)
+	tradesArtifact         = of(layout.Trades)
+	tradeValuesArtifact    = of(layout.TradeValues)
+	tradeOfferArtifact     = of(layout.TradeOffers)
+	reportsArtifact        = of(layout.Reports)
+	footballTradesArtifact = of(layout.FootballTrades)
 )
 
 // Bucket is the single os.Getenv("STATE_BUCKET") read in the codebase. Empty
@@ -70,25 +83,76 @@ func Bucket() string { return os.Getenv("STATE_BUCKET") }
 // table, which declares the STATE_BUCKET key layout only.
 func RecapLogBucket() string { return os.Getenv("RECAP_LOG_BUCKET") }
 
+// Tenant is the single os.Getenv("ROSTERBOT_USER_ID") read. Empty means
+// single-tenant mode, where per-tenant artifacts keep their original,
+// un-segmented prefixes.
+//
+// Empty is a real mode, not a missing value: it is exactly where the
+// deployment's state lives today, so an un-migrated bucket keeps working
+// unchanged. The fan-out (rosterbot-crq.13) sets this per task, and the backfill
+// relocates the operator's existing state under their own segment.
+func Tenant() string { return os.Getenv("ROSTERBOT_USER_ID") }
+
 // Selector resolves durable-state stores against one backend choice made once.
-type Selector struct{ bucket string }
+type Selector struct {
+	bucket string
+	tenant string
+}
 
 // FromEnv builds a Selector from STATE_BUCKET (the deployment's signal).
-func FromEnv() *Selector { return &Selector{bucket: Bucket()} }
+func FromEnv() *Selector { return &Selector{bucket: Bucket(), tenant: Tenant()} }
 
 // New builds a Selector for an explicit bucket ("" = local). Used by tests and
 // by any caller that already knows the bucket.
 func New(bucket string) *Selector { return &Selector{bucket: bucket} }
 
-// pick is the sole S3-vs-local branch. On S3 it calls s3New(ctx, bucket, prefix);
-// locally it calls fileNew(localDir).
+// ForTenant returns a Selector scoped to one user. Used by the job fan-out,
+// which knows which tenant a task is running for, and by tests.
+func ForTenant(bucket, tenant string) *Selector {
+	return &Selector{bucket: bucket, tenant: tenant}
+}
+
+// pick is the sole S3-vs-local branch, and the sole place a tenant segment is
+// composed. Both live here so a new store cannot accidentally opt out of
+// either: there is one function to go through.
+//
+// On S3 it calls s3New(ctx, bucket, prefix); locally it calls fileNew(localDir).
 func pick[T any](s *Selector, a artifact,
 	s3New func(ctx context.Context, bucket, prefix string) (T, error),
 	fileNew func(dir string) T) (T, error) {
 	if s.bucket != "" {
-		return s3New(context.Background(), s.bucket, a.s3Prefix)
+		return s3New(context.Background(), s.bucket, s.prefixFor(a))
 	}
-	return fileNew(a.localDir), nil
+	return fileNew(s.dirFor(a)), nil
+}
+
+// prefixFor inserts user=<tenant>/ directly after the artifact prefix, for
+// per-tenant artifacts only.
+//
+// The segment is Hive-style for the same reason the Analysis Store's system=
+// is: internal/s3blob keys are relative to the prefix (joined on the way in,
+// stripped on the way out), so a longer prefix is invisible to every key parser
+// above it — the dt= partition walk, the ledger's inverted timestamps — and
+// Athena can project it as a partition column rather than needing a crawler.
+//
+// A shared artifact never gains the segment even when a tenant is set. That
+// asymmetry is the point: the TTL Cache and the league-wide value stores are
+// deliberately common ground, and partitioning them would multiply upstream
+// load by the tenant count while splitting data that describes the whole league.
+func (s *Selector) prefixFor(a artifact) string {
+	if !a.perTenant || s.tenant == "" {
+		return a.s3Prefix
+	}
+	return a.s3Prefix + "user=" + s.tenant + "/"
+}
+
+// dirFor is the local-filesystem equivalent, kept in step so `serve` and a
+// deployed task disagree about nothing but the backend.
+func (s *Selector) dirFor(a artifact) string {
+	if !a.perTenant || s.tenant == "" || a.localDir == "" {
+		return a.localDir
+	}
+	return a.localDir + "/user=" + s.tenant
 }
 
 // RunWriter is the write side of the run ledger, satisfied by both the S3 and

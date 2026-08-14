@@ -81,31 +81,29 @@ func TestServeMux_AuthRoutesWork(t *testing.T) {
 	lineupDir := t.TempDir()
 	mux := newServeMux("test-token", []byte("test-session-secret"), lineupDir, "")
 
-	// No identity registered yet: login/begin is 404, not 401/500.
+	// Discoverable login answers with a challenge whether or not anyone is
+	// registered (rosterbot-crq.15). The old flow returned 404 here because it
+	// loaded the single identity up front to build allowCredentials — so the
+	// server necessarily knew, before the user said anything, whether an account
+	// existed. Not revealing that is the improvement, not a regression.
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login/begin", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("POST /v1/auth/login/begin (no identity) = %d, want 404", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/auth/login/begin = %d, want 200 (a challenge regardless of "+
+			"who exists), body=%s", rec.Code, rec.Body.String())
 	}
 
-	// register/begin with the bootstrap token succeeds and sets a ceremony cookie.
+	// register/begin with the bootstrap token is now REFUSED. That token
+	// authorized enrolment against an identity model with no notion of whose
+	// account, which becomes a god token once there are several users. Enrolment
+	// goes through a user-scoped invite link or an existing session.
 	req = httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("POST /v1/auth/register/begin = %d, want 200, body=%s", rec.Code, rec.Body.String())
-	}
-	// Verify ceremony cookie is set (must match internal/lineupapi/webauthn.go ceremonyCookieName).
-	var foundCeremony bool
-	for _, cookie := range rec.Result().Cookies() {
-		if cookie.Name == "rosterbot_ceremony" {
-			foundCeremony = true
-			break
-		}
-	}
-	if !foundCeremony {
-		t.Fatalf("POST /v1/auth/register/begin did not set rosterbot_ceremony cookie")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /v1/auth/register/begin with the bootstrap token = %d, want 403, "+
+			"body=%s", rec.Code, rec.Body.String())
 	}
 }

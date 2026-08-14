@@ -33,7 +33,7 @@ func TestArtifactLayout(t *testing.T) {
 }
 
 func TestPickRoutesToLocalWhenBucketEmpty(t *testing.T) {
-	got, err := pick(New(""), artifact{"p/", "dir"},
+	got, err := pick(New(""), artifact{"p/", "dir", false},
 		func(_ context.Context, b, p string) (string, error) { return "s3:" + b + "/" + p, nil },
 		func(dir string) string { return "file:" + dir })
 	if err != nil {
@@ -45,7 +45,7 @@ func TestPickRoutesToLocalWhenBucketEmpty(t *testing.T) {
 }
 
 func TestPickRoutesToS3WhenBucketSet(t *testing.T) {
-	got, err := pick(New("mybucket"), artifact{"p/", "dir"},
+	got, err := pick(New("mybucket"), artifact{"p/", "dir", false},
 		func(_ context.Context, b, p string) (string, error) { return "s3:" + b + "/" + p, nil },
 		func(dir string) string { return "file:" + dir })
 	if err != nil {

@@ -49,6 +49,25 @@ type Artifact struct {
 	// status page enumerate days and detect missing ones.
 	Partitioned bool
 
+	// PerTenant marks state that belongs to ONE user rather than to the league
+	// or the deployment. Those artifacts gain a user=<uid>/ segment directly
+	// after S3Prefix, so one tenant's lineups, runs and reports cannot be read
+	// or overwritten by another's job.
+	//
+	// The split is by WHO THE DATA IS ABOUT, not by who happens to produce it.
+	// The Team Value Store is written by one job and describes every team in the
+	// league, so it stays shared; the Lineup Gap Store is written by the same
+	// job and describes one manager's bench decisions, so it does not. Getting
+	// this backwards in the sharing direction is a cross-tenant leak; getting it
+	// backwards the other way merely duplicates data.
+	//
+	// The TTL Cache is deliberately shared. Its keys already carry the team id
+	// where the value is team-specific (fantrax-hitter-roster-<teamID>), and the
+	// expensive entries — FanGraphs projections, Savant CSVs, the MLB schedule —
+	// are identical for every tenant. Partitioning it would multiply the load on
+	// those upstreams by the tenant count for no benefit.
+	PerTenant bool
+
 	// NoBackfill marks an artifact whose missing days can never be recovered,
 	// so a gap is permanent data loss rather than a re-runnable job. Two
 	// artifacts carry it: the Team Value Store (docs/adr/0002 — HKB has no
@@ -65,20 +84,20 @@ const Day = 24 * time.Hour
 // with the CDK's bucket policy.
 var (
 	Cache      = Artifact{Name: "TTL Cache", S3Prefix: "cache/", LocalDir: ".cache", Durable: false}
-	Analysis   = Artifact{Name: "Analysis Store", S3Prefix: "analysis/grades/", LocalDir: ".analysis", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true}
+	Analysis   = Artifact{Name: "Analysis Store", S3Prefix: "analysis/grades/", LocalDir: ".analysis", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true, PerTenant: true}
 	TeamValues = Artifact{Name: "Team Value Store", S3Prefix: "analysis/team-values/", LocalDir: ".teamvalue", Durable: true, MaxAge: 2 * Day, Producer: "TeamValues", Partitioned: true, NoBackfill: true}
 	// FootballValues is per-player grain (unlike TeamValues' per-team
 	// aggregate), so unlike the Team Value Store it is NOT NoBackfill: both
 	// the Sleeper roster snapshot and the StatsGuy bundle are re-fetchable,
 	// so a missed day is re-runnable rather than permanently lost.
 	FootballValues = Artifact{Name: "Dynasty Value Store", S3Prefix: "analysis/football-values/", LocalDir: ".footballvalue", Durable: true, MaxAge: 2 * Day, Producer: "FootballValues", Partitioned: true}
-	LineupGaps     = Artifact{Name: "Lineup Gap Store", S3Prefix: "analysis/lineup-gaps/", LocalDir: ".lineupgap", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true}
+	LineupGaps     = Artifact{Name: "Lineup Gap Store", S3Prefix: "analysis/lineup-gaps/", LocalDir: ".lineupgap", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true, PerTenant: true}
 	Archive        = Artifact{Name: "Daily Archive", S3Prefix: "archive/", LocalDir: ".archive", Durable: true, MaxAge: 2 * Day, Producer: "Archive", Partitioned: true}
-	Backtest       = Artifact{Name: "Projection Snapshots", S3Prefix: "backtest/", LocalDir: ".backtest", Durable: true, MaxAge: 2 * Day, Producer: "Lineup"}
-	RunLedger      = Artifact{Name: "Run Ledger", S3Prefix: "runledger/", LocalDir: ".lineup/runs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
-	RunOutput      = Artifact{Name: "Run Output", S3Prefix: "runs/", LocalDir: ".lineup/outputs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
-	Notification   = Artifact{Name: "Notifications", S3Prefix: "notifications/", LocalDir: ".lineup/notifications", Durable: true, MaxAge: 7 * Day, Producer: ""}
-	Lineup         = Artifact{Name: "Published Lineup", S3Prefix: "lineup/", LocalDir: ".lineup", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
+	Backtest       = Artifact{Name: "Projection Snapshots", S3Prefix: "backtest/", LocalDir: ".backtest", Durable: true, MaxAge: 2 * Day, Producer: "Lineup", PerTenant: true}
+	RunLedger      = Artifact{Name: "Run Ledger", S3Prefix: "runledger/", LocalDir: ".lineup/runs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup", PerTenant: true}
+	RunOutput      = Artifact{Name: "Run Output", S3Prefix: "runs/", LocalDir: ".lineup/outputs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup", PerTenant: true}
+	Notification   = Artifact{Name: "Notifications", S3Prefix: "notifications/", LocalDir: ".lineup/notifications", Durable: true, MaxAge: 7 * Day, Producer: "", PerTenant: true}
+	Lineup         = Artifact{Name: "Published Lineup", S3Prefix: "lineup/", LocalDir: ".lineup", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup", PerTenant: true}
 	Claims         = Artifact{Name: "Claims Ledger", S3Prefix: "claims/", LocalDir: ".waivers", Durable: true, MaxAge: 3 * Day, Producer: "Claims"}
 
 	// The three Trades-tab artifacts. They are separate prefixes rather than
@@ -89,9 +108,9 @@ var (
 	// Trades' 14h tolerance is not its 1h cadence: the Lineup schedule runs
 	// 14:00-03:00 UTC, so an 11h overnight quiet period is legitimate. This is
 	// the same reasoning as infra.go's hourlyGap (13h), plus slack.
-	Trades      = Artifact{Name: "Pending Offers", S3Prefix: "trades/", LocalDir: ".trades", Durable: true, MaxAge: 14 * time.Hour, Producer: "Lineup"}
+	Trades      = Artifact{Name: "Pending Offers", S3Prefix: "trades/", LocalDir: ".trades", Durable: true, MaxAge: 14 * time.Hour, Producer: "Lineup", PerTenant: true}
 	TradeValues = Artifact{Name: "Trade Values Table", S3Prefix: "tradevalues/", LocalDir: ".tradevalues", Durable: true, MaxAge: 26 * time.Hour, Producer: "TeamValues"}
-	TradeOffers = Artifact{Name: "Trade Offer Log", S3Prefix: "analysis/trade-offers/", LocalDir: ".tradeoffers", Durable: true, MaxAge: 2 * Day, Producer: "Lineup", Partitioned: true, NoBackfill: true}
+	TradeOffers = Artifact{Name: "Trade Offer Log", S3Prefix: "analysis/trade-offers/", LocalDir: ".tradeoffers", Durable: true, MaxAge: 2 * Day, Producer: "Lineup", Partitioned: true, NoBackfill: true, PerTenant: true}
 
 	// Reports holds the three private dashboard artifacts — model.json,
 	// gap.json, views.json — that projection-site used to publish to the
@@ -106,13 +125,13 @@ var (
 	// daily schedule, so the newest object's age is an honest reading for the
 	// set. The residual cost is that one of the three soft-failing in
 	// projection-site while the others succeed does not move this row.
-	Reports = Artifact{Name: "Private Dashboard Reports", S3Prefix: "reports/", LocalDir: ".reports", Durable: true, MaxAge: 26 * time.Hour, Producer: "ProjectionSite"}
+	Reports = Artifact{Name: "Private Dashboard Reports", S3Prefix: "reports/", LocalDir: ".reports", Durable: true, MaxAge: 26 * time.Hour, Producer: "ProjectionSite", PerTenant: true}
 
-	Session = Artifact{Name: "Fantrax Session", S3Prefix: "session/", LocalDir: ".fantrax-cache", Durable: true, MaxAge: 7 * Day, Producer: ""}
+	Session = Artifact{Name: "Fantrax Session", S3Prefix: "session/", LocalDir: ".fantrax-cache", Durable: true, MaxAge: 7 * Day, Producer: "", PerTenant: true}
 
 	// Progress shares the runs/ prefix with RunOutput; it is not a separate
 	// listing target, so it is deliberately absent from All().
-	Progress = Artifact{Name: "Run Progress", S3Prefix: "runs/", LocalDir: ".lineup/progress", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup"}
+	Progress = Artifact{Name: "Run Progress", S3Prefix: "runs/", LocalDir: ".lineup/progress", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup", PerTenant: true}
 
 	// FootballTrades holds one dedup marker object per Sleeper trade
 	// transaction_id (check -> send -> mark, rosterbot-chs). Deliberately no
