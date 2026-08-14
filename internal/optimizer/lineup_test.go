@@ -597,3 +597,51 @@ func TestOptimizeLineup_ActiveBeforeRecordsPreExistingSlots(t *testing.T) {
 		t.Error("a reserve player must not appear in ActiveBefore")
 	}
 }
+
+// A player occupying an active slot his positions do not permit is a lineup
+// that cannot stand, and the optimizer is the only place that holds both facts
+// needed to notice — the current assignment and the eligibility predicate.
+//
+// Callers need it because the resulting fix is a SLOT-ONLY move set: nobody
+// enters or leaves the lineup, so it is correctly valued at 0 by rosterbot-6i4
+// and would otherwise be suppressed as cosmetic on every run, forever
+// (rosterbot-uhq).
+func TestOptimizeLineup_IneligibleBeforeNamesPlayersInSlotsTheyCannotFill(t *testing.T) {
+	scoring := fantrax.ScoringWeights{"HR": 4.0}
+	proj := newStubProj(map[string]*projections.Projection{
+		"Wrong Slot": {G: 100, PA: 400, HR: 30},
+		"Right Slot": {G: 100, PA: 400, HR: 20},
+		"No Data":    {G: 100, PA: 400, HR: 10},
+	})
+
+	roster := []fantrax.Player{
+		// Catcher-only, sitting in 1B: Fantrax revoked or changed an eligibility
+		// under a player who was already there.
+		{ID: "wrong", Name: "Wrong Slot", MLBTeam: "NYY", Positions: []string{"001"}, Status: "Active", RosterPosition: "002"},
+		// Legitimately in a slot he fills.
+		{ID: "right", Name: "Right Slot", MLBTeam: "NYY", Positions: []string{"002"}, Status: "Active", RosterPosition: "002"},
+		// No position data at all. Absent evidence is not evidence of
+		// ineligibility, and treating it as such would flag EVERY active player
+		// the moment the roster feed dropped this field.
+		{ID: "nodata", Name: "No Data", MLBTeam: "NYY", Positions: nil, Status: "Active", RosterPosition: "002"},
+	}
+	slots := []fantrax.Slot{{PosID: "002", PosName: "1B"}, {PosID: "001", PosName: "C"}}
+
+	result := OptimizeLineup(roster, map[string]bool{"NYY": true}, proj, scoring, slots, nil)
+
+	got := map[string]bool{}
+	for _, id := range result.IneligibleBefore {
+		got[id] = true
+	}
+	if !got["wrong"] {
+		t.Errorf("IneligibleBefore = %v, want it to contain \"wrong\" (C-only player in a 1B slot)", result.IneligibleBefore)
+	}
+	if got["right"] {
+		t.Errorf("IneligibleBefore = %v, must not contain \"right\" (he fills 1B legitimately)", result.IneligibleBefore)
+	}
+	if got["nodata"] {
+		t.Errorf("IneligibleBefore = %v, must not contain \"nodata\": an empty position list is "+
+			"missing data, not proof of ineligibility, and flagging it would fire for every "+
+			"active player if the roster feed ever stopped populating Positions", result.IneligibleBefore)
+	}
+}

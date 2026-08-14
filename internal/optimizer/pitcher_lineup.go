@@ -38,6 +38,11 @@ type PitcherResult struct {
 	// optimization. See Result.ActiveBefore — the pitcher path emits the same
 	// slot-only activations and carries the same valuation hazard.
 	ActiveBefore map[string]string
+	// IneligibleBefore lists active pitchers whose current slot their positions
+	// do not permit. See Result.IneligibleBefore. The pitcher predicate is
+	// narrower than it looks — P accepts any pitcher, but SP accepts only
+	// SP-eligible ones — so this is reachable here too.
+	IneligibleBefore []string
 }
 
 // OptimizePitcherLineup computes the optimal daily pitcher lineup.
@@ -177,11 +182,12 @@ func OptimizePitcherLineup(
 	}
 
 	return PitcherResult{
-		ToActivate:   changedActivate,
-		ToBench:      toBench,
-		Scored:       scored,
-		GateReport:   gateReport,
-		ActiveBefore: currentAssign,
+		ToActivate:       changedActivate,
+		ToBench:          toBench,
+		Scored:           scored,
+		GateReport:       gateReport,
+		ActiveBefore:     currentAssign,
+		IneligibleBefore: ineligibleActive(roster, currentAssign, slots, fantrax.EligibleForPitcherSlot),
 	}
 }
 

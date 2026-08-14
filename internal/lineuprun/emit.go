@@ -138,6 +138,22 @@ func emitDate(ft emitClient, in EmitInputs, dr dateResult) {
 
 	renderPlannedMoves(in.Out, plan, in.SlotName)
 
+	// A zero-gain payload that IS submitted looks like a regression of the
+	// rosterbot-6i4 guard unless the run says why, so name the players whose
+	// slots forced it.
+	if plan.Required {
+		names := make([]string, 0, len(plan.RequiredPlayerIDs))
+		for _, id := range plan.RequiredPlayerIDs {
+			if n := plan.Names[id]; n != "" {
+				names = append(names, n)
+			} else {
+				names = append(names, id)
+			}
+		}
+		fmt.Fprintf(in.Out, "\n  ⚠ Required slot fix: %s in a slot they are no longer eligible for — applying despite ≈0 gain.\n",
+			strings.Join(names, ", "))
+	}
+
 	if plan.Disposition == movesZeroGain {
 		fmt.Fprintln(in.Out, "\n  Net gain ≈ 0 — skipping apply (no change in who plays).")
 		return
@@ -195,6 +211,18 @@ type datePlan struct {
 	// plays. Those entries stay in the payload — Fantrax has to be told the new
 	// slot — but they are worth zero points and are rendered as such.
 	SlotOnly map[string]bool
+
+	// Required marks a move set that must be submitted even though it is worth
+	// nothing, because the CURRENT assignment is not legal — a player occupies
+	// a slot his positions no longer permit.
+	//
+	// Correcting that is slot-only by construction (nobody enters or leaves the
+	// lineup), so it nets zero and would otherwise be classified movesZeroGain
+	// and dropped on every hourly run forever, with the lineup never converging
+	// and nothing saying so (rosterbot-uhq). Names the players so the run
+	// output can explain why a zero-gain payload was sent.
+	Required          bool
+	RequiredPlayerIDs []string
 }
 
 // planDate combines the hitter and pitcher move sets, values them, and decides
@@ -263,20 +291,27 @@ func planDate(dr dateResult, playerName map[string]string) datePlan {
 		}
 	}
 
+	// A lineup whose current assignment is illegal has to be fixed, and the fix
+	// is worth exactly zero by the delta above — nobody's active membership
+	// changes. Without this the zero-gain guard would suppress it on every run.
+	required := append(append([]string(nil), dr.hitterResult.IneligibleBefore...), dr.pitcherResult.IneligibleBefore...)
+
 	delta := combinedMovesDelta(activate, bench, pts, slotOnly)
 	disposition := movesWorthApplying
-	if isZeroGainDelta(delta) {
+	if isZeroGainDelta(delta) && len(required) == 0 {
 		disposition = movesZeroGain
 	}
 
 	return datePlan{
-		Disposition: disposition,
-		Delta:       delta,
-		Activate:    activate,
-		Bench:       bench,
-		Names:       names,
-		Pts:         pts,
-		SlotOnly:    slotOnly,
+		Disposition:       disposition,
+		Delta:             delta,
+		Activate:          activate,
+		Bench:             bench,
+		Names:             names,
+		Pts:               pts,
+		SlotOnly:          slotOnly,
+		Required:          len(required) > 0,
+		RequiredPlayerIDs: required,
 	}
 }
 

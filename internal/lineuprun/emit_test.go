@@ -536,3 +536,90 @@ func TestApplySummary_CountsBothRolesAndListsEveryMove(t *testing.T) {
 		}
 	}
 }
+
+// requiredSlotMoveResult is a move set consisting ONLY of a slot change, where
+// the current assignment is no longer legal: the player sits in a slot his
+// positions do not permit. Nobody enters or leaves the lineup, so the delta is
+// correctly 0 — and 0 is precisely why it must not be suppressed.
+func requiredSlotMoveResult() dateResult {
+	dr := goldenResult()
+	dr.hitterResult.Scored = []optimizer.ScoredPlayer{
+		scoredHitter("Stranded", "NYY", "001", 6.00, true, true),
+	}
+	dr.pitcherResult.Scored = nil
+	// Moving from the 1B slot he can no longer fill to the C slot he can.
+	dr.hitterResult.ToActivate = []fantrax.PlayerSlot{{PlayerID: "Stranded", PosID: "001"}}
+	dr.hitterResult.ToBench = nil
+	dr.hitterResult.ActiveBefore = map[string]string{"Stranded": "002"}
+	dr.hitterResult.IneligibleBefore = []string{"Stranded"}
+	return dr
+}
+
+// rosterbot-6i4 correctly made a slot-only move set worth 0, and rosterbot-uhq
+// is the residual: the suppression was unconditional. A shuffle that is
+// REQUIRED — a player sitting in a slot he is no longer eligible for — nets 0
+// too, so it was suppressed on every hourly run forever and the lineup never
+// converged.
+func TestPlanDate_RequiredSlotShuffleIsNotSuppressed(t *testing.T) {
+	got := planDate(requiredSlotMoveResult(), nil)
+
+	// Precondition: this really is the zero-gain shape, not a move that escapes
+	// suppression by being worth something.
+	if !isZeroGainDelta(got.Delta) {
+		t.Fatalf("fixture must net zero to exercise the guard, got delta %v", got.Delta)
+	}
+	if got.Disposition != movesWorthApplying {
+		t.Errorf("disposition = %v, want movesWorthApplying: the current assignment is "+
+			"ILLEGAL, so this shuffle is required, not cosmetic — suppressing it leaves "+
+			"the lineup permanently unconverged", got.Disposition)
+	}
+	if !got.Required {
+		t.Error("plan should be marked Required so the run output can say why a " +
+			"zero-gain move set was submitted")
+	}
+}
+
+// The case rosterbot-6i4 was actually about must still be suppressed: an equal
+// swap among legally assigned players is worth nothing and risks Fantrax
+// rejecting a whole payload atomically over a per-player lock.
+func TestPlanDate_CosmeticShuffleIsStillSuppressed(t *testing.T) {
+	got := planDate(cosmeticResult(), nil)
+	if got.Disposition != movesZeroGain {
+		t.Errorf("disposition = %v, want movesZeroGain", got.Disposition)
+	}
+	if got.Required {
+		t.Error("a legal lineup must never be marked Required")
+	}
+}
+
+// The run output has to explain a zero-gain payload that WAS submitted, or the
+// next person reading it sees the rosterbot-6i4 guard apparently regressing.
+func TestEmitDate_RequiredSlotFixExplainsItselfInTheOutput(t *testing.T) {
+	h := newEmitHarness()
+	dr := requiredSlotMoveResult()
+	emitDate(h.ft, h.inputs([]dateResult{dr}, true), dr)
+	out := h.out.String()
+	if !strings.Contains(out, "Required slot fix") {
+		t.Errorf("run output does not explain the required slot fix:\n%s", out)
+	}
+	if !strings.Contains(out, "Stranded") {
+		t.Errorf("run output does not name the stranded player:\n%s", out)
+	}
+	if strings.Contains(out, "skipping apply") {
+		t.Errorf("required fix was suppressed:\n%s", out)
+	}
+}
+
+// The converse: a cosmetic shuffle must not raise the alarm.
+func TestEmitDate_CosmeticShuffleStaysQuiet(t *testing.T) {
+	h := newEmitHarness()
+	dr := cosmeticResult()
+	emitDate(h.ft, h.inputs([]dateResult{dr}, true), dr)
+	out := h.out.String()
+	if strings.Contains(out, "Required slot fix") {
+		t.Errorf("a legal lineup raised the required-fix warning:\n%s", out)
+	}
+	if !strings.Contains(out, "skipping apply") {
+		t.Errorf("cosmetic shuffle should still be suppressed:\n%s", out)
+	}
+}

@@ -31,6 +31,61 @@ type Result struct {
 	// must consult this map, or it credits a slot shuffle with the player's full
 	// projection (rosterbot-6i4).
 	ActiveBefore map[string]string
+
+	// IneligibleBefore lists players who were occupying an active slot their
+	// positions do not permit, sorted by ID. Normally empty: Fantrax
+	// eligibility is additive within a season, so a player gains positions by
+	// appearing there rather than losing them.
+	//
+	// It exists because the move set that CORRECTS such an assignment is
+	// slot-only — nobody enters or leaves the lineup — so it is correctly
+	// valued at zero by rosterbot-6i4's delta and would be suppressed as a
+	// cosmetic shuffle on every run forever, with the lineup never converging
+	// (rosterbot-uhq). A caller distinguishes "slot-only and legal" from
+	// "slot-only and required" by consulting this.
+	//
+	// A player with NO position data is never listed. Absent evidence is not
+	// evidence of ineligibility, and the alternative fails catastrophically:
+	// if the roster feed ever stopped populating Positions, every active
+	// player would look ineligible at once and every zero-gain shuffle would
+	// be submitted — reinstating exactly the churn rosterbot-6i4 removed.
+	IneligibleBefore []string
+}
+
+// ineligibleActive returns the IDs of active players whose current slot their
+// positions do not permit, sorted for deterministic output.
+//
+// eligible is passed in so the hitter and pitcher optimizers can share this
+// with their own predicates (fantrax.EligibleForSlot vs EligibleForPitcherSlot)
+// rather than each growing a near-copy.
+func ineligibleActive(
+	roster []fantrax.Player,
+	currentAssign map[string]string,
+	slots []fantrax.Slot,
+	eligible func([]string, fantrax.Slot) bool,
+) []string {
+	slotByID := make(map[string]fantrax.Slot, len(slots))
+	for _, s := range slots {
+		slotByID[s.PosID] = s
+	}
+	var out []string
+	for _, p := range roster {
+		posID, active := currentAssign[p.ID]
+		if !active || len(p.Positions) == 0 {
+			continue
+		}
+		slot, known := slotByID[posID]
+		if !known {
+			// A slot the league no longer defines is a different problem, and
+			// not one an eligibility predicate can answer.
+			continue
+		}
+		if !eligible(p.Positions, slot) {
+			out = append(out, p.ID)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // OptimizeLineup computes the optimal daily hitter lineup.
@@ -109,10 +164,11 @@ func OptimizeLineup(
 	}
 
 	return Result{
-		ToActivate:   changedActivate,
-		ToBench:      toBench,
-		Scored:       scored,
-		ActiveBefore: currentAssign,
+		ToActivate:       changedActivate,
+		ToBench:          toBench,
+		Scored:           scored,
+		ActiveBefore:     currentAssign,
+		IneligibleBefore: ineligibleActive(roster, currentAssign, slots, fantrax.EligibleForSlot),
 	}
 }
 
