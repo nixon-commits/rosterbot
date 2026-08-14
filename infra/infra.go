@@ -274,7 +274,8 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			//
 			// The fan-out (rosterbot-crq.13) overrides it per task via
 			// containerOverrides, which takes precedence over this default.
-			"ROSTERBOT_USER_ID": secret("ROSTERBOT_USER_ID"),
+			"ROSTERBOT_USER_ID": awsecs.Secret_FromSsmParameter(
+				awsssm.StringParameter_FromStringParameterName(stack, jsii.String("POperatorUserId"), jsii.String("/rosterbot/OPERATOR_USER_ID"))),
 			// SLEEPER_LEAGUE_ID is the one hard requirement football-values/
 			// football-trades have (loadFootballConfig errors without it,
 			// unlike DYNASTY_FORMAT and FOOTBALL_PUSHOVER_*, which fall back
@@ -398,8 +399,18 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// reader would split every per-tenant artifact in two: jobs writing to
 	// user=<uid>/ while the dashboard reads the un-segmented prefix and shows
 	// nothing, with every job still reporting success.
+	// A PLAIN String parameter, not a SecureString. CloudFormation refuses
+	// ssm-secure dynamic references in Lambda environment variables
+	// ("SSM Secure reference is not supported in:
+	// [AWS::Lambda::Function/Properties/Environment/Variables/...]") because it
+	// resolves them at deploy time rather than handing them to a runtime role
+	// the way ECS secrets work. cdk synth does not catch this — CDK emits the
+	// reference and only warns, so the rejection comes from CFN at deploy.
+	//
+	// The value is not a secret in any case: the tenant id is an opaque handle
+	// that already appears in every per-tenant S3 key.
 	apiFn.AddEnvironment(jsii.String("ROSTERBOT_USER_ID"),
-		awsssm.StringParameter_ValueForSecureStringParameter(stack, jsii.String("/rosterbot/ROSTERBOT_USER_ID"), jsii.Number(1)), nil)
+		awsssm.StringParameter_ValueForStringParameter(stack, jsii.String("/rosterbot/OPERATOR_USER_ID"), nil), nil)
 	apiFn.AddEnvironment(jsii.String("IDENTITY_TABLE"), identityTable.TableName(), nil)
 	apiFn.AddEnvironment(jsii.String("FANTRAX_CRED_KEY"), fantraxCredKey.KeyArn(), nil)
 	// GET /v1/infra reports the health of every prefix in the state bucket, so
