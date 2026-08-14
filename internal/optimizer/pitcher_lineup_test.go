@@ -249,3 +249,31 @@ func TestOptimizePitcherLineup_Idempotent(t *testing.T) {
 			len(r2.ToActivate), len(r2.ToBench))
 	}
 }
+
+// The pitcher path builds the same current-assignment map and emits the same
+// slot-only activations as the hitter path, so it must report ActiveBefore too
+// (rosterbot-6i4).
+func TestOptimizePitcherLineup_ActiveBeforeRecordsPreExistingSlots(t *testing.T) {
+	roster := []fantrax.Player{
+		{ID: "sp1", Name: "Ace Pitcher", MLBTeam: "NYY", Positions: []string{auth_client.PosSP},
+			PosShortNames: "SP", Status: "Active", RosterPosition: auth_client.PosP},
+		{ID: "rp1", Name: "Reserve Arm", MLBTeam: "BOS", Positions: []string{auth_client.PosRP},
+			PosShortNames: "RP", Status: "Reserve"},
+	}
+	playing := map[string]bool{"NYY": true, "BOS": true}
+	probables := map[string]string{"ace pitcher": "NYY"}
+	src := &stubPitcherSource{data: map[string]*projections.PitcherProjection{
+		"ace pitcher": {G: 30, GS: 30, IP: 180, K: 200, W: 15},
+		"reserve arm": {G: 60, IP: 60, K: 70, SV: 30},
+	}}
+	scoring := fantrax.ScoringWeights{"K": 1.0, "W": 5.0, "SV": 5.0}
+
+	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, makeSlots("SP", "RP"), nil)
+
+	if got, ok := result.ActiveBefore["sp1"]; !ok || got != auth_client.PosP {
+		t.Errorf("ActiveBefore[sp1] = %q (present=%v), want %q", got, ok, auth_client.PosP)
+	}
+	if _, ok := result.ActiveBefore["rp1"]; ok {
+		t.Error("a reserve pitcher must not appear in ActiveBefore")
+	}
+}

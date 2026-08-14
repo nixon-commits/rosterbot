@@ -20,6 +20,17 @@ type Result struct {
 	ToActivate []fantrax.PlayerSlot
 	ToBench    []string // player IDs to move to reserve
 	Scored     []ScoredPlayer
+	// ActiveBefore maps player ID → the active slot they occupied BEFORE this
+	// optimization, for every player who occupied one. It is the optimizer's own
+	// current-assignment map, published rather than discarded.
+	//
+	// ToActivate carries two different kinds of move that the payload cannot
+	// distinguish: a genuine bench→active promotion, and an already-active
+	// player changing which slot he fills. Fantrax needs both, but only the
+	// first changes whether the player scores. A caller valuing the move set
+	// must consult this map, or it credits a slot shuffle with the player's full
+	// projection (rosterbot-6i4).
+	ActiveBefore map[string]string
 }
 
 // OptimizeLineup computes the optimal daily hitter lineup.
@@ -98,9 +109,10 @@ func OptimizeLineup(
 	}
 
 	return Result{
-		ToActivate: changedActivate,
-		ToBench:    toBench,
-		Scored:     scored,
+		ToActivate:   changedActivate,
+		ToBench:      toBench,
+		Scored:       scored,
+		ActiveBefore: currentAssign,
 	}
 }
 

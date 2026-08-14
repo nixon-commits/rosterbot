@@ -139,7 +139,7 @@ func emitDate(ft emitClient, in EmitInputs, dr dateResult) {
 	renderPlannedMoves(in.Out, plan, in.SlotName)
 
 	if plan.Disposition == movesZeroGain {
-		fmt.Fprintln(in.Out, "\n  Net gain ≈ 0 — skipping apply (cosmetic swap).")
+		fmt.Fprintln(in.Out, "\n  Net gain ≈ 0 — skipping apply (no change in who plays).")
 		return
 	}
 	if in.Cfg.DryRun {
@@ -189,6 +189,12 @@ type datePlan struct {
 	// effective point value each move is credited with.
 	Names map[string]string
 	Pts   map[string]float64
+
+	// SlotOnly marks the Activate entries whose player already occupied an
+	// active slot, i.e. the move changes WHICH slot he fills, not whether he
+	// plays. Those entries stay in the payload — Fantrax has to be told the new
+	// slot — but they are worth zero points and are rendered as such.
+	SlotOnly map[string]bool
 }
 
 // planDate combines the hitter and pitcher move sets, values them, and decides
@@ -244,7 +250,20 @@ func planDate(dr dateResult, playerName map[string]string) datePlan {
 		}
 	}
 
-	delta := combinedMovesDelta(activate, bench, pts)
+	// Which activations are slot-only. Taken from the optimizers' own
+	// current-assignment maps rather than re-derived from Scored: the predicate
+	// for "already in an active slot" is the same one that decided the entry
+	// belonged in ToActivate at all, so the two cannot drift apart.
+	slotOnly := make(map[string]bool)
+	for _, ps := range activate {
+		_, wasHitterActive := dr.hitterResult.ActiveBefore[ps.PlayerID]
+		_, wasPitcherActive := dr.pitcherResult.ActiveBefore[ps.PlayerID]
+		if wasHitterActive || wasPitcherActive {
+			slotOnly[ps.PlayerID] = true
+		}
+	}
+
+	delta := combinedMovesDelta(activate, bench, pts, slotOnly)
 	disposition := movesWorthApplying
 	if isZeroGainDelta(delta) {
 		disposition = movesZeroGain
@@ -257,6 +276,7 @@ func planDate(dr dateResult, playerName map[string]string) datePlan {
 		Bench:       bench,
 		Names:       names,
 		Pts:         pts,
+		SlotOnly:    slotOnly,
 	}
 }
 
@@ -284,7 +304,13 @@ func (p datePlan) authorize() (applyAuthorization, bool) {
 func renderPlannedMoves(out io.Writer, plan datePlan, slotName map[string]string) {
 	fmt.Fprintf(out, "\n  Changes (%+.2f pts) %s\n", plan.Delta, strings.Repeat("─", 35))
 	for _, ps := range plan.Activate {
-		fmt.Fprintf(out, "    ↑ %-24s → %-4s  %+6.2f\n", plan.Names[ps.PlayerID], slotName[ps.PosID], plan.Pts[ps.PlayerID])
+		// ↔ is a slot change for a player who was already active: submitted, but
+		// worth nothing, so the lines sum to the header.
+		marker, gain := "↑", plan.Pts[ps.PlayerID]
+		if plan.SlotOnly[ps.PlayerID] {
+			marker, gain = "↔", 0
+		}
+		fmt.Fprintf(out, "    %s %-24s → %-4s  %+6.2f\n", marker, plan.Names[ps.PlayerID], slotName[ps.PosID], gain)
 	}
 	for _, id := range plan.Bench {
 		fmt.Fprintf(out, "    ↓ %-24s → BN    %+6.2f\n", plan.Names[id], -plan.Pts[id])
@@ -338,7 +364,11 @@ func applySummary(dr dateResult, plan datePlan, slotName map[string]string) stri
 	summary := fmt.Sprintf("%s: %s changes (%+.2f pts)",
 		dr.date.Format("Mon Jan 2"), strings.Join(parts, " + "), plan.Delta)
 	for _, ps := range plan.Activate {
-		summary += fmt.Sprintf("\n  ↑ %s → %s", plan.Names[ps.PlayerID], slotName[ps.PosID])
+		marker := "↑"
+		if plan.SlotOnly[ps.PlayerID] {
+			marker = "↔"
+		}
+		summary += fmt.Sprintf("\n  %s %s → %s", marker, plan.Names[ps.PlayerID], slotName[ps.PosID])
 	}
 	for _, id := range plan.Bench {
 		summary += fmt.Sprintf("\n  ↓ %s → BN", plan.Names[id])

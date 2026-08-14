@@ -34,6 +34,10 @@ type PitcherResult struct {
 	// GateReport names the starts the weekly GS budget declined. Zero-valued
 	// when no budget was in force for this date.
 	GateReport GSGateReport
+	// ActiveBefore maps player ID → the active slot they occupied BEFORE this
+	// optimization. See Result.ActiveBefore — the pitcher path emits the same
+	// slot-only activations and carries the same valuation hazard.
+	ActiveBefore map[string]string
 }
 
 // OptimizePitcherLineup computes the optimal daily pitcher lineup.
@@ -173,10 +177,11 @@ func OptimizePitcherLineup(
 	}
 
 	return PitcherResult{
-		ToActivate: changedActivate,
-		ToBench:    toBench,
-		Scored:     scored,
-		GateReport: gateReport,
+		ToActivate:   changedActivate,
+		ToBench:      toBench,
+		Scored:       scored,
+		GateReport:   gateReport,
+		ActiveBefore: currentAssign,
 	}
 }
 

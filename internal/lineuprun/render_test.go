@@ -58,7 +58,7 @@ func scoredPitcher(name, team, slot, pos string, pts float64, active, hasGame, s
 }
 
 func goldenSlotNames() map[string]string {
-	return map[string]string{"001": "C", "012": "OF", "020": "P"}
+	return map[string]string{"001": "C", "004": "3B", "012": "OF", "020": "P"}
 }
 
 // goldenResult is one date's board carrying every visual state the renderer
