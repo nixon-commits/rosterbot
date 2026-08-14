@@ -41,6 +41,27 @@ type PrefixListing struct {
 	// directories. A missing entry here is the "one shadow system quietly
 	// stopped" case that no error would otherwise surface.
 	Subkeys []string `json:"subkeys,omitempty"`
+
+	// Tenants breaks the listing down by user= segment, for artifacts the
+	// layout marks PerTenant. Empty for shared artifacts and for a bucket with
+	// no tenant segments yet.
+	//
+	// Judging a per-tenant artifact on the aggregate above is worse than
+	// useless: LastModified is the newest object across ALL tenants, so one
+	// tenant whose jobs still run makes the row read healthy while eleven
+	// others have written nothing for a week. Partitions has the same defect —
+	// the dt= values are unioned, so a day missing for one tenant is hidden by
+	// any other tenant having it. That is the rosterbot-ys8 blindness (a dead
+	// producer is indistinguishable from a live one) reproduced per tenant,
+	// which is exactly what this page exists to catch.
+	Tenants map[string]TenantListing `json:"tenants,omitempty"`
+}
+
+// TenantListing is one tenant's slice of a per-tenant prefix.
+type TenantListing struct {
+	Objects      int       `json:"objects"`
+	LastModified time.Time `json:"last_modified"`
+	Partitions   []string  `json:"partitions,omitempty"`
 }
 
 // InfraLister enumerates one prefix of the state bucket. Implemented by
@@ -69,7 +90,14 @@ type ArtifactStatus struct {
 	LatestPartition string   `json:"latest_partition,omitempty"`
 	Partitions      int      `json:"partitions,omitempty"`
 	Gaps            []string `json:"gaps,omitempty"`
-	Subkeys         []string `json:"subkeys,omitempty"`
+
+	// Tenants is how many tenants were found under a per-tenant prefix, and
+	// WorstTenant names the one that produced this row's health. Reporting the
+	// worst rather than the aggregate is the whole point: a page that averages
+	// tenants reports green during a single tenant's outage.
+	Tenants     int      `json:"tenants,omitempty"`
+	WorstTenant string   `json:"worst_tenant,omitempty"`
+	Subkeys     []string `json:"subkeys,omitempty"`
 
 	Error string `json:"error,omitempty"`
 }
@@ -179,6 +207,23 @@ func buildStatus(ctx context.Context, lister InfraLister, artifacts []layout.Art
 		}
 		row.Health = artifactHealth(a, l, now)
 
+		// For a per-tenant artifact the aggregate above answers the wrong
+		// question. Re-judge each tenant on its own slice and let the worst one
+		// set the row, naming it — otherwise the busiest tenant's freshness
+		// speaks for everybody.
+		if a.PerTenant && len(l.Tenants) > 0 {
+			row.Tenants = len(l.Tenants)
+			for _, uid := range sortedTenantIDs(l.Tenants) {
+				t := l.Tenants[uid]
+				th := artifactHealth(a, PrefixListing{
+					Objects: t.Objects, LastModified: t.LastModified,
+				}, now)
+				if healthWorseThan(th, row.Health) {
+					row.Health, row.WorstTenant = th, uid
+				}
+			}
+		}
+
 		if a.Partitioned && len(l.Partitions) > 0 {
 			days := make([]string, len(l.Partitions))
 			copy(days, l.Partitions)
@@ -191,6 +236,24 @@ func buildStatus(ctx context.Context, lister InfraLister, artifacts []layout.Art
 			// Grades can be re-graded from archived snapshots; team values
 			// cannot be reconstructed at all (docs/adr/0002), so that gap is
 			// permanent data loss and outranks a fresh newest-partition.
+			// Gaps, likewise, must be computed per tenant. Unioning the dt=
+			// values across tenants hides exactly the case worth seeing: a day
+			// present for one tenant and missing for another.
+			if a.PerTenant && len(l.Tenants) > 0 {
+				row.Gaps = nil
+				for _, uid := range sortedTenantIDs(l.Tenants) {
+					t := l.Tenants[uid]
+					if len(t.Partitions) == 0 {
+						continue
+					}
+					td := append([]string(nil), t.Partitions...)
+					sort.Strings(td)
+					for _, g := range findGaps(td, now) {
+						row.Gaps = append(row.Gaps, uid+"/"+g)
+					}
+				}
+			}
+
 			if a.NoBackfill && len(row.Gaps) > 0 && row.Health == HealthOK {
 				row.Health = HealthGap
 			}
@@ -295,6 +358,22 @@ func sortedStrings(m map[string]bool) []string {
 	if len(m) == 0 {
 		return nil
 	}
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// healthOrder ranks verdicts worst-last so a row can take the worst tenant's.
+var healthOrder = map[Health]int{
+	HealthOK: 0, HealthGap: 1, HealthStale: 2, HealthMissing: 3, HealthUnknown: 4,
+}
+
+func healthWorseThan(a, b Health) bool { return healthOrder[a] > healthOrder[b] }
+
+func sortedTenantIDs(m map[string]TenantListing) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)

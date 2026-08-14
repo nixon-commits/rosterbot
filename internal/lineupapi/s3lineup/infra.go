@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/s3blob"
@@ -35,6 +36,12 @@ var dtRe = regexp.MustCompile(`(?:^|/)dt=(\d{4}-\d{2}-\d{2})(?:/|$)`)
 // systemRe extracts the Analysis Store's second partition dimension.
 var systemRe = regexp.MustCompile(`(?:^|/)system=([^/]+)(?:/|$)`)
 
+// userRe extracts the tenant segment. It anchors at the START of the key
+// relative to the prefix, because user= is always the first segment a
+// per-tenant artifact adds — matching it anywhere would also catch a stray
+// "user=" inside a filename and invent a tenant.
+var userRe = regexp.MustCompile(`^user=([^/]+)/`)
+
 // maxKeys bounds a single listing. The state bucket's biggest prefix is cache/
 // (~thousands of small objects); this caps the work per request so the Lambda
 // can't be walked into a timeout by an unbounded prefix.
@@ -52,6 +59,10 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 	var out lineupapi.PrefixListing
 	parts := map[string]bool{}
 	subs := map[string]bool{}
+	// Per-tenant slices, so a dead tenant cannot hide behind a live one.
+	tenantObjects := map[string]int{}
+	tenantNewest := map[string]time.Time{}
+	tenantParts := map[string]map[string]bool{}
 
 	err := s.blob.Walk(ctx, prefix, func(o s3blob.Object) bool {
 		out.Objects++
@@ -61,6 +72,19 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 		}
 
 		rel := strings.TrimPrefix(o.Key, prefix)
+		if m := userRe.FindStringSubmatch(rel); m != nil {
+			uid := m[1]
+			tenantObjects[uid]++
+			if o.LastModified.After(tenantNewest[uid]) {
+				tenantNewest[uid] = o.LastModified
+			}
+			if dm := dtRe.FindStringSubmatch(rel); dm != nil {
+				if tenantParts[uid] == nil {
+					tenantParts[uid] = map[string]bool{}
+				}
+				tenantParts[uid][dm[1]] = true
+			}
+		}
 		if m := dtRe.FindStringSubmatch(rel); m != nil {
 			parts[m[1]] = true
 		}
@@ -80,6 +104,16 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 
 	out.Partitions = sortedKeys(parts)
 	out.Subkeys = sortedKeys(subs)
+	if len(tenantObjects) > 0 {
+		out.Tenants = make(map[string]lineupapi.TenantListing, len(tenantObjects))
+		for uid, n := range tenantObjects {
+			out.Tenants[uid] = lineupapi.TenantListing{
+				Objects:      n,
+				LastModified: tenantNewest[uid],
+				Partitions:   sortedKeys(tenantParts[uid]),
+			}
+		}
+	}
 	return out, nil
 }
 
