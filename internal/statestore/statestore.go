@@ -53,11 +53,8 @@ func of(a layout.Artifact) artifact {
 }
 
 var (
-	cacheArtifact = artifact{layout.Cache.S3Prefix, "", false} // local: default fsStore, dir unused
-	// analysisArtifact uses the analysis/ ROOT while layout.Analysis names the
-	// analysis/grades/ subtree, so it cannot come from of(): the writer appends
-	// grades/dt=.../ itself. PerTenant is carried across by hand for that reason.
-	analysisArtifact       = artifact{"analysis/", layout.Analysis.LocalDir, layout.Analysis.PerTenant}
+	cacheArtifact          = artifact{layout.Cache.S3Prefix, "", false} // local: default fsStore, dir unused
+	analysisArtifact       = of(layout.Analysis)
 	teamValueArtifact      = of(layout.TeamValues)
 	footballValueArtifact  = of(layout.FootballValues)
 	lineupGapArtifact      = of(layout.LineupGaps)

@@ -13,7 +13,10 @@ func TestArtifactLayout(t *testing.T) {
 		wantLocalDir string
 	}{
 		{"cache", cacheArtifact, "cache/", ""},
-		{"analysis", analysisArtifact, "analysis/", ".analysis"},
+		// analysis/grades/ — the WHOLE prefix. internal/analysis used to append
+		// "grades/" itself, which is what let the tenant segment land between the
+		// two halves (rosterbot-crq.11).
+		{"analysis", analysisArtifact, "analysis/grades/", ".analysis"},
 		{"teamValue", teamValueArtifact, "analysis/team-values/", ".teamvalue"},
 		{"lineupGap", lineupGapArtifact, "analysis/lineup-gaps/", ".lineupgap"},
 		{"runLedger", runLedgerArtifact, "runledger/", ".lineup/runs"},

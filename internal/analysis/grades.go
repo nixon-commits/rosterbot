@@ -25,8 +25,21 @@ import (
 const LegacySystem = "depthcharts-ros"
 
 const (
-	// gradesPrefix is the store root within its bucket prefix or local dir.
-	gradesPrefix = "grades/"
+	// gradesPrefix is empty: the store is rooted at layout.Analysis.S3Prefix
+	// ("analysis/grades/"), so the whole prefix now lives in ONE place.
+	//
+	// It used to be "grades/", with statestore rooting the store at "analysis/"
+	// and this constant supplying the rest. Untenanted the two halves rejoined
+	// and nobody noticed. The tenant segment (rosterbot-crq.11) is inserted
+	// directly after the artifact prefix — which for every other artifact is the
+	// whole prefix, and for this one was only the first half, so the runtime
+	// built analysis/user=<uid>/grades/ while the backfill and the Athena
+	// partition template both used analysis/grades/user=<uid>/. The Projections
+	// tab went empty and every producer still reported success.
+	//
+	// Keep it empty. A prefix split across two files has no single place to be
+	// correct.
+	gradesPrefix = ""
 	// gradesFilename is the leaf object name in every partition.
 	gradesFilename = "grades.ndjson"
 )

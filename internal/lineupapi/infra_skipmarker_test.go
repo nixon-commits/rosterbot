@@ -102,7 +102,7 @@ func TestSkipMarkerKey_IsDistinctAndUnpartitionedBySystem(t *testing.T) {
 	d, _ := time.Parse("2006-01-02", "2026-07-13")
 	key := analysis.SkipMarkerKey(d)
 
-	if want := "grades/dt=2026-07-13/no-actuals.json"; key != want {
+	if want := "dt=2026-07-13/no-actuals.json"; key != want {
 		t.Errorf("key = %q, want %q", key, want)
 	}
 	if filepath.Base(key) == "grades.ndjson" {
@@ -121,7 +121,7 @@ func TestAnalysisReader_IgnoresSkipMarkers(t *testing.T) {
 	if err := w.WriteSkip(d, analysis.SkipMarker{Dt: "2026-07-13", Reason: "no games"}); err != nil {
 		t.Fatalf("write skip: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "grades", "dt=2026-07-13", "no-actuals.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "dt=2026-07-13", "no-actuals.json")); err != nil {
 		t.Fatalf("marker not written where expected: %v", err)
 	}
 

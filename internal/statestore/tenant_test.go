@@ -1,6 +1,7 @@
 package statestore
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
@@ -46,7 +47,7 @@ func TestPerTenantArtifactsGainTheSegment(t *testing.T) {
 		"lineup":    {lineupArtifact, "lineup/user=u123/"},
 		"runledger": {runLedgerArtifact, "runledger/user=u123/"},
 		"reports":   {reportsArtifact, "reports/user=u123/"},
-		"analysis":  {analysisArtifact, "analysis/user=u123/"},
+		"analysis":  {analysisArtifact, "analysis/grades/user=u123/"},
 	}
 	for name, c := range cases {
 		if got := s.prefixFor(c.art); got != c.want {
@@ -144,6 +145,59 @@ func TestProducerAndReaderComposeIdenticalPrefixes(t *testing.T) {
 				t.Errorf("tenant=%q %s: producer writes %q, reader reads %q — jobs and "+
 					"dashboard would disagree with no error on either side",
 					tenant, a.Name, producer, reader)
+			}
+		}
+	}
+}
+
+// TestRuntimePrefixesStartWithTheLayoutPrefix closes the axis that let the
+// Analysis Store break in production (rosterbot-crq.11).
+//
+// TestProducerAndReaderComposeIdenticalPrefixes passed throughout that outage,
+// because statestore and the API Lambda genuinely agreed — they agreed on the
+// WRONG path. The drift was between both of them and the layout declaration,
+// which is what the backfill, the Infra page's gap scan and the Athena partition
+// template all key off.
+//
+// The Analysis Store was the only artifact whose prefix was split across two
+// files: statestore rooted the store at "analysis/" and internal/analysis
+// appended "grades/". Untenanted the halves rejoined and nothing looked wrong;
+// with a tenant the segment landed BETWEEN them, so the runtime read
+// analysis/user=<uid>/grades/ while 168 backfilled objects sat in
+// analysis/grades/user=<uid>/. Every producer reported success and the
+// Projections tab was empty.
+//
+// The invariant that catches it: whatever prefix the runtime builds must begin
+// with the artifact's declared prefix. A split can then only extend the layout
+// path, never interleave with it.
+func TestRuntimePrefixesStartWithTheLayoutPrefix(t *testing.T) {
+	runtime := map[string]artifact{
+		"Analysis Store":            analysisArtifact,
+		"Team Value Store":          teamValueArtifact,
+		"Lineup Gap Store":          lineupGapArtifact,
+		"Run Ledger":                runLedgerArtifact,
+		"Run Output":                runOutputArtifact,
+		"Notifications":             notificationArtifact,
+		"Published Lineup":          lineupArtifact,
+		"Pending Offers":            tradesArtifact,
+		"Trade Values Table":        tradeValuesArtifact,
+		"Trade Offer Log":           tradeOfferArtifact,
+		"Private Dashboard Reports": reportsArtifact,
+		"Dynasty Value Store":       footballValueArtifact,
+	}
+	for _, a := range append(layout.All(), layout.Progress) {
+		art, ok := runtime[a.Name]
+		if !ok {
+			continue // not built through statestore (Cache, Archive, Session, ...)
+		}
+		for _, tenant := range []string{"", "u123"} {
+			got := ForTenant("bucket", tenant).prefixFor(art)
+			if !strings.HasPrefix(got, a.S3Prefix) {
+				t.Errorf("%s: runtime builds %q, which does not start with the declared "+
+					"prefix %q. The backfill, the Infra gap scan and the Athena partition "+
+					"template all use the declared one, so they would read a different "+
+					"location than the producers write — with no error on either side",
+					a.Name, got, a.S3Prefix)
 			}
 		}
 	}

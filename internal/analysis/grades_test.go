@@ -32,7 +32,11 @@ func TestFileWriter_PathLayout(t *testing.T) {
 	if err := w.WriteGrades(date, "steamer-ros", []GradeRow{{Dt: "2026-06-15", PlayerID: "1"}}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := os.ReadFile(dir + "/grades/dt=2026-06-15/system=steamer-ros/grades.ndjson"); err != nil {
+	// Keys are relative to the store root now: the "grades/" segment moved into
+	// layout.Analysis.S3Prefix so the whole prefix lives in one place
+	// (rosterbot-crq.11). SystemFromKey below still handles both shapes, since
+	// it reads the system= segment wherever it appears.
+	if _, err := os.ReadFile(dir + "/dt=2026-06-15/system=steamer-ros/grades.ndjson"); err != nil {
 		t.Fatalf("expected system-partitioned file: %v", err)
 	}
 }
