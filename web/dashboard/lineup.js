@@ -18,15 +18,35 @@ const el = (tag, cls, text) => {
   return n;
 };
 
-// A slot needs attention when it is empty, when its player is not in a normal
-// active state, or when a filled slot is projected to score nothing — the last
-// one catches a player whose team has no game, which no status flag reports.
-function slotAlert(slot) {
+// slotState names what is true about a slot: empty, a player status that isn't
+// plain active, or a filled slot projected to score nothing — the last one
+// catches a player whose team has no game, which no status flag reports.
+function slotState(slot) {
   if (!slot.player) return "empty";
   const status = String(slot.player.status || "").toUpperCase();
   if (status && status !== "OK" && status !== "ACTIVE") return status.toLowerCase();
   if (!slot.player.proj) return "zero";
   return "";
+}
+
+// Not every non-active state is a problem, and conflating the two was what made
+// this page read as a wall of red. LOCKED means the player's game has started
+// and the lineup is frozen — routine, and by the evening it is most of the
+// board (21 of 36 slots on 2026-08-13). Marking it the same way as BENCHED gave
+// the majority of rows an anomaly treatment calibrated, per the stripe's own
+// comment, for "three rows that need attention among nineteen" — so the marker
+// stopped marking anything and the header claimed 21 slots needed a look when
+// one did.
+//
+// A state earns row emphasis only if the manager can still act on it. Every
+// state still gets its tag; this decides which ones also get the stripe, and
+// it is the single predicate behind both the stripe and the header count, so
+// the two can never disagree about what "needs a look" means.
+const INFORMATIONAL_STATES = new Set(["locked"]);
+
+function slotNeedsAttention(slot) {
+  const state = slotState(slot);
+  return state !== "" && !INFORMATIONAL_STATES.has(state);
 }
 
 // ---- Heatmap scales --------------------------------------------------------
@@ -93,8 +113,8 @@ const fmtAge = (v) => v.toFixed(1);
 const fmtValue = (v) => v.toLocaleString();
 
 function slotRow(slot, scales) {
-  const alert = slotAlert(slot);
-  const row = el("li", `lineup-row${alert ? " alert" : ""}`);
+  const state = slotState(slot);
+  const row = el("li", `lineup-row${slotNeedsAttention(slot) ? " alert" : ""}`);
   row.appendChild(el("span", "lineup-slot", slot.slot));
 
   if (!slot.player) {
@@ -109,10 +129,12 @@ function slotRow(slot, scales) {
   const p = slot.player;
   const nameCell = el("span", "lineup-name");
   nameCell.appendChild(el("span", null, p.name));
-  // The status badge only appears when the status is worth reading. Printing
-  // "OK" on sixteen of nineteen rows is noise that hides the three that matter.
-  if (alert && alert !== "zero") {
-    nameCell.appendChild(el("span", `badge badge-${alert}`, p.status));
+  // The tag is now the primary marker, so every non-active state carries one —
+  // including the informational ones the row no longer stripes. "zero" stays
+  // untagged because it is not a roster state: it is a projection of 0.0, which
+  // the PROJ cell already prints and mutes.
+  if (state && state !== "zero") {
+    nameCell.appendChild(el("span", `badge badge-${state}`, p.status));
   }
   row.appendChild(nameCell);
 
@@ -201,7 +223,7 @@ export async function renderLineup(root) {
     root.appendChild(box);
   }
 
-  const flagged = (data.slots || []).filter((s) => slotAlert(s)).length;
+  const flagged = (data.slots || []).filter(slotNeedsAttention).length;
   if (flagged) {
     root.appendChild(el("p", "sub muted",
       `${flagged} of ${data.slots.length} slots need a look — marked below.`));

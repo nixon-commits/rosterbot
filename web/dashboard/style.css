@@ -320,7 +320,13 @@ td.cov.warn { color: var(--danger); }
   color: var(--muted);
 }
 .badge-ok, .badge-success { background: color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); }
-.badge-locked, .badge-running { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
+.badge-running { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
+/* .badge-locked deliberately falls through to the neutral default above. It was
+   grouped with .badge-running on accent blue, which gave the most common state
+   on the lineup board the same weight as a live run — twenty accent chips
+   competing with the one red BENCHED chip that actually wants the eye. Locked
+   is information, so it recedes; the rule is split rather than restyled because
+   accent is still right for a run that is genuinely in progress. */
 .badge-benched, .badge-failed, .badge-failure, .badge-il { background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
 .badge-info { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--muted); }
 
@@ -683,9 +689,15 @@ td.cov.warn { color: var(--danger); }
 }
 
 /* The stripe is the anomaly marker — it reads down the left edge, so spotting
-   the three rows that need attention among nineteen takes no reading at all. */
+   the rows that need attention among the rest takes no reading at all.
+
+   It is an edge stripe and NOT a row wash on purpose. The wash tinted the whole
+   row, which set the tinted status cells and the heatmap cells on the same
+   background and made a routine LOCKED row look like a failure. Status is now
+   carried by the tag in the name cell; the stripe only says "this one is still
+   actionable", and slotNeedsAttention keeps it off the informational states, so
+   it marks one row on a typical evening rather than twenty-one. */
 .lineup-row.alert {
-  background: color-mix(in srgb, var(--danger) 7%, transparent);
   box-shadow: inset 3px 0 0 var(--danger);
 }
 
