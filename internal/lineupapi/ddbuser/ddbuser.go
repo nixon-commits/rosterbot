@@ -531,3 +531,54 @@ func (st *Store) RedeemEnrollment(ctx context.Context, tokenHash string, now tim
 	}
 	return e, nil
 }
+
+// --- ConnectionStore ---------------------------------------------------------
+
+var _ lineupapi.ConnectionStore = (*Store)(nil)
+
+const connSK = "FANTRAX"
+
+// The Fantrax connection is a sibling item of the profile rather than fields on
+// it, for the same reason credentials are: it is written by a different actor at
+// a different time. The connect task writes this; the API writes the profile.
+// Separate keys mean neither can lose the other's change.
+func (st *Store) GetConnection(ctx context.Context, uid lineupapi.UserID) (*lineupapi.FantraxConnection, bool, error) {
+	out, err := st.api.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(st.table), Key: st.key(userPK(uid), connSK),
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if len(out.Item) == 0 {
+		return nil, false, nil
+	}
+	var c lineupapi.FantraxConnection
+	if err := attributevalue.UnmarshalMap(out.Item, &c); err != nil {
+		return nil, false, err
+	}
+	return &c, true, nil
+}
+
+func (st *Store) PutConnection(ctx context.Context, c *lineupapi.FantraxConnection) error {
+	if c.UserID == "" {
+		return fmt.Errorf("ddbuser: refusing to write a connection with no user id")
+	}
+	c.UpdatedAt = time.Now().UTC()
+	item, err := attributevalue.MarshalMap(c)
+	if err != nil {
+		return err
+	}
+	// Zero times marshal to the string "0001-01-01T00:00:00Z" rather than being
+	// omitted (attributevalue honours dynamodbav tags and ignores json ones), so
+	// an unverified connection would carry a LastVerifiedAt that reads as a real
+	// timestamp from the year 1. Same trap as the enrollment UsedAt.
+	if c.LastVerifiedAt.IsZero() {
+		delete(item, "LastVerifiedAt")
+	}
+	item["pk"] = s(userPK(c.UserID))
+	item["sk"] = s(connSK)
+	_, err = st.api.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(st.table), Item: item,
+	})
+	return err
+}
