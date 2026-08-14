@@ -3,6 +3,7 @@ package ddbuser_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -12,6 +13,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser/ddbusertest"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/enrollmenttest"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/usertest"
 )
 
@@ -134,5 +136,63 @@ func TestScanFilterMatchesTheMarshalledAttribute(t *testing.T) {
 	}
 	if _, ok := item.Item["ver"]; !ok {
 		t.Error("stored item has no `ver` attribute; conditional writes have nothing to assert on")
+	}
+}
+
+func TestStore_EnrollmentConformance(t *testing.T) {
+	enrollmenttest.Run(t, func(t *testing.T) lineupapi.EnrollmentStore {
+		return ddbuser.NewWithAPI(ddbusertest.New(), "test-table")
+	})
+}
+
+// TestEnrollment_UnusedItemHasNoUsedAtAttribute pins the trap that made every
+// redemption fail on the first attempt.
+//
+// RedeemEnrollment's single-use guarantee is the condition
+// attribute_not_exists(UsedAt), so ABSENCE has to mean "unused". But
+// attributevalue encodes a zero time.Time as the string "0001-01-01T00:00:00Z"
+// rather than omitting it — `json:"omitempty"` does not apply, because
+// attributevalue honours `dynamodbav` tags and ignores `json` ones. Left alone
+// the attribute always exists, the condition never passes, and an enrollment
+// link is unusable from the moment it is minted. For a recovery link that means
+// no way back into the account at all.
+//
+// This is the third place the same tag blindness has bitten (see also the
+// Status filter and the persisted Version), which is why it is asserted rather
+// than remembered.
+func TestEnrollment_UnusedItemHasNoUsedAtAttribute(t *testing.T) {
+	ctx := context.Background()
+	api := ddbusertest.New()
+	store := ddbuser.NewWithAPI(api, "test-table")
+
+	_, hash, err := lineupapi.MintEnrollmentToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.CreateEnrollment(ctx, hash, lineupapi.Enrollment{
+		UserID: "alice", ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := api.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String("test-table"),
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: "ENROLL#" + hash},
+			"sk": &types.AttributeValueMemberS{Value: "TOKEN"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := out.Item["UsedAt"]; ok {
+		t.Fatalf("unused enrollment carries a UsedAt attribute (%v); "+
+			"attribute_not_exists(UsedAt) can then never pass and the link is "+
+			"unusable from the moment it is minted", v)
+	}
+	if _, ok := out.Item["expires_at"]; !ok {
+		t.Error("no expires_at attribute; the table's TTL has nothing to reap, so " +
+			"spent links would accumulate forever")
 	}
 }

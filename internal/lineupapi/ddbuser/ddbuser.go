@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -404,4 +405,129 @@ func (st *Store) ListActive(ctx context.Context) ([]*lineupapi.User, error) {
 		start = out.LastEvaluatedKey
 	}
 	return users, nil
+}
+
+// --- EnrollmentStore ---------------------------------------------------------
+
+var _ lineupapi.EnrollmentStore = (*Store)(nil)
+
+func enrollPK(tokenHash string) string { return "ENROLL#" + tokenHash }
+
+const enrollSK = "TOKEN"
+
+// attrUsedAt is the redemption marker. Its ABSENCE means unused, which is what
+// RedeemEnrollment's attribute_not_exists(UsedAt) condition asserts.
+//
+// It has to be deleted explicitly when zero. attributevalue encodes a zero
+// time.Time as the STRING "0001-01-01T00:00:00Z" rather than omitting it —
+// `json:"omitempty"` does not apply, since attributevalue honours `dynamodbav`
+// tags and ignores `json` ones. Left alone, the attribute always exists, the
+// condition is never satisfied, and every redemption fails: enrollment links
+// would be unusable from the moment they were minted, which for a recovery
+// link means no way back into the account at all.
+const attrUsedAt = "UsedAt"
+
+// enrollItem marshals an Enrollment, normalising the two time fields so that
+// absence carries meaning.
+func (st *Store) enrollItem(tokenHash string, e lineupapi.Enrollment) (map[string]types.AttributeValue, error) {
+	item, err := attributevalue.MarshalMap(e)
+	if err != nil {
+		return nil, err
+	}
+	if e.UsedAt.IsZero() {
+		delete(item, attrUsedAt)
+	}
+	item["pk"] = s(enrollPK(tokenHash))
+	item["sk"] = s(enrollSK)
+	// expires_at is the table's declared TTL attribute, in epoch seconds. It is
+	// HOUSEKEEPING ONLY: TTL deletion is asynchronous and documented to lag by
+	// up to 48 hours, so RedeemEnrollment checks expiry itself rather than
+	// inferring it from the row being gone.
+	if e.ExpiresAt.IsZero() {
+		delete(item, "expires_at")
+	} else {
+		item["expires_at"] = n(e.ExpiresAt.Unix())
+	}
+	return item, nil
+}
+
+func (st *Store) CreateEnrollment(ctx context.Context, tokenHash string, e lineupapi.Enrollment) error {
+	item, err := st.enrollItem(tokenHash, e)
+	if err != nil {
+		return err
+	}
+
+	_, err = st.api.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           aws.String(st.table),
+		Item:                item,
+		ConditionExpression: aws.String("attribute_not_exists(pk)"),
+	})
+	if err != nil {
+		var failed *types.ConditionalCheckFailedException
+		if errors.As(err, &failed) {
+			// Overwriting would reset a spent link back to unused.
+			return lineupapi.ErrUserConflict
+		}
+		return err
+	}
+	return nil
+}
+
+func (st *Store) GetEnrollment(ctx context.Context, tokenHash string) (lineupapi.Enrollment, bool, error) {
+	out, err := st.api.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(st.table), Key: st.key(enrollPK(tokenHash), enrollSK),
+	})
+	if err != nil {
+		return lineupapi.Enrollment{}, false, err
+	}
+	if len(out.Item) == 0 {
+		return lineupapi.Enrollment{}, false, nil
+	}
+	var e lineupapi.Enrollment
+	if err := attributevalue.UnmarshalMap(out.Item, &e); err != nil {
+		return lineupapi.Enrollment{}, false, err
+	}
+	return e, true, nil
+}
+
+// RedeemEnrollment burns the link with a conditional write.
+//
+// The condition — attribute_not_exists(UsedAt) — is what makes this single-use
+// under concurrency. Reading, checking Redeemed(), then writing would satisfy
+// the interface and let two simultaneous redemptions of one recovery link both
+// succeed, because both would read an unused row before either wrote.
+//
+// Expiry is checked here in code, deliberately not left to the table's TTL:
+// TTL deletion lags, so the row can still be present and readable well after
+// it expired.
+func (st *Store) RedeemEnrollment(ctx context.Context, tokenHash string, now time.Time) (lineupapi.Enrollment, error) {
+	e, ok, err := st.GetEnrollment(ctx, tokenHash)
+	if err != nil {
+		return lineupapi.Enrollment{}, err
+	}
+	if !ok || e.Redeemed() || e.Expired(now) {
+		return lineupapi.Enrollment{}, lineupapi.ErrEnrollmentInvalid
+	}
+
+	e.UsedAt = now
+	item, err := st.enrollItem(tokenHash, e)
+	if err != nil {
+		return lineupapi.Enrollment{}, err
+	}
+
+	_, err = st.api.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           aws.String(st.table),
+		Item:                item,
+		ConditionExpression: aws.String("attribute_not_exists(UsedAt)"),
+	})
+	if err != nil {
+		var failed *types.ConditionalCheckFailedException
+		if errors.As(err, &failed) {
+			// Someone else redeemed it between our read and our write. That is
+			// the race this condition exists to lose safely.
+			return lineupapi.Enrollment{}, lineupapi.ErrEnrollmentInvalid
+		}
+		return lineupapi.Enrollment{}, err
+	}
+	return e, nil
 }

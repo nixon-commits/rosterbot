@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 )
@@ -332,4 +333,80 @@ func (s *FileUserStore) ListActive(_ context.Context) ([]*User, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+// --- EnrollmentStore ---------------------------------------------------------
+//
+// Enrollment links live under <dir>/enroll/<tokenHash>.json. The mutex that
+// guards the rest of this store is what makes redemption atomic here; see
+// ddbuser for the backend where atomicity has to be a server-side condition.
+
+var _ EnrollmentStore = (*FileUserStore)(nil)
+
+func (s *FileUserStore) enrollPath(tokenHash string) string {
+	return filepath.Join(s.dir, "enroll", tokenHash+".json")
+}
+
+func (s *FileUserStore) readEnrollment(tokenHash string) (Enrollment, bool, error) {
+	var e Enrollment
+	b, err := os.ReadFile(s.enrollPath(tokenHash))
+	if errors.Is(err, fs.ErrNotExist) {
+		return e, false, nil
+	}
+	if err != nil {
+		return e, false, err
+	}
+	if err := json.Unmarshal(b, &e); err != nil {
+		return e, false, err
+	}
+	return e, true, nil
+}
+
+func (s *FileUserStore) CreateEnrollment(_ context.Context, tokenHash string, e Enrollment) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok, err := s.readEnrollment(tokenHash); err != nil {
+		return err
+	} else if ok {
+		// Overwriting would reset a spent link back to unused, which is the one
+		// outcome a single-use token must never have.
+		return ErrUserConflict
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(s.enrollPath(tokenHash), data)
+}
+
+func (s *FileUserStore) GetEnrollment(_ context.Context, tokenHash string) (Enrollment, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readEnrollment(tokenHash)
+}
+
+func (s *FileUserStore) RedeemEnrollment(_ context.Context, tokenHash string, now time.Time) (Enrollment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e, ok, err := s.readEnrollment(tokenHash)
+	if err != nil {
+		return Enrollment{}, err
+	}
+	// Unknown, expired and already-redeemed collapse to one error on the way
+	// out: distinguishing them would answer "does this token exist?" for anyone
+	// who asks. Expiry is checked here rather than assumed cleaned up.
+	if !ok || e.Redeemed() || e.Expired(now) {
+		return Enrollment{}, ErrEnrollmentInvalid
+	}
+	e.UsedAt = now
+	data, err := json.Marshal(e)
+	if err != nil {
+		return Enrollment{}, err
+	}
+	if err := writeAtomic(s.enrollPath(tokenHash), data); err != nil {
+		return Enrollment{}, err
+	}
+	return e, nil
 }

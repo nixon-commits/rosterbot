@@ -42,6 +42,12 @@ func (u UserID) WebAuthnHandle() []byte {
 	return b
 }
 
+// NewWebAuthnUserID mints a fresh 64-byte user handle — the exported form of
+// the generator registration already uses. Exported so that a user created by
+// an admin invite and one created by self-registration are the same shape:
+// two generators would eventually differ, and the handle is the primary key.
+func NewWebAuthnUserID() ([]byte, error) { return newWebAuthnUserID() }
+
 // Role decides which routes a caller may reach. There are exactly two, and the
 // distinction is not seniority: a member sees only their own tenant's data,
 // while an admin can read any tenant's and reach the league-wide controls.

@@ -94,6 +94,18 @@ func (a *API) evalCondition(expr *string, existing item, exists bool, vals map[s
 		}
 		return cur.Value == str(want), nil
 
+	case "attribute_not_exists(UsedAt)":
+		// Conditions on a non-key attribute: the item may exist, but the named
+		// attribute must be absent. An implementation that writes a zero
+		// time.Time here leaves the attribute present (attributevalue encodes
+		// it as a string rather than omitting it), so this correctly never
+		// passes for such an item.
+		if !exists {
+			return true, nil
+		}
+		_, present := existing["UsedAt"]
+		return !present, nil
+
 	case "attribute_not_exists(pk) OR uid = :uid":
 		if !exists {
 			return true, nil
