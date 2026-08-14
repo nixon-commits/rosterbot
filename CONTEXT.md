@@ -87,6 +87,14 @@ _Avoid_: warehouse, archive, history DB, datalake.
 The materialized fact behind the Analysis Store: one row per (date, player) pairing the projected Expected Points with the actual Single-Game FPts and their signed error, plus dimensions — Eligibility Bucket, role, was-started. Computed by reusing `internal/backtest`'s projection grading. The grain model-audit queries aggregate.
 _Avoid_: grade row, result, scorecard.
 
+**Team Value Store**:
+Durable, date-partitioned NDJSON of each fantasy team's aggregate HKB dynasty value, one row per (date, team), under `analysis/team-values/dt=YYYY-MM-DD/`. Written daily by `team-values`. Unlike every other durable store here it **accumulates forward and cannot be backfilled** — HKB publishes no history and rosters are not archived, so a missed or wrong day is permanently missed or wrong (`NoBackfill: true`; see `docs/adr/0002`).
+_Avoid_: value history, dynasty index, standings store.
+
+**Namesake Re-baseline (2026-08-14)**:
+The one known discontinuity in the Team Value Store. `rosterbot-5z7` fixed the HKB namesake join, which had been resolving colliding normalized names by scrape order — so partitions `dt` ≤ 2026-08-13 carry namesake-corrupted values and cannot be restated. **All ten teams shifted, in both directions** (+1105 to −10), measured from the two surviving S3 object versions of that day's own partition. It reads exactly like a trade or waiver haul and nothing in the data distinguishes it, so a team-vs-team comparison straddling this date is comparing two measurement regimes. Full table and reasoning in `docs/adr/0002`'s 2026-08-14 amendment.
+_Avoid_: the HKB bug, the Garcia fix (it was never one team).
+
 ## Dynasty Football
 
 Sleeper (league/roster state, public read-only API, no key) + StatsGuy (dynasty valuations, `api.statsguyfantasy.com`, no key). Read-only throughout: Sleeper has no lineup-write endpoint, so the optimize-and-apply spine (Slot, Weekly Period, ApplyLineup, …) has no football counterpart — football's two commands are a value store and a trade monitor, not an optimizer.
