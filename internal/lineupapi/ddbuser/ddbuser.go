@@ -234,8 +234,19 @@ func (st *Store) PutUser(ctx context.Context, u *lineupapi.User) error {
 	if u.Version == "" {
 		return lineupapi.ErrUserConflict
 	}
-	next := nextVersion(u.Version)
-	item, err := st.userItem(u, next)
+	// The version must be parseable, and it must be compared as a NUMBER.
+	// userItem writes `ver` with n(), so a string :v makes `ver = :v` compare an
+	// N against an S — which DynamoDB evaluates as false rather than as an
+	// error. Every update of an existing record then failed the condition and
+	// surfaced as ErrUserConflict forever: ClaimTeam could not bind a team and
+	// a token-version bump could not revoke a session, both reported as routine
+	// concurrent-write contention. The in-memory double compared only the
+	// decimal text, so the conformance suite stayed green throughout.
+	cur, err := strconv.ParseInt(string(u.Version), 10, 64)
+	if err != nil {
+		return fmt.Errorf("ddbuser: unparseable record version %q for %s: %w", u.Version, u.ID, err)
+	}
+	item, err := st.userItem(u, cur+1)
 	if err != nil {
 		return err
 	}
@@ -243,7 +254,7 @@ func (st *Store) PutUser(ctx context.Context, u *lineupapi.User) error {
 		TableName:                 aws.String(st.table),
 		Item:                      item,
 		ConditionExpression:       aws.String("ver = :v"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{":v": s(string(u.Version))},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": n(cur)},
 	})
 	if err != nil {
 		var failed *types.ConditionalCheckFailedException
@@ -252,7 +263,7 @@ func (st *Store) PutUser(ctx context.Context, u *lineupapi.User) error {
 		}
 		return err
 	}
-	u.Version = lineupapi.IdentityVersion(strconv.FormatInt(next, 10))
+	u.Version = lineupapi.IdentityVersion(strconv.FormatInt(cur+1, 10))
 	return nil
 }
 

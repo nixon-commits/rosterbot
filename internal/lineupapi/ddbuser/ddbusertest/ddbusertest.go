@@ -92,7 +92,26 @@ func (a *API) evalCondition(expr *string, existing item, exists bool, vals map[s
 		if cur == nil {
 			return false, nil
 		}
-		return cur.Value == str(want), nil
+		// DynamoDB compares TYPE AND VALUE: {"N":"1"} does not equal {"S":"1"},
+		// and a mismatch makes this condition permanently false rather than
+		// erroring. Comparing only the decimal text made this fake accept a
+		// condition the service rejects every time, which is how PutUser shipped
+		// sending :v as a string against a numeric `ver` and could never update
+		// an existing record — ClaimTeam and token-version revocation both
+		// returned ErrUserConflict forever, with the whole conformance suite
+		// green (rosterbot-crq.18 follow-up).
+		//
+		// A type mismatch is therefore a TEST FAILURE here, not a false: a
+		// silent false would reproduce the outage faithfully but report it as
+		// ordinary optimistic-concurrency contention, which is exactly how it
+		// hid the first time.
+		wantN, ok := want.(*types.AttributeValueMemberN)
+		if !ok {
+			return false, fmt.Errorf("ddbusertest: condition %q compares numeric `ver` against a "+
+				"%T; DynamoDB matches on type as well as value, so this condition would never be "+
+				"true against the real service", *expr, want)
+		}
+		return cur.Value == wantN.Value, nil
 
 	case "attribute_not_exists(UsedAt)":
 		// Conditions on a non-key attribute: the item may exist, but the named
