@@ -228,11 +228,16 @@ const positionText = (p) => (p ? displayPositions(p.pos).join("/") : "");
 // the one that does not.
 const COLUMNS = [
   { key: "slot",  label: "Slot",   cls: "lineup-slot",  num: true,  first: "asc",  get: (s, i) => i },
-  { key: "name",  label: "Player", cls: "lineup-name",  num: false, first: "asc",  get: (s) => s.player?.name },
-  // The club column is logo-width, which "TEAM" does not fit, so the visible
-  // label is abbreviated and `aria` carries the full name for the button's
+  // The club sits immediately left of the name, where the logo reads as part of
+  // the player's identity rather than as a separate fact about them. It stays
+  // its own grid column rather than moving inside the name cell, which is what
+  // keeps it independently sortable.
+  //
+  // The column is logo-width, which "TEAM" does not fit, so the visible label
+  // is abbreviated and `aria` carries the full name for the button's
   // accessible name — the shorthand is visual only.
   { key: "team",  label: "Tm", aria: "Team", cls: "lineup-club", num: false, first: "asc", get: (s) => s.player?.team || undefined },
+  { key: "name",  label: "Player", cls: "lineup-name",  num: false, first: "asc",  get: (s) => s.player?.name },
   { key: "pos",   label: "Pos",    cls: "lineup-pos",   num: false, first: "asc",  get: (s) => positionText(s.player) || undefined },
   { key: "age",   label: "Age",    cls: "lineup-age",   num: true,  first: "desc", get: (s) => s.player?.age || undefined },
   { key: "value", label: "HKB",    cls: "lineup-value", num: true,  first: "desc", get: (s) => s.player?.hkb_value || undefined },
@@ -270,8 +275,8 @@ function slotRow(slot, scales) {
   row.appendChild(el("span", "lineup-slot", slot.slot));
 
   if (!slot.player) {
-    row.appendChild(el("span", "lineup-name lineup-empty", "empty"));
     row.appendChild(el("span", "lineup-club"));
+    row.appendChild(el("span", "lineup-name lineup-empty", "empty"));
     row.appendChild(el("span", "lineup-pos"));
     row.appendChild(el("span", "lineup-age muted", "—"));
     row.appendChild(el("span", "lineup-value muted", "—"));
@@ -289,9 +294,8 @@ function slotRow(slot, scales) {
   if (state && state !== "zero") {
     nameCell.appendChild(el("span", `badge badge-${state}`, p.status));
   }
-  row.appendChild(nameCell);
-
   row.appendChild(clubCell(p.team));
+  row.appendChild(nameCell);
   row.appendChild(el("span", "lineup-pos", positionText(p)));
 
   row.appendChild(heatCell("lineup-age", p.age, scales.age, fmtAge));
