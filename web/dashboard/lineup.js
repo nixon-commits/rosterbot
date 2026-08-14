@@ -9,6 +9,7 @@
 // Fantrax, and render.js's escapeHtml does not escape quotes, so it is unsafe
 // in an attribute context (the footgun views.js and trades.js both document).
 import { api, ApiError } from "./api.js";
+import { help } from "./render.js";
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -28,15 +29,79 @@ function slotAlert(slot) {
   return "";
 }
 
-function slotRow(slot) {
+// ---- Heatmap scales --------------------------------------------------------
+// Age and HKB value are both magnitude, so each gets a sequential single-hue
+// ramp (light -> dark), never a rainbow and never a diverging pair: neither has
+// a meaningful midpoint to diverge around. Both ramps run in the same direction
+// — more is darker — so one rule covers the whole row; the legend states which
+// end is which rather than leaving the reader to infer that older is "worse".
+//
+// The domain is the players on THIS page, not an absolute league-wide range.
+// A lineup's HKB values routinely sit inside a narrow band, and an absolute
+// 0..10000 domain would paint all of them the same shade — which is a scale
+// that answers no question. The trade-off is that shading is not comparable
+// across days, so the legend prints the domain it is actually using.
+//
+// Color never carries a fact on its own here: every shaded cell prints its own
+// number, so the ramp is redundant encoding for anyone who cannot separate the
+// steps.
+const MAX_TINT = 26; // percent; the dark-mode hue lives in style.css
+
+// Age is shaded linearly and HKB value on a square root, because the two
+// distributions are not the same shape. A lineup's ages span maybe 23 to 34 and
+// spread evenly across it, so linear uses the whole ramp. HKB values are
+// heavily right-skewed — one franchise bat can be worth more than the next six
+// players together — and under a linear ramp that single player takes the dark
+// end and everyone below him collapses into the same near-white step, which is
+// a scale that answers nothing about the fifteen rows the reader is comparing.
+// The square root keeps the order and still puts the elite asset on top; what
+// it gives up is proportionality, so the help text says so rather than letting
+// the reader assume twice the tint means twice the value.
+function scaleFor(values, transform = (v) => v) {
+  const nums = values.filter((v) => typeof v === "number" && v > 0);
+  if (nums.length === 0) return null;
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  const lo = transform(min);
+  const hi = transform(max);
+  return {
+    min,
+    max,
+    // A constant domain gets no tint at all. Shading it would draw a gradient
+    // over a distinction that does not exist.
+    t: (v) => (hi > lo ? (transform(v) - lo) / (hi - lo) : 0),
+  };
+}
+
+// heatCell renders one shaded numeric cell, or a muted em-dash when the value
+// is missing. Zero means "HKB has no row for this player" on both fields (see
+// lineupapi.Player), so it is rendered as unknown rather than as a low reading.
+function heatCell(cls, value, scale, format) {
+  if (!value) {
+    const n = el("span", `${cls} muted`, "—");
+    n.title = "not in HKB";
+    return n;
+  }
+  const n = el("span", cls, format(value));
+  if (scale) {
+    n.style.setProperty("--heat-pct", `${(scale.t(value) * MAX_TINT).toFixed(1)}%`);
+  }
+  return n;
+}
+
+const fmtAge = (v) => v.toFixed(1);
+const fmtValue = (v) => v.toLocaleString();
+
+function slotRow(slot, scales) {
   const alert = slotAlert(slot);
   const row = el("li", `lineup-row${alert ? " alert" : ""}`);
   row.appendChild(el("span", "lineup-slot", slot.slot));
 
   if (!slot.player) {
-    const name = el("span", "lineup-name lineup-empty", "empty");
-    row.appendChild(name);
+    row.appendChild(el("span", "lineup-name lineup-empty", "empty"));
     row.appendChild(el("span", "lineup-meta"));
+    row.appendChild(el("span", "lineup-age muted", "—"));
+    row.appendChild(el("span", "lineup-value muted", "—"));
     row.appendChild(el("span", "lineup-proj", "—"));
     return row;
   }
@@ -56,10 +121,57 @@ function slotRow(slot) {
   meta.appendChild(el("span", "lineup-pos", (p.pos || []).join("/")));
   row.appendChild(meta);
 
+  row.appendChild(heatCell("lineup-age", p.age, scales.age, fmtAge));
+  row.appendChild(heatCell("lineup-value", p.hkb_value, scales.value, fmtValue));
+
   const proj = el("span", "lineup-proj", p.proj.toFixed(1));
   if (!p.proj) proj.classList.add("muted");
   row.appendChild(proj);
   return row;
+}
+
+// The column header is a real row in the same grid rather than a floating
+// caption, so the two new numeric columns are labelled where they are read.
+// Without it "27.4" and "5,210" sit side by side with nothing saying which is
+// which.
+function headerRow() {
+  const row = el("li", "lineup-row lineup-colhead");
+  row.appendChild(el("span", "lineup-slot", "Slot"));
+  row.appendChild(el("span", "lineup-name", "Player"));
+  row.appendChild(el("span", "lineup-meta", "Team"));
+  row.appendChild(el("span", "lineup-age", "Age"));
+  row.appendChild(el("span", "lineup-value", "HKB"));
+  row.appendChild(el("span", "lineup-proj", "Proj"));
+  return row;
+}
+
+function rampKey(cls, label, scale, format) {
+  const key = el("span", "lineup-key");
+  key.appendChild(el("span", `lineup-ramp ${cls}`));
+  const text = scale
+    ? `${label} ${format(scale.min)} → ${format(scale.max)}`
+    : `${label} — no data`;
+  key.appendChild(el("span", null, text));
+  return key;
+}
+
+function legend(scales) {
+  const box = el("div", "lineup-legend");
+  box.appendChild(rampKey("ramp-age", "Age", scales.age, fmtAge));
+  box.appendChild(rampKey("ramp-value", "HKB value", scales.value, fmtValue));
+  box.appendChild(help(
+    "Age and HKB dynasty value come from the Harry Knows Ball rankings, matched " +
+    "to each player by name. In both columns a darker cell means more — older, " +
+    "and more valuable. The shading is scaled to the highest and lowest numbers " +
+    "in today's lineup, not to the whole league, so it shows how these players " +
+    "compare with each other today and cannot be compared with another day's " +
+    "page. Age shading is proportional; value shading is not — dynasty values " +
+    "are so top-heavy that a proportional ramp would leave everyone below the " +
+    "best player looking identical, so the value column is shaded on a square " +
+    "root. Order is still exact; the size of the gap is not. A dash means HKB " +
+    "has no entry for that player — often a recent call-up.",
+    "How the shading works"));
+  return box;
 }
 
 export async function renderLineup(root) {
@@ -95,8 +207,18 @@ export async function renderLineup(root) {
       `${flagged} of ${data.slots.length} slots need a look — marked below.`));
   }
 
+  const players = (data.slots || []).map((s) => s.player).filter(Boolean);
+  const scales = {
+    age: scaleFor(players.map((p) => p.age)),
+    value: scaleFor(players.map((p) => p.hkb_value), Math.sqrt),
+  };
+  // The legend is only meaningful once something is shaded. An older published
+  // lineup predates the enrichment and carries neither field.
+  if (scales.age || scales.value) root.appendChild(legend(scales));
+
   const list = el("ol", "lineup-list");
-  for (const slot of data.slots) list.appendChild(slotRow(slot));
+  list.appendChild(headerRow());
+  for (const slot of data.slots) list.appendChild(slotRow(slot, scales));
   root.appendChild(list);
 }
 

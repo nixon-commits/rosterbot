@@ -48,6 +48,12 @@ type EmitInputs struct {
 	PublishLineup bool
 	Publisher     lineupapi.Publisher
 
+	// HKB is the dynasty age/value enrichment the published JSON carries,
+	// keyed by normalized name (see LoadHKBMeta). Nil publishes without it —
+	// the caller's soft-fail path, and what every test that does not care
+	// about the enrichment passes.
+	HKB map[string]lineupapi.Dynasty
+
 	// Cfg supplies the league/team identity the published JSON carries, and
 	// DryRun — the difference between printing a plan and enacting it.
 	Cfg *config.Config
@@ -108,7 +114,7 @@ func publishToday(in EmitInputs) {
 		if !dr.isToday {
 			continue
 		}
-		if err := publishLineup(dr, in.Cfg, in.HitterSlots, in.PitcherSlots, in.Publisher); err != nil {
+		if err := publishLineup(dr, in.Cfg, in.HitterSlots, in.PitcherSlots, in.HKB, in.Publisher); err != nil {
 			fmt.Fprintf(in.Out, "  ⚠ lineup publish failed: %v\n", err)
 		}
 		return

@@ -1,6 +1,7 @@
 package lineuprun
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestPublishLineupWritesTodayAndDateKeys(t *testing.T) {
 	}
 	cfg := &config.Config{LeagueID: "L1", TeamID: "T1"}
 
-	if err := publishLineup(dr, cfg, nil, nil, pub); err != nil {
+	if err := publishLineup(dr, cfg, nil, nil, nil, pub); err != nil {
 		t.Fatalf("publishLineup: %v", err)
 	}
 
@@ -42,8 +43,31 @@ func TestPublishLineupWritesTodayAndDateKeys(t *testing.T) {
 func TestPublishLineupNilPublisherIsNoOp(t *testing.T) {
 	dr := dateResult{date: time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC), benchedToday: map[string]bool{}}
 	cfg := &config.Config{LeagueID: "L1", TeamID: "T1"}
-	if err := publishLineup(dr, cfg, nil, nil, nil); err != nil {
+	if err := publishLineup(dr, cfg, nil, nil, nil, nil); err != nil {
 		t.Fatalf("nil publisher should be a no-op, got: %v", err)
+	}
+}
+
+// A nil HKB map is the soft-fail path (the scrape failed, or the run is one
+// that never loads it), so publishing must still produce a valid payload
+// rather than depending on the enrichment being present.
+func TestPublishLineupWithoutHKBMetaStillPublishes(t *testing.T) {
+	pub := &memPub{}
+	dr := dateResult{
+		date:         time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC),
+		benchedToday: map[string]bool{},
+	}
+	cfg := &config.Config{LeagueID: "L1", TeamID: "T1"}
+
+	if err := publishLineup(dr, cfg, nil, nil, nil, pub); err != nil {
+		t.Fatalf("publishLineup: %v", err)
+	}
+	var resp lineupapi.LineupResponse
+	if err := json.Unmarshal(pub.m[lineupapi.TodayKey], &resp); err != nil {
+		t.Fatalf("unmarshal published payload: %v", err)
+	}
+	if resp.Date != "2026-07-24" {
+		t.Errorf("date = %q, want 2026-07-24", resp.Date)
 	}
 }
 

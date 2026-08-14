@@ -17,13 +17,22 @@ import "encoding/json"
 // order), and the json tags are the snake_case contract the iOS client decodes
 // with keyDecodingStrategy=.convertFromSnakeCase. Do not rename without bumping
 // the API version.
+// Age and HKBValue are the dynasty enrichment, joined from HKB by normalized
+// name (see lineuprun.LoadHKBMeta). Both are omitempty and both are zero for
+// the same reason — HKB has no row for this player — so a client must treat
+// zero as "unknown", not as "newborn" or "worthless". That happens routinely: a
+// fresh call-up can be missing from HKB's rankings for days, and the enrichment
+// is skipped entirely when the scrape fails, which must not change how the rest
+// of the lineup reads.
 type Player struct {
-	ID     string   `json:"id"`
-	Name   string   `json:"name"`
-	Team   string   `json:"team"`
-	Pos    []string `json:"pos"`
-	Proj   float64  `json:"proj"`
-	Status string   `json:"status"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Team     string   `json:"team"`
+	Pos      []string `json:"pos"`
+	Age      float64  `json:"age,omitempty"`
+	HKBValue int      `json:"hkb_value,omitempty"`
+	Proj     float64  `json:"proj"`
+	Status   string   `json:"status"`
 }
 
 // Slot is one lineup slot. Player is nil for an empty/open slot (rendered as

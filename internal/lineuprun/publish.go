@@ -11,7 +11,7 @@ import (
 // (S3 or local), selected in cmd through internal/statestore. A nil pub is a
 // no-op (the caller chose not to publish). It publishes under both "today"
 // (the alias the endpoint serves) and the date string.
-func publishLineup(dr dateResult, cfg *config.Config, hitterSlots, pitcherSlots []fantrax.Slot, pub lineupapi.Publisher) error {
+func publishLineup(dr dateResult, cfg *config.Config, hitterSlots, pitcherSlots []fantrax.Slot, hkbMeta map[string]lineupapi.Dynasty, pub lineupapi.Publisher) error {
 	if pub == nil {
 		return nil
 	}
@@ -25,6 +25,7 @@ func publishLineup(dr dateResult, cfg *config.Config, hitterSlots, pitcherSlots 
 		Pitchers:     dr.pitcherResult.Scored,
 		BenchedToday: dr.benchedToday,
 		DataWarnings: dr.warnings,
+		HKB:          hkbMeta,
 	})
 	data, err := lineupapi.Marshal(resp)
 	if err != nil {

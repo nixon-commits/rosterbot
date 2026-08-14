@@ -23,6 +23,21 @@ type Inputs struct {
 	Pitchers     []optimizer.ScoredPitcher
 	BenchedToday map[string]bool // normalized name -> benched in real MLB lineup
 	DataWarnings []string        // pass-through data-availability warnings
+
+	// HKB is the dynasty enrichment keyed by normalized player name. Nil is a
+	// supported input, not a defect: the HKB scrape soft-fails upstream, so
+	// every field it feeds is optional on the wire and Build simply emits the
+	// lineup without it.
+	HKB map[string]Dynasty
+}
+
+// Dynasty is one player's HKB dynasty enrichment. It is a plain pair of numbers
+// rather than internal/hkb.Enriched so this package — the wire contract the iOS
+// client is pinned to — keeps no dependency on the scraper it happens to be
+// sourced from today.
+type Dynasty struct {
+	Age   float64 // decimal age, e.g. 25.8
+	Value int     // HKB dynasty value
 }
 
 // Build maps a day's optimizer output into the API response.
@@ -48,7 +63,7 @@ func Build(in Inputs) LineupResponse {
 	var projected float64
 
 	for _, sp := range in.Hitters {
-		pl := hitterPlayer(sp, in.BenchedToday)
+		pl := hitterPlayer(sp, in.BenchedToday, in.HKB)
 		if sp.Player.Status != "Active" {
 			bench = append(bench, Slot{Slot: "BN", Player: pl})
 			continue
@@ -63,7 +78,7 @@ func Build(in Inputs) LineupResponse {
 	}
 
 	for _, sp := range in.Pitchers {
-		pl := pitcherPlayer(sp)
+		pl := pitcherPlayer(sp, in.HKB)
 		if sp.Player.Status != "Active" {
 			bench = append(bench, Slot{Slot: "BN", Player: pl})
 			continue
@@ -100,7 +115,7 @@ func Build(in Inputs) LineupResponse {
 // Adjust the status vocabulary and warning phrasing here; everything else in
 // Build is mechanical slot plumbing.
 
-func hitterPlayer(sp optimizer.ScoredPlayer, benched map[string]bool) *Player {
+func hitterPlayer(sp optimizer.ScoredPlayer, benched map[string]bool, hkb map[string]Dynasty) *Player {
 	status := "OK"
 	switch {
 	case sp.Player.Locked:
@@ -108,28 +123,34 @@ func hitterPlayer(sp optimizer.ScoredPlayer, benched map[string]bool) *Player {
 	case benched[projections.NormalizeName(sp.Player.Name)]:
 		status = "BENCHED"
 	}
+	d := hkb[projections.NormalizeName(sp.Player.Name)]
 	return &Player{
-		ID:     sp.Player.ID,
-		Name:   sp.Player.Name,
-		Team:   sp.Player.MLBTeam,
-		Pos:    posCodes(sp.Player.Positions),
-		Proj:   round2(sp.ExpectedPts),
-		Status: status,
+		ID:       sp.Player.ID,
+		Name:     sp.Player.Name,
+		Team:     sp.Player.MLBTeam,
+		Pos:      posCodes(sp.Player.Positions),
+		Age:      d.Age,
+		HKBValue: d.Value,
+		Proj:     round2(sp.ExpectedPts),
+		Status:   status,
 	}
 }
 
-func pitcherPlayer(sp optimizer.ScoredPitcher) *Player {
+func pitcherPlayer(sp optimizer.ScoredPitcher, hkb map[string]Dynasty) *Player {
 	status := "OK"
 	if sp.Player.Locked {
 		status = "LOCKED"
 	}
+	d := hkb[projections.NormalizeName(sp.Player.Name)]
 	return &Player{
-		ID:     sp.Player.ID,
-		Name:   sp.Player.Name,
-		Team:   sp.Player.MLBTeam,
-		Pos:    posCodes(sp.Player.Positions),
-		Proj:   round2(sp.ExpectedPts),
-		Status: status,
+		ID:       sp.Player.ID,
+		Name:     sp.Player.Name,
+		Team:     sp.Player.MLBTeam,
+		Pos:      posCodes(sp.Player.Positions),
+		Age:      d.Age,
+		HKBValue: d.Value,
+		Proj:     round2(sp.ExpectedPts),
+		Status:   status,
 	}
 }
 
