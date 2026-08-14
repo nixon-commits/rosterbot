@@ -209,6 +209,40 @@ stored, so a leak of the identity table yields no usable links. The link is
 single-use, scoped to one user, and redeemed only when a registration actually
 completes — an abandoned ceremony leaves it usable.
 
+`--team` is optional to the flag, but a user without one **cannot connect
+Fantrax** — `connect` refuses with `no_team`, because an empty team gives the
+ownership check nothing to prove against. Repair an existing record with
+`user set-team` below.
+
+</details>
+
+<details>
+<summary><b>Assign a Fantrax team to an existing user</b> — <code>user set-team</code></summary>
+
+```bash
+# Bind a team to a user that already exists
+rosterbot user set-team --user <user-id> --team team-7
+
+# Report the transition without writing
+rosterbot user set-team --user <user-id> --team team-7 --dry-run
+```
+
+`invite --team` only sets the team at creation, so this is the way to fix a
+record that has none — including the operator's own, which neither
+`migrate-identity` nor the dashboard bootstrap gives a team.
+
+This records **which** team to prove, not permission to use it. Ownership is
+still established at connect time against Fantrax's own `MyTeamIDs`, so naming
+the wrong team here does not grant access to it — it makes that user's next
+connect fail with `team_not_owned`.
+
+Two refusals are deliberate. A team already held by another user is an error,
+never a warning: two tenants on one Fantrax team means both hourly jobs optimize
+and apply to the same roster, each reading the other's changes as drift, fighting
+every hour, invisibly. And a user who already holds a *different* team is refused
+rather than moved, because the underlying claim is not released on reassignment —
+the old team would stay recorded as theirs and become unassignable to anyone.
+
 New accounts are members with `auto_apply` **off**. Full flow, recovery from a
 lost device, and the troubleshooting table: **[docs/user-registration.md](docs/user-registration.md)**.
 

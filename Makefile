@@ -118,6 +118,7 @@ run-all:
 	@echo "=== recap --out /tmp/recap.html ===";          time go run . recap --out /tmp/recap.html &&                      echo
 	@echo "=== recap-site --out /tmp/recap-site ===";     time go run . recap-site --out /tmp/recap-site &&                 echo
 	@echo "=== invite --dry-run ===";                        time go run . invite --dry-run --email smoke@example.test --name Smoke && echo
+	@echo "=== user set-team --dry-run ===";                 time go run . user set-team --dry-run --user smoke-nobody --team team-0 || true; echo
 	@echo "=== projection-site --out /tmp/rosterbot-proj-report ==="; time go run . projection-site --out /tmp/rosterbot-proj-report || echo "(tolerated: needs an Analysis Store that may be empty locally)" && echo
 	@echo "=== cache size ===";                           du -sh .cache/ 2>/dev/null || echo "(no cache directory)";      echo
 	@echo "=== DONE ==="
