@@ -375,6 +375,31 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	identityTable.GrantReadWriteData(taskDef.TaskRole())
 	fantraxCredKey.GrantDecrypt(taskDef.TaskRole())
 
+	// The connect task needs BOTH halves of the key, which the encrypt/decrypt
+	// split above did not anticipate. It DECRYPTS the credential pair the API
+	// sealed, drives the login, and then must ENCRYPT the captured FX_RM
+	// session cookie back into the record (cmd/connect.go's sealer.Seal).
+	//
+	// With decrypt only, connect ran the entire flow successfully — login,
+	// MyTeamIDs ownership proof, ClaimTeam — and then died on the seal with
+	//
+	//   AccessDeniedException: ... not authorized to perform: kms:Encrypt
+	//
+	// i.e. at the last write, after the expensive and irreversible parts had
+	// already happened, leaving the team claimed and the connection stuck at
+	// pending. Measured in production 2026-08-14 (rosterbot-crq.18).
+	//
+	// Written by hand rather than fantraxCredKey.GrantEncrypt for the same
+	// reason as the Lambda's statement below: that helper also grants
+	// kms:ReEncrypt*. This role can already decrypt, so ReEncrypt* would give
+	// it nothing it lacks — but keeping the narrow form leaves ONE rule for
+	// this key ("nobody gets ReEncrypt*") instead of an exception that has to
+	// be re-justified every time someone reads it.
+	taskDef.TaskRole().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions:   jsii.Strings("kms:Encrypt"),
+		Resources: &[]*string{fantraxCredKey.KeyArn()},
+	}))
+
 	// NOT fantraxCredKey.GrantEncrypt(apiFn). That helper grants kms:Encrypt,
 	// kms:GenerateDataKey* AND kms:ReEncrypt* — and ReEncrypt* covers
 	// ReEncryptFrom, which is a decryption primitive wearing a disguise: a
