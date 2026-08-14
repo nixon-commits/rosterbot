@@ -47,7 +47,8 @@ func init() {
 	f := inviteCmd.Flags()
 	f.StringVar(&inviteEmail, "email", "", "email of the person being invited (required, unique)")
 	f.StringVar(&inviteName, "name", "", "display name for the new user")
-	f.StringVar(&inviteTeamID, "team", "", "Fantrax team id this person manages (proven at connect time)")
+	f.StringVar(&inviteTeamID, "team", "",
+		"Fantrax team id this person manages (proven at connect time; without it they can sign in but cannot connect Fantrax)")
 	f.DurationVar(&inviteTTL, "ttl", 72*time.Hour, "how long the link stays valid")
 	f.StringVar(&inviteLocalDir, "local-dir", ".lineup", "local directory when STATE_BUCKET is unset")
 	f.BoolVar(&inviteDryRun, "dry-run", false, "show what would be created without writing or minting a usable token")

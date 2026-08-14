@@ -47,7 +47,7 @@ rosterbot invite --email dave@example.test --name Dave --team team-7
 |---|---|
 | `--email` | required, unique across users. Cannot be changed later without a migration. |
 | `--name` | display name shown in the OS passkey picker. Defaults to the email. |
-| `--team` | the Fantrax team this person manages. Optional today; required once connect lands. |
+| `--team` | the Fantrax team this person manages. Still optional to the flag, but a user without one **cannot connect Fantrax** — see below. |
 | `--ttl` | how long the link stays valid. Default 72h. |
 | `--dry-run` | print what would be created, mint nothing. |
 
@@ -68,6 +68,24 @@ The user record is created **now**, not at redemption. That is deliberate: the
 email and team uniqueness constraints are enforced while you are still looking
 at the terminal, rather than surfacing as a confusing failure when the invitee
 clicks their link.
+
+### A user with no team cannot connect
+
+`--team` remains optional to the flag, because a record is still useful without
+one — the invitee can sign in and read the dashboard. What they cannot do is
+connect their Fantrax account: `connect` fails with `no_team`.
+
+That refusal is deliberate and it is not a formality. The connect task exists to
+prove ownership against Fantrax's own `MyTeamIDs`, and an empty team gives it
+nothing to compare. Before this was enforced, an empty team skipped the
+ownership check entirely and the connection was recorded **verified** having
+proven nothing (rosterbot-crq.18).
+
+`no_team` is an admin error wearing a user's clothes. The invitee's credentials
+are fine and re-entering them cannot help — someone has to assign the team. Note
+that the operator's own record is affected: neither `migrate-identity` nor the
+bootstrap profile sets a `TeamID`, so **the operator must have a team assigned
+before their own connect will succeed.**
 
 On AWS the command needs `STATE_BUCKET` and `IDENTITY_TABLE`; locally it writes
 to `.lineup/` and needs neither.

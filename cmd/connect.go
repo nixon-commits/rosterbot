@@ -121,14 +121,21 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fail(lineupapi.ConnErrLoginChallengeOrTimeout)
 	}
-	if conn.TeamID != "" && !contains(owned, conn.TeamID) {
-		fmt.Fprintf(out, "credentials control %v, not %s\n", owned, conn.TeamID)
-		return fail(lineupapi.ConnErrTeamNotOwned)
-	}
-	if conn.TeamID != "" {
-		if err := store.ClaimTeam(ctx, uid, conn.TeamID); err != nil {
-			return fail(lineupapi.ConnErrTeamClaimed)
+	proof, class := proveTeam(conn.TeamID, owned)
+	if class != "" {
+		if class == lineupapi.ConnErrTeamNotOwned {
+			fmt.Fprintf(out, "credentials control %v, not %s\n", owned, conn.TeamID)
 		}
+		return fail(class)
+	}
+	// Claimed from the PROOF, not from conn.TeamID. They hold the same value
+	// here, but reading it off the proof means a future edit that drops
+	// proveTeam stops compiling instead of silently claiming an unproven team —
+	// which is exactly how the previous `if conn.TeamID != ""` guards managed to
+	// look deliberate at both sites while nothing rejected an empty team at
+	// either.
+	if err := store.ClaimTeam(ctx, uid, proof.teamID); err != nil {
+		return fail(lineupapi.ConnErrTeamClaimed)
 	}
 
 	// The email is CORROBORATION, not a gate. A manager may legitimately use a
@@ -145,12 +152,9 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	conn.FXRMCiphertext = sealed
-	conn.FantraxUserID = info.UserID
-	conn.FantraxEmail = info.Email
-	conn.Status = lineupapi.ConnVerified
-	conn.LastError = ""
-	conn.LastVerifiedAt = time.Now().UTC()
+	if err := markVerified(conn, proof, sealed, info, time.Now()); err != nil {
+		return err
+	}
 	if err := store.PutConnection(ctx, conn); err != nil {
 		return err
 	}
@@ -224,6 +228,61 @@ func myTeamIDs() ([]string, error) {
 		return nil, fmt.Errorf("fantrax returned no roster payload")
 	}
 	return resp.Responses[0].Data.MyTeamIDs, nil
+}
+
+// teamProof is evidence that Fantrax itself confirmed this tenant controls a
+// specific team. proveTeam is its only constructor, and markVerified is the
+// only thing that consumes it, so the verified write cannot be reached without
+// the check having run — the same shape as applyAuthorization in
+// internal/lineuprun, and for the same reason: an ordering rule that lives only
+// in statement order is one revert away from being gone with every test still
+// green.
+//
+// Go cannot stop an in-package literal from forging teamProof{}, so the zero
+// value is inert and markVerified refuses it.
+type teamProof struct{ teamID string }
+
+// proveTeam decides whether Fantrax has confirmed these credentials control the
+// team named on the tenant's record. It returns a usable proof and "" when they
+// do, and a zero proof plus a failure class when they do not.
+//
+// An empty team is a failure, never a pass. Binding the sole owned team instead
+// would be defensible, but it discards the admin's invite as an independent
+// cross-check on a misdirected invitation — a trade to take deliberately rather
+// than a default to fall into (rosterbot-crq.18).
+func proveTeam(connTeamID string, owned []string) (teamProof, string) {
+	if connTeamID == "" {
+		return teamProof{}, lineupapi.ConnErrNoTeam
+	}
+	if !contains(owned, connTeamID) {
+		return teamProof{}, lineupapi.ConnErrTeamNotOwned
+	}
+	return teamProof{teamID: connTeamID}, ""
+}
+
+// markVerified moves a connection to ConnVerified. It is the single place that
+// status is written, and it requires a proof to get there.
+//
+// Both refusals are programmer errors rather than user ones — a caller reached
+// this with no ownership check or no session — so they return an error the task
+// surfaces as a failure, rather than recording needs_reconnect and telling a
+// user to re-enter credentials that were never the problem.
+func markVerified(conn *lineupapi.FantraxConnection, p teamProof, fxrmSealed []byte,
+	info *fantraxUserInfo, now time.Time) error {
+	if p.teamID == "" {
+		return fmt.Errorf("connect: refusing to verify %s without proof of team ownership", conn.UserID)
+	}
+	if len(fxrmSealed) == 0 {
+		return fmt.Errorf("connect: refusing to verify %s with no sealed session", conn.UserID)
+	}
+	conn.TeamID = p.teamID
+	conn.FXRMCiphertext = fxrmSealed
+	conn.FantraxUserID = info.UserID
+	conn.FantraxEmail = info.Email
+	conn.Status = lineupapi.ConnVerified
+	conn.LastError = ""
+	conn.LastVerifiedAt = now.UTC()
+	return nil
 }
 
 func contains(hay []string, needle string) bool {

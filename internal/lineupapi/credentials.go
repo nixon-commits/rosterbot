@@ -51,6 +51,22 @@ const (
 	// the invite named. Fantrax's own MyTeamIDs is the authority here.
 	ConnErrTeamNotOwned = "team_not_owned"
 
+	// ConnErrNoTeam — the user's record names no team, so there is nothing for
+	// MyTeamIDs to confirm.
+	//
+	// This is an ADMIN error surfaced as a connection failure: `invite` treats
+	// --team as optional, and neither migrate-identity nor the bootstrap profile
+	// in ensureUserForIdentity sets one, so a perfectly valid Fantrax login can
+	// arrive with no team attached. It is a distinct class from TeamNotOwned
+	// because the remedy is different — the user's credentials are fine and
+	// re-entering them cannot help; someone has to assign the team.
+	//
+	// Without this class the empty team was not an error at all: both ownership
+	// checks were guarded on a non-empty TeamID and the ConnVerified assignment
+	// after them was not, so the connection was marked proven having proven
+	// nothing (rosterbot-crq.18).
+	ConnErrNoTeam = "no_team"
+
 	// ConnErrTeamClaimed — another tenant already holds that team.
 	ConnErrTeamClaimed = "team_claimed"
 )
