@@ -190,6 +190,31 @@ When the pin reads OK, a second probe sends a deliberately obsolete version as a
 </details>
 
 <details>
+<summary><b>Invite someone to the dashboard</b> — <code>invite</code></summary>
+
+```bash
+# Mint a single-use enrollment link for one person
+rosterbot invite --email dave@example.test --name Dave --team team-7
+
+# Preview without minting anything
+rosterbot invite --email dave@example.test --dry-run
+```
+
+Passkeys are the only login method — no passwords, no reset flow, no
+verification mail. An admin mints a link, hands it over out-of-band, and the
+person enrolls a passkey with it.
+
+The token is printed **once** and is not recoverable: only its SHA-256 is
+stored, so a leak of the identity table yields no usable links. The link is
+single-use, scoped to one user, and redeemed only when a registration actually
+completes — an abandoned ceremony leaves it usable.
+
+New accounts are members with `auto_apply` **off**. Full flow, recovery from a
+lost device, and the troubleshooting table: **[docs/user-registration.md](docs/user-registration.md)**.
+
+</details>
+
+<details>
 <summary><b>Grade the tape</b> — <code>backtest</code> · <code>shadow</code> · <code>grade</code></summary>
 
 ```bash
