@@ -9,6 +9,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
+	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/pmurley/go-fantrax/auth_client"
 )
 
@@ -84,6 +85,27 @@ func cosmeticResult() dateResult {
 	return dr
 }
 
+// liveSlotMoveResult reproduces the 2026-08-14 case in rosterbot-6i4: an
+// already-active hitter slides OF→3B so a bench bat can take the OF slot, and a
+// third hitter drops to the bench. Only two of the three moves change who
+// scores; the reported gain was +5.28 when the truth is +0.04.
+func liveSlotMoveResult() dateResult {
+	dr := goldenResult()
+	dr.hitterResult.Scored = []optimizer.ScoredPlayer{
+		scoredHitter("Antonacci", "CWS", "012", 5.24, true, true),
+		scoredHitter("Bauers", "MIL", "", 4.32, false, true),
+		scoredHitter("Genao", "CLE", "012", 4.28, true, true),
+	}
+	dr.pitcherResult.Scored = nil
+	dr.hitterResult.ToActivate = []fantrax.PlayerSlot{
+		{PlayerID: "Antonacci", PosID: "004"},
+		{PlayerID: "Bauers", PosID: "012"},
+	}
+	dr.hitterResult.ToBench = []string{"Genao"}
+	dr.hitterResult.ActiveBefore = map[string]string{"Antonacci": "012", "Genao": "012"}
+	return dr
+}
+
 // --- planDate: pure ---
 
 func TestPlanDate_NoMovesIsMovesNone(t *testing.T) {
@@ -108,6 +130,104 @@ func TestPlanDate_EquallyValuedSwapIsZeroGain(t *testing.T) {
 	got := planDate(cosmeticResult(), nil)
 	if got.Disposition != movesZeroGain {
 		t.Errorf("disposition = %v (delta %v), want movesZeroGain", got.Disposition, got.Delta)
+	}
+}
+
+// rosterbot-6i4: the delta must measure change in ACTIVE MEMBERSHIP, not change
+// in slot assignment. Two of these three moves change who scores; the third only
+// moves a player who was already scoring.
+func TestPlanDate_SlotOnlyMoveEarnsNothing(t *testing.T) {
+	got := planDate(liveSlotMoveResult(), nil)
+
+	if want := 4.32 - 4.28; got.Delta < want-1e-9 || got.Delta > want+1e-9 {
+		t.Errorf("delta = %v, want %v (the slot mover's 5.24 must not be credited)", got.Delta, want)
+	}
+	if got.Disposition != movesWorthApplying {
+		t.Errorf("disposition = %v, want movesWorthApplying — the genuine swap still stands", got.Disposition)
+	}
+	if !got.SlotOnly["Antonacci"] {
+		t.Error("the already-active player should be marked slot-only")
+	}
+	if got.SlotOnly["Bauers"] {
+		t.Error("a bench→active promotion is not a slot-only move")
+	}
+	// The payload still needs every entry — Fantrax has to be told the new slot.
+	if len(got.Activate) != 2 {
+		t.Errorf("activate payload = %v, want both entries retained", got.Activate)
+	}
+}
+
+// The headline consequence: a move set that only reshuffles slots is worth
+// nothing and must not reach the live roster.
+func TestPlanDate_PureSlotShuffleIsZeroGain(t *testing.T) {
+	dr := goldenResult()
+	dr.hitterResult.Scored = []optimizer.ScoredPlayer{
+		scoredHitter("Shuffle A", "NYY", "012", 5.00, true, true),
+		scoredHitter("Shuffle B", "BOS", "014", 3.00, true, true),
+	}
+	dr.pitcherResult.Scored = nil
+	dr.hitterResult.ToActivate = []fantrax.PlayerSlot{
+		{PlayerID: "Shuffle A", PosID: "014"},
+		{PlayerID: "Shuffle B", PosID: "012"},
+	}
+	dr.hitterResult.ActiveBefore = map[string]string{"Shuffle A": "012", "Shuffle B": "014"}
+
+	got := planDate(dr, nil)
+	if got.Disposition != movesZeroGain {
+		t.Errorf("disposition = %v (delta %v), want movesZeroGain", got.Disposition, got.Delta)
+	}
+}
+
+// The pitcher optimizer emits slot-only activations from the identical
+// `currentAssign[id] != PosID` test, so the same rule has to hold there.
+func TestPlanDate_PitcherSlotOnlyMoveEarnsNothing(t *testing.T) {
+	dr := goldenResult()
+	dr.hitterResult = optimizer.Result{}
+	dr.pitcherResult.Scored = []optimizer.ScoredPitcher{
+		scoredPitcher("Settled Ace", "LAD", "020", "SP", 22.00, true, true, true),
+	}
+	dr.pitcherResult.ToActivate = []fantrax.PlayerSlot{{PlayerID: "Settled Ace", PosID: "021"}}
+	dr.pitcherResult.ActiveBefore = map[string]string{"Settled Ace": "020"}
+
+	got := planDate(dr, nil)
+	if got.Delta != 0 {
+		t.Errorf("delta = %v, want 0 — the ace was already in an active slot", got.Delta)
+	}
+	if got.Disposition != movesZeroGain {
+		t.Errorf("disposition = %v, want movesZeroGain", got.Disposition)
+	}
+}
+
+// The wiring, end to end: the map the OPTIMIZER populates has to be the one
+// planDate reads. Every other test here hand-builds ActiveBefore, so none of
+// them would notice if the optimizer stopped setting it — the delta would
+// silently revert to crediting slot shuffles at full value, which is precisely
+// how this bug stayed invisible the first time. This test drives the real
+// optimizer instead, so the two sides cannot drift apart.
+func TestPlanDate_ReadsTheRealOptimizersActiveBeforeMap(t *testing.T) {
+	scoring := fantrax.ScoringWeights{"HR": 4.0}
+	src := stubHitterSource{byName: map[string]*projections.Projection{
+		"Slot Mover": {G: 100, HR: 30},
+	}}
+	// One player, already active at OF, and one 1B slot he is also eligible for:
+	// the optimizer must move him, and the move must be worth nothing.
+	roster := []fantrax.Player{{
+		ID: "mover", Name: "Slot Mover", MLBTeam: "NYY",
+		Positions: []string{"002", "012"}, Status: "Active", RosterPosition: "012",
+	}}
+	result := optimizer.OptimizeLineup(roster, map[string]bool{"NYY": true}, src, scoring,
+		[]fantrax.Slot{{PosID: "002", PosName: "1B"}}, nil)
+
+	if len(result.ToActivate) != 1 {
+		t.Fatalf("precondition: expected the optimizer to emit a slot-only move, got %+v", result.ToActivate)
+	}
+
+	got := planDate(dateResult{hitterResult: result}, nil)
+	if got.Delta != 0 {
+		t.Errorf("delta = %v, want 0 — the player was already in an active slot", got.Delta)
+	}
+	if got.Disposition != movesZeroGain {
+		t.Errorf("disposition = %v, want movesZeroGain", got.Disposition)
 	}
 }
 
@@ -235,7 +355,7 @@ func TestEmit_ZeroGainMoveSetIsNeverApplied(t *testing.T) {
 	if len(h.notify) != 0 {
 		t.Errorf("nothing was applied, so nothing should notify: %v", h.notify)
 	}
-	if !strings.Contains(h.out.String(), "Net gain ≈ 0 — skipping apply (cosmetic swap).") {
+	if !strings.Contains(h.out.String(), "Net gain ≈ 0 — skipping apply (no change in who plays).") {
 		t.Errorf("expected the skip to be explained in the output, got:\n%s", h.out.String())
 	}
 }
@@ -343,6 +463,43 @@ func TestEmit_NoChangesSaysSoAndAppliesNothing(t *testing.T) {
 	}
 	if !strings.Contains(h.out.String(), "No changes needed.") {
 		t.Errorf("missing the no-changes line in:\n%s", h.out.String())
+	}
+}
+
+// The printed move lines have to add up to the printed header, or the fix to
+// the total (rosterbot-6i4) just relocates the inflation one line down: a
+// slot-only move showing +5.24 under a +0.04 heading reads as an arithmetic
+// error rather than as a move that is genuinely worth nothing.
+func TestRenderPlannedMoves_SlotOnlyMoveShowsNoGain(t *testing.T) {
+	var buf bytes.Buffer
+	renderPlannedMoves(&buf, planDate(liveSlotMoveResult(), nil), goldenSlotNames())
+	out := buf.String()
+
+	if !strings.Contains(out, "Changes (+0.04 pts)") {
+		t.Errorf("header should carry the true net gain:\n%s", out)
+	}
+	if strings.Contains(out, "+5.24") {
+		t.Errorf("the slot mover's projection is still being credited:\n%s", out)
+	}
+	if !strings.Contains(out, "↔ Antonacci") {
+		t.Errorf("a slot change should be marked as one, not as an activation:\n%s", out)
+	}
+	if !strings.Contains(out, "↑ Bauers") {
+		t.Errorf("a genuine promotion should still render as one:\n%s", out)
+	}
+}
+
+// The Pushover body is the same statement in a different medium and must not
+// disagree with the terminal.
+func TestApplySummary_MarksSlotOnlyMoves(t *testing.T) {
+	dr := liveSlotMoveResult()
+	got := applySummary(dr, planDate(dr, nil), goldenSlotNames())
+
+	if !strings.Contains(got, "↔ Antonacci") {
+		t.Errorf("slot change not marked in the notification:\n%s", got)
+	}
+	if !strings.Contains(got, "(+0.04 pts)") {
+		t.Errorf("notification should carry the true net gain:\n%s", got)
 	}
 }
 

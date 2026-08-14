@@ -150,7 +150,7 @@ func CheckTrades(ft TradeClient, cacheDir string, pushoverUserKey, pushoverAPITo
 }
 
 // buildHKBLookup creates a map from normalized player name to HKB player.
-func buildHKBLookup(players []hkb.Player) map[string]hkb.Player {
+func buildHKBLookup(players []hkb.Player) hkb.Lookup {
 	return hkb.BuildLookup(players)
 }
 
@@ -158,7 +158,7 @@ func buildHKBLookup(players []hkb.Player) map[string]hkb.Player {
 // players is the full HKB roster (not just the name lookup) because pick
 // pricing needs to scan every PICK asset for a year+round match rather than
 // join by name (rosterbot-uc3).
-func groupTrades(txs []models.Transaction, lookup map[string]hkb.Player, players []hkb.Player) []Trade {
+func groupTrades(txs []models.Transaction, lookup hkb.Lookup, players []hkb.Player) []Trade {
 	groups := make(map[string][]models.Transaction)
 	for _, tx := range txs {
 		groups[tx.TradeGroupID] = append(groups[tx.TradeGroupID], tx)
@@ -176,7 +176,7 @@ func groupTrades(txs []models.Transaction, lookup map[string]hkb.Player, players
 }
 
 // buildTrade constructs a Trade from a group of transactions sharing the same TradeGroupID.
-func buildTrade(group []models.Transaction, lookup map[string]hkb.Player, players []hkb.Player) Trade {
+func buildTrade(group []models.Transaction, lookup hkb.Lookup, players []hkb.Player) Trade {
 	// Partition by direction: players moving to each team.
 	sides := make(map[string]*TradeSide)
 	var processedDate time.Time
@@ -484,7 +484,7 @@ func formatValue(v int) string {
 }
 
 // groupPendingTrades groups pending trade moves by TradeID into Trade structs.
-func groupPendingTrades(pts []fantrax.PendingTrade, lookup map[string]hkb.Player) []Trade {
+func groupPendingTrades(pts []fantrax.PendingTrade, lookup hkb.Lookup) []Trade {
 	groups := make(map[string][]fantrax.PendingTrade)
 	for _, pt := range pts {
 		groups[pt.TradeID] = append(groups[pt.TradeID], pt)
@@ -528,7 +528,7 @@ func tradeKey(t Trade) string {
 // An empty name is Fantrax's representation of a draft pick, labelled here the
 // same way tradevalue.NewAsset labels it so the report and the tab call the
 // same thing by the same name.
-func newTradePlayer(name, position string, lookup map[string]hkb.Player) TradePlayer {
+func newTradePlayer(name, position string, lookup hkb.Lookup) TradePlayer {
 	if name == "" {
 		return TradePlayer{Name: "Draft pick (unidentified)", IsPick: true}
 	}

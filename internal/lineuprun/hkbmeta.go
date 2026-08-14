@@ -38,10 +38,28 @@ func LoadHKBMeta(cacheDir string) (map[string]lineupapi.Dynasty, error) {
 // is testable without reaching HKB. It is the half worth testing: a broken
 // fetch is loud, whereas a join key that stops matching is silent and empties
 // both columns while every player still renders.
+//
+// # Namesakes
+//
+// The normalized key is not unique (rosterbot-5z7), and this map is looked up
+// by name alone, so a contested key is simply omitted: the player renders with
+// unknown age and value rather than with someone else's. That is the Find rule
+// rather than the FindFor one on purpose. The stronger disambiguation needs
+// Fantrax's minors-ELIGIBILITY flag, and a lineup roster carries
+// fantrax.Player.InMinors — where the player currently IS, not what he is
+// eligible for. Passing one as the other would resolve a called-up prospect
+// against his MLB namesake and print a confident wrong number, which is the
+// exact failure this change exists to remove. This page also self-corrects
+// daily, unlike the Team Value Store, so refusing costs a blank cell for a day.
 func hkbMeta(players []hkb.Player) map[string]lineupapi.Dynasty {
+	lookup := hkb.BuildLookup(players)
 	out := make(map[string]lineupapi.Dynasty, len(players))
 	for _, p := range players {
-		out[playername.Normalize(p.Name)] = lineupapi.Dynasty{Age: p.Age, Value: p.Value}
+		resolved, ok := lookup.Find(p.Name)
+		if !ok {
+			continue // contested name: leave it absent, which reads as unknown
+		}
+		out[playername.Normalize(p.Name)] = lineupapi.Dynasty{Age: resolved.Age, Value: resolved.Value}
 	}
 	return out
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/pmurley/go-fantrax/models"
 )
 
-func testLookup() map[string]hkb.Player {
+func testLookup() hkb.Lookup {
 	return buildHKBLookup([]hkb.Player{
 		{Name: "Alpha Ace", Value: 5000, Rank: 5, Level: "MLB"},
 		{Name: "Beta Bat", Value: 3000, Rank: 40, Level: "MLB"},

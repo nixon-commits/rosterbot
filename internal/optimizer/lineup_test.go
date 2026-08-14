@@ -562,3 +562,38 @@ func TestOptimizeLineup_BenchedPlayerTreatedAsNoGame(t *testing.T) {
 		}
 	}
 }
+
+// A player already in an active slot who is merely moving to a DIFFERENT active
+// slot is indistinguishable from a genuine bench→active promotion once he is in
+// ToActivate — and he has to be in ToActivate, because Fantrax needs the
+// slot-change entry in the apply payload. ActiveBefore is what lets a caller
+// tell the two apart (rosterbot-6i4).
+func TestOptimizeLineup_ActiveBeforeRecordsPreExistingSlots(t *testing.T) {
+	scoring := fantrax.ScoringWeights{"HR": 4.0}
+
+	proj := newStubProj(map[string]*projections.Projection{
+		"Slot Mover": {G: 100, PA: 400, HR: 30},
+		"Bench Bat":  {G: 100, PA: 400, HR: 1},
+	})
+
+	roster := []fantrax.Player{
+		{ID: "mover", Name: "Slot Mover", MLBTeam: "NYY", Positions: []string{"002", "012"}, Status: "Active", RosterPosition: "012"},
+		{ID: "bench", Name: "Bench Bat", MLBTeam: "BOS", Positions: []string{"002"}, Status: "Reserve"},
+	}
+	slots := []fantrax.Slot{{PosID: "002", PosName: "1B"}}
+	playing := map[string]bool{"NYY": true, "BOS": true}
+
+	result := OptimizeLineup(roster, playing, proj, scoring, slots, nil)
+
+	// Precondition: this is the slot-only shape the field exists to describe.
+	if len(result.ToActivate) != 1 || result.ToActivate[0].PlayerID != "mover" {
+		t.Fatalf("expected the mover activated into 1B, got %+v", result.ToActivate)
+	}
+
+	if got, ok := result.ActiveBefore["mover"]; !ok || got != "012" {
+		t.Errorf("ActiveBefore[mover] = %q (present=%v), want %q", got, ok, "012")
+	}
+	if _, ok := result.ActiveBefore["bench"]; ok {
+		t.Error("a reserve player must not appear in ActiveBefore")
+	}
+}

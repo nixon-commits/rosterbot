@@ -11,7 +11,7 @@ import (
 // valuing each added/dropped player via HKB. TRADE rows are ignored. The result
 // is sorted by net value descending, ties broken by team then first added name
 // then TxID for a total comparator (idempotency convention).
-func BuildMoves(txs []models.Transaction, hkbLookup map[string]hkb.Player) []Move {
+func BuildMoves(txs []models.Transaction, hkbLookup hkb.Lookup) []Move {
 	byID := map[string]*Move{}
 	var order []string
 

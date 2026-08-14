@@ -98,6 +98,7 @@ func TestCombinedMovesDelta(t *testing.T) {
 		name     string
 		activate []fantrax.PlayerSlot
 		bench    []string
+		slotOnly map[string]bool
 		want     float64
 	}{
 		{
@@ -108,6 +109,27 @@ func TestCombinedMovesDelta(t *testing.T) {
 			},
 			bench: []string{"benched1", "benched2"},
 			want:  0.0,
+		},
+		// rosterbot-6i4: an already-active player changing slots is in the
+		// payload but changes nothing about whether he scores.
+		{
+			name: "slot-only move earns nothing",
+			activate: []fantrax.PlayerSlot{
+				{PlayerID: "hot", PosID: "004"},
+				{PlayerID: "emerson", PosID: "012"},
+			},
+			bench:    []string{"cold"},
+			slotOnly: map[string]bool{"hot": true},
+			want:     3.7 - 1.5,
+		},
+		{
+			name: "pure slot shuffle nets zero",
+			activate: []fantrax.PlayerSlot{
+				{PlayerID: "hot", PosID: "014"},
+				{PlayerID: "cold", PosID: "012"},
+			},
+			slotOnly: map[string]bool{"hot": true, "cold": true},
+			want:     0.0,
 		},
 		{
 			name: "positive net gain",
@@ -135,11 +157,28 @@ func TestCombinedMovesDelta(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := combinedMovesDelta(tt.activate, tt.bench, ptsMap)
+			got := combinedMovesDelta(tt.activate, tt.bench, ptsMap, tt.slotOnly)
 			if got != tt.want {
 				t.Errorf("combinedMovesDelta = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// The gate exists to keep valueless payloads off the live roster, because
+// Fantrax rejects a payload atomically if any player in it is per-player-locked.
+// A pure slot shuffle is exactly such a payload, and before rosterbot-6i4 it
+// cleared the gate carrying a phantom multi-point gain.
+func TestIsZeroGainDelta_CatchesPureSlotShuffle(t *testing.T) {
+	activate := []fantrax.PlayerSlot{
+		{PlayerID: "a", PosID: "014"},
+		{PlayerID: "b", PosID: "012"},
+	}
+	pts := map[string]float64{"a": 5.00, "b": 3.00}
+	slotOnly := map[string]bool{"a": true, "b": true}
+
+	if got := combinedMovesDelta(activate, nil, pts, slotOnly); !isZeroGainDelta(got) {
+		t.Errorf("delta = %v, want a zero-gain classification", got)
 	}
 }
 

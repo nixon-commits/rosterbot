@@ -150,6 +150,7 @@ func buildTradeValues(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb
 		players = append(players, tradeboard.PoolPlayer{
 			Name:           pp.Name,
 			Position:       positionDisplay(pp.PosShortNames),
+			MLBTeam:        pp.MLBTeamShortName,
 			FantasyTeamID:  pp.FantasyTeamID,
 			MinorsEligible: pp.MinorsEligible,
 			IsPitcher:      teamvalue.IsPitcher(pp.Positions),

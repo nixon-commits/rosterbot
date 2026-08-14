@@ -27,9 +27,21 @@ const zeroGainEps = 1e-9
 // combinedMovesDelta returns the net pts gain from a combined hitter+pitcher
 // move set. ptsMap maps player ID to effective pts (already discounted for
 // non-starting SPs by the caller).
-func combinedMovesDelta(activate []fantrax.PlayerSlot, bench []string, ptsMap map[string]float64) float64 {
+//
+// What it measures is the change in ACTIVE MEMBERSHIP — who scores today — not
+// the change in slot assignment. slotOnly names the activate entries whose
+// player already occupied an active slot; those move between slots, so they
+// were scoring before the change and are scoring after it, and crediting them
+// is double-counting a player the lineup already had. Nothing else cancels the
+// credit: such a player never appears in bench, so before rosterbot-6i4 a pure
+// slot shuffle reported a gain equal to the shuffled players' whole projection
+// while changing nothing at all.
+func combinedMovesDelta(activate []fantrax.PlayerSlot, bench []string, ptsMap map[string]float64, slotOnly map[string]bool) float64 {
 	var delta float64
 	for _, ps := range activate {
+		if slotOnly[ps.PlayerID] {
+			continue
+		}
 		delta += ptsMap[ps.PlayerID]
 	}
 	for _, id := range bench {

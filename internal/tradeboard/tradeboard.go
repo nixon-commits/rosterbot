@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/hkb"
-	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
 	"github.com/nixon-commits/rosterbot/internal/tradevalue"
 )
@@ -121,8 +120,12 @@ type ValuesTable struct {
 // so this package never interprets an ID, and the pool's PosShortNames field
 // carries HTML markup that has no business reaching a JSON artifact.
 type PoolPlayer struct {
-	Name           string
-	Position       string
+	Name     string
+	Position string
+	// MLBTeam is the Fantrax club abbreviation. Carried purely to disambiguate
+	// HKB namesakes (rosterbot-5z7) — two active players can share a normalized
+	// name and differ only by club, which no other field here distinguishes.
+	MLBTeam        string
 	FantasyTeamID  string
 	MinorsEligible bool
 	IsPitcher      bool
@@ -149,7 +152,7 @@ func BuildValuesTable(now time.Time, pool []PoolPlayer, hkbPlayers []hkb.Player,
 			IsPitcher: pp.IsPitcher,
 			IsMinors:  pp.MinorsEligible,
 		}
-		if hp, ok := lookup[playername.Normalize(pp.Name)]; ok {
+		if hp, ok := lookup.FindFor(pp.Name, hkb.Hint{MLBTeam: pp.MLBTeam, MinorsEligible: pp.MinorsEligible}); ok {
 			t.Matched++
 			pv.Matched = true
 			pv.Value = hp.Value

@@ -1,7 +1,5 @@
 package hkb
 
-import "github.com/nixon-commits/rosterbot/internal/playername"
-
 // Enriched holds the fields derived from matching a display name against the
 // HKB dataset -- the mapping shared by every package that joins its own
 // player records onto HKB rankings (internal/claims, internal/transactions).
@@ -25,23 +23,19 @@ type Enriched struct {
 	WHIP      float64
 }
 
-// BuildLookup builds a map from normalized player name to HKB player, the
-// join key shared by every HKB consumer.
-func BuildLookup(players []Player) map[string]Player {
-	m := make(map[string]Player, len(players))
-	for _, p := range players {
-		m[playername.Normalize(p.Name)] = p
-	}
-	return m
-}
-
 // Enrich looks up name in lookup and returns the HKB enrichment fields for
 // it, or a name/position-only Enriched if not found. isPitcherHint seeds
 // IsPitcher from an out-of-band source (e.g. a roster position string) so an
 // unranked pitcher is still correctly flagged when no HKB entry exists.
-func Enrich(name, position string, lookup map[string]Player, isPitcherHint bool) Enriched {
+//
+// It resolves through Lookup.Find, which declines a contested name: this path's
+// callers (internal/claims, internal/transactions) hold a transaction row with
+// a name and a position and no club, so they have nothing to disambiguate a
+// namesake with. An unranked result is the same outcome they already handle for
+// a player HKB has never heard of.
+func Enrich(name, position string, lookup Lookup, isPitcherHint bool) Enriched {
 	e := Enriched{Name: name, Position: position, IsPitcher: isPitcherHint}
-	p, ok := lookup[playername.Normalize(name)]
+	p, ok := lookup.Find(name)
 	if !ok {
 		return e
 	}

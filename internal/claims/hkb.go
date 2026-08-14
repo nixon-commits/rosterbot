@@ -6,7 +6,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 )
 
-func buildHKBLookup(players []hkb.Player) map[string]hkb.Player {
+func buildHKBLookup(players []hkb.Player) hkb.Lookup {
 	return hkb.BuildLookup(players)
 }
 
@@ -24,7 +24,7 @@ func isPitcherPosition(pos string) bool {
 // lookupHKB builds a SidePlayer for `name`, enriching with HKB data when found.
 // IsPitcher is set from the position string first so that unranked pitchers are
 // correctly identified even when no HKB entry exists.
-func lookupHKB(name, position string, lookup map[string]hkb.Player) SidePlayer {
+func lookupHKB(name, position string, lookup hkb.Lookup) SidePlayer {
 	e := hkb.Enrich(name, position, lookup, isPitcherPosition(position))
 	return SidePlayer{
 		Name:      e.Name,
