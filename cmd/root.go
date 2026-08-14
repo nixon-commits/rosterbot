@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -84,6 +85,13 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 	cfg, err := config.Load(dryRun, dates)
 	if err != nil {
 		return nil, nil, fmt.Errorf("config: %w", err)
+	}
+	// Before the client is built, because NewClient takes cfg.TeamID and a
+	// tenant run must reach THEIR roster, never the deployment's. A refusal
+	// here stops the command outright rather than falling through to the
+	// operator's credentials — fail safe, not fail open (rosterbot-crq.17).
+	if err := resolveTenantCredentials(context.Background(), cfg); err != nil {
+		return nil, nil, err
 	}
 	ft, err := fantrax.NewClient(cfg.LeagueID, cfg.TeamID)
 	if err != nil {

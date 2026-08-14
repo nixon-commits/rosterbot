@@ -4,10 +4,49 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/kmscreds"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 )
+
+// resolveTenantCredentials is initApp's one call into this file: it decides
+// whether this run is tenant-scoped and, if so, replaces the deployment's
+// Fantrax credentials with that tenant's.
+//
+// It is a no-op in single-tenant deployments and in local dev, where there is
+// no user directory to consult, so every existing command keeps working
+// unchanged (rosterbot-crq.17).
+//
+// Two commands deliberately do NOT reach here, and both should stay that way.
+// `version-check` builds no config at all — its probe is unauthenticated on
+// purpose — so the canary that detects Fantrax API drift keeps running through
+// a credential outage, which is exactly when you want to know the difference
+// between "our credentials broke" and "Fantrax changed". `archive` never talks
+// to Fantrax.
+func resolveTenantCredentials(ctx context.Context, cfg *config.Config) error {
+	table := os.Getenv("IDENTITY_TABLE")
+	mode, err := resolveCredentialMode(table, statestore.Tenant())
+	if err != nil {
+		return err
+	}
+	if mode == credsFromEnv {
+		return nil
+	}
+
+	store, err := ddbuser.New(ctx, table)
+	if err != nil {
+		return fmt.Errorf("tenant credentials: identity store: %w", err)
+	}
+	opener, err := kmscreds.NewOpener(ctx)
+	if err != nil {
+		return fmt.Errorf("tenant credentials: kms opener: %w", err)
+	}
+	return applyTenantCredentials(ctx, cfg, lineupapi.UserID(statestore.Tenant()), store, opener)
+}
 
 // applyTenantCredentials replaces the deployment's Fantrax credentials in cfg
 // with the ones belonging to uid, refusing outright if that tenant is not
