@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 )
@@ -76,6 +77,20 @@ func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
 	if cfg.Identities, err = s3lineup.NewIdentity(ctx, bucket, identityPrefix); err != nil {
 		return cfg, fmt.Errorf("init s3 identity store: %w", err)
 	}
+
+	// The tenant directory (rosterbot-crq.10). A session's subject resolves
+	// against this; the bearer token deliberately does not, so an operator can
+	// still get in when this table is unreachable or has not been migrated yet.
+	table := os.Getenv("IDENTITY_TABLE")
+	if table == "" {
+		return cfg, fmt.Errorf("IDENTITY_TABLE is not set; passkey sessions cannot be resolved")
+	}
+	userStore, err := ddbuser.New(ctx, table)
+	if err != nil {
+		return cfg, fmt.Errorf("init dynamodb user store: %w", err)
+	}
+	cfg.Users = userStore
+	cfg.Enrollments = userStore
 
 	// The Trades tab's two artifacts. Separate prefixes because they have
 	// different producers and cadences (see layout.go); both are passkey-gated

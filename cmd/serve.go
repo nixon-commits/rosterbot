@@ -75,7 +75,12 @@ func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) h
 		Output:        lineupapi.NewFileOutputStore(lineupDir + "/outputs"),
 		Progress:      lineupapi.NewFileProgressStore(lineupDir + "/progress"),
 		Identities:    lineupapi.NewFileIdentityStore(lineupDir),
-		Infra:         lineupapi.NewFileInfraStore("."),
+		// Tenant directory + enrollment links, both backed by the same local
+		// store so `serve` exercises the real authorization path rather than a
+		// permissive dev shortcut.
+		Users:       lineupapi.NewFileUserStore(lineupDir),
+		Enrollments: lineupapi.NewFileUserStore(lineupDir),
+		Infra:       lineupapi.NewFileInfraStore("."),
 		// The Trades artifacts live in their own local dirs (matching their
 		// own S3 prefixes) rather than under lineupDir, so `serve` reads
 		// exactly what the producers wrote.

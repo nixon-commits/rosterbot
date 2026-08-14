@@ -40,6 +40,10 @@ func TestBuildStores_WiresEveryStoreField(t *testing.T) {
 	// result does not depend on the developer's or CI's config, and so a
 	// missing region can never turn this guard into a silent skip.
 	t.Setenv("AWS_REGION", "us-west-1")
+	// buildStores refuses to start without a tenant directory: a session names
+	// a user, and with nowhere to resolve it the Lambda would reject every
+	// passkey login. Failing at construction is louder than failing per-request.
+	t.Setenv("IDENTITY_TABLE", "test-identity-table")
 
 	cfg, err := buildStores(context.Background(), "test-bucket")
 	if err != nil {
@@ -80,6 +84,10 @@ func TestBuildStores_WiresEveryStoreField(t *testing.T) {
 // same store would satisfy the nil check and silently reintroduce exactly that.
 func TestBuildStores_TradesAndTradeValuesAreDistinct(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-1")
+	// buildStores refuses to start without a tenant directory: a session names
+	// a user, and with nowhere to resolve it the Lambda would reject every
+	// passkey login. Failing at construction is louder than failing per-request.
+	t.Setenv("IDENTITY_TABLE", "test-identity-table")
 
 	cfg, err := buildStores(context.Background(), "test-bucket")
 	if err != nil {

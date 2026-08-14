@@ -224,6 +224,11 @@ func (cfg Config) handleAuthRegisterFinish(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, "could not save passkey")
 		return
 	}
+	uid, err := cfg.ensureUserForIdentity(r.Context(), identity)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not create user record")
+		return
+	}
 	clearCeremonyCookie(w)
 	// The session names WHO it belongs to (rosterbot-crq.8). Until the handlers
 	// move onto the user store (rosterbot-crq.10) the subject is derived from
@@ -231,7 +236,7 @@ func (cfg Config) handleAuthRegisterFinish(w http.ResponseWriter, r *http.Reques
 	// migrate-identity writes, so a session minted before the cutover names the
 	// same user afterwards. TokenVersion is 0 because the singleton record has
 	// no such field; it becomes user.TokenVersion when the store is wired.
-	setSessionCookie(w, cfg.SessionSecret, NewUserID(identity.WebAuthnUserID), 0, time.Now())
+	setSessionCookie(w, cfg.SessionSecret, uid, 0, time.Now())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "registered"})
 }
 
@@ -287,8 +292,13 @@ func (cfg Config) handleAuthLoginFinish(w http.ResponseWriter, r *http.Request) 
 		return nil
 	})
 
+	uid, uerr := cfg.ensureUserForIdentity(r.Context(), identity)
+	if uerr != nil {
+		writeErr(w, http.StatusInternalServerError, "could not resolve user record")
+		return
+	}
 	clearCeremonyCookie(w)
-	setSessionCookie(w, cfg.SessionSecret, NewUserID(identity.WebAuthnUserID), 0, time.Now())
+	setSessionCookie(w, cfg.SessionSecret, uid, 0, time.Now())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -348,4 +358,51 @@ func (cfg Config) handleRevokePasskey(w http.ResponseWriter, r *http.Request) {
 func (cfg Config) handleLogout(w http.ResponseWriter, r *http.Request) {
 	clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ensureUserForIdentity makes the tenant record a session's subject resolves
+// against, idempotently.
+//
+// It exists because authorization now requires one (rosterbot-crq.10): a
+// session names a user, and resolveCaller refuses a subject with no record. The
+// singleton Identity has no such record until either `migrate-identity` runs or
+// this does — and without it a successful passkey login would mint a session
+// that is then rejected by every route, which reads as "login worked and
+// nothing else does".
+//
+// Creating the user as ADMIN is not a privilege grant so much as an
+// observation: at this point the only way to hold a passkey at all is to have
+// been the operator, since enrolment requires either the bootstrap token or an
+// existing credential. It produces exactly what migrate-identity produces, so
+// whichever runs first, the other is a no-op.
+//
+// Failures are returned rather than swallowed. A login that cannot produce a
+// usable session should say so at the login, not hand back a cookie that fails
+// on the next request.
+func (cfg Config) ensureUserForIdentity(ctx context.Context, identity *Identity) (UserID, error) {
+	uid := NewUserID(identity.WebAuthnUserID)
+	if cfg.Users == nil {
+		return uid, nil // no tenant directory configured; sessions are refused anyway
+	}
+	if _, ok, err := cfg.Users.GetUser(ctx, uid); err != nil {
+		return uid, err
+	} else if ok {
+		return uid, nil
+	}
+	err := cfg.Users.CreateUser(ctx, &User{
+		ID:          uid,
+		DisplayName: "operator",
+		Role:        RoleAdmin,
+		Status:      UserActive,
+		// AutoApply stays false even here: the switch that lets the bot write to
+		// a roster is turned on by a person, never inherited from a bootstrap.
+		AutoApply: false,
+		CreatedAt: time.Now().UTC(),
+	})
+	// A concurrent request that created it first is success, not failure — the
+	// postcondition (a user exists for this handle) holds either way.
+	if errors.Is(err, ErrUserConflict) {
+		return uid, nil
+	}
+	return uid, err
 }

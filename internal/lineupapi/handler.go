@@ -43,7 +43,17 @@ type Config struct {
 	Reports       ObjectStore
 
 	// WebAuthn passkey auth (see webauthn.go).
-	Identities    IdentityStore
+	Identities IdentityStore
+
+	// Users and Enrollments back multi-tenant auth (rosterbot-crq.10). Users
+	// is what a session's subject resolves against; without it every session
+	// is refused, which is deliberate -- see resolveCaller.
+	//
+	// The bearer token path reads NEITHER, so a deployment with these nil (or
+	// with DynamoDB unreachable) is still reachable by an operator holding the
+	// token. That is the recovery path for every failure in this layer.
+	Users         UserStore
+	Enrollments   EnrollmentStore
 	WebAuthn      *webauthn.WebAuthn
 	SessionSecret []byte
 }
@@ -95,11 +105,11 @@ func Handler(cfg Config) http.Handler {
 			mux.ServeHTTP(w, r)
 			return
 		}
-		if !isAuthed(r, cfg) {
-			writeErr(w, http.StatusUnauthorized, "unauthorized")
-			return
+		caller, ok := cfg.authorize(w, r)
+		if !ok {
+			return // authorize already wrote the status
 		}
-		mux.ServeHTTP(w, r)
+		mux.ServeHTTP(w, r.WithContext(withCaller(r.Context(), caller)))
 	})
 }
 
@@ -242,11 +252,28 @@ func (cfg Config) handleJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg Config) handleJob(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	// AUTHORIZATION BEFORE CONFIGURATION. League-wide jobs act on the league or
+	// the deployment rather than on one team, and every run costs real money on
+	// someone else's behalf, so only an admin may launch them; a member may
+	// still launch jobs scoped to their own tenant. The check lives here rather
+	// than in the path allowlist because it depends on the job NAME, which is a
+	// path value and not a prefix.
+	//
+	// It deliberately precedes the nil-runner check below. Ordering them the
+	// other way answers "job runner not configured" to a caller who was never
+	// entitled to ask — a small disclosure on its own, and the wrong habit in a
+	// handler whose job is to decide who may spend money.
+	if leagueWideJobs[name] && !CallerFrom(r.Context()).IsAdmin() {
+		writeErr(w, http.StatusForbidden, "job "+name+" is league-wide; admin only")
+		return
+	}
+
 	if cfg.Jobs == nil {
 		writeErr(w, http.StatusNotImplemented, "job runner not configured")
 		return
 	}
-	name := r.PathValue("name")
 
 	// Optional JSON body { "params": { ... } }. An empty/absent body means
 	// "use defaults"; a malformed body just yields no params (defaults too).
