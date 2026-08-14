@@ -52,7 +52,13 @@ phases:
       # Apply infra before publishing the dashboard. The outputs file makes the
       # newly-created bucket/distribution available to this very first build;
       # CodeBuild environment variables would not update until the next build.
+      # set -e so a failed deploy fails HERE. Without it the block's exit status
+      # is `cd ..`, execution continues, and the next block dies on the missing
+      # cdk-outputs.json — so CodeBuild names the dashboard sync as the failing
+      # command for an error that happened in cdk deploy 90 seconds earlier
+      # (rosterbot-ill).
       - |
+        set -e
         cd infra && cdk deploy -c enableBuild=true --require-approval never --outputs-file ../cdk-outputs.json
         cd ..
       # Publish the static dashboard on every build, including the first build

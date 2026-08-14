@@ -90,27 +90,34 @@ clean-cache:
 # stderr lines like `cache hit:` / `cache miss:` show what each command
 # touched. Each step continues on error so one broken command doesn't
 # abort the whole sweep — final-status check is on you.
+# run-all exercises every CLI command in dry-run / read-only mode.
+#
+# Each step is chained with `&&` rather than `;`. In shell, `a; b` exits with
+# B's status, so the trailing `echo` that separated the sections swallowed
+# every command's exit code — the target could not fail, while CLAUDE.md
+# calls it the canonical pre-push smoke test (rosterbot-ww8). The only way a
+# failure is ignored now is an explicit fallback that says why.
 run-all:
-	@echo "=== build-modules (nested Go modules) ===";    $(MAKE) build-modules;                                          echo
-	@echo "=== scoring ===";                              time go run . scoring;                                          echo
-	@echo "=== optimize --dry-run --publish-lineup ===";  time go run . optimize --dry-run --publish-lineup;              echo
+	@echo "=== build-modules (nested Go modules) ===";    $(MAKE) build-modules &&                                          echo
+	@echo "=== scoring ===";                              time go run . scoring &&                                          echo
+	@echo "=== optimize --dry-run --publish-lineup ===";  time go run . optimize --dry-run --publish-lineup &&              echo
 	@echo "  (serve is long-running — exercise manually: ROSTERBOT_API_TOKEN=test go run . serve)"
-	@echo "=== prospects --dry-run ===";                  time go run . prospects --dry-run;                              echo
-	@echo "=== gs-check --dry-run ===";                   time go run . gs-check --dry-run;                               echo
-	@echo "=== version-check ===";                        time go run . version-check;                                    echo
-	@echo "=== transactions --dry-run ===";               time go run . transactions --dry-run;                           echo
-	@echo "=== waivers --dry-run ===";                    time go run . waivers --dry-run;                                echo
-	@echo "=== claims --dry-run ===";                    time go run . claims --dry-run --no-signals;                    echo
-	@echo "=== grade --dry-run ===";                     time go run . grade --dry-run;                                  echo
-	@echo "=== archive --dry-run ===";                   time go run . archive --dry-run;                                echo
-	@echo "=== team-values --dry-run ===";               time go run . team-values --dry-run;                            echo
-	@echo "=== football-values --dry-run ===";           time go run . football-values --dry-run;                       echo
-	@echo "=== football-trades --dry-run ===";           time go run . football-trades --dry-run;                       echo
-	@echo "=== backtest ===";                             time go run . backtest;                                         echo
-	@echo "=== backtest --recency-experiment ===";        time go run . backtest --recency-experiment --dates 2026-05-01:2026-05-07 || true; echo
-	@echo "=== recap --out /tmp/recap.html ===";          time go run . recap --out /tmp/recap.html;                      echo
-	@echo "=== recap-site --out /tmp/recap-site ===";     time go run . recap-site --out /tmp/recap-site;                 echo
-	@echo "=== invite --dry-run ===";                        time go run . invite --dry-run --email smoke@example.test --name Smoke; echo
-	@echo "=== projection-site --out /tmp/rosterbot-proj-report ==="; time go run . projection-site --out /tmp/rosterbot-proj-report || true; echo
+	@echo "=== prospects --dry-run ===";                  time go run . prospects --dry-run &&                              echo
+	@echo "=== gs-check --dry-run ===";                   time go run . gs-check --dry-run &&                               echo
+	@echo "=== version-check ===";                        time go run . version-check &&                                    echo
+	@echo "=== transactions --dry-run ===";               time go run . transactions --dry-run &&                           echo
+	@echo "=== waivers --dry-run ===";                    time go run . waivers --dry-run &&                                echo
+	@echo "=== claims --dry-run ===";                    time go run . claims --dry-run --no-signals &&                    echo
+	@echo "=== grade --dry-run ===";                     time go run . grade --dry-run &&                                  echo
+	@echo "=== archive --dry-run ===";                   time go run . archive --dry-run &&                                echo
+	@echo "=== team-values --dry-run ===";               time go run . team-values --dry-run &&                            echo
+	@echo "=== football-values --dry-run ===";           if [ -n "$$SLEEPER_LEAGUE_ID" ]; then time go run . football-values --dry-run; else echo "SKIPPED (SLEEPER_LEAGUE_ID unset; it lives in SSM for the deployment)"; fi && echo
+	@echo "=== football-trades --dry-run ===";           if [ -n "$$SLEEPER_LEAGUE_ID" ]; then time go run . football-trades --dry-run; else echo "SKIPPED (SLEEPER_LEAGUE_ID unset)"; fi && echo
+	@echo "=== backtest ===";                             time go run . backtest &&                                         echo
+	@echo "=== backtest --recency-experiment ===";        time go run . backtest --recency-experiment --dates 2026-05-01:2026-05-07 || echo "(tolerated: needs archived snapshots that may not exist locally)" && echo
+	@echo "=== recap --out /tmp/recap.html ===";          time go run . recap --out /tmp/recap.html &&                      echo
+	@echo "=== recap-site --out /tmp/recap-site ===";     time go run . recap-site --out /tmp/recap-site &&                 echo
+	@echo "=== invite --dry-run ===";                        time go run . invite --dry-run --email smoke@example.test --name Smoke && echo
+	@echo "=== projection-site --out /tmp/rosterbot-proj-report ==="; time go run . projection-site --out /tmp/rosterbot-proj-report || echo "(tolerated: needs an Analysis Store that may be empty locally)" && echo
 	@echo "=== cache size ===";                           du -sh .cache/ 2>/dev/null || echo "(no cache directory)";      echo
 	@echo "=== DONE ==="

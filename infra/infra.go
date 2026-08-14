@@ -643,6 +643,18 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				"SECURITY_GROUPS": {Value: taskSg.SecurityGroupId()},
 			},
 		})
+		// Serialize builds. Two pushes close together produced three distinct
+		// failures in one day (rosterbot-ill): a cdk deploy refused because the
+		// other build held the CloudFormation stack, and a build that could not
+		// PROVISION a container at all. Neither had anything to do with the code
+		// being built, and both were indistinguishable from a real failure at a
+		// glance — main showed red and Pushover fired for a build that executed
+		// nothing.
+		//
+		// A limit of 1 queues the second build instead, which is the correct
+		// behaviour anyway: two concurrent deploys of one stack cannot both win.
+		project.Node().DefaultChild().(awscodebuild.CfnProject).
+			AddPropertyOverride(jsii.String("ConcurrentBuildLimit"), jsii.Number(1))
 		repo.GrantPullPush(project)
 		// Let the build launch the projection-site task (ecs:RunTask + the
 		// iam:PassRole on the task's execution/task roles that RunTask requires).
