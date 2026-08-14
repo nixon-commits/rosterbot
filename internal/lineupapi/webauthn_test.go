@@ -116,7 +116,7 @@ func TestRegisterBegin_AcceptsValidSession(t *testing.T) {
 
 	// Mint a valid session cookie the same way login/finish would.
 	sessionRec := httptest.NewRecorder()
-	setSessionCookie(sessionRec, secret, time.Now())
+	setSessionCookie(sessionRec, secret, "alice", 0, time.Now())
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
 	for _, c := range sessionRec.Result().Cookies() {
@@ -249,7 +249,7 @@ func TestListPasskeys_ReturnsRegisteredIDs(t *testing.T) {
 	h := Handler(Config{Token: "t", Identities: identities, WebAuthn: testWebAuthn(t), SessionSecret: secret})
 
 	sessionRec := httptest.NewRecorder()
-	setSessionCookie(sessionRec, secret, time.Now())
+	setSessionCookie(sessionRec, secret, "alice", 0, time.Now())
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/passkeys", nil)
 	for _, c := range sessionRec.Result().Cookies() {
 		req.AddCookie(c)
@@ -277,7 +277,7 @@ func TestRevokePasskey_RemovesMatchingCredential(t *testing.T) {
 	h := Handler(Config{Token: "t", Identities: identities, WebAuthn: testWebAuthn(t), SessionSecret: secret})
 
 	sessionRec := httptest.NewRecorder()
-	setSessionCookie(sessionRec, secret, time.Now())
+	setSessionCookie(sessionRec, secret, "alice", 0, time.Now())
 	targetID := base64.RawURLEncoding.EncodeToString([]byte("revoke-me"))
 	req := httptest.NewRequest(http.MethodDelete, "/v1/auth/passkeys/"+targetID, nil)
 	for _, c := range sessionRec.Result().Cookies() {

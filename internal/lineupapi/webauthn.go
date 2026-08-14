@@ -225,7 +225,13 @@ func (cfg Config) handleAuthRegisterFinish(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	clearCeremonyCookie(w)
-	setSessionCookie(w, cfg.SessionSecret, time.Now())
+	// The session names WHO it belongs to (rosterbot-crq.8). Until the handlers
+	// move onto the user store (rosterbot-crq.10) the subject is derived from
+	// the singleton identity's handle — which is exactly the id
+	// migrate-identity writes, so a session minted before the cutover names the
+	// same user afterwards. TokenVersion is 0 because the singleton record has
+	// no such field; it becomes user.TokenVersion when the store is wired.
+	setSessionCookie(w, cfg.SessionSecret, NewUserID(identity.WebAuthnUserID), 0, time.Now())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "registered"})
 }
 
@@ -282,7 +288,7 @@ func (cfg Config) handleAuthLoginFinish(w http.ResponseWriter, r *http.Request) 
 	})
 
 	clearCeremonyCookie(w)
-	setSessionCookie(w, cfg.SessionSecret, time.Now())
+	setSessionCookie(w, cfg.SessionSecret, NewUserID(identity.WebAuthnUserID), 0, time.Now())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

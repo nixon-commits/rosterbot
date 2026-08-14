@@ -19,15 +19,38 @@ const (
 
 var errInvalidSession = errors.New("invalid or expired session")
 
+// sessionPayload is the signed body of the session cookie.
+//
+// Sub and Ver are what make this a multi-tenant session rather than a boolean
+// "someone logged in". Before rosterbot-crq.8 the payload carried only an
+// expiry, which was sufficient for exactly one operator and becomes "every
+// logged-in user is the same user" the moment there are two.
 type sessionPayload struct {
+	// Sub is the user this session belongs to. A session without one is
+	// rejected outright (see parseSession) rather than defaulted to anybody.
+	Sub UserID `json:"sub"`
+
+	// Ver is the User.TokenVersion this session was minted at. Revocation is
+	// incrementing that field: every cookie carrying the old value stops
+	// verifying, for that user alone.
+	//
+	// It is checked by the caller, not here, because the check needs the user
+	// record — and every route that cares has to load that record anyway to
+	// scope its query. Keeping this file free of the store keeps the crypto
+	// testable without one.
+	Ver int `json:"ver"`
+
 	ExpiresAt int64 `json:"exp"`
 }
 
 // signSession mints a signed, stateless session cookie value:
 // base64url(payload) + "." + base64url(HMAC-SHA256(payload, secret)). Nothing
-// is stored server-side — verifying later needs only the same secret.
-func signSession(secret []byte, now time.Time) string {
-	payload, _ := json.Marshal(sessionPayload{ExpiresAt: now.Add(sessionTTL).Unix()})
+// is stored server-side — verifying later needs only the same secret, plus the
+// user's current TokenVersion for revocation.
+func signSession(secret []byte, sub UserID, ver int, now time.Time) string {
+	payload, _ := json.Marshal(sessionPayload{
+		Sub: sub, Ver: ver, ExpiresAt: now.Add(sessionTTL).Unix(),
+	})
 	return signPayload(secret, payload)
 }
 
@@ -38,22 +61,35 @@ func signPayload(secret, payload []byte) string {
 	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
-// verifySession checks the signature and expiry of a session cookie value.
-func verifySession(secret []byte, value string, now time.Time) error {
+// parseSession checks the signature and expiry of a session cookie and returns
+// its payload. It does NOT check Ver — that needs the user record; see
+// sessionPayload.Ver.
+//
+// A payload with no Sub is rejected. Cookies minted before rosterbot-crq.8
+// carry only an expiry, and they are still correctly signed, so the only thing
+// standing between them and being accepted is this check. Accepting them would
+// mean a valid session belonging to nobody, which every downstream scoping
+// decision would then have to invent an answer for. The visible consequence is
+// that deploying this logs out every existing session exactly once.
+func parseSession(secret []byte, value string, now time.Time) (sessionPayload, error) {
+	var p sessionPayload
 	payload, err := verifyPayload(secret, value)
 	if err != nil {
-		return err
+		return p, err
 	}
-	var p sessionPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return errInvalidSession
+		return p, errInvalidSession
+	}
+	if p.Sub == "" {
+		return p, errInvalidSession
 	}
 	if now.Unix() > p.ExpiresAt {
-		return errInvalidSession
+		return p, errInvalidSession
 	}
-	return nil
+	return p, nil
 }
 
+// verifyPayload checks the HMAC and returns the raw payload bytes.
 func verifyPayload(secret []byte, value string) ([]byte, error) {
 	if len(secret) == 0 {
 		return nil, errInvalidSession
@@ -79,10 +115,10 @@ func verifyPayload(secret []byte, value string) ([]byte, error) {
 	return payload, nil
 }
 
-func setSessionCookie(w http.ResponseWriter, secret []byte, now time.Time) {
+func setSessionCookie(w http.ResponseWriter, secret []byte, sub UserID, ver int, now time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    signSession(secret, now),
+		Value:    signSession(secret, sub, ver, now),
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   true,
@@ -103,16 +139,28 @@ func clearSessionCookie(w http.ResponseWriter) {
 	})
 }
 
-// hasValidSession reports whether the request carries a session cookie signed
-// by secret and not yet expired. An empty secret (misconfiguration) fails
-// closed, matching authorized()'s empty-token behavior.
-func hasValidSession(r *http.Request, secret []byte) bool {
+// sessionFromRequest returns the verified payload on the request, if any.
+// Callers that need the subject use this; callers that only need "is anyone
+// logged in" use hasValidSession.
+func sessionFromRequest(r *http.Request, secret []byte) (sessionPayload, error) {
 	if len(secret) == 0 {
-		return false
+		return sessionPayload{}, errInvalidSession
 	}
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil {
-		return false
+		return sessionPayload{}, errInvalidSession
 	}
-	return verifySession(secret, c.Value, time.Now()) == nil
+	return parseSession(secret, c.Value, time.Now())
+}
+
+// hasValidSession reports whether the request carries a signed, unexpired
+// session naming some user. An empty secret (misconfiguration) fails closed,
+// matching authorized()'s empty-token behavior.
+//
+// It deliberately does not check Ver, so it cannot see a revoked session. That
+// is why it survives only until rosterbot-crq.10 replaces the blanket isAuthed
+// check with per-route, per-tenant authorization that loads the user.
+func hasValidSession(r *http.Request, secret []byte) bool {
+	_, err := sessionFromRequest(r, secret)
+	return err == nil
 }
