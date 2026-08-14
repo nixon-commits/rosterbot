@@ -140,19 +140,13 @@ func pick[T any](s *Selector, a artifact,
 // deliberately common ground, and partitioning them would multiply upstream
 // load by the tenant count while splitting data that describes the whole league.
 func (s *Selector) prefixFor(a artifact) string {
-	if !a.perTenant || s.tenant == "" {
-		return a.s3Prefix
-	}
-	return a.s3Prefix + "user=" + s.tenant + "/"
+	return layout.Artifact{S3Prefix: a.s3Prefix, PerTenant: a.perTenant}.PrefixFor(s.tenant)
 }
 
 // dirFor is the local-filesystem equivalent, kept in step so `serve` and a
 // deployed task disagree about nothing but the backend.
 func (s *Selector) dirFor(a artifact) string {
-	if !a.perTenant || s.tenant == "" || a.localDir == "" {
-		return a.localDir
-	}
-	return a.localDir + "/user=" + s.tenant
+	return layout.Artifact{LocalDir: a.localDir, PerTenant: a.perTenant}.LocalDirFor(s.tenant)
 }
 
 // RunWriter is the write side of the run ledger, satisfied by both the S3 and

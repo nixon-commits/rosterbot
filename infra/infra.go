@@ -260,6 +260,21 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			"PUSHOVER_USER_KEY":    secret("PUSHOVER_USER_KEY"),
 			"PUSHOVER_GROUP_KEY":   secret("PUSHOVER_GROUP_KEY"),
 			"PUSHOVER_API_TOKEN":   secret("PUSHOVER_API_TOKEN"),
+			// The tenant this task runs for (rosterbot-crq.11/.13). Every
+			// per-tenant store composes user=<this>/ into its prefix; unset, they
+			// fall back to the original un-segmented layout, which is why the
+			// cutover is exactly this parameter existing.
+			//
+			// On the task definition rather than per-schedule so that EVERY
+			// launch path inherits it — the EventBridge schedules, the jobs the
+			// API launches, and the projection-site render CodeBuild fires after
+			// a deploy. A per-schedule override would have left those last two
+			// writing to the legacy prefix while the schedules wrote to the new
+			// one, splitting the same artifact across two locations.
+			//
+			// The fan-out (rosterbot-crq.13) overrides it per task via
+			// containerOverrides, which takes precedence over this default.
+			"ROSTERBOT_USER_ID": secret("ROSTERBOT_USER_ID"),
 			// SLEEPER_LEAGUE_ID is the one hard requirement football-values/
 			// football-trades have (loadFootballConfig errors without it,
 			// unlike DYNASTY_FORMAT and FOOTBALL_PUSHOVER_*, which fall back
@@ -378,6 +393,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		Resources: &[]*string{fantraxCredKey.KeyArn()},
 	}))
 
+	// The API reads the same per-tenant prefixes the tasks write, so it must
+	// compose the SAME tenant segment. Giving the tasks a tenant and not the
+	// reader would split every per-tenant artifact in two: jobs writing to
+	// user=<uid>/ while the dashboard reads the un-segmented prefix and shows
+	// nothing, with every job still reporting success.
+	apiFn.AddEnvironment(jsii.String("ROSTERBOT_USER_ID"),
+		awsssm.StringParameter_ValueForSecureStringParameter(stack, jsii.String("/rosterbot/ROSTERBOT_USER_ID"), jsii.Number(1)), nil)
 	apiFn.AddEnvironment(jsii.String("IDENTITY_TABLE"), identityTable.TableName(), nil)
 	apiFn.AddEnvironment(jsii.String("FANTRAX_CRED_KEY"), fantraxCredKey.KeyArn(), nil)
 	// GET /v1/infra reports the health of every prefix in the state bucket, so

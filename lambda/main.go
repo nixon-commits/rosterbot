@@ -48,6 +48,17 @@ import (
 func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
 	var cfg lineupapi.Config
 
+	// The tenant whose state this API serves (rosterbot-crq.11). Composition
+	// goes through layout.Artifact.PrefixFor rather than a second copy of the
+	// rule here: producers and readers drifting apart is silent and total —
+	// jobs writing to user=<uid>/ while the dashboard reads the un-segmented
+	// prefix means a dashboard showing nothing while every job reports success.
+	//
+	// It is a single value for now, matching the tasks. Serving each caller
+	// their OWN tenant means building these stores per request instead of at
+	// cold start, which is the read half of the fan-out and lands with it.
+	tenant := os.Getenv("ROSTERBOT_USER_ID")
+
 	// Prefixes come from internal/statestore/layout, the single declaration of
 	// the STATE_BUCKET key layout, rather than being retyped here. layout is a
 	// zero-dependency leaf, so importing it from this module costs nothing.
@@ -56,19 +67,19 @@ func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
 	}
 
 	var err error
-	if cfg.Lineups, err = store(layout.Lineup.S3Prefix); err != nil {
+	if cfg.Lineups, err = store(layout.Lineup.PrefixFor(tenant)); err != nil {
 		return cfg, fmt.Errorf("init s3 lineup store: %w", err)
 	}
-	if cfg.Runs, err = s3lineup.NewRuns(ctx, bucket, layout.RunLedger.S3Prefix); err != nil {
+	if cfg.Runs, err = s3lineup.NewRuns(ctx, bucket, layout.RunLedger.PrefixFor(tenant)); err != nil {
 		return cfg, fmt.Errorf("init s3 runs store: %w", err)
 	}
-	if cfg.Notifications, err = s3lineup.NewNotifications(ctx, bucket, layout.Notification.S3Prefix); err != nil {
+	if cfg.Notifications, err = s3lineup.NewNotifications(ctx, bucket, layout.Notification.PrefixFor(tenant)); err != nil {
 		return cfg, fmt.Errorf("init s3 notifications store: %w", err)
 	}
-	if cfg.Output, err = s3lineup.NewOutput(ctx, bucket, layout.RunOutput.S3Prefix); err != nil {
+	if cfg.Output, err = s3lineup.NewOutput(ctx, bucket, layout.RunOutput.PrefixFor(tenant)); err != nil {
 		return cfg, fmt.Errorf("init s3 output store: %w", err)
 	}
-	if cfg.Progress, err = s3lineup.NewProgress(ctx, bucket, layout.Progress.S3Prefix); err != nil {
+	if cfg.Progress, err = s3lineup.NewProgress(ctx, bucket, layout.Progress.PrefixFor(tenant)); err != nil {
 		return cfg, fmt.Errorf("init s3 progress store: %w", err)
 	}
 	if cfg.Infra, err = s3lineup.NewInfra(ctx, bucket); err != nil {
@@ -96,17 +107,17 @@ func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
 	// different producers and cadences (see layout.go); both are passkey-gated
 	// rather than published to the world-readable report/ path, because a
 	// pending offer is not something to publish before deciding on it.
-	if cfg.Trades, err = store(layout.Trades.S3Prefix); err != nil {
+	if cfg.Trades, err = store(layout.Trades.PrefixFor(tenant)); err != nil {
 		return cfg, fmt.Errorf("init s3 trades store: %w", err)
 	}
-	if cfg.TradeValues, err = store(layout.TradeValues.S3Prefix); err != nil {
+	if cfg.TradeValues, err = store(layout.TradeValues.PrefixFor(tenant)); err != nil {
 		return cfg, fmt.Errorf("init s3 trade values store: %w", err)
 	}
 
 	// The three private dashboard reports. They live in the state bucket, not
 	// the dashboard bucket's world-readable report/ prefix, so serving them
 	// through this passkey-gated API is the only way the SPA can reach them.
-	if cfg.Reports, err = store(layout.Reports.S3Prefix); err != nil {
+	if cfg.Reports, err = store(layout.Reports.PrefixFor(tenant)); err != nil {
 		return cfg, fmt.Errorf("init s3 reports store: %w", err)
 	}
 

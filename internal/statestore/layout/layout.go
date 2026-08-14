@@ -153,3 +153,31 @@ func All() []Artifact {
 		Session, Cache,
 	}
 }
+
+// PrefixFor returns this artifact's S3 key prefix for one tenant.
+//
+// The composition lives here, in the zero-dependency leaf that already owns the
+// key layout, because there are two independent consumers: internal/statestore
+// (which builds the producers' stores) and the API Lambda (which builds the
+// readers). A copy in each is how they drift — and the failure of drift here is
+// silent and total: producers writing to user=<uid>/ while readers look at the
+// un-segmented prefix means a dashboard that shows nothing while every job
+// reports success.
+//
+// An empty tenant returns the original prefix unchanged. That is a real mode,
+// not a missing value: it is where every object sits before the cutover.
+func (a Artifact) PrefixFor(tenant string) string {
+	if !a.PerTenant || tenant == "" {
+		return a.S3Prefix
+	}
+	return a.S3Prefix + "user=" + tenant + "/"
+}
+
+// LocalDirFor is the filesystem equivalent, kept in step so `serve` and a
+// deployed task disagree about nothing but the backend.
+func (a Artifact) LocalDirFor(tenant string) string {
+	if !a.PerTenant || tenant == "" || a.LocalDir == "" {
+		return a.LocalDir
+	}
+	return a.LocalDir + "/user=" + tenant
+}

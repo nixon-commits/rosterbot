@@ -119,3 +119,32 @@ func TestPerTenantSplitIsDeliberate(t *testing.T) {
 		}
 	}
 }
+
+// TestProducerAndReaderComposeIdenticalPrefixes is the guard against the one
+// failure mode of splitting this rule across two consumers.
+//
+// internal/statestore builds the PRODUCERS' stores; the API Lambda builds the
+// READERS'. If those two ever disagree about how a tenant segment is composed,
+// jobs write to one location and the dashboard reads another — and nothing
+// fails. Every job reports success, every prefix looks healthy to its own
+// writer, and the dashboard is simply empty.
+//
+// Both now go through layout.Artifact.PrefixFor. This asserts they agree for
+// every artifact and for both the tenant and no-tenant cases, so a future
+// "optimisation" that reintroduces a local copy in either place fails here.
+func TestProducerAndReaderComposeIdenticalPrefixes(t *testing.T) {
+	for _, tenant := range []string{"", "u123"} {
+		sel := ForTenant("bucket", tenant)
+		for _, a := range append(layout.All(), layout.Progress) {
+			// The producer path, as statestore composes it.
+			producer := sel.prefixFor(artifact{a.S3Prefix, a.LocalDir, a.PerTenant})
+			// The reader path, as lambda/main.go composes it.
+			reader := a.PrefixFor(tenant)
+			if producer != reader {
+				t.Errorf("tenant=%q %s: producer writes %q, reader reads %q — jobs and "+
+					"dashboard would disagree with no error on either side",
+					tenant, a.Name, producer, reader)
+			}
+		}
+	}
+}
