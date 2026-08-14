@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
+	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/nixon-commits/rosterbot/internal/statesync"
 	"github.com/spf13/cobra"
 )
@@ -19,17 +20,54 @@ import (
 // otherwise-successful job, so per-step errors are logged and the command still
 // exits 0 (mirroring the old `|| true` shell wrappers).
 
-// statePairs are the bulk dir<->prefix mappings under STATE_BUCKET. The TTL
-// cache (cache/ prefix) is intentionally absent — the bot reads/writes it
-// per-key directly via cache.Store.
-var statePairs = []struct {
+type statePair struct {
 	dir    string
 	prefix string
-}{
-	{".fantrax-cache/", "session/"},
-	{".waivers/", "claims/"},
-	{".backtest/", "backtest/"},
-	{".archive/", "archive/"},
+}
+
+// statePairsFor returns the bulk dir<->prefix mappings under STATE_BUCKET for
+// one tenant. The TTL cache (cache/ prefix) is intentionally absent — the bot
+// reads/writes it per-key directly via cache.Store.
+//
+// THE PREFIXES ARE DERIVED FROM THE LAYOUT, NEVER WRITTEN AS LITERALS. This
+// sync is the only writer that does not go through statestore's typed
+// constructors, so it was the only one that never composed the tenant segment,
+// and its prefixes were a second independent statement of a fact the layout
+// already owned. Nothing made the two agree, so they didn't.
+//
+// For session/ the consequence is cross-tenant CREDENTIAL sharing, not
+// untidiness: every task syncs .fantrax-cache/ up when it finishes and pulls it
+// down when the next one starts, so a single shared session/ prefix means
+// tenant B's task boots holding tenant A's Fantrax FX_RM cookie and acts as
+// them, with every job reporting success. Measured on the live bucket
+// 2026-08-14, session/.fantrax_cookie_cache.json and its user=<uid>/ twin
+// carried the same write timestamp — the un-tenanted copy was being actively
+// maintained, not left behind by the crq.11 backfill.
+//
+// backtest/ is the same mechanism with lower stakes: projection snapshots
+// mixing between tenants rather than a credential.
+//
+// claims/ and archive/ are deliberately NOT PerTenant — a league-wide
+// transaction ledger and upstream snapshots identical for everyone — and
+// PrefixFor leaves them alone, so this stays one rule rather than a list of
+// exceptions.
+//
+// The LOCAL side keeps its plain directory: a task runs for exactly one tenant,
+// so the container's own filesystem needs no tenant segment, and adding one
+// would move paths every other command already hardcodes.
+// syncPairs is what the two commands call. The tenant is read here rather than
+// passed in, so a call site has nothing to get wrong — an earlier version took
+// it as an argument and a mutation that passed "" at both call sites went
+// undetected by every test of statePairsFor itself.
+func syncPairs() []statePair { return statePairsFor(statestore.Tenant()) }
+
+func statePairsFor(tenant string) []statePair {
+	return []statePair{
+		{".fantrax-cache/", layout.Session.PrefixFor(tenant)},
+		{".waivers/", layout.Claims.PrefixFor(tenant)},
+		{".backtest/", layout.Backtest.PrefixFor(tenant)},
+		{".archive/", layout.Archive.PrefixFor(tenant)},
+	}
 }
 
 var syncDownCmd = &cobra.Command{
@@ -62,7 +100,7 @@ func runSyncDown(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	ctx := context.Background()
-	for _, p := range statePairs {
+	for _, p := range syncPairs() {
 		if err := s.Down(ctx, bucket, p.prefix, p.dir); err != nil {
 			warn("sync-down %s: %v", p.prefix, err)
 		}
@@ -78,7 +116,7 @@ func runSyncUp(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	if bucket := statestore.Bucket(); bucket != "" {
-		for _, p := range statePairs {
+		for _, p := range syncPairs() {
 			if err := s.Up(ctx, bucket, p.prefix, p.dir, false); err != nil {
 				warn("sync-up %s: %v", p.prefix, err)
 			}
