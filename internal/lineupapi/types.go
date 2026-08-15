@@ -33,7 +33,26 @@ type Player struct {
 	HKBValue int      `json:"hkb_value,omitempty"`
 	Proj     float64  `json:"proj"`
 	Status   string   `json:"status"`
+	// Role is "hitter" or "pitcher", and exists because Proj means a different
+	// thing in each: measured on the 2026-08-15 lineup, hitters span 2.92-5.48
+	// and pitchers 2.85-19.89, so any client comparing the two on one scale
+	// puts every hitter in the bottom sixth of it.
+	//
+	// It is stated rather than left to be inferred from Pos. Build fills the
+	// response from two separate optimizer lists and already knows which is
+	// which; a two-way player appears in BOTH, producing two rows that carry
+	// identical eligibility, so Pos cannot distinguish his hitter row from his
+	// pitcher row and a client inferring the role would shade a ~4-point row on
+	// a 20-point scale. Not omitempty: a client must be able to tell "this
+	// lineup predates the field" (absent) from any value it might carry.
+	Role string `json:"role"`
 }
+
+// Role values for Player.Role.
+const (
+	RoleHitter  = "hitter"
+	RolePitcher = "pitcher"
+)
 
 // Slot is one lineup slot. Player is nil for an empty/open slot (rendered as
 // JSON null), e.g. an unfilled active slot or a vacant bench row.

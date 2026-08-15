@@ -133,6 +133,7 @@ func hitterPlayer(sp optimizer.ScoredPlayer, benched map[string]bool, hkb map[st
 		HKBValue: d.Value,
 		Proj:     round2(sp.ExpectedPts),
 		Status:   status,
+		Role:     RoleHitter,
 	}
 }
 
@@ -151,6 +152,7 @@ func pitcherPlayer(sp optimizer.ScoredPitcher, hkb map[string]Dynasty) *Player {
 		HKBValue: d.Value,
 		Proj:     round2(sp.ExpectedPts),
 		Status:   status,
+		Role:     RolePitcher,
 	}
 }
 

@@ -74,7 +74,8 @@ const wantJSON = `{
           "C"
         ],
         "proj": 3.4,
-        "status": "OK"
+        "status": "OK",
+        "role": "hitter"
       }
     },
     {
@@ -87,7 +88,8 @@ const wantJSON = `{
           "1B"
         ],
         "proj": 5.25,
-        "status": "BENCHED"
+        "status": "BENCHED",
+        "role": "hitter"
       }
     },
     {
@@ -100,7 +102,8 @@ const wantJSON = `{
           "SP"
         ],
         "proj": 12.1,
-        "status": "OK"
+        "status": "OK",
+        "role": "pitcher"
       }
     },
     {
@@ -113,7 +116,8 @@ const wantJSON = `{
           "OF"
         ],
         "proj": 2,
-        "status": "OK"
+        "status": "OK",
+        "role": "hitter"
       }
     }
   ],

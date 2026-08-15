@@ -56,6 +56,14 @@
      alert instead of as a reading. */
   --heat-age: var(--c5);
   --heat-value: var(--accent);
+  /* Proj takes the mauve. The paragraph above ruled mauve and amber out because
+     an alert row was a pink wash and a warm pill on it read as part of the
+     alert; that wash is gone (the alert is now the inset --danger stripe on
+     .lineup-row.alert), so the objection no longer applies. Mauve over amber
+     because Proj is shaded for every player including the ones flagged below,
+     and amber still reads as a caution next to a red stripe. It also has to
+     stay separable from the teal and blue in the two columns beside it. */
+  --heat-proj: var(--c7);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -72,6 +80,9 @@
        number of distinguishable steps. --heat-value needs no entry — it tracks
        --accent, which is already re-picked for dark just above. */
     --heat-age: #9fdcd7;
+    /* Same reason as the age hue: --c7 at a low tint is indistinguishable from
+       #14161a, so the mauve steps lighter for dark. */
+    --heat-proj: #d8b6d2;
 
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.3);
   }
@@ -687,7 +698,15 @@ td.cov.warn { color: var(--danger); }
   white-space: nowrap;
   text-align: right;
 }
-.lineup-proj { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.lineup-proj {
+  --heat-pct: 0%;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  padding: 2px var(--s1);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--heat-proj) var(--heat-pct), transparent);
+}
 
 /* ---- Age / HKB value heatmap -------------------------------------------- */
 /* Two sequential single-hue ramps, one per column, both running the same way:
@@ -720,8 +739,14 @@ td.cov.warn { color: var(--danger); }
    shaded — a tinted "—" would claim a magnitude that does not exist. */
 .lineup-colhead .lineup-age,
 .lineup-colhead .lineup-value,
+.lineup-colhead .lineup-proj,
 .lineup-age.muted,
 .lineup-value.muted { background: none; padding-left: 0; padding-right: 0; }
+/* .lineup-proj.muted is deliberately NOT in that list. A muted Proj is a 0.0 —
+   a real projection for a player whose team has no game — not a missing value,
+   so it keeps the column's padding and stays aligned with the numbers above and
+   below it. It needs no background rule: at the foot of its ramp --heat-pct is
+   already 0%, so it renders transparent on its own. */
 
 .lineup-legend {
   display: flex;
@@ -748,6 +773,14 @@ td.cov.warn { color: var(--danger); }
   background: linear-gradient(to right,
     color-mix(in srgb, var(--heat-value) 0%, transparent),
     color-mix(in srgb, var(--heat-value) 26%, transparent));
+}
+/* One ramp class, used by both Proj keys: hitters and pitchers are the same
+   quantity against different populations, so they share the hue and are told
+   apart by the two domains printed beside them. */
+.lineup-ramp.ramp-proj {
+  background: linear-gradient(to right,
+    color-mix(in srgb, var(--heat-proj) 0%, transparent),
+    color-mix(in srgb, var(--heat-proj) 26%, transparent));
 }
 
 /* The stripe is the anomaly marker — it reads down the left edge, so spotting

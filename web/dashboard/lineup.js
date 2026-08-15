@@ -77,8 +77,14 @@ const MAX_TINT = 26; // percent; the dark-mode hue lives in style.css
 // The square root keeps the order and still puts the elite asset on top; what
 // it gives up is proportionality, so the help text says so rather than letting
 // the reader assume twice the tint means twice the value.
-function scaleFor(values, transform = (v) => v) {
-  const nums = values.filter((v) => typeof v === "number" && v > 0);
+// keepZero decides whether 0 is a reading or a missing value, which differs by
+// field rather than being a global rule: on age and HKB value a 0 means "HKB has
+// no row" and must stay out of the domain, while on Proj a 0.0 is a real
+// projection — a player whose team has no game today — and belongs at the
+// bottom of the ramp. Excluding it there would compute the domain from a subset
+// and then shade rows that were never in it.
+function scaleFor(values, transform = (v) => v, keepZero = false) {
+  const nums = values.filter((v) => typeof v === "number" && (keepZero ? v >= 0 : v > 0));
   if (nums.length === 0) return null;
   const min = Math.min(...nums);
   const max = Math.max(...nums);
@@ -111,6 +117,45 @@ function heatCell(cls, value, scale, format) {
 
 const fmtAge = (v) => v.toFixed(1);
 const fmtValue = (v) => v.toLocaleString();
+const fmtProj = (v) => v.toFixed(1);
+
+// ---- Role ------------------------------------------------------------------
+// Proj is scaled per role because the two are not the same quantity. Measured on
+// the 2026-08-15 lineup: hitters spanned 2.92-5.48 and pitchers 2.85-19.89, so a
+// shared domain puts all 25 hitters inside the bottom sixth of the ramp and they
+// all come out the same near-white step — the same failure the HKB comment above
+// describes, for the same reason.
+const PITCHER_POS = new Set(["SP", "RP", "P"]);
+
+// roleOf prefers the server's own answer. lineupapi.Build fills the response
+// from two separate optimizer lists and states which one each row came from, and
+// that is strictly better than anything derivable here: a two-way player appears
+// in BOTH lists, so his two rows carry identical eligibility and `pos` cannot
+// tell them apart.
+//
+// The fallback exists because the field does not: a lineup published before
+// lineupapi grew `role` carries none, and the dashboard reads whatever JSON was
+// last published. It reads `pos` instead, which is right for every one-way
+// player — i.e. everything except the case the server field was added for.
+function roleOf(p) {
+  if (p.role === "hitter" || p.role === "pitcher") return p.role;
+  return (p.pos || []).some((c) => PITCHER_POS.has(c)) ? "pitcher" : "hitter";
+}
+
+// projCell is heatCell's sibling for a field where 0 is a reading rather than a
+// miss, so the two cannot share one function: heatCell renders any falsy value
+// as "not in HKB". Here only the absence of a player is unknown; a 0.0 keeps its
+// number, keeps the muted styling that already marked it, and sits at the foot
+// of its own role's ramp.
+function projCell(value, scale) {
+  if (typeof value !== "number") return el("span", "lineup-proj muted", "—");
+  const n = el("span", "lineup-proj", fmtProj(value));
+  if (!value) n.classList.add("muted");
+  if (scale) {
+    n.style.setProperty("--heat-pct", `${(scale.t(value) * MAX_TINT).toFixed(1)}%`);
+  }
+  return n;
+}
 
 // ---- MLB club logos --------------------------------------------------------
 // Ported from mlbTeamAbbrevToID in internal/recap/render.go, which is the Go
@@ -301,9 +346,7 @@ function slotRow(slot, scales) {
   row.appendChild(heatCell("lineup-age", p.age, scales.age, fmtAge));
   row.appendChild(heatCell("lineup-value", p.hkb_value, scales.value, fmtValue));
 
-  const proj = el("span", "lineup-proj", p.proj.toFixed(1));
-  if (!p.proj) proj.classList.add("muted");
-  row.appendChild(proj);
+  row.appendChild(projCell(p.proj, scales.proj[roleOf(p)]));
   return gridRow(row);
 }
 
@@ -362,17 +405,31 @@ function legend(scales) {
   const box = el("div", "lineup-legend");
   box.appendChild(rampKey("ramp-age", "Age", scales.age, fmtAge));
   box.appendChild(rampKey("ramp-value", "HKB value", scales.value, fmtValue));
+  // Two keys, one ramp colour: projected points for a hitter and for a pitcher
+  // are the same quantity read against different populations, so a second hue
+  // would say they are different things while a shared domain would say they
+  // are comparable. Neither is true, and printing both domains is what makes
+  // the distinction legible rather than hidden.
+  box.appendChild(rampKey("ramp-proj", "Proj hitters", scales.proj.hitter, fmtProj));
+  box.appendChild(rampKey("ramp-proj", "Proj pitchers", scales.proj.pitcher, fmtProj));
   box.appendChild(help(
     "Age and HKB dynasty value come from the Harry Knows Ball rankings, matched " +
-    "to each player by name. In both columns a darker cell means more — older, " +
-    "and more valuable. The shading is scaled to the highest and lowest numbers " +
+    "to each player by name. Proj is the points this player is expected to score " +
+    "today. In all three columns a darker cell means more — older, more valuable, " +
+    "higher projected. The shading is scaled to the highest and lowest numbers " +
     "in today's lineup, not to the whole league, so it shows how these players " +
     "compare with each other today and cannot be compared with another day's " +
-    "page. Age shading is proportional; value shading is not — dynasty values " +
-    "are so top-heavy that a proportional ramp would leave everyone below the " +
-    "best player looking identical, so the value column is shaded on a square " +
-    "root. Order is still exact; the size of the gap is not. A dash means HKB " +
-    "has no entry for that player — often a recent call-up.",
+    "page. Proj is shaded separately for hitters and for pitchers, because a good " +
+    "day from a starting pitcher is worth several times a good day from a hitter " +
+    "and one shared scale would leave every hitter looking identical. The two " +
+    "ranges are printed above; a hitter and a pitcher with the same shade are not " +
+    "projected to score the same. Age and Proj shading are proportional; value " +
+    "shading is not — dynasty values are so top-heavy that a proportional ramp " +
+    "would leave everyone below the best player looking identical, so the value " +
+    "column is shaded on a square root. Order is still exact; the size of the gap " +
+    "is not. A dash in Age or HKB means HKB has no entry for that player — often " +
+    "a recent call-up. A 0.0 in Proj is a real projection: that player's team has " +
+    "no game today.",
     "How the shading works"));
   return box;
 }
@@ -411,13 +468,26 @@ export async function renderLineup(root) {
   }
 
   const players = (data.slots || []).map((s) => s.player).filter(Boolean);
+  // Proj is linear, unlike HKB value: neither role is top-heavy the way dynasty
+  // values are. Measured on the 2026-08-15 lineup the eight starting pitchers
+  // spread evenly across 9.29-19.89 with the three relievers genuinely at the
+  // floor near 3, which is real signal about who is pitching today rather than
+  // one outlier flattening everyone below it. So proportionality is worth
+  // keeping here, and the legend says the shading is proportional.
+  const projFor = (role) =>
+    scaleFor(players.filter((p) => roleOf(p) === role).map((p) => p.proj), undefined, true);
   const scales = {
     age: scaleFor(players.map((p) => p.age)),
     value: scaleFor(players.map((p) => p.hkb_value), Math.sqrt),
+    proj: { hitter: projFor("hitter"), pitcher: projFor("pitcher") },
   };
   // The legend is only meaningful once something is shaded. An older published
-  // lineup predates the enrichment and carries neither field.
-  if (scales.age || scales.value) root.appendChild(legend(scales));
+  // lineup predates the dynasty enrichment and carries neither of those fields,
+  // but proj is not omitempty and is always present, so in practice this now
+  // renders whenever there is a player at all.
+  if (scales.age || scales.value || scales.proj.hitter || scales.proj.pitcher) {
+    root.appendChild(legend(scales));
+  }
 
   // Sorting re-orders the rows already on the page: it changes no membership,
   // so `scales` is computed once here and never recomputed. Shading is derived
