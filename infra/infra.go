@@ -249,6 +249,34 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			// leave one composition root pointing at a table that is gone.
 			"IDENTITY_TABLE":   identityTable.TableName(),
 			"FANTRAX_CRED_KEY": fantraxCredKey.KeyArn(),
+			// AN ENVIRONMENT VARIABLE, NOT A SECRET, AND THAT IS LOAD-BEARING
+			// FOR THE FAN-OUT (rosterbot-crq.13).
+			//
+			// It was a Secrets entry, carrying a comment asserting that
+			// containerOverrides "takes precedence over this default". AWS
+			// documents containerOverrides.environment as overriding the task
+			// definition's `environment`; it says nothing about overriding a
+			// `secrets` entry of the same name, and the two are resolved by
+			// different machinery — the agent injects secrets from SSM at
+			// container start. So the assertion was untested, and its failure
+			// mode is the worst one available here: every fanned-out task would
+			// silently keep the operator's id, write to the operator's
+			// PerTenant session/ prefix, and act as them, with every job
+			// reporting success (cmd/sync_tenant_test.go names exactly this).
+			//
+			// Designed away rather than tested. As `environment` the override
+			// is documented behaviour, and the value was never a secret: the
+			// same reasoning is already written at the apiFn.AddEnvironment
+			// call below, which passes this identical parameter as a plain
+			// environment variable — the tenant id is an opaque handle that
+			// already appears in every per-tenant S3 key.
+			//
+			// Still on the task definition rather than per-schedule, so every
+			// launch path inherits the operator default: the EventBridge
+			// schedules, the jobs the API launches, and the projection-site
+			// render CodeBuild fires after a deploy.
+			"ROSTERBOT_USER_ID": awsssm.StringParameter_ValueForStringParameter(
+				stack, jsii.String("/rosterbot/OPERATOR_USER_ID"), nil),
 		},
 		Secrets: &map[string]awsecs.Secret{
 			"FANTRAX_USERNAME":     secret("FANTRAX_USERNAME"),
@@ -272,10 +300,6 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			// writing to the legacy prefix while the schedules wrote to the new
 			// one, splitting the same artifact across two locations.
 			//
-			// The fan-out (rosterbot-crq.13) overrides it per task via
-			// containerOverrides, which takes precedence over this default.
-			"ROSTERBOT_USER_ID": awsecs.Secret_FromSsmParameter(
-				awsssm.StringParameter_FromStringParameterName(stack, jsii.String("POperatorUserId"), jsii.String("/rosterbot/OPERATOR_USER_ID"))),
 			// SLEEPER_LEAGUE_ID is the one hard requirement football-values/
 			// football-trades have (loadFootballConfig errors without it,
 			// unlike DYNASTY_FORMAT and FOOTBALL_PUSHOVER_*, which fall back
