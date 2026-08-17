@@ -50,6 +50,26 @@ func resolveTenantCredentials(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 
+	// CONSENT TO BEING WRITTEN TO IS SEPARATE FROM CONNECTING (rosterbot-18wq).
+	//
+	// A manager who connects has agreed to the bot READING their team. Letting
+	// it APPLY a lineup is a second decision, and auto_apply is the field that
+	// records it — false for every new user until a person turns it on.
+	//
+	// cfg.AutoApply arrives here true, which is the correct default for the
+	// single-tenant env path and the wrong one for a tenant, so it is lowered
+	// rather than raised. A read failure lowers it too: acting on an unknown
+	// answer would mean writing to somebody's roster on the strength of a
+	// DynamoDB hiccup, and the safe direction is obvious.
+	cfg.AutoApply = false
+	u, ok, err := store.GetUser(ctx, uid)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tenant %s: could not read the auto-apply preference (%v); "+
+			"proposing only\n", uid, err)
+	} else if ok {
+		cfg.AutoApply = u.AutoApply
+	}
+
 	// The ladder runs AFTER the session is installed, so its probe tests the
 	// exact cookie this run will use rather than a hypothetical one.
 	//

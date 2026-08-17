@@ -54,9 +54,14 @@ func (h *emitHarness) inputs(results []dateResult, dryRun bool) EmitInputs {
 		Results:    results,
 		SlotName:   goldenSlotNames(),
 		PlayerName: map[string]string{},
-		Cfg:        &config.Config{DryRun: dryRun, LeagueID: "L1", TeamID: "T1"},
-		Out:        &h.out,
-		Notify:     func(m string) { h.notify = append(h.notify, m) },
+		// AutoApply true because these fixtures exercise the APPLY path.
+		// config.Load defaults it true for the single-tenant env deployment;
+		// only a tenant's own profile lowers it (rosterbot-18wq). A struct
+		// literal gets Go's false, so stating it here is what keeps these tests
+		// about what they are actually testing.
+		Cfg:    &config.Config{DryRun: dryRun, LeagueID: "L1", TeamID: "T1", AutoApply: true},
+		Out:    &h.out,
+		Notify: func(m string) { h.notify = append(h.notify, m) },
 	}
 }
 
@@ -311,7 +316,9 @@ func TestAuthorize_OnlyIssuedForAWorthwhileGain(t *testing.T) {
 		{"real gain", datePlan{Disposition: movesWorthApplying}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			auth, ok := tc.plan.authorize()
+			// Consent held true so this case tests the DELTA dimension alone;
+			// the consent dimension is TestAuthorize_RequiresTenantConsent.
+			auth, ok := tc.plan.authorize(true)
 			if ok != tc.want {
 				t.Fatalf("authorize() ok = %v, want %v", ok, tc.want)
 			}

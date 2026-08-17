@@ -163,11 +163,19 @@ func emitDate(ft emitClient, in EmitInputs, dr dateResult) {
 		return
 	}
 
-	auth, ok := plan.authorize()
+	auth, ok := plan.authorize(in.Cfg.AutoApply)
 	if !ok {
-		// Unreachable: the dispositions that fail authorize() returned above.
-		// Kept as a guard rather than an assumption, since this is the branch
-		// that writes to the live roster.
+		if !in.Cfg.AutoApply {
+			// Said out loud, every time. A bot that silently declines to do the
+			// thing it was asked to do is indistinguishable from a broken one,
+			// and this is the line that explains an unchanged roster.
+			fmt.Fprintln(in.Out, "\n  Proposed only: auto-apply is off for this account, "+
+				"so no changes were written to the roster.")
+			return
+		}
+		// Otherwise unreachable: the dispositions that fail authorize()
+		// returned above. Kept as a guard rather than an assumption, since this
+		// is the branch that writes to the live roster.
 		return
 	}
 	applyLineupFor(ft, in, dr, auth)
@@ -327,8 +335,25 @@ func planDate(dr dateResult, playerName map[string]string) datePlan {
 // pinned by TestApplyLineupFor_RefusesAnUnauthorizedApply.
 type applyAuthorization struct{ plan *datePlan }
 
-func (p datePlan) authorize() (applyAuthorization, bool) {
+// authorize issues proof only when BOTH conditions hold: the move set is worth
+// applying, and the tenant has consented to the bot writing to their roster.
+//
+// autoApply is a required argument rather than a field on datePlan so that a
+// caller cannot obtain an authorization without having stated a position on
+// consent. It is the same reasoning that made the delta check a signature
+// requirement instead of a statement above the call: the branch this guards
+// writes to somebody's real team.
+//
+// Until rosterbot-18wq this second condition did not exist. auto_apply was
+// documented as "the only field that decides whether this bot writes to" a
+// roster, every creation path set it false deliberately, and nothing read it —
+// so propose-only was a claim, and a second manager connecting would have had
+// their lineup applied without ever opting in.
+func (p datePlan) authorize(autoApply bool) (applyAuthorization, bool) {
 	if p.Disposition != movesWorthApplying {
+		return applyAuthorization{}, false
+	}
+	if !autoApply {
 		return applyAuthorization{}, false
 	}
 	return applyAuthorization{plan: &p}, true

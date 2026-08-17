@@ -10,11 +10,16 @@ import (
 )
 
 type Config struct {
-	Username          string
-	Password          string
-	LeagueID          string
-	TeamID            string
-	DryRun            bool
+	Username string
+	Password string
+	LeagueID string
+	TeamID   string
+	DryRun   bool
+
+	// AutoApply decides whether the bot WRITES a lineup or only proposes one.
+	// True for the single-tenant env path; set from the tenant's profile
+	// otherwise, where it is false until a person turns it on.
+	AutoApply         bool
 	Dates             []time.Time
 	ILSlots           int
 	MinorsSlots       int
@@ -38,11 +43,24 @@ func Load(dryRun bool, dates []time.Time) (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		Username:          os.Getenv("FANTRAX_USERNAME"),
-		Password:          os.Getenv("FANTRAX_PASSWORD"),
-		LeagueID:          os.Getenv("FANTRAX_LEAGUE_ID"),
-		TeamID:            os.Getenv("FANTRAX_TEAM_ID"),
-		DryRun:            dryRun,
+		Username: os.Getenv("FANTRAX_USERNAME"),
+		Password: os.Getenv("FANTRAX_PASSWORD"),
+		LeagueID: os.Getenv("FANTRAX_LEAGUE_ID"),
+		TeamID:   os.Getenv("FANTRAX_TEAM_ID"),
+		DryRun:   dryRun,
+		// TRUE BY DEFAULT, and only the tenant path lowers it.
+		//
+		// This is the single-tenant contract: a deployment configured entirely
+		// from FANTRAX_* env vars has exactly one operator, who by running the
+		// bot at all has asked it to manage their team. Defaulting false there
+		// would silently stop every existing deployment and local run from
+		// applying anything.
+		//
+		// resolveTenantCredentials overwrites it from the tenant's own profile,
+		// where it defaults FALSE — a manager who connects has consented to the
+		// bot READING their team, and separately has to consent to it WRITING
+		// (rosterbot-18wq, design decision 11).
+		AutoApply:         true,
 		Dates:             dates,
 		ILSlots:           envInt("FANTRAX_IL_SLOTS", 0),
 		MinorsSlots:       envInt("FANTRAX_MINORS_SLOTS", 0),
