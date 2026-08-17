@@ -20,8 +20,8 @@ import (
 
 // FileUserStore is a local-filesystem UserStore for `rosterbot serve`.
 //
-//	<dir>/users/<uid>/profile.json
-//	<dir>/users/<uid>/creds/<b64url(credID)>.json
+//	<dir>/users/<b64url(uid)>/profile.json
+//	<dir>/users/<b64url(uid)>/creds/<b64url(credID)>.json
 //
 // The layout mirrors the DynamoDB key design deliberately — one file per item,
 // credentials as siblings of the profile rather than inside it — so the two
@@ -41,8 +41,34 @@ func NewFileUserStore(dir string) *FileUserStore { return &FileUserStore{dir: di
 
 var _ UserStore = (*FileUserStore)(nil)
 
+// userDir is the one place a user id becomes a path, so it is the one place
+// that has to make a path safe.
+//
+// THE ID IS ENCODED, NEVER INTERPOLATED. filepath.Join calls Clean, so a "../"
+// inside an id does not stay a literal directory name — it escapes. Every path
+// in this store funnels through here, which meant the profile read, the profile
+// WRITE and the credential listing were all affected: a read leaks somebody
+// else's file, a write destroys one. (CodeQL go/path-injection #16, reported on
+// readProfile; readProfile was simply where the scanner happened to land.)
+//
+// A real UserID is base64url — NewUserID encodes the WebAuthn handle — so no id
+// this store's own callers construct contains a dot or a slash, and nothing
+// exploitable exists today. The exposure is every id that arrives from outside
+// that constructor: the --user admin flags, a hand-edited store, the next
+// caller nobody has written yet. Encoding removes the question rather than
+// answering it for the current callers only.
+//
+// base64url is the same tool claimPath below already reaches for, and its
+// alphabet ([A-Za-z0-9_-]) provably contains no path metacharacter. Validation
+// would preserve prettier directory names, but it would have to return an error
+// that four call sites do not currently have anywhere to put.
+//
+// The cost is that ids are double-encoded on disk, so directory names are no
+// longer eyeball-matchable to a UserID, and any store written before this is
+// orphaned. Both are acceptable: this backend exists for `rosterbot serve`, and
+// production runs on DynamoDB.
 func (s *FileUserStore) userDir(id UserID) string {
-	return filepath.Join(s.dir, "users", string(id))
+	return filepath.Join(s.dir, "users", base64.RawURLEncoding.EncodeToString([]byte(id)))
 }
 func (s *FileUserStore) profilePath(id UserID) string {
 	return filepath.Join(s.userDir(id), "profile.json")
@@ -323,7 +349,20 @@ func (s *FileUserStore) ListActive(_ context.Context) ([]*User, error) {
 		if !e.IsDir() {
 			continue
 		}
-		u, _, ok, err := s.readProfile(UserID(e.Name()))
+		// The directory name is the ENCODED id (see userDir), so it has to be
+		// decoded before it is an id again. Passing e.Name() straight through
+		// would re-encode it on the way back into a path and look for a
+		// directory that cannot exist — ListActive silently returning nothing,
+		// which for a fan-out means every tenant quietly skipped.
+		raw, decErr := base64.RawURLEncoding.DecodeString(e.Name())
+		if decErr != nil {
+			// Not one of ours — a stray directory, or a store written before
+			// the encoding. Skipping is right: this listing drives the fan-out,
+			// and inventing a tenant from an unparseable name is worse than
+			// omitting a directory that holds no profile anyway.
+			continue
+		}
+		u, _, ok, err := s.readProfile(UserID(raw))
 		if err != nil {
 			return nil, err
 		}
