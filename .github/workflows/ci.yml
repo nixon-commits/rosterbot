@@ -44,8 +44,19 @@ jobs:
       - name: Build nested Go modules (lambda/, opsnotify/, infra/)
         run: make build-modules
 
+      # `make test`, not `go test ./internal/...`. The nested modules
+      # (lambda/, opsnotify/, infra/) have their own go.mod, so the root test
+      # run never descends into them — and CI called the root run directly,
+      # which meant every test in those modules was never executed here.
+      #
+      # That is not hypothetical. lambda's TestBuildStores_WiresEveryStoreField
+      # exists because Trades and TradeValues were declared, routed and granted
+      # IAM but never wired, so two endpoints answered 501 in production for
+      # weeks with nothing failing. The guard written to catch the next one was
+      # itself red and unnoticed, because nothing ran it. Same class as
+      # check-pins, which CI does run for exactly this reason.
       - name: Test
-        run: go test ./internal/...
+        run: make test
 
       - name: Test stale-branch detection script
         run: bash .github/scripts/check-stale-critical-branches.test.sh

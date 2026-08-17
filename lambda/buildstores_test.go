@@ -44,6 +44,12 @@ func TestBuildStores_WiresEveryStoreField(t *testing.T) {
 	// a user, and with nowhere to resolve it the Lambda would reject every
 	// passkey login. Failing at construction is louder than failing per-request.
 	t.Setenv("IDENTITY_TABLE", "test-identity-table")
+	// Set for the same reason as AWS_REGION above: buildStores wires the Sealer
+	// only when this is non-empty, and infra.go always sets it in production.
+	// Leaving it unset made the guard report Sealer as unwired on every run — a
+	// false positive about a field that is fine, which is how a guard gets
+	// ignored rather than read.
+	t.Setenv("FANTRAX_CRED_KEY", "arn:aws:kms:us-west-1:111122223333:key/test")
 
 	cfg, err := buildStores(context.Background(), "test-bucket")
 	if err != nil {
@@ -88,6 +94,12 @@ func TestBuildStores_TradesAndTradeValuesAreDistinct(t *testing.T) {
 	// a user, and with nowhere to resolve it the Lambda would reject every
 	// passkey login. Failing at construction is louder than failing per-request.
 	t.Setenv("IDENTITY_TABLE", "test-identity-table")
+	// Set for the same reason as AWS_REGION above: buildStores wires the Sealer
+	// only when this is non-empty, and infra.go always sets it in production.
+	// Leaving it unset made the guard report Sealer as unwired on every run — a
+	// false positive about a field that is fine, which is how a guard gets
+	// ignored rather than read.
+	t.Setenv("FANTRAX_CRED_KEY", "arn:aws:kms:us-west-1:111122223333:key/test")
 
 	cfg, err := buildStores(context.Background(), "test-bucket")
 	if err != nil {

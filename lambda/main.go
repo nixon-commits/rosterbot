@@ -29,6 +29,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/kmscreds"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
+	"github.com/nixon-commits/rosterbot/lambda/internal/ecsrun"
 )
 
 // buildStores constructs every S3-backed store this function serves from, and
@@ -160,7 +161,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load aws config: %v", err)
 	}
-	jobs, err := newECSRunner(ecs.NewFromConfig(cfg))
+	jobs, err := ecsrun.New(ecs.NewFromConfig(cfg))
 	if err != nil {
 		log.Fatalf("init job runner: %v", err)
 	}
