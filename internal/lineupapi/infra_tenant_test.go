@@ -104,6 +104,29 @@ func TestGapsAreScannedPerTenant(t *testing.T) {
 	}
 }
 
+// A tenant qualifier that disambiguates nothing must not be rendered. The
+// deployment has one tenant, whose id is an 87-character opaque WebAuthn user
+// handle; prefixing it onto every gap buried five dates under five copies of
+// the same string and made the card unreadable. Identity belongs in the gap
+// label only where it separates one tenant's missing day from another's.
+func TestSingleTenantGapsAreNotQualifiedByTenant(t *testing.T) {
+	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	uid := "57VUsoMRiBvON3CXIz3N3Tv5UhTsOeg_L517-QPobKY1x6r8VitfqTCgwkA9cDnCTwLQeQ2tn21Hj6S-0amddg"
+
+	row := rowFor(t, layout.TradeOffers, PrefixListing{
+		Objects: 5, LastModified: now.Add(-time.Hour),
+		Partitions: []string{"2026-08-11", "2026-08-13"},
+		Tenants: map[string]TenantListing{
+			uid: {Objects: 5, LastModified: now.Add(-time.Hour),
+				Partitions: []string{"2026-08-11", "2026-08-13"}},
+		},
+	}, now)
+
+	if got, want := row.Gaps, []string{"2026-08-12"}; !eqDays(got, want) {
+		t.Errorf("gaps = %v, want %v — with one tenant the id qualifies nothing", got, want)
+	}
+}
+
 // TestSharedArtifactIgnoresTenantSlices guards the other direction. A shared
 // artifact must be judged on its aggregate even if some key happens to contain
 // a user= segment, or the league-wide stores would start reporting per-tenant

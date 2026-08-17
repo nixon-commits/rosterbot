@@ -25,6 +25,13 @@ const HELP = {
   ephemeral:
     "A cache, not a record. Anything here is re-fetchable from upstream, so age " +
     "is not a health signal and losing it costs only the time to fetch again.",
+  lostgap:
+    "A day is graded by joining its actual results against the projection " +
+    "snapshot captured on that day. These days have no snapshot — the job that " +
+    "captures them did not complete — and a rest-of-season projection cannot be " +
+    "fetched retroactively, so re-running the producer would write nothing.\n\n" +
+    "Days listed as re-runnable are missing a run, not their input. Those do " +
+    "fill in.",
 };
 
 function attachHelp(root) {
@@ -70,6 +77,30 @@ function healthBadge(h) {
   return `<span class="badge ${cfg.cls}">${cfg.label}</span>`;
 }
 
+// fmtGap renders one gap entry. The server sends a bare date unless more than
+// one tenant is present, in which case it qualifies it as "<uid>/<date>" to
+// keep the two apart. A tenant id is an opaque 87-character WebAuthn handle, so
+// the date leads and the id trails as a short muted tag — enough to tell two
+// tenants apart at a glance, without burying what the row is about.
+function fmtGap(g) {
+  const cut = g.lastIndexOf("/");
+  if (cut < 0) return `<span class="mono">${escapeHtml(g)}</span>`;
+  const uid = g.slice(0, cut);
+  const date = g.slice(cut + 1);
+  return `<span class="mono">${escapeHtml(date)}</span><span class="muted" title="${escapeHtml(
+    uid,
+  )}"> ·${escapeHtml(uid.slice(0, 6))}…</span>`;
+}
+
+function gapBlock(days, permanent, footer) {
+  const shown = days.slice(0, 8).map(fmtGap).join(", ");
+  const more = days.length > 8 ? ` +${days.length - 8} more` : "";
+  return `<div class="infra-gap${permanent ? " infra-gap-permanent" : ""}">
+      ${days.length} missing day${days.length === 1 ? "" : "s"}: ${shown}${more}
+      ${footer}
+    </div>`;
+}
+
 function artifactCard(a) {
   const bits = [];
 
@@ -103,17 +134,27 @@ function artifactCard(a) {
   }
 
   if (a.gaps && a.gaps.length) {
-    const permanent = a.no_backfill;
-    const shown = a.gaps.slice(0, 8).map(escapeHtml).join(", ");
-    const more = a.gaps.length > 8 ? ` +${a.gaps.length - 8} more` : "";
-    detail += `<div class="infra-gap${permanent ? " infra-gap-permanent" : ""}">
-      ${a.gaps.length} missing day${a.gaps.length === 1 ? "" : "s"}: <span class="mono">${shown}</span>${more}
-      ${
-        permanent
-          ? `<div class="infra-warn">Gone for good <span data-help="nobackfill"></span></div>`
-          : `<div class="muted">Re-runnable</div>`
+    if (a.no_backfill) {
+      // The whole artifact is unbackfillable, so every gap has one story.
+      detail += gapBlock(a.gaps, true, `<div class="infra-warn">Gone for good <span data-help="nobackfill"></span></div>`);
+    } else {
+      // Otherwise the same series holds both kinds at once, and telling an
+      // operator to re-run a job that structurally cannot work is worse than
+      // saying nothing — it turns permanent loss into a chore that never
+      // completes. Split them.
+      const lost = new Set(a.lost_gaps || []);
+      const rerunnable = a.gaps.filter((g) => !lost.has(g));
+      if (rerunnable.length) {
+        detail += gapBlock(rerunnable, false, `<div class="muted">Re-runnable</div>`);
       }
-    </div>`;
+      if (lost.size) {
+        detail += gapBlock(
+          a.gaps.filter((g) => lost.has(g)),
+          true,
+          `<div class="infra-warn">Input never captured — cannot be re-run <span data-help="lostgap"></span></div>`,
+        );
+      }
+    }
   }
 
   if (a.error) {

@@ -68,6 +68,25 @@ type Artifact struct {
 	// those upstreams by the tenant count for no benefit.
 	PerTenant bool
 
+	// RecoveryInput names the S3Prefix of the artifact a missing day has to be
+	// re-derived FROM, for artifacts whose gaps are only conditionally
+	// re-runnable. Empty means unconditional: either the job can simply be run
+	// again for that date, or NoBackfill already says it never can.
+	//
+	// It exists because "Re-runnable" was an assumption the status page stated
+	// as a fact. Grades are re-derivable from a projection snapshot — but only
+	// where one was captured. On 2026-08-01 and 08-02 the Shadow job failed on
+	// Fantrax STALE_CLIENT and wrote none, and a snapshot records what the model
+	// projected ON that day: FanGraphs rest-of-season cannot be fetched
+	// retroactively, so those two days are permanently ungradeable. The page
+	// listed them beside three genuinely recoverable ones under one
+	// "Re-runnable" footer, which turns permanent loss into a chore that
+	// silently never completes.
+	//
+	// Deliberately a per-day check rather than a per-artifact flag: the whole
+	// distinction is that the SAME artifact has both kinds of gap at once.
+	RecoveryInput string
+
 	// NoBackfill marks an artifact whose missing days can never be recovered,
 	// so a gap is permanent data loss rather than a re-runnable job. Two
 	// artifacts carry it: the Team Value Store (docs/adr/0002 — HKB has no
@@ -83,8 +102,11 @@ const Day = 24 * time.Hour
 // The table. Keep S3Prefix values in sync with cmd/sync.go's statePairs and
 // with the CDK's bucket policy.
 var (
-	Cache      = Artifact{Name: "TTL Cache", S3Prefix: "cache/", LocalDir: ".cache", Durable: false}
-	Analysis   = Artifact{Name: "Analysis Store", S3Prefix: "analysis/grades/", LocalDir: ".analysis", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true, PerTenant: true}
+	Cache = Artifact{Name: "TTL Cache", S3Prefix: "cache/", LocalDir: ".cache", Durable: false}
+	// Analysis grades a day by joining that day's actuals against the projection
+	// snapshot the Shadow job captured for it, so a gap is re-runnable exactly
+	// when backtest/ still holds that day's capture — see RecoveryInput.
+	Analysis   = Artifact{Name: "Analysis Store", S3Prefix: "analysis/grades/", LocalDir: ".analysis", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true, PerTenant: true, RecoveryInput: "backtest/"}
 	TeamValues = Artifact{Name: "Team Value Store", S3Prefix: "analysis/team-values/", LocalDir: ".teamvalue", Durable: true, MaxAge: 2 * Day, Producer: "TeamValues", Partitioned: true, NoBackfill: true}
 	// FootballValues is per-player grain (unlike TeamValues' per-team
 	// aggregate), so unlike the Team Value Store it is NOT NoBackfill: both
