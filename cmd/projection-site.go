@@ -20,8 +20,9 @@ import (
 )
 
 var (
-	projSiteOut  string
-	projSiteOpen bool
+	projSiteOut   string
+	projSiteOpen  bool
+	projSiteScope string
 )
 
 var projectionSiteCmd = &cobra.Command{
@@ -43,10 +44,16 @@ public report/ prefix.`,
 func init() {
 	projectionSiteCmd.Flags().StringVar(&projSiteOut, "out", "report", "output directory for the publicly-published artifacts (value.json, football.json)")
 	projectionSiteCmd.Flags().BoolVar(&projSiteOpen, "open", false, "open the rendered value.json in the default handler")
+	projectionSiteCmd.Flags().StringVar(&projSiteScope, "scope", string(scopeAll),
+		"which half to render: all | tenant (private per-user reports) | league (public value/football)")
 	rootCmd.AddCommand(projectionSiteCmd)
 }
 
 func runProjectionSite(cmd *cobra.Command, args []string) error {
+	scope, err := parseProjectionScope(projSiteScope)
+	if err != nil {
+		return err
+	}
 	today := todayET()
 
 	reader, err := statestore.FromEnv().AnalysisReader()
@@ -74,55 +81,70 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 	// passkey-gated GET /v1/reports/{name}. Opening the store is fatal here for
 	// the same reason writing model.json was: it is this command's primary
 	// output, and a run that cannot write it has done nothing.
-	reports, err := statestore.FromEnv().ReportsStore()
-	if err != nil {
-		return fmt.Errorf("init reports store: %w", err)
+	var reports lineupapi.Publisher
+	if scopeWritesPrivateReports(scope) {
+		rs, rerr := statestore.FromEnv().ReportsStore()
+		if rerr != nil {
+			return fmt.Errorf("init reports store: %w", rerr)
+		}
+		reports = rs
+		if err := publishReport(reports, lineupapi.ReportModelKey, m); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Published report %q (%d graded rows, latest %s)\n",
+			lineupapi.ReportModelKey, len(rows), m.LatestDate)
 	}
-	if err := publishReport(reports, lineupapi.ReportModelKey, m); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "Published report %q (%d graded rows, latest %s)\n",
-		lineupapi.ReportModelKey, len(rows), m.LatestDate)
 
-	if err := os.MkdirAll(projSiteOut, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", projSiteOut, err)
+	// Only for a scope that actually publishes into it — see ensurePublicDir.
+	// Creating it unconditionally would make a per-tenant run's empty directory
+	// wipe the league's public artifacts on the next sync.
+	if err := ensurePublicDir(scope, projSiteOut); err != nil {
+		return err
 	}
 
 	// Emit value.json (team HKB value tracker) alongside the accuracy model.
 	// It reads its own store and is additive, so a team-value hiccup soft-fails
 	// rather than blocking the accuracy dashboard deploy. It stays on the
 	// public report/ prefix: league-wide standings, not one manager's numbers.
-	if err := renderValueSite(projSiteOut); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: value.json not written: %v\n", err)
+	if scopeWritesPublicDir(scope) {
+		if err := renderValueSite(projSiteOut); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: value.json not written: %v\n", err)
+		}
 	}
 
 	// Emit the views report (recap-site readership) on the same terms: its own
 	// source, additive, and soft-failing so a log-read hiccup never blocks the
 	// accuracy dashboard deploy. Private — readership is the operator's.
-	if err := renderViewsSite(reports); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: views report not written: %v\n", err)
+	if scopeWritesPrivateReports(scope) {
+		if err := renderViewsSite(reports); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: views report not written: %v\n", err)
+		}
 	}
 
 	// Emit the gap report (realized-vs-hindsight lineup gap) on the same terms:
 	// its own store, additive, soft-failing so a gap hiccup never blocks the
 	// accuracy dashboard deploy. Private — this is how many points the manager
 	// left on their own bench.
-	if err := renderGapSite(reports); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: gap report not written: %v\n", err)
+	if scopeWritesPrivateReports(scope) {
+		if err := renderGapSite(reports); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: gap report not written: %v\n", err)
+		}
 	}
 
 	// Emit football.json (dynasty football standings) on the same terms: its
 	// own store, additive, soft-failing so a football hiccup never blocks the
 	// accuracy dashboard deploy. projection-site never calls initApp (pure
 	// statestore reads), so there is no Fantrax coupling to work around here.
-	if err := renderFootballSite(projSiteOut); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: football.json not written: %v\n", err)
+	if scopeWritesPublicDir(scope) {
+		if err := renderFootballSite(projSiteOut); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: football.json not written: %v\n", err)
+		}
 	}
 
 	// --open points at value.json: the private reports are no longer files at a
 	// predictable path (the store owns their layout), and value.json is the one
 	// artifact this command still writes to <out>.
-	if projSiteOpen {
+	if projSiteOpen && scopeWritesPublicDir(scope) {
 		if err := openInBrowser(filepath.Join(projSiteOut, "value.json")); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		}

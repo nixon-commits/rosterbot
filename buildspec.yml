@@ -93,7 +93,7 @@ phases:
             --launch-type FARGATE \
             --count 1 \
             --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SECURITY_GROUPS],assignPublicIp=ENABLED}" \
-            --overrides '{"containerOverrides":[{"name":"bot","command":["projection-site","--out","report"]}]}'
+            --overrides '{"containerOverrides":[{"name":"bot","command":["projection-site","--out","report","--scope","league"]}]}'
         else
           echo "CLUSTER not set (project env not yet deployed via cdk); skipping projection-site render"
         fi

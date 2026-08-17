@@ -147,7 +147,7 @@ var (
 	// daily schedule, so the newest object's age is an honest reading for the
 	// set. The residual cost is that one of the three soft-failing in
 	// projection-site while the others succeed does not move this row.
-	Reports = Artifact{Name: "Private Dashboard Reports", S3Prefix: "reports/", LocalDir: ".reports", Durable: true, MaxAge: 26 * time.Hour, Producer: "ProjectionSite", PerTenant: true}
+	Reports = Artifact{Name: "Private Dashboard Reports", S3Prefix: "reports/", LocalDir: ".reports", Durable: true, MaxAge: 26 * time.Hour, Producer: "ProjectionReports", PerTenant: true}
 
 	Session = Artifact{Name: "Fantrax Session", S3Prefix: "session/", LocalDir: ".fantrax-cache", Durable: true, MaxAge: 7 * Day, Producer: "", PerTenant: true}
 

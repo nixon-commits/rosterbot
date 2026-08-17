@@ -917,7 +917,21 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		{"Recap", "cron(0 11 ? * MON *)", jsii.Strings("recap-site", "--out", "dist"), weeklyGap},
 		{"Backtest", "cron(0 12 ? * MON *)", jsii.Strings("backtest"), weeklyGap},
 		{"Grade", "cron(30 13 * * ? *)", jsii.Strings("grade"), dailyGap},
-		{"ProjectionSite", "cron(0 15 * * ? *)", jsii.Strings("projection-site", "--out", "report"), dailyGap},
+		// SPLIT IN TWO (rosterbot-crq.14 follow-up). projection-site produces
+		// two unrelated kinds of artifact: the three PRIVATE per-tenant reports
+		// (model, gap, views) and the league-wide PUBLIC value.json /
+		// football.json. It was excluded from perTenantJobs because of the
+		// second half, which meant the FIRST half only ever ran as the operator
+		// — layout.Reports is PerTenant and resolved per caller, so every other
+		// tenant read a permanent 404 on their own model, gap and views.
+		//
+		// The league-wide half stays a singleton: N tenants publishing
+		// value.json would be N tasks racing on one key, and publishSite
+		// mirrors that directory with --delete.
+		{"ProjectionSite", "cron(0 15 * * ? *)", jsii.Strings("projection-site", "--out", "report", "--scope", "league"), dailyGap},
+		// The per-tenant half, five minutes later so it reads the same day's
+		// grades without contending with the league render.
+		{"ProjectionReports", "cron(5 15 * * ? *)", jsii.Strings("projection-site", "--scope", "tenant"), dailyGap},
 		// daily capture of ephemeral upstream data (HKB, projections, Savant, prospects) after upstreams' once-daily refresh
 		{"Archive", "cron(15 14 * * ? *)", jsii.Strings("archive"), dailyGap},
 		// Appends today's per-team aggregate HKB dynasty value to the Team Value
@@ -972,6 +986,9 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// scoping at all — so they are singletons, not per-tenant jobs.
 	perTenantJobs := map[string]bool{
 		"Lineup": true, "Grade": true, "Backtest": true, "Shadow": true, "Prospects": true,
+		// The private-reports half of projection-site. Its league-wide sibling
+		// (ProjectionSite) is deliberately absent — see the schedule table.
+		"ProjectionReports": true,
 	}
 	// A typo'd key would not fail — it would silently mean "not per-tenant",
 	// leaving that job running once for the operator forever while looking

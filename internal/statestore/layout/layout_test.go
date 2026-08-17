@@ -63,16 +63,24 @@ func TestAll_DurableArtifactsDeclareAMaxAge(t *testing.T) {
 
 // Producer names must match real EventBridge schedules; a typo here sends the
 // reader hunting for a job that doesn't exist.
+// TestAll_ProducersAreRealSchedules now READS infra.go's schedule table rather
+// than restating it.
+//
+// It held a hand-copied list of schedule names, which is the shape of guard
+// this repo keeps getting bitten by: it went stale the moment a schedule was
+// added, and its failure said "unknown schedule" about a schedule that plainly
+// exists. Parsing the real table means adding a schedule cannot break it and
+// deleting one cannot silently pass it.
+//
+// See scheduleIDsFromInfra for why parsing is the only option across this
+// module boundary.
 func TestAll_ProducersAreRealSchedules(t *testing.T) {
-	valid := map[string]bool{
-		"Lineup": true, "Prospects": true, "GsCheck": true, "Waivers": true,
-		"Transactions": true, "Claims": true, "Backtest": true, "Grade": true,
-		"ProjectionSite": true, "Archive": true, "TeamValues": true, "Shadow": true, "FootballValues": true,
-		"": true, // no single producer (e.g. session/, written by every task)
-	}
+	valid := scheduleIDsFromInfra(t)
+	valid[""] = true // no single producer (e.g. session/, written by every task)
 	for _, a := range All() {
 		if !valid[a.Producer] {
-			t.Errorf("%s: Producer %q is not a known EventBridge schedule", a.Name, a.Producer)
+			t.Errorf("%s: Producer %q is not a schedule in infra.go's jobs table",
+				a.Name, a.Producer)
 		}
 	}
 }
