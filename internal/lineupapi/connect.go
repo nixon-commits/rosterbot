@@ -84,7 +84,16 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := cfg.Jobs.Run(r.Context(), []string{"connect", "--user", string(caller.UserID)})
+	// The caller goes in BOTH places, and they are not redundant. --user tells
+	// the connect command whose credentials to decrypt and verify; the caller
+	// argument sets the task's ROSTERBOT_USER_ID, which decides the S3 prefixes
+	// it writes under. Without the second, a tenant's freshly minted FX_RM
+	// cookie cache lands in the OPERATOR's session/ prefix — the precise
+	// cross-tenant credential leak cmd/sync_tenant_test.go exists to prevent,
+	// arriving through the one flow whose entire job is handling somebody
+	// else's credentials.
+	id, err := cfg.Jobs.Run(r.Context(), caller.UserID,
+		[]string{"connect", "--user", string(caller.UserID)})
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "could not start verification")
 		return

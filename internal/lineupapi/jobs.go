@@ -378,8 +378,27 @@ type RunStore interface {
 }
 
 // JobRunner launches a job asynchronously (ECS RunTask) and returns the run id.
+//
+// caller IS A PARAMETER RATHER THAN AN ENVIRONMENT CONVENTION, and that is the
+// whole fix for the worst defect this API has had. The scheduled dispatcher put
+// the tenant into the task's environment; this launcher did not, and nothing
+// could notice — ROSTERBOT_USER_ID lives on the SHARED task definition, so an
+// omitted override does not fail or yield an empty prefix, it silently resolves
+// to a real, working, PRIVILEGED tenant. A member launching `optimize` got a
+// task that decrypted the OPERATOR's Fantrax credentials and applied a lineup
+// to the OPERATOR's roster, with every layer reporting success.
+//
+// As an argument the compiler rejects a launcher that forgets it. Same move
+// this repo already made twice: WeeklyPeriod/DailyPeriod as distinct types
+// after two period-axis bugs, and Version on lineupapi.Identity rather than in
+// the method signature.
+//
+// An EMPTY caller is the bearer-token path, which has no UserID by construction
+// (break-glass admin that deliberately never touches the user store). An
+// implementation resolves that to the deployment's default tenant; it is not an
+// error and must not be turned into one.
 type JobRunner interface {
-	Run(ctx context.Context, command []string) (id string, err error)
+	Run(ctx context.Context, caller UserID, command []string) (id string, err error)
 }
 
 // commandString renders args for display.

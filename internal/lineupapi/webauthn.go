@@ -388,6 +388,31 @@ func (cfg Config) handleRevokePasskey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not revoke passkey")
 		return
 	}
+
+	// AND END THE SESSIONS IT MAY HAVE MINTED. Deleting the credential alone
+	// only stops NEW logins; every cookie that credential already produced
+	// stays valid, which is exactly the wrong half for the case this control
+	// exists to answer. Someone revoking a lost device is not worried about
+	// future logins — whoever holds the device already has a live session.
+	//
+	// TokenVersion was read on every authenticated route by three independent
+	// checks and written by nothing, anywhere: revocation was fully implemented
+	// except for the part that triggers it.
+	//
+	// This logs the caller out too, and that is honest rather than unfortunate:
+	// a session cannot be attributed to the credential that minted it, so
+	// "revoke this passkey" can only truthfully mean "and end the sessions it
+	// may have created".
+	//
+	// A failure here is reported even though the credential is already gone. The
+	// alternative — 204 with the sessions still live — would tell a user their
+	// lost device was locked out when it was not.
+	u.TokenVersion++
+	if err := cfg.Users.PutUser(r.Context(), u); err != nil {
+		writeErr(w, http.StatusInternalServerError,
+			"passkey removed, but existing sessions could not be ended; try again")
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

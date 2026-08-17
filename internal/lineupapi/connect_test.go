@@ -59,6 +59,7 @@ func (m *memConnections) PutConnection(_ context.Context, c *FantraxConnection) 
 // TestConnect_WritesTheRecordBeforeLaunchingTheTask assert an ordering rather
 // than just a pair of end states.
 type recordingJobs struct {
+	callers    []UserID
 	conns      *memConnections
 	argv       []string
 	statusAt   ConnStatus
@@ -67,7 +68,8 @@ type recordingJobs struct {
 	returnedID string
 }
 
-func (j *recordingJobs) Run(_ context.Context, command []string) (string, error) {
+func (j *recordingJobs) Run(_ context.Context, caller UserID, command []string) (string, error) {
+	j.callers = append(j.callers, caller)
 	j.launched = true
 	j.argv = append([]string(nil), command...)
 	if j.conns != nil && j.conns.conn != nil {
@@ -339,4 +341,36 @@ func equalArgv(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestConnect_LaunchesTheTaskAsTheCaller.
+//
+// --user tells the connect command whose credentials to decrypt; the caller
+// argument sets the task's ROSTERBOT_USER_ID, which decides the S3 prefixes it
+// writes under. They are not redundant. Without the second, the FX_RM cookie
+// cache the task mints lands in the OPERATOR's session/ prefix — the
+// cross-tenant credential leak cmd/sync_tenant_test.go exists to prevent,
+// arriving through the one flow whose whole job is handling somebody else's
+// credentials.
+func TestConnect_LaunchesTheTaskAsTheCaller(t *testing.T) {
+	h, _, jobs, _ := connectFixture(t, "team-7")
+
+	// Mirror TestConnect_BodyOverTheSizeCapIsRefused: build the request with the
+	// real body, then borrow the session headers.
+	sess := reqWithSession(t, http.MethodPost, "/v1/connect", "alice", 0)
+	r := httptest.NewRequest(http.MethodPost, "/v1/connect", connectBody(t, "u", "p"))
+	r.Header = sess.Header
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body)
+	}
+	if len(jobs.callers) != 1 {
+		t.Fatalf("launched %d tasks, want 1", len(jobs.callers))
+	}
+	if jobs.callers[0] != "alice" {
+		t.Errorf("connect task launched as %q, want alice — its session cookie would be "+
+			"written under the wrong tenant's prefix", jobs.callers[0])
+	}
 }

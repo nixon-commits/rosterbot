@@ -16,7 +16,9 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
+
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 )
 
 // API is the slice of the ECS client this package uses, so callers can test
@@ -52,10 +54,30 @@ func New(client API) (*Runner, error) {
 	return r, nil
 }
 
-// Run launches a user-initiated job, tagging the run ledger with
-// RUN_TRIGGER=manual. Implements lineupapi.JobRunner.
-func (r *Runner) Run(ctx context.Context, command []string) (string, error) {
-	return r.RunWithEnv(ctx, command, map[string]string{"RUN_TRIGGER": "manual"})
+// Run launches a user-initiated job AS THE CALLER. Implements
+// lineupapi.JobRunner.
+//
+// It sets the same two tenant variables the scheduled dispatcher does, and for
+// the same reasons: ROSTERBOT_USER_ID decides the S3 prefixes every PerTenant
+// artifact is written under, and RUN_USER_ID is what entrypoint.sh stamps on
+// the run-ledger record. Setting neither was the critical defect this
+// parameter exists to close — ROSTERBOT_USER_ID lives on the shared task
+// definition, so an omitted override silently resolved to the operator, and a
+// member's job ran against the operator's credentials, roster and auto_apply
+// while reporting success.
+//
+// An EMPTY caller is the bearer-token path, which has no UserID by
+// construction. Both variables are then left unset so the task definition's
+// default applies — that is the deployment's own tenant, which is the right
+// answer for break-glass access and is decided here, once, rather than by every
+// call site.
+func (r *Runner) Run(ctx context.Context, caller lineupapi.UserID, command []string) (string, error) {
+	env := map[string]string{"RUN_TRIGGER": "manual"}
+	if caller != "" {
+		env["ROSTERBOT_USER_ID"] = string(caller)
+		env["RUN_USER_ID"] = string(caller)
+	}
+	return r.RunWithEnv(ctx, command, env)
 }
 
 // RunWithEnv launches a job with extra container environment variables.

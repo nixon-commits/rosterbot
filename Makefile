@@ -58,11 +58,26 @@ install:
 	go install .
 	"$$(go env GOPATH)/bin/rosterbot" completion zsh > "$${HOMEBREW_PREFIX:-/usr/local}/share/zsh/site-functions/_rosterbot"
 
-# Mirrors `build: build-modules`. The root `go test ./internal/...` never
-# descends into the nested modules (lambda/, opsnotify/, infra/), so their
-# tests silently never ran — opsnotify/build_test.go sat dead for months.
+# Mirrors `build: build-modules`. The root run never descends into the nested
+# modules (lambda/, opsnotify/, infra/), so their tests silently never ran —
+# opsnotify/build_test.go sat dead for months.
+#
+# `./...`, NOT `./internal/...`. Naming a subtree makes the gate an allowlist of
+# directories, so it silently re-breaks every time code lives somewhere new —
+# and it had: cmd/ is neither internal/ nor its own module, so its 26 test files
+# ran in no workflow at all. That is the composition root, where every
+# tenant-credential, tenant-sync, auto_apply and connect-gate guard lives.
+#
+# Proven rather than assumed: reintroducing the rosterbot-crq.17 silent
+# operator-credential fallback in cmd/credmode.go passed `go build`, `go vet`,
+# `make check-pins`, `make build-modules` AND `make test`, and was caught only
+# by `go test ./cmd/...` run by hand.
+#
+# The first fix for this widened the allowlist (b823b57, adding the nested
+# modules) instead of correcting its shape, which is why it broke again one
+# commit later. Test the module, not a list of its directories.
 test: test-modules
-	go test ./internal/...
+	go test ./...
 
 test-modules:
 	@for d in $$(find . -name go.mod -not -path './.git/*' -not -path './.claude/*' | grep -v '^\./go\.mod$$' | xargs -n1 dirname | sort); do \

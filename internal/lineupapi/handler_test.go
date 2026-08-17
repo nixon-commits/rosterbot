@@ -226,7 +226,7 @@ type fakeJobs struct {
 	err         error
 }
 
-func (f *fakeJobs) Run(_ context.Context, command []string) (string, error) {
+func (f *fakeJobs) Run(_ context.Context, _ UserID, command []string) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}

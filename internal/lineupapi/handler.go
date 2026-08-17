@@ -340,11 +340,21 @@ func (cfg Config) handleJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if run := inFlightRun(r.Context(), cfg.Runs, name, time.Now()); run != nil {
+	// view.Runs, not cfg.Runs: the duplicate guard has to ask about THIS
+	// caller's runs. Reading the configured store was harmless only while every
+	// launch was operator-scoped — with per-tenant launches it would let one
+	// tenant's run block another's, and hide a member's run from the guard
+	// entirely.
+	view, viewOK := cfg.tenantView(r.Context())
+	if !viewOK {
+		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+		return
+	}
+	if run := inFlightRun(r.Context(), view.Runs, name, time.Now()); run != nil {
 		writeErr(w, http.StatusConflict, "job "+name+" is already running (run "+run.ID+", started "+run.StartedAt+")")
 		return
 	}
-	id, runErr := cfg.Jobs.Run(r.Context(), args)
+	id, runErr := cfg.Jobs.Run(r.Context(), CallerFrom(r.Context()).UserID, args)
 	if runErr != nil {
 		writeErr(w, http.StatusBadGateway, "could not start job")
 		return
