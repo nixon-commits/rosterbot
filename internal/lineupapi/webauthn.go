@@ -3,10 +3,12 @@
 package lineupapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -115,18 +117,44 @@ func (cfg Config) registrationSubject(r *http.Request, token string) (*User, boo
 	return nil, false
 }
 
-// enrollmentToken pulls the token from the request body, falling back to a
-// query parameter so an invite link can carry it directly.
+// enrollmentToken reads the enrollment token from ?token= or the JSON body.
+//
+// IT PUTS THE BODY BACK, and that is not tidiness — it is the difference
+// between registration working and not. handleAuthRegisterFinish calls this
+// first and then hands the SAME request to FinishRegistration, which parses the
+// WebAuthn attestation out of the body. Consuming it here left that parse
+// looking at an empty reader, so the ceremony failed with a credential error
+// whose real cause was two lines earlier.
+//
+// It drained the body even when there was NO token to find, so this was never
+// limited to enrollment: adding a second passkey from an existing session was
+// broken the same way. It survived unnoticed because the only account in
+// existence already had a passkey from before this function was introduced, so
+// nothing anyone did reached the finish path — and the two tests covering that
+// route both post "{}" and assert failure, which an empty body satisfies just
+// as well as a full one.
+//
+// The whole body is read rather than a bounded prefix: a LimitReader would
+// silently truncate a large attestation into a parse error, trading this bug
+// for a subtler one. Request size is already capped upstream by the Function
+// URL's payload limit.
 func enrollmentToken(r *http.Request) string {
 	if t := r.URL.Query().Get("token"); t != "" {
 		return t
 	}
+	if r.Body == nil {
+		return ""
+	}
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return ""
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+
 	var body struct {
 		Token string `json:"token"`
 	}
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body)
-	}
+	_ = json.Unmarshal(raw, &body)
 	return body.Token
 }
 

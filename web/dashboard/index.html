@@ -18,10 +18,12 @@
 <div id="bootstrap-screen" hidden>
   <form id="bootstrap-form" class="login-card">
     <h1>rosterbot</h1>
-    <p class="muted">No passkey is registered yet. Paste the API token once to set one up.</p>
-    <label for="bootstrap-token-input">API token</label>
-    <input id="bootstrap-token-input" type="password" autocomplete="off" placeholder="Paste ROSTERBOT_API_TOKEN">
-    <button type="submit">Set up passkey</button>
+    <p id="bootstrap-prompt" class="muted">No passkey is registered yet. Setting up requires an invite link.</p>
+    <div id="bootstrap-token-field" hidden>
+      <label for="bootstrap-token-input">API token</label>
+      <input id="bootstrap-token-input" type="password" autocomplete="off" placeholder="Paste ROSTERBOT_API_TOKEN">
+    </div>
+    <button id="bootstrap-submit" type="submit">Set up passkey</button>
     <p id="bootstrap-error" class="error"></p>
   </form>
 </div>

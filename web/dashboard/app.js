@@ -31,11 +31,13 @@ const DEFAULT_ROUTE = "#lineup";
 const root = document.getElementById("view-root");
 const loginScreen = document.getElementById("login-screen");
 const bootstrapScreen = document.getElementById("bootstrap-screen");
+const bootstrapPrompt = document.getElementById("bootstrap-prompt");
+const bootstrapSubmit = document.getElementById("bootstrap-submit");
+const bootstrapTokenField = document.getElementById("bootstrap-token-field");
 const shell = document.getElementById("shell");
 const passkeyLoginBtn = document.getElementById("passkey-login-btn");
 const loginError = document.getElementById("login-error");
 const bootstrapForm = document.getElementById("bootstrap-form");
-const bootstrapTokenInput = document.getElementById("bootstrap-token-input");
 const bootstrapError = document.getElementById("bootstrap-error");
 const logoutBtn = document.getElementById("logout-btn");
 
@@ -55,11 +57,36 @@ async function boot() {
   await showLoginOrBootstrap();
 }
 
-// showLoginOrBootstrap decides which pre-login screen to show by probing
-// login/begin: a 404 means no identity has ever been registered (first run,
-// or every passkey was revoked/lost), so the token-bootstrap screen is the
-// only way forward; any other outcome means a real login attempt is possible.
+// enrollTokenFromURL reads a single-use enrollment token off an invite or
+// recovery link (?token=...).
+//
+// The token is removed from the address bar as soon as it is read: it is a
+// credential, and leaving it in the URL puts it in browser history, in the
+// Referer header of anything the page later loads, and in any screenshot of
+// the window.
+function enrollTokenFromURL() {
+  const t = new URLSearchParams(window.location.search).get("token");
+  if (!t) return "";
+  const clean = window.location.pathname + window.location.hash;
+  window.history.replaceState(null, "", clean);
+  return t;
+}
+
+// showLoginOrBootstrap decides which pre-login screen to show.
+//
+// An enrollment token in the link wins outright: whoever holds one is being
+// invited to create their FIRST passkey, so there is nothing for them to log in
+// with and offering a login button would be a dead end.
+//
+// Otherwise it probes login/begin. A 404 means no identity has ever been
+// registered, which is now a state only an enrollment link can resolve — the
+// API token used to and deliberately no longer does (rosterbot-crq.9).
 async function showLoginOrBootstrap() {
+  const token = enrollTokenFromURL();
+  if (token) {
+    showEnroll(token);
+    return;
+  }
   try {
     await api.authLoginBegin();
     showLogin();
@@ -105,18 +132,44 @@ passkeyLoginBtn.addEventListener("click", async () => {
   }
 });
 
-bootstrapForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const token = bootstrapTokenInput.value.trim();
-  if (!token) return;
+// showEnroll runs the ceremony for someone arriving on an invite link. It
+// reuses the bootstrap screen's markup rather than adding a third pre-login
+// screen; only the wording and what the button does differ.
+function showEnroll(token) {
+  loginScreen.hidden = true;
+  shell.hidden = true;
+  bootstrapScreen.hidden = false;
   bootstrapError.textContent = "";
-  try {
-    await registerPasskey(token);
-    bootstrapTokenInput.value = "";
-    showShell();
-  } catch (err) {
-    bootstrapError.textContent = "Setup failed — check the token and try again.";
+  if (bootstrapPrompt) {
+    bootstrapPrompt.textContent =
+      "You have been invited to rosterbot. Create a passkey to finish setting up your account.";
   }
+  if (bootstrapTokenField) bootstrapTokenField.hidden = true;
+  bootstrapSubmit.textContent = "Create your passkey";
+  bootstrapForm.onsubmit = async (e) => {
+    e.preventDefault();
+    bootstrapError.textContent = "";
+    try {
+      await registerPasskey(token);
+      showShell();
+    } catch (err) {
+      // The link is single-use and time-limited, so "expired or already used"
+      // is the likeliest cause by far and is worth naming — a bare "failed"
+      // sends someone hunting for a browser problem they do not have.
+      bootstrapError.textContent =
+        "Could not create the passkey. The invite link may have expired or already been used — ask for a new one.";
+    }
+  };
+}
+
+bootstrapForm.addEventListener("submit", async (e) => {
+  // The legacy API-token path. The server no longer accepts that token for
+  // registration (rosterbot-crq.9), so this remains only to give an
+  // intelligible answer to anyone who still has the old instructions.
+  if (bootstrapForm.onsubmit) return;
+  e.preventDefault();
+  bootstrapError.textContent =
+    "Setting up with an API token is no longer supported. Ask for an invite link instead.";
 });
 
 logoutBtn.addEventListener("click", async () => {

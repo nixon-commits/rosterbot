@@ -16,9 +16,8 @@ export class ApiError extends Error {
   }
 }
 
-async function request(method, path, body, bootstrapToken) {
+async function request(method, path, body) {
   const headers = body ? { "Content-Type": "application/json" } : {};
-  if (bootstrapToken) headers["Authorization"] = "Bearer " + bootstrapToken;
   const res = await fetch(path, {
     method,
     credentials: "same-origin",
@@ -51,9 +50,20 @@ export const api = {
 
   authLoginBegin: () => request("POST", "/v1/auth/login/begin"),
   authLoginFinish: (assertion) => request("POST", "/v1/auth/login/finish", assertion),
-  authRegisterBegin: (bootstrapToken) => request("POST", "/v1/auth/register/begin", undefined, bootstrapToken),
-  authRegisterFinish: (attestation, bootstrapToken) =>
-    request("POST", "/v1/auth/register/finish", attestation, bootstrapToken),
+  // An ENROLLMENT token, carried in the JSON body — not the Authorization
+  // header. The global API token used to authorize registration and no longer
+  // does: it proved you were the operator, and with several users that makes it
+  // a god token whose holder could add a passkey to anybody's account
+  // (rosterbot-crq.9). The server reads ?token= or a body "token" field and
+  // resolves it to one specific person.
+  //
+  // Omit it entirely when adding a device while already logged in; the session
+  // cookie authorizes that on its own.
+  authRegisterBegin: (enrollToken) =>
+    request("POST", "/v1/auth/register/begin", enrollToken ? { token: enrollToken } : undefined),
+  authRegisterFinish: (attestation, enrollToken) =>
+    request("POST", "/v1/auth/register/finish",
+      enrollToken ? { ...attestation, token: enrollToken } : attestation),
   authPasskeys: () => request("GET", "/v1/auth/passkeys"),
   authRevokePasskey: (id) => request("DELETE", `/v1/auth/passkeys/${encodeURIComponent(id)}`),
   authLogout: () => request("POST", "/v1/auth/logout"),

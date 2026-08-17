@@ -76,14 +76,20 @@ function encodeAssertion(cred) {
   };
 }
 
-// registerPasskey runs a full registration ceremony. bootstrapToken is the
-// ROSTERBOT_API_TOKEN, required only when setting up the very first passkey
-// (no session cookie exists yet); omit it when adding an additional device
-// while already logged in.
-export async function registerPasskey(bootstrapToken) {
-  const opts = await api.authRegisterBegin(bootstrapToken);
+// registerPasskey runs a full registration ceremony.
+//
+// enrollToken is a single-use enrollment token from an invite or recovery link,
+// required when creating a FIRST passkey because no session cookie exists yet.
+// Omit it when adding another device while already logged in — the session
+// authorizes that by itself.
+//
+// It is NOT the ROSTERBOT_API_TOKEN. That token no longer authorizes
+// registration: it identified the operator, and once there are several accounts
+// its holder could add a passkey to any of them (rosterbot-crq.9).
+export async function registerPasskey(enrollToken) {
+  const opts = await api.authRegisterBegin(enrollToken);
   const cred = await navigator.credentials.create(decodeCreationOptions(opts));
-  await api.authRegisterFinish(encodeAttestation(cred), bootstrapToken);
+  await api.authRegisterFinish(encodeAttestation(cred), enrollToken);
 }
 
 // loginWithPasskey runs a full login ceremony against the one registered
