@@ -16,6 +16,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/kmscreds"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 )
 
 var connectUser string
@@ -74,6 +75,16 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("connect: %w", lineupapi.ErrNoConnection)
 	}
 
+	// The tenant's own activity feed. Composed from the environment, which the
+	// launcher set to THIS tenant, so the store is already theirs. Soft: a feed
+	// that cannot be opened must not stop connect recording the outcome.
+	feed, feedErr := statestore.FromEnv().Notifications()
+	if feedErr != nil {
+		fmt.Fprintf(out, "note: activity feed unavailable (%v); the outcome is still "+
+			"recorded on the connection\n", feedErr)
+		feed = nil
+	}
+
 	// fail records the outcome and returns nil: a connect that legitimately
 	// could not authenticate is a RESULT, not a task crash. Exiting non-zero
 	// would make the run ledger show a failed job and page the operator for
@@ -86,6 +97,12 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	// records a failure and opsalert pages. This is the same split runConnect
 	// already draws for a KMS decrypt failure below.
 	fail := func(class string) error {
+		// Tell whoever can act. Tenant-actionable failures go to that user's
+		// feed and NOT to the operator, which is the whole point: becoming the
+		// help desk for problems users can fix themselves is what this routing
+		// exists to prevent (rosterbot-crq.14).
+		recordConnectFailure(ctx, feed, notifyOperator, uid, class)
+
 		conn.LastError = class
 		if operatorActionableClass(class) {
 			if err := store.PutConnection(ctx, conn); err != nil {

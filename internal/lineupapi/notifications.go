@@ -21,14 +21,23 @@ type Change struct {
 // also went to Pushover (lineup applied, waiver picks, trades, etc.). This feed
 // is the app's replacement for Pushover as the primary surface.
 type Notification struct {
-	ID        string   `json:"id"`
-	Kind      string   `json:"kind"`   // lineup|waivers|claims|transactions|prospects|gs-check|alert
-	Status    string   `json:"status"` // success|failure|info — for the app's severity color
-	Title     string   `json:"title"`
-	Message   string   `json:"message"`
-	CreatedAt string   `json:"created_at"` // RFC3339 UTC
-	RunID     string   `json:"run_id,omitempty"`
-	Changes   []Change `json:"changes,omitempty"`
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`   // lineup|waivers|claims|transactions|prospects|gs-check|alert
+	Status    string `json:"status"` // success|failure|info — for the app's severity color
+	Title     string `json:"title"`
+	Message   string `json:"message"`
+	CreatedAt string `json:"created_at"` // RFC3339 UTC
+	RunID     string `json:"run_id,omitempty"`
+
+	// UserID is whose notification this is.
+	//
+	// Tenancy previously existed ONLY in the S3 prefix the writer was
+	// constructed with, so a record read back could not say whose it was —
+	// which made per-tenant delivery unverifiable by inspection. Empty for
+	// every record written before this and for single-tenant deployments,
+	// where there is only one answer.
+	UserID  string   `json:"user_id,omitempty"`
+	Changes []Change `json:"changes,omitempty"`
 }
 
 // ClassifyStatus derives a severity for an event from its kind and text:
