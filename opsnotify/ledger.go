@@ -47,25 +47,83 @@ func newLedgerReader(ctx context.Context, bucket string) (*ledgerReader, error) 
 	return &ledgerReader{blob: b}, nil
 }
 
+// isLedgerRecord reports whether a key's basename is a run-ledger record.
+//
+// The shape comes from lineupapi.RunKey: fmt.Sprintf("%010d-%s", inv, id) plus
+// ".json". The zero padding is what makes lexicographic order equal
+// chronological order, and the id may itself contain hyphens
+// ("local-20260617211937"), so only the FIRST segment is checked.
+//
+// Shape is the discriminator rather than key depth. The previous test — skip
+// anything containing a slash — was written to stop sub-objects sharing the
+// prefix from hiding the ledger block (rosterbot-432), and it did that job
+// until the ledger itself moved under user=<uid>/, at which point it excluded
+// every real record. Shape survives that move, and is strictly stronger: it
+// also rejects a stray top-level object, which the depth test never did.
+func isLedgerRecord(base string) bool {
+	if !strings.HasSuffix(base, ".json") {
+		return false
+	}
+	stamp, rest, ok := strings.Cut(strings.TrimSuffix(base, ".json"), "-")
+	if !ok || stamp == "" || rest == "" {
+		return false
+	}
+	for _, r := range stamp {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// basename returns the part of a key after the last slash.
+func basename(key string) string {
+	if i := strings.LastIndex(key, "/"); i >= 0 {
+		return key[i+1:]
+	}
+	return key
+}
+
 // keys returns the newest ledger keys, newest first, at most limit of them.
 //
-// Ledger keys carry an inverted-timestamp prefix, so an ascending listing is
-// reverse-chronological. Sub-objects that share the prefix are skipped, and the
-// walk follows continuation tokens before stopping early — the combination that
-// makes a "newest N" listing safe (rosterbot-432).
+// ORDERING IS ON THE BASENAME, NOT THE WHOLE KEY, and that is the whole
+// difficulty. Ledger keys carry an inverted-timestamp prefix, so an ascending
+// listing is reverse-chronological — but only WITHIN one partition. Since the
+// tenant cutover the ledger is spread across runledger/user=<uid>/ partitions,
+// and "user=" sorts after every digit, so ordering on the whole key would put
+// every pre-migration flat record ahead of every tenant record no matter when
+// they ran. The basename is the inverted timestamp for flat and tenant records
+// alike, so sorting on it interleaves partitions correctly.
+//
+// The consequence is that the LISTING can no longer stop early: a newer record
+// may live in a partition that sorts last, so every key has to be seen before
+// the newest N are known. Only the listing pays this — the fetch, which is the
+// expensive part at one GetObject per record, still stops at limit. At the
+// ~26 runs/day this is sized for that is a handful of ListObjectsV2 calls, and
+// the walk follows continuation tokens so a partition cannot be hidden behind a
+// page boundary (rosterbot-432, which partitions make easier to hit: one page
+// can now be filled entirely by one tenant).
 func (l *ledgerReader) keys(ctx context.Context, limit int) ([]string, error) {
 	var keys []string
 	err := l.blob.Walk(ctx, "", func(o s3blob.Object) bool {
-		if strings.Contains(o.Key, "/") {
-			return true
+		if isLedgerRecord(basename(o.Key)) {
+			keys = append(keys, o.Key)
 		}
-		keys = append(keys, o.Key)
-		return len(keys) < limit
+		return true
 	})
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(keys) // defensive: ensure newest-first ordering
+	sort.Slice(keys, func(i, j int) bool {
+		bi, bj := basename(keys[i]), basename(keys[j])
+		if bi != bj {
+			return bi < bj
+		}
+		return keys[i] < keys[j] // stable across partitions on a basename collision
+	})
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
 	return keys, nil
 }
 

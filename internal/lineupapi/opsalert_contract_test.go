@@ -113,3 +113,61 @@ func TestRecordDecodesARunningLedgerRecord(t *testing.T) {
 		t.Errorf("UserID = %q, want empty", got.UserID)
 	}
 }
+
+// TestRunKey_ShapeOpsnotifyKeysOn pins the WRITER half of a contract whose
+// reader lives in another module.
+//
+// opsnotify/ledger.go decides what is a ledger record from the key's basename:
+// a run of digits, a hyphen, then a non-empty id, then ".json". It has to use
+// the shape rather than the key's depth, because the records moved under
+// runledger/user=<uid>/ when layout.RunLedger became PerTenant and a
+// depth-based filter then excluded every one of them — which froze the
+// notifier for three days and produced 14 false "has not run" alerts
+// (rosterbot-3vr).
+//
+// This cannot import opsnotify's predicate: opsnotify is package main in its
+// own module, and the module boundary that keeps chromedp out of the Lambda is
+// the same one that prevents a shared test. So the two sides are tied by a
+// written-down shape rather than by the compiler, and this test is the half
+// that fails if the writer moves. TestIsLedgerRecord in opsnotify is the other
+// half. A genuinely mechanical link would need the predicate to live in a
+// stdlib-only leaf both can import.
+func TestRunKey_ShapeOpsnotifyKeysOn(t *testing.T) {
+	for _, tc := range []struct{ name, started, id string }{
+		{"an ECS task id", "2026-08-17T17:02:20Z", "837df59b0adb4bf6981f3c0243d4dcc4"},
+		{"a local id, which itself contains hyphens", "2026-06-17T21:19:37Z", "local-20260617211937"},
+		{"an unparseable start time still yields a well-formed key", "not-a-time", "abc123"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := lineupapi.RunKey(tc.started, tc.id) + ".json"
+
+			if !strings.HasSuffix(base, ".json") {
+				t.Fatalf("key %q lost its .json suffix", base)
+			}
+			stamp, rest, ok := strings.Cut(strings.TrimSuffix(base, ".json"), "-")
+			if !ok || stamp == "" || rest == "" {
+				t.Fatalf("key %q is not <digits>-<id>.json; opsnotify would skip it", base)
+			}
+			if strings.TrimLeft(stamp, "0123456789") != "" {
+				t.Errorf("timestamp segment %q of %q is not all digits; opsnotify would skip it", stamp, base)
+			}
+		})
+	}
+}
+
+// TestRunKey_SortsReverseChronologically pins the property the whole "newest N"
+// listing rests on: the inverted timestamp is ZERO-PADDED, so lexicographic
+// order equals chronological order. Drop the padding and every ledger read
+// silently returns the wrong records in the wrong order.
+func TestRunKey_SortsReverseChronologically(t *testing.T) {
+	older := lineupapi.RunKey("2026-08-14T17:26:37Z", "old")
+	newer := lineupapi.RunKey("2026-08-17T17:02:20Z", "new")
+
+	if !(newer < older) {
+		t.Errorf("RunKey(newer)=%q should sort before RunKey(older)=%q", newer, older)
+	}
+	if len(strings.SplitN(newer, "-", 2)[0]) != len(strings.SplitN(older, "-", 2)[0]) {
+		t.Errorf("timestamp segments differ in width (%q vs %q); lexicographic order "+
+			"no longer equals chronological order", newer, older)
+	}
+}
