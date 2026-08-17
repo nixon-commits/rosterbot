@@ -21,6 +21,11 @@ import "github.com/nixon-commits/rosterbot/internal/playername"
 // join.
 type Lookup struct {
 	byKey map[string][]Player
+	// byClub indexes the same rows by canonical club, for the near-miss path
+	// below. It is only ever read when the exact key missed, so the cost is a
+	// scan of one club's ~55 rows on the handful of misses per run (6 of 517
+	// rostered players on 2026-08-17), not per lookup.
+	byClub map[string][]Player
 }
 
 // Hint is what the caller knows about the Fantrax player it is looking up. It
@@ -41,11 +46,15 @@ type Hint struct {
 // shares a key rather than letting the last one win.
 func BuildLookup(players []Player) Lookup {
 	m := make(map[string][]Player, len(players))
+	c := make(map[string][]Player, 32)
 	for _, p := range players {
 		k := playername.Normalize(p.Name)
 		m[k] = append(m[k], p)
+		if club := canonicalTeam(p.Team); club != "" && club != "FA" {
+			c[club] = append(c[club], p)
+		}
 	}
-	return Lookup{byKey: m}
+	return Lookup{byKey: m, byClub: c}
 }
 
 // Find resolves a name with no disambiguating information, so it declines any
@@ -70,12 +79,103 @@ func (l Lookup) FindFor(name string, hint Hint) (Player, bool) {
 	rows := l.byKey[playername.Normalize(name)]
 	switch len(rows) {
 	case 0:
-		return Player{}, false
+		return l.resolveMiss(name, hint)
 	case 1:
 		return rows[0], true
 	default:
 		return resolveCollision(rows, hint)
 	}
+}
+
+// resolveMiss handles a name the exact normalized key did not find at all. It is
+// the mirror image of resolveCollision: that one has too many candidates and
+// narrows them, this one has none and widens — but both may decline, and for the
+// same reason (a wrong match counts toward join coverage and renders as a
+// confident number, so it is strictly worse than the miss it replaces).
+//
+// Measured against the live feeds on 2026-08-17, six of 517 rostered players
+// missed the exact join, in three distinct classes that Normalize cannot reach
+// because none of them is a punctuation or diacritic difference:
+//
+//	Jake Latz        TEX  ->  Jacob Latz            legal name vs. nickname
+//	Zac Thornton     NYM  ->  Zach Thornton         spelling variant
+//	Elmer Rodriguez  NYY  ->  Elmer Rodriguez-Cruz  compound surname truncated
+//	Josiah Ragsdale  STL  ->  (nothing)             HKB does not rank him
+//	Albert Fermin    HOU  ->  (nothing)             17-year-old signee
+//	Bryce Mayer      HOU  ->  (nothing)             HKB does not rank him
+//
+// The last three are the documented-unfixable class: no string transformation
+// reaches a player the source has no row for, and this must keep reporting them
+// as unmatched rather than reaching for the nearest surname.
+//
+// The club is what makes widening defensible at all — it is evidence from
+// outside the name. Without it the surname rule is plainly unsafe: HKB carries
+// 28 (club, surname) pairs covering two DIFFERENT players (MIA meyer is Max
+// Meyer and Noble Meyer; CHW perez is Junior Perez and Jeral Perez), and a
+// league-wide surname match would eventually pick one of those at random.
+//
+// A miss with no club hint is not widened at all: an empty MLBTeam means the
+// caller has none (see Hint), and widening on no evidence is guessing.
+func (l Lookup) resolveMiss(name string, hint Hint) (Player, bool) {
+	if hint.MLBTeam == "" {
+		return Player{}, false
+	}
+	want := playername.Normalize(name)
+	var pick Player
+	n := 0
+	for _, p := range l.byClub[canonicalTeam(hint.MLBTeam)] {
+		if nameCouldMatch(want, playername.Normalize(p.Name)) {
+			n++
+			pick = p
+		}
+	}
+	// Exactly one survivor, or nothing. Two candidates on one club means the
+	// club has stopped discriminating, which is an absence of information, not
+	// a tie to be broken.
+	if n == 1 {
+		return pick, true
+	}
+	return Player{}, false
+}
+
+// nameAliases maps a normalized Fantrax name to the normalized HKB name for the
+// same player. Keys and values are both playername.Normalize output — lowercase,
+// no diacritics, hyphens already turned into spaces — so "Elmer Rodriguez-Cruz"
+// appears here as "elmer rodriguez cruz".
+//
+// This is a curated list rather than a string rule ON PURPOSE, and the reason is
+// the asymmetry this whole file is built around: a heuristic close enough to
+// admit "jake latz" -> "jacob latz" is also close enough to admit some future
+// pair it should not, and that failure is a confident number that counts toward
+// join coverage. An entry here is an assertion about two specific players,
+// checked once by a human against club and level. A rule that is wrong is wrong
+// silently; a list that is incomplete is merely incomplete, and reports itself
+// as an unmatched name in the team-values job log every run.
+//
+// Maintenance is that log line. When a new name appears in it, check whether HKB
+// carries the player under another spelling and, if so, add the pair here. Three
+// entries covered every recoverable miss on 2026-08-17 (6 misses of 517 rostered
+// players; the other three are players HKB does not rank at all).
+//
+// The club check in resolveMiss still applies to every entry, so a stale alias —
+// one player traded, the feeds briefly disagreeing — degrades to a miss rather
+// than to a wrong match.
+var nameAliases = map[string]string{
+	"jake latz":       "jacob latz",           // legal name vs. nickname (TEX)
+	"zac thornton":    "zach thornton",        // spelling variant (NYM)
+	"elmer rodriguez": "elmer rodriguez cruz", // compound surname truncated (NYY)
+}
+
+// nameCouldMatch reports whether two already-normalized names, known to belong
+// to the same MLB club, name the same player. A plain == is what already failed
+// upstream, so the only thing that counts here is an explicit alias.
+//
+// The ok check is not decoration: a bare map read returns "" for an absent key,
+// which would make every unaliased name match any HKB row whose normalized name
+// is also empty.
+func nameCouldMatch(fantrax, hkb string) bool {
+	want, ok := nameAliases[fantrax]
+	return ok && want == hkb
 }
 
 // Collisions reports every normalized key carrying more than one row, for

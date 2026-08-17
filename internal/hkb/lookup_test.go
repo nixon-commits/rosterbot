@@ -178,3 +178,87 @@ func TestLookup_FindForResolvesWhenBothSignalsAgree(t *testing.T) {
 		t.Errorf("FindFor = (%d, %v), want (900, true)", got.Value, ok)
 	}
 }
+
+// ---- Near-miss path (resolveMiss) -----------------------------------------
+// Fixtures are the real 2026-08-17 misses. Latz and Thornton are name variants
+// on the same club; Rodriguez-Cruz is a compound surname Fantrax truncates.
+
+func latzHKB() Player {
+	return Player{Name: "Jacob Latz", Team: "TEX", Level: "MLB", Value: 238}
+}
+func rodriguezCruzHKB() Player {
+	return Player{Name: "Elmer Rodriguez-Cruz", Team: "NYY", Level: "MLB", Value: 516}
+}
+
+// An aliased name is the whole point of the path: HKB spells him "Jacob", the
+// Fantrax pool spells him "Jake", and no amount of normalizing closes that.
+func TestLookup_FindForResolvesAnAliasedName(t *testing.T) {
+	l := BuildLookup([]Player{latzHKB()})
+
+	got, ok := l.FindFor("Jake Latz", Hint{MLBTeam: "TEX", MinorsEligible: false})
+	if !ok || got.Value != 238 {
+		t.Errorf("FindFor = (%d, %v), want (238, true)", got.Value, ok)
+	}
+}
+
+// The hyphen is already a word break by the time Normalize is done, so this is
+// a token-prefix case, not a punctuation one — "elmer rodriguez" against
+// "elmer rodriguez cruz".
+func TestLookup_FindForResolvesATruncatedCompoundSurname(t *testing.T) {
+	l := BuildLookup([]Player{rodriguezCruzHKB()})
+
+	got, ok := l.FindFor("Elmer Rodriguez", Hint{MLBTeam: "NYY", MinorsEligible: true})
+	if !ok || got.Value != 516 {
+		t.Errorf("FindFor = (%d, %v), want (516, true)", got.Value, ok)
+	}
+}
+
+// The club is the evidence that makes widening defensible at all. An alias
+// whose row sits on another club is stale — a trade the two feeds disagree
+// about — and stale evidence resolves to a miss, never to the row anyway.
+func TestLookup_FindForDeclinesAnAliasOnTheWrongClub(t *testing.T) {
+	moved := latzHKB()
+	moved.Team = "SEA"
+	l := BuildLookup([]Player{moved})
+
+	if got, ok := l.FindFor("Jake Latz", Hint{MLBTeam: "TEX", MinorsEligible: false}); ok {
+		t.Errorf("resolved to %s on %s — the club no longer agrees", got.Name, got.Team)
+	}
+}
+
+// A caller with no club has no evidence, and widening on no evidence is
+// guessing. Find never reaches this path at all; FindFor with an empty MLBTeam
+// must behave the same way.
+func TestLookup_MissWithoutAClubHintIsNotWidened(t *testing.T) {
+	l := BuildLookup([]Player{latzHKB()})
+
+	if _, ok := l.FindFor("Jake Latz", Hint{}); ok {
+		t.Error("resolved with no club hint — nothing licensed that choice")
+	}
+	if _, ok := l.Find("Jake Latz"); ok {
+		t.Error("Find resolved a near miss — it has no hint to gate on")
+	}
+}
+
+// The guard that a surname rule would have failed. HKB carries 28 (club,
+// surname) pairs covering two different players; MIA meyer is one of them. Max
+// Meyer is in HKB, Noble Meyer is the one we rostered, and they are not the
+// same person — so this must stay unmatched rather than inherit Max's value.
+func TestLookup_FindForDeclinesASameClubSurnameThatIsNotAliased(t *testing.T) {
+	l := BuildLookup([]Player{{Name: "Max Meyer", Team: "MIA", Level: "MLB", Value: 400}})
+
+	if got, ok := l.FindFor("Noble Meyer", Hint{MLBTeam: "MIA", MinorsEligible: true}); ok {
+		t.Errorf("resolved to %s (value %d) — sharing a club and a surname is not identity",
+			got.Name, got.Value)
+	}
+}
+
+// A player HKB genuinely does not rank has no row to find under any spelling,
+// and must keep reporting as unmatched — that shortfall is real information.
+func TestLookup_FindForDeclinesAPlayerHKBDoesNotRank(t *testing.T) {
+	l := BuildLookup([]Player{latzHKB(), rodriguezCruzHKB()})
+
+	if _, ok := l.FindFor("Josiah Ragsdale", Hint{MLBTeam: "STL", MinorsEligible: true}); ok {
+		t.Error("resolved a player with no HKB row at all")
+	}
+}
