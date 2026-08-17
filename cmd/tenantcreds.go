@@ -70,6 +70,16 @@ func applyTenantCredentials(ctx context.Context, cfg *config.Config, uid lineupa
 	// rather than by remembering to clear at each one.
 	cfg.Username, cfg.Password, cfg.TeamID = "", "", ""
 
+	// The ENVIRONMENT is cleared alongside the config, and that is a separate
+	// hole rather than belt-and-braces. auth_client reads FANTRAX_USERNAME,
+	// FANTRAX_PASSWORD and FANTRAX_COOKIES with os.Getenv and never sees
+	// config.Config, while infra.go injects the deployment's own values into
+	// EVERY task from SSM. So a refusal that only cleared cfg would leave
+	// auth_client able to log in as the operator the moment anything downstream
+	// asked it for cookies — the run gate closed the config path and left this
+	// one open underneath it.
+	setFantraxEnv("", "", "")
+
 	conn, ok, err := conns.GetConnection(ctx, uid)
 	if err != nil {
 		return fmt.Errorf("tenant %s: read connection: %w", uid, err)
@@ -101,10 +111,75 @@ func applyTenantCredentials(ctx context.Context, cfg *config.Config, uid lineupa
 		return fmt.Errorf("tenant %s: decrypted credentials are empty", uid)
 	}
 
+	// THE SESSION IS THE POINT, not a bonus. Until this, the FX_RM the connect
+	// task captured and sealed was written, length-checked, copied into the
+	// grant and dropped — a secret with no consumer (rosterbot-crq.17 criterion
+	// 4). What actually carried a session between runs was the PLAINTEXT
+	// .fantrax_cookie_cache.json synced through S3, which made the KMS envelope
+	// the whole design rests on decorative.
+	//
+	// A decrypt failure here is NOT fatal. The sealed cookie is an optimisation:
+	// auth_client can always mint a fresh one from the credentials we just
+	// decrypted, so refusing the run would turn a recoverable session problem
+	// into an outage. It is logged rather than swallowed, because a cookie that
+	// silently stops being used is how this became invisible the first time.
+	session, err := opener.Open(ctx, uid, grant.FXRM)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tenant %s: sealed session unusable (%v); "+
+			"falling back to a fresh login\n", uid, err)
+		session = nil
+	}
+
 	cfg.Username, cfg.Password = creds.Username, creds.Password
 	// The team comes from the grant, which took it from the record the connect
 	// task PROVED against Fantrax's own MyTeamIDs. LeagueID is deliberately not
 	// touched: the league is deployment-wide, and this pilot is scoped to one.
 	cfg.TeamID = grant.TeamID
+
+	// Installed LAST, once every refusal is behind us, so the window in which
+	// this process can authenticate as anybody is as short as the function
+	// allows.
+	setFantraxEnv(creds.Username, creds.Password, fantraxCookieHeader(string(session)))
 	return nil
+}
+
+// setFantraxEnv installs the process-level Fantrax credentials that auth_client
+// reads directly, or clears them when called with empty strings.
+//
+// It exists because auth_client's entry points take no credential argument:
+// GetCookiesWithBrowser reads the username and password from the environment,
+// and GetCookies consults FANTRAX_COOKIES before its cache file and before the
+// browser. That environment read is also precisely why the fan-out has to be one
+// ECS task per tenant per job rather than a loop in one process — two tenants
+// sharing a process would share these variables.
+func setFantraxEnv(user, pass, cookie string) {
+	for _, kv := range []struct{ k, v string }{
+		{"FANTRAX_USERNAME", user},
+		{"FANTRAX_PASSWORD", pass},
+		{"FANTRAX_COOKIES", cookie},
+	} {
+		if kv.v == "" {
+			os.Unsetenv(kv.k)
+			continue
+		}
+		os.Setenv(kv.k, kv.v)
+	}
+}
+
+// fantraxCookieHeader renders a raw FX_RM value as the Cookie header
+// auth_client expects.
+//
+// The quote unwrapping mirrors convertCookiesToString in the fork, which is what
+// builds this header on the path that does not come through us. If the two
+// disagreed, a session would work when freshly minted by the browser and fail
+// when replayed from the sealed copy — a difference that would look like an
+// expiring cookie rather than a formatting bug.
+func fantraxCookieHeader(fxrm string) string {
+	if fxrm == "" {
+		return ""
+	}
+	if len(fxrm) >= 2 && fxrm[0] == '"' && fxrm[len(fxrm)-1] == '"' {
+		fxrm = fxrm[1 : len(fxrm)-1]
+	}
+	return "FX_RM=" + fxrm
 }
