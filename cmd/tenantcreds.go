@@ -45,7 +45,28 @@ func resolveTenantCredentials(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("tenant credentials: kms opener: %w", err)
 	}
-	return applyTenantCredentials(ctx, cfg, lineupapi.UserID(statestore.Tenant()), store, opener)
+	uid := lineupapi.UserID(statestore.Tenant())
+	if err := applyTenantCredentials(ctx, cfg, uid, store, opener); err != nil {
+		return err
+	}
+
+	// The ladder runs AFTER the session is installed, so its probe tests the
+	// exact cookie this run will use rather than a hypothetical one.
+	//
+	// The sealer is built here rather than inside the ladder because the task
+	// role holds kms:Encrypt for precisely this — writing a refreshed session
+	// back so the NEXT run starts from it instead of logging in again.
+	sealer, err := kmscreds.NewSealer(ctx, os.Getenv("FANTRAX_CRED_KEY"))
+	if err != nil {
+		return fmt.Errorf("tenant credentials: kms sealer: %w", err)
+	}
+	lad := sessionLadder{
+		conns:  store,
+		sealer: sealer,
+		probe:  liveSessionProbe,
+		mint:   fantraxLogin,
+	}
+	return lad.refresh(ctx, uid, cfg)
 }
 
 // applyTenantCredentials replaces the deployment's Fantrax credentials in cfg
