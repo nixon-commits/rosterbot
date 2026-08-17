@@ -32,8 +32,16 @@ type PrefixListing struct {
 	Bytes        int64     `json:"bytes"`
 	LastModified time.Time `json:"last_modified"`
 
-	// Partitions holds the dt= values found (YYYY-MM-DD), for artifacts that
-	// are Hive-partitioned. Empty for flat prefixes.
+	// Partitions holds the days this prefix has data for (YYYY-MM-DD), read
+	// either from a Hive dt= segment or from a bare YYYY-MM-DD.json basename.
+	// Empty for prefixes that carry no date in their keys.
+	//
+	// Both encodings land in one field because both answer the same question —
+	// which days exist here — and the second one has a consumer: the projection
+	// snapshots under backtest/ are named by filename, not partitioned, and are
+	// what decides whether an Analysis Store gap can be re-graded at all.
+	// Only artifacts marked Partitioned are gap-scanned, so filling this for a
+	// flat prefix adds a fact without changing any verdict.
 	Partitions []string `json:"partitions,omitempty"`
 
 	// Subkeys names the second-level dimension where one exists — the four
@@ -90,6 +98,13 @@ type ArtifactStatus struct {
 	LatestPartition string   `json:"latest_partition,omitempty"`
 	Partitions      int      `json:"partitions,omitempty"`
 	Gaps            []string `json:"gaps,omitempty"`
+
+	// LostGaps is the subset of Gaps that cannot be re-run, because the
+	// artifact's declared RecoveryInput has nothing for that day. It is a
+	// positive finding, never an inference from silence: if the input's listing
+	// fails we know nothing and claim nothing, and that failure is visible on
+	// this same page as the input artifact's own HealthUnknown row.
+	LostGaps []string `json:"lost_gaps,omitempty"`
 
 	// Tenants is how many tenants were found under a per-tenant prefix, and
 	// WorstTenant names the one that produced this row's health. Reporting the
@@ -173,11 +188,86 @@ func findGaps(partitions []string, now time.Time) []string {
 	return gaps
 }
 
+// prefixCache lists each prefix at most once per request, so an artifact that
+// is both its own row and another's RecoveryInput costs one listing, not two.
+type prefixCache struct {
+	lister InfraLister
+	seen   map[string]PrefixListing
+	errs   map[string]error
+}
+
+func newPrefixCache(l InfraLister) *prefixCache {
+	return &prefixCache{lister: l, seen: map[string]PrefixListing{}, errs: map[string]error{}}
+}
+
+func (p *prefixCache) get(ctx context.Context, prefix string) (PrefixListing, error) {
+	if l, ok := p.seen[prefix]; ok {
+		return l, p.errs[prefix]
+	}
+	l, err := p.lister.ListPrefix(ctx, prefix)
+	p.seen[prefix], p.errs[prefix] = l, err
+	return l, err
+}
+
+// recovery answers "does the recovery input still hold this day?".
+//
+// The zero value answers yes to everything, and that asymmetry is the point: an
+// artifact with no declared input, or one whose input could not be listed, must
+// never have days written off as unrecoverable. Loss is reported only from a
+// listing that SUCCEEDED and did not contain the day — a positive finding, not
+// an inference from silence.
+type recovery struct {
+	known   bool
+	days    map[string]bool
+	tenants map[string]map[string]bool
+}
+
+func (r recovery) holds(uid, day string) bool {
+	if !r.known {
+		return true
+	}
+	// Before the per-tenant cutover the input carries no user= segments at all,
+	// so its aggregate is the only reading available and is the right one.
+	if uid != "" && len(r.tenants) > 0 {
+		return r.tenants[uid][day]
+	}
+	return r.days[day]
+}
+
+func recoveryFor(ctx context.Context, list *prefixCache, a layout.Artifact) recovery {
+	if a.RecoveryInput == "" {
+		return recovery{}
+	}
+	l, err := list.get(ctx, a.RecoveryInput)
+	if err != nil {
+		return recovery{}
+	}
+	r := recovery{known: true, days: make(map[string]bool, len(l.Partitions))}
+	for _, d := range l.Partitions {
+		r.days[d] = true
+	}
+	if len(l.Tenants) > 0 {
+		r.tenants = make(map[string]map[string]bool, len(l.Tenants))
+		for uid, t := range l.Tenants {
+			days := make(map[string]bool, len(t.Partitions))
+			for _, d := range t.Partitions {
+				days[d] = true
+			}
+			r.tenants[uid] = days
+		}
+	}
+	return r
+}
+
 // buildStatus lists every artifact and judges it. A listing failure is confined
 // to its own row (HealthUnknown + the message) so one broken prefix cannot
 // blank the page — the same soft-fail posture the rest of the API takes.
 func buildStatus(ctx context.Context, lister InfraLister, artifacts []layout.Artifact, now time.Time) InfraStatus {
 	st := InfraStatus{GeneratedAt: now, Artifacts: make([]ArtifactStatus, 0, len(artifacts))}
+	// A prefix can be needed twice — once as its own row, once as another
+	// artifact's RecoveryInput — and listing it twice would double the S3 calls
+	// for no new information.
+	list := newPrefixCache(lister)
 
 	for _, a := range artifacts {
 		row := ArtifactStatus{
@@ -192,7 +282,7 @@ func buildStatus(ctx context.Context, lister InfraLister, artifacts []layout.Art
 			row.MaxAgeSeconds = a.MaxAge.Seconds()
 		}
 
-		l, err := lister.ListPrefix(ctx, a.S3Prefix)
+		l, err := list.get(ctx, a.S3Prefix)
 		if err != nil {
 			row.Health = HealthUnknown
 			row.Error = err.Error()
@@ -239,8 +329,15 @@ func buildStatus(ctx context.Context, lister InfraLister, artifacts []layout.Art
 			// Gaps, likewise, must be computed per tenant. Unioning the dt=
 			// values across tenants hides exactly the case worth seeing: a day
 			// present for one tenant and missing for another.
+			rec := recoveryFor(ctx, list, a)
+
 			if a.PerTenant && len(l.Tenants) > 0 {
 				row.Gaps = nil
+				// Qualifying a gap with the tenant id is only worth its cost
+				// where it separates one tenant's missing day from another's.
+				// With a single tenant it separates nothing, and the id is an
+				// 87-character opaque WebAuthn handle that buries the date.
+				qualify := len(l.Tenants) > 1
 				for _, uid := range sortedTenantIDs(l.Tenants) {
 					t := l.Tenants[uid]
 					if len(t.Partitions) == 0 {
@@ -249,11 +346,32 @@ func buildStatus(ctx context.Context, lister InfraLister, artifacts []layout.Art
 					td := append([]string(nil), t.Partitions...)
 					sort.Strings(td)
 					for _, g := range findGaps(td, now) {
-						row.Gaps = append(row.Gaps, uid+"/"+g)
+						label := g
+						if qualify {
+							label = uid + "/" + g
+						}
+						row.Gaps = append(row.Gaps, label)
+						if !rec.holds(uid, g) {
+							row.LostGaps = append(row.LostGaps, label)
+						}
+					}
+				}
+			} else {
+				for _, g := range row.Gaps {
+					if !rec.holds("", g) {
+						row.LostGaps = append(row.LostGaps, g)
 					}
 				}
 			}
 
+			// LostGaps deliberately does NOT move Health. A NoBackfill artifact
+			// escalates because a gap there is exceptional; an unrecoverable day
+			// in an otherwise-recoverable series is a scar, and it never heals —
+			// so escalating would leave this row red for the rest of the season
+			// with no action that could ever clear it. A permanent red is how a
+			// status page teaches you to stop reading it, which is the same
+			// reason findGaps refuses to scan past yesterday. The fact is
+			// reported in the detail, where it can be acted on or accepted.
 			if a.NoBackfill && len(row.Gaps) > 0 && row.Health == HealthOK {
 				row.Health = HealthGap
 			}
@@ -318,6 +436,9 @@ func (f *FileInfraStore) ListPrefix(ctx context.Context, prefix string) (PrefixL
 			}
 			return nil
 		}
+		if m := dayFileRe.FindStringSubmatch(rel); m != nil {
+			parts[m[1]] = true
+		}
 		info, statErr := d.Info()
 		if statErr != nil {
 			return nil
@@ -341,6 +462,11 @@ func (f *FileInfraStore) ListPrefix(ctx context.Context, prefix string) (PrefixL
 var (
 	dtDirRe     = regexp.MustCompile(`(?:^|/)dt=(\d{4}-\d{2}-\d{2})(?:/|$)`)
 	systemDirRe = regexp.MustCompile(`(?:^|/)system=([^/]+)(?:/|$)`)
+	// dayFileRe reads the day out of a file NAMED for it, which is how the
+	// projection snapshots under backtest/ record their date — no dt= segment
+	// anywhere in the key. Anchored on the basename so a date appearing in a
+	// directory name cannot be mistaken for one.
+	dayFileRe = regexp.MustCompile(`(?:^|/)(\d{4}-\d{2}-\d{2})\.[A-Za-z0-9]+$`)
 )
 
 // localDirFor maps an S3 prefix back to its local directory via the layout

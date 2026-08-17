@@ -36,6 +36,14 @@ var dtRe = regexp.MustCompile(`(?:^|/)dt=(\d{4}-\d{2}-\d{2})(?:/|$)`)
 // systemRe extracts the Analysis Store's second partition dimension.
 var systemRe = regexp.MustCompile(`(?:^|/)system=([^/]+)(?:/|$)`)
 
+// dayFileRe reads the day out of a file NAMED for it. The projection snapshots
+// under backtest/ record their date that way — backtest/user=<uid>/
+// snapshots-systems/system=<sys>/2026-08-01.json carries no dt= segment — and
+// whether one exists for a day is what decides if an Analysis Store gap can be
+// re-graded. Anchored on the basename so a date in a directory name cannot be
+// mistaken for one.
+var dayFileRe = regexp.MustCompile(`(?:^|/)(\d{4}-\d{2}-\d{2})\.[A-Za-z0-9]+$`)
+
 // userRe extracts the tenant segment. It anchors at the START of the key
 // relative to the prefix, because user= is always the first segment a
 // per-tenant artifact adds — matching it anywhere would also catch a stray
@@ -72,21 +80,30 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 		}
 
 		rel := strings.TrimPrefix(o.Key, prefix)
+
+		// The day this key belongs to, however the prefix spells it.
+		day := ""
+		if m := dtRe.FindStringSubmatch(rel); m != nil {
+			day = m[1]
+		} else if m := dayFileRe.FindStringSubmatch(rel); m != nil {
+			day = m[1]
+		}
+
 		if m := userRe.FindStringSubmatch(rel); m != nil {
 			uid := m[1]
 			tenantObjects[uid]++
 			if o.LastModified.After(tenantNewest[uid]) {
 				tenantNewest[uid] = o.LastModified
 			}
-			if dm := dtRe.FindStringSubmatch(rel); dm != nil {
+			if day != "" {
 				if tenantParts[uid] == nil {
 					tenantParts[uid] = map[string]bool{}
 				}
-				tenantParts[uid][dm[1]] = true
+				tenantParts[uid][day] = true
 			}
 		}
-		if m := dtRe.FindStringSubmatch(rel); m != nil {
-			parts[m[1]] = true
+		if day != "" {
+			parts[day] = true
 		}
 		if m := systemRe.FindStringSubmatch(rel); m != nil {
 			subs[m[1]] = true
