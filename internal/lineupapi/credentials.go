@@ -40,12 +40,34 @@ const (
 	// must supply new ones; retrying cannot help and can cause lockout.
 	ConnErrBadCredentials = "bad_credentials"
 
-	// ConnErrLoginChallengeOrTimeout — the flow completed without yielding an
-	// FX_RM cookie. Most likely a 2FA prompt or a Cloudflare interstitial the
-	// headless browser cannot answer. Named separately so a user who enabled
-	// two-factor auth is diagnosable on day one instead of appearing as a
-	// generic failure nobody can explain.
+	// ConnErrLoginChallengeOrTimeout — the login produced no session and the
+	// page said nothing that identifies why.
+	//
+	// This is the HONEST-IGNORANCE class, and keeping it that way is the point.
+	// It used to absorb every failure — a wrong password, a 2FA prompt and a
+	// Cloudflare interstitial all end with no FX_RM cookie, so inferring the
+	// cause from the cookie's absence collapsed three different problems into
+	// one unactionable label (rosterbot-43q). The two classes below are split
+	// out of it on positive evidence from the page. What remains here is what
+	// genuinely could not be told apart, and it must not be widened again by
+	// guessing.
 	ConnErrLoginChallengeOrTimeout = "login_challenge_or_timeout"
+
+	// ConnErrTwoFactor — Fantrax asked for a second factor, which means the
+	// username and password were ACCEPTED. Distinct from BadCredentials because
+	// the remedy is the opposite: re-entering the password cannot help, and the
+	// user must disable two-factor auth or the account cannot be automated.
+	ConnErrTwoFactor = "two_factor_required"
+
+	// ConnErrBotChallenge — a Cloudflare interstitial stood in front of the
+	// login form. The credentials are not implicated at all.
+	//
+	// This is the one connect failure that is OPERATOR-actionable: our headless
+	// browser is being treated as a bot, and nothing the user types changes
+	// that. It must therefore never set ConnNeedsReconnect, which would tell
+	// someone their working credentials are dead — the same distinction
+	// runConnect already draws for a KMS decrypt failure.
+	ConnErrBotChallenge = "bot_challenge"
 
 	// ConnErrTeamNotOwned — the credentials work but do not control the team
 	// the invite named. Fantrax's own MyTeamIDs is the authority here.

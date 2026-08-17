@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -76,9 +78,23 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	// could not authenticate is a RESULT, not a task crash. Exiting non-zero
 	// would make the run ledger show a failed job and page the operator for
 	// something only the user can fix.
+	//
+	// The exception is a class only the OPERATOR can act on. There, both halves
+	// invert: the tenant's status must be left alone (marking needs_reconnect
+	// would tell someone their working credentials are dead and ask them to
+	// re-enter them), and the task must exit non-zero precisely so the ledger
+	// records a failure and opsalert pages. This is the same split runConnect
+	// already draws for a KMS decrypt failure below.
 	fail := func(class string) error {
-		conn.Status = lineupapi.ConnNeedsReconnect
 		conn.LastError = class
+		if operatorActionableClass(class) {
+			if err := store.PutConnection(ctx, conn); err != nil {
+				return err
+			}
+			return fmt.Errorf("connect: %s for %s (operator action required; "+
+				"tenant credentials not implicated)", class, uid)
+		}
+		conn.Status = lineupapi.ConnNeedsReconnect
 		if err := store.PutConnection(ctx, conn); err != nil {
 			return err
 		}
@@ -99,20 +115,18 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("connect: malformed credential blob")
 	}
 
-	fxrm, info, err := fantraxLogin(creds)
-	if err != nil {
-		return fail(lineupapi.ConnErrLoginChallengeOrTimeout)
+	ev := fantraxLogin(creds)
+	if v := classifyLogin(ev); v.class != "" {
+		// Printed on EVERY failure, including the ambiguous one, and especially
+		// the ambiguous one. The selector probes behind this are a hypothesis
+		// about markup we do not control, so the only way the classification
+		// gets better is if a real failed attempt leaves behind what the page
+		// actually looked like. A class that was guessed and never checked is
+		// worth no more than the class it replaced.
+		printLoginEvidence(out, ev)
+		return fail(v.class)
 	}
-	if fxrm == "" {
-		// The flow completed but produced no session cookie. Most likely a 2FA
-		// prompt or a Cloudflare interstitial the headless browser cannot
-		// answer — named separately so that user is diagnosable rather than a
-		// mystery.
-		return fail(lineupapi.ConnErrLoginChallengeOrTimeout)
-	}
-	if info == nil || info.UserID == "" {
-		return fail(lineupapi.ConnErrBadCredentials)
-	}
+	fxrm, info := ev.FXRM, ev.Info
 
 	// OWNERSHIP IS PROVEN, NOT ASSERTED. The invite carries the team an admin
 	// BELIEVES this person manages; MyTeamIDs is Fantrax stating which teams
@@ -173,7 +187,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 // is one ECS task per tenant per job and not a loop in a single process; two
 // tenants sharing a process would share these variables and the package-level
 // cookie cache with them.
-func fantraxLogin(creds lineupapi.FantraxCreds) (string, *fantraxUserInfo, error) {
+func fantraxLogin(creds lineupapi.FantraxCreds) loginEvidence {
 	os.Setenv("FANTRAX_USERNAME", creds.Username)
 	os.Setenv("FANTRAX_PASSWORD", creds.Password)
 	// Cleared as soon as the browser has them; the process still holds the
@@ -184,28 +198,79 @@ func fantraxLogin(creds lineupapi.FantraxCreds) (string, *fantraxUserInfo, error
 		os.Unsetenv("FANTRAX_PASSWORD")
 	}()
 
-	cookies, err := auth_client.GetCookiesWithBrowser(auth_client.CacheFile)
-	if err != nil {
-		return "", nil, err
-	}
-	var fxrm string
-	for _, c := range cookies {
-		if c.Name == "FX_RM" {
-			fxrm = c.Value
-		}
-	}
-	if fxrm == "" {
-		return "", nil, nil
+	ev := runBrowserLogin()
+	if ev.Err != nil || ev.FXRM == "" {
+		return ev
 	}
 
 	client, err := auth_client.NewClient(os.Getenv("FANTRAX_LEAGUE_ID"), false)
 	if err != nil {
-		return fxrm, nil, err
+		ev.Err = err
+		return ev
 	}
-	if client.UserInfo == nil {
-		return fxrm, nil, nil
+	if client.UserInfo != nil {
+		ev.Info = &fantraxUserInfo{UserID: client.UserInfo.UserID, Email: client.UserInfo.Email}
 	}
-	return fxrm, &fantraxUserInfo{UserID: client.UserInfo.UserID, Email: client.UserInfo.Email}, nil
+	return ev
+}
+
+// runBrowserLogin is the seam over the headless browser.
+//
+// It exists as a var because everything above it — the classification, the
+// routing, the status write — is worth testing and none of it is testable with
+// Chrome in the path.
+var runBrowserLogin = defaultBrowserLogin
+
+func defaultBrowserLogin() loginEvidence {
+	cookies, outcome, err := auth_client.LoginWithBrowser(auth_client.CacheFile, auth_client.DefaultLoginProbes)
+	ev := loginEvidence{Err: err}
+	// The outcome is read even when err is non-nil, because that is the case
+	// that most needs describing: a login challenge makes the form never
+	// render, which surfaces as a timeout, and the evidence is the only thing
+	// that says which challenge it was.
+	if outcome != nil {
+		ev.FinalURL = outcome.FinalURL
+		ev.Title = outcome.Title
+		ev.Matched = make(map[string]bool, len(outcome.Matched))
+		for _, m := range outcome.Matched {
+			ev.Matched[m] = true
+		}
+		ev.Texts = outcome.Texts
+	}
+	for _, c := range cookies {
+		if c.Name == "FX_RM" {
+			ev.FXRM = c.Value
+		}
+	}
+	return ev
+}
+
+// printLoginEvidence dumps what the page looked like after a failed attempt.
+//
+// It prints the ambiguous case too. That case is the one carrying the open
+// question — whether Fantrax ever presents 2FA (rosterbot-crq.18) — and it can
+// only be answered by a real attempt leaving its evidence somewhere readable.
+func printLoginEvidence(out io.Writer, ev loginEvidence) {
+	fmt.Fprintf(out, "login evidence: url=%q title=%q\n", ev.FinalURL, ev.Title)
+	if ev.Err != nil {
+		fmt.Fprintf(out, "login evidence: browser error: %v\n", ev.Err)
+	}
+	matched := make([]string, 0, len(ev.Matched))
+	for name, ok := range ev.Matched {
+		if ok {
+			matched = append(matched, name)
+		}
+	}
+	sort.Strings(matched)
+	fmt.Fprintf(out, "login evidence: probes matched: %v\n", matched)
+	texts := make([]string, 0, len(ev.Texts))
+	for name := range ev.Texts {
+		texts = append(texts, name)
+	}
+	sort.Strings(texts)
+	for _, name := range texts {
+		fmt.Fprintf(out, "login evidence: %s: %q\n", name, ev.Texts[name])
+	}
 }
 
 type fantraxUserInfo struct{ UserID, Email string }
