@@ -1029,6 +1029,31 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		Actions:   jsii.Strings("iam:PassRole"),
 		Resources: &dispatchPassRoles,
 	}))
+	// The active tenant roster (rosterbot-crq.4): the dispatcher publishes the
+	// list it has just read in order to do its work, and the notifier reads it
+	// so opsalert.Overdue can assert on a tenant that has NEVER run. Without it
+	// Overdue derives tenants from the ledger and can only surface one that ran
+	// and then stopped. Write for one, read for the other — neither needs the
+	// opposite.
+	//
+	// The prefix is a LITERAL here while both Go sides derive it from
+	// layout.TenantRoster, and that asymmetry is deliberate rather than an
+	// oversight. infra/ has no dependency on the application module at all;
+	// adding one for a single constant would pull the root's whole module graph
+	// into infra/go.sum and put a fourth file in dependabot's grouped bumps.
+	//
+	// It is acceptable HERE and was not acceptable in cmd/sync.go — which
+	// restated "session/" and blinded ops for three days — because the two
+	// failures differ in kind. There, a literal decided WHERE DATA WAS WRITTEN,
+	// so drift silently split an artifact across two locations with every job
+	// reporting success. Here it decides only an IAM scope: if it drifts, the
+	// dispatcher logs "could not publish tenant roster", the heartbeat falls
+	// back to its ledger-derived tenants, and nothing is lost or misplaced.
+	// Loud and degrading, not silent and wrong.
+	const tenantRosterPrefix = "tenants/" // must match layout.TenantRoster.S3Prefix
+	stateBucket.GrantWrite(dispatchFn, jsii.String(tenantRosterPrefix+"*"), nil)
+	stateBucket.GrantRead(opsNotifyFn, jsii.String(tenantRosterPrefix+"*"))
+	dispatchFn.AddEnvironment(jsii.String("STATE_BUCKET"), stateBucket.BucketName(), nil)
 
 	for _, j := range jobs {
 		r := awsevents.NewRule(stack, jsii.String(j.id+"Rule"), &awsevents.RuleProps{
@@ -1075,6 +1100,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	type jobSchedule struct {
 		Command       string `json:"command"`
 		MaxGapSeconds int    `json:"max_gap_seconds"`
+		// PerTenant comes from the SAME perTenantJobs set that decides which
+		// rules target the dispatcher, so the notifier cannot disagree with the
+		// wiring about which jobs fan out. It matters because the active tenant
+		// roster applies only to per-tenant jobs: applying it to a league-wide
+		// one would assert that job for every tenant, and since no tenant runs
+		// it under their own id, report a healthy job as permanently dark.
+		PerTenant bool `json:"per_tenant,omitempty"`
 	}
 	scheds := make([]jobSchedule, 0, len(jobs))
 	for _, j := range jobs {
@@ -1085,6 +1117,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		scheds = append(scheds, jobSchedule{
 			Command:       strings.Join(parts, " "),
 			MaxGapSeconds: int(j.maxGap.Seconds()),
+			PerTenant:     perTenantJobs[j.id],
 		})
 	}
 	schedJSON, err := json.Marshal(scheds)

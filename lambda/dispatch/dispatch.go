@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/opsalert"
 )
 
 // event is the EventBridge rule's static input. The rule carries the job's
@@ -31,6 +32,12 @@ type taskLauncher interface {
 	RunWithEnv(ctx context.Context, command []string, env map[string]string) (string, error)
 }
 
+// rosterPublisher stores the active tenant list for the ops notifier
+// (rosterbot-crq.4).
+type rosterPublisher interface {
+	PutJSON(ctx context.Context, key string, data []byte) error
+}
+
 // dispatcher turns one scheduled event into one ECS task per active tenant.
 //
 // One task per tenant per job is FORCED rather than chosen: auth_client holds
@@ -41,6 +48,7 @@ type taskLauncher interface {
 type dispatcher struct {
 	tenants  tenantLister
 	launcher taskLauncher
+	roster   rosterPublisher
 }
 
 func (d dispatcher) dispatch(ctx context.Context, ev event) (result, error) {
@@ -60,6 +68,8 @@ func (d dispatcher) dispatch(ctx context.Context, ev event) (result, error) {
 		// recovery available.
 		return res, fmt.Errorf("dispatch: list active tenants: %w", err)
 	}
+
+	d.publishRoster(ctx, tenants)
 
 	for _, u := range tenants {
 		if u == nil || u.ID == "" {
@@ -101,6 +111,37 @@ func (d dispatcher) dispatch(ctx context.Context, ev event) (result, error) {
 	return res, nil
 }
 
+// publishRoster stores the active tenant list so opsalert.Overdue can assert on
+// a tenant that has NEVER run (rosterbot-crq.4). Without it Overdue derives its
+// tenant set from the ledger and can only ever surface a tenant that ran and
+// then stopped — an onboarded tenant whose job never launched once is silent.
+//
+// BEST EFFORT, ALWAYS. A storage failure must never stop the launches below:
+// the roster improves an alerting check, while the launches are the job itself,
+// and trading the second for the first would be exactly backwards. Publishing
+// here rather than on a schedule of its own is what keeps it fresh for free —
+// the dispatcher has just read the authoritative list in order to do its work.
+func (d dispatcher) publishRoster(ctx context.Context, tenants []*lineupapi.User) {
+	if d.roster == nil {
+		return
+	}
+	ids := make([]string, 0, len(tenants))
+	for _, u := range tenants {
+		if u != nil && u.ID != "" {
+			ids = append(ids, string(u.ID))
+		}
+	}
+	data, err := opsalert.MarshalRoster(ids)
+	if err != nil {
+		log.Printf("dispatch: could not encode tenant roster: %v", err)
+		return
+	}
+	if err := d.roster.PutJSON(ctx, opsalert.RosterKey, data); err != nil {
+		log.Printf("dispatch: could not publish tenant roster (%v); the heartbeat falls back "+
+			"to its ledger-derived tenant set", err)
+	}
+}
+
 // handle is the Lambda entry point.
 //
 // IT RETURNS NIL EVEN WHEN EVERY LAUNCH FAILED, and that is the deliberate
@@ -111,11 +152,11 @@ func (d dispatcher) dispatch(ctx context.Context, ev event) (result, error) {
 // delayed alert, and a tenant that did not run is precisely what
 // opsalert.Overdue exists to notice.
 //
-// The residual gap is real and belongs to rosterbot-crq.4: Overdue discovers
-// tenants from the ledger, so a tenant whose launch fails on EVERY attempt
-// never writes a record and stays invisible. Closing that needs the active
-// roster fed to the notifier, which is why the ticket asks for it alongside
-// this change.
+// That trade is only safe because the missed run is genuinely noticed. A tenant
+// whose launch fails on EVERY attempt writes no ledger record at all, so
+// Overdue could not have discovered it from run history — which is why
+// publishRoster above exists (rosterbot-crq.4). The roster is what makes "no
+// record" mean "did not run" rather than "not a tenant".
 func (d dispatcher) handle(ctx context.Context, ev event) error {
 	res, err := d.dispatch(ctx, ev)
 	if err != nil {

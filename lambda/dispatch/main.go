@@ -26,6 +26,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser"
+	"github.com/nixon-commits/rosterbot/internal/s3blob"
+	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/nixon-commits/rosterbot/lambda/internal/ecsrun"
 )
 
@@ -55,5 +57,23 @@ func main() {
 	}
 
 	d := dispatcher{tenants: users, launcher: runner}
+
+	// The roster is OPTIONAL wiring: without STATE_BUCKET the dispatcher still
+	// launches everything, it just stops improving the heartbeat's tenant
+	// discovery. The prefix comes from layout rather than a literal because the
+	// reader lives in another Go module (opsnotify) with no compiler link to
+	// here — the arrangement that let the run ledger's reader and writer drift
+	// apart and blind alerting for three days.
+	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
+		blob, err := s3blob.New(ctx, bucket, layout.TenantRoster.S3Prefix)
+		if err != nil {
+			log.Printf("dispatch: tenant roster disabled: %v", err)
+		} else {
+			d.roster = blob
+		}
+	} else {
+		log.Printf("dispatch: STATE_BUCKET unset; tenant roster not published")
+	}
+
 	lambda.Start(d.handle)
 }

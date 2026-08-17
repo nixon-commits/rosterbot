@@ -126,7 +126,7 @@ func TestOverdue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Overdue(tt.recs, tt.sched, hbNow)
+			got := Overdue(tt.recs, tt.sched, nil, hbNow)
 			if len(got) != len(tt.want) {
 				t.Fatalf("got %d overdue %v, want %d %v", len(got), commands(got), len(tt.want), tt.want)
 			}
@@ -157,7 +157,7 @@ func TestOverdue_ReportsTheDarkTenantOnly(t *testing.T) {
 		ranU("b1", "optimize", "b", 1*time.Hour, StatusSuccess),
 		ranU("c1", "optimize", "c", 30*time.Hour, StatusSuccess), // dark since yesterday
 	}
-	got := Overdue(recs, []Schedule{hourly("optimize")}, hbNow)
+	got := Overdue(recs, []Schedule{hourly("optimize")}, nil, hbNow)
 	if len(got) != 1 {
 		t.Fatalf("got %d overdue %v, want 1 (tenant c)", len(got), tenantKeys(got))
 	}
@@ -176,7 +176,7 @@ func TestOverdue_ReportsEveryDarkTenant(t *testing.T) {
 		ranU("a1", "optimize", "a", 30*time.Hour, StatusSuccess),
 		ranU("b1", "optimize", "b", 50*time.Hour, StatusSuccess),
 	}
-	got := Overdue(recs, []Schedule{hourly("optimize")}, hbNow)
+	got := Overdue(recs, []Schedule{hourly("optimize")}, nil, hbNow)
 	if len(got) != 2 || got[0].UserID != "b" || got[1].UserID != "a" {
 		t.Fatalf("got %v, want [b a] (oldest first)", tenantKeys(got))
 	}
@@ -187,7 +187,7 @@ func TestOverdue_ReportsEveryDarkTenant(t *testing.T) {
 // judgement, empty tenant.
 func TestOverdue_UntaggedRecordsJudgeOneUntaggedTenant(t *testing.T) {
 	got := Overdue([]Record{ran("a", "grade", 30*time.Hour, StatusSuccess)},
-		[]Schedule{daily("grade")}, hbNow)
+		[]Schedule{daily("grade")}, nil, hbNow)
 	if len(got) != 1 {
 		t.Fatalf("got %d overdue, want 1", len(got))
 	}
@@ -200,7 +200,7 @@ func TestOverdue_UntaggedRecordsJudgeOneUntaggedTenant(t *testing.T) {
 // empty tenant — "nothing launched" is the case with no tenant to name, and it
 // is the case the check was built for.
 func TestOverdue_NoRecordsAtAllReportsTheUntaggedJob(t *testing.T) {
-	got := Overdue(nil, []Schedule{daily("grade")}, hbNow)
+	got := Overdue(nil, []Schedule{daily("grade")}, nil, hbNow)
 	if len(got) != 1 || got[0].UserID != "" || !got[0].Last.IsZero() {
 		t.Fatalf("got %v, want one untagged never-ran entry", tenantKeys(got))
 	}
@@ -214,7 +214,7 @@ func TestOverdue_TenantWithOnlyAnUnusableTimestampIsStillReported(t *testing.T) 
 		ranU("a1", "optimize", "a", 1*time.Hour, StatusSuccess),
 		{ID: "b1", Command: "optimize", UserID: "b", Status: StatusSuccess, StartedAt: "not a time"},
 	}
-	got := Overdue(recs, []Schedule{hourly("optimize")}, hbNow)
+	got := Overdue(recs, []Schedule{hourly("optimize")}, nil, hbNow)
 	if len(got) != 1 || got[0].UserID != "b" {
 		t.Fatalf("got %v, want [optimize/b]", tenantKeys(got))
 	}

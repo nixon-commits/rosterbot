@@ -57,6 +57,27 @@ func loadSchedules() []opsalert.Schedule {
 // It returns nil on a send failure rather than propagating, because an
 // async-invoke retry would recompute every overdue job and re-send the ones that
 // already got through. The next tick covers a genuinely missed one.
+// activeRoster reads the tenant list the fan-out dispatcher publishes.
+//
+// Every failure returns nil, and nil is a supported answer: Overdue falls back
+// to its ledger-derived tenant set, which is exactly what it used before
+// rosterbot-crq.4. The roster narrows a blind spot, so failing the heartbeat
+// over it would trade that narrow gap for total silence — the one failure this
+// whole check exists to prevent.
+func activeRoster(ctx context.Context) []string {
+	if rosterBlob == nil {
+		return nil
+	}
+	data, found, err := rosterBlob.Get(ctx, opsalert.RosterKey)
+	if err != nil || !found {
+		if err != nil {
+			log.Printf("heartbeat: tenant roster unreadable (%v); using ledger-derived tenants", err)
+		}
+		return nil
+	}
+	return opsalert.ParseRoster(data)
+}
+
 func handleHeartbeat(ctx context.Context) error {
 	if len(schedules) == 0 {
 		log.Printf("no %s configured; heartbeat is a no-op", schedulesEnv)
@@ -73,7 +94,7 @@ func handleHeartbeat(ctx context.Context) error {
 		return err
 	}
 
-	missed := opsalert.Overdue(recs, schedules, t)
+	missed := opsalert.Overdue(recs, schedules, activeRoster(ctx), t)
 	if len(missed) == 0 {
 		log.Printf("heartbeat: all %d jobs within cadence", len(schedules))
 		return nil

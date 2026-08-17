@@ -155,6 +155,22 @@ var (
 	// listing target, so it is deliberately absent from All().
 	Progress = Artifact{Name: "Run Progress", S3Prefix: "runs/", LocalDir: ".lineup/progress", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup", PerTenant: true}
 
+	// TenantRoster is the active tenant list the fan-out dispatcher publishes
+	// so the ops notifier can assert on a tenant that has NEVER run
+	// (rosterbot-crq.4). Overdue otherwise derives its tenant set from the
+	// ledger, which can only ever surface a tenant that ran and then stopped.
+	//
+	// Deliberately NOT PerTenant: it is the list OF tenants, so scoping it to
+	// one would be self-defeating.
+	//
+	// It is declared here rather than as a string literal in each module
+	// because the writer (lambda/dispatch) and the reader (opsnotify) are
+	// separate Go modules with no compiler link between them — the precise
+	// arrangement that let the run ledger's readers and writers drift apart and
+	// blind alerting for three days (rosterbot-3vr). One declaration, two
+	// importers, no restatement.
+	TenantRoster = Artifact{Name: "Tenant Roster", S3Prefix: "tenants/", LocalDir: ".lineup/tenants", Durable: true, MaxAge: 26 * time.Hour, Producer: "Lineup"}
+
 	// FootballTrades holds one dedup marker object per Sleeper trade
 	// transaction_id (check -> send -> mark, rosterbot-chs). Deliberately no
 	// MaxAge and absent from All(), like Progress: markers are written only
@@ -179,7 +195,7 @@ func All() []Artifact {
 	return []Artifact{
 		TeamValues, TradeOffers, Analysis, LineupGaps, FootballValues, Archive, Backtest,
 		Lineup, Trades, TradeValues, Reports, RunLedger, RunOutput, Notification, Claims,
-		Session, Cache,
+		Session, Cache, TenantRoster,
 	}
 }
 

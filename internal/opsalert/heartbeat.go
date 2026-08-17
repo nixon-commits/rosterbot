@@ -31,6 +31,21 @@ import (
 type Schedule struct {
 	Command       string `json:"command"`
 	MaxGapSeconds int    `json:"max_gap_seconds"`
+
+	// PerTenant marks a schedule that fans out to one run per tenant, and it
+	// decides whether the active roster applies to it at all.
+	//
+	// Eleven of the sixteen jobs are league-wide — waivers, transactions,
+	// gs-check, archive, team-values and the rest run ONCE, not once per
+	// tenant. Applying the roster to those would assert each of them for every
+	// tenant, and since no tenant ever runs them under their own id, every one
+	// would be reported permanently dark: a flood of alerts about jobs that are
+	// working perfectly.
+	//
+	// It is populated from the same perTenantJobs set in infra.go that decides
+	// which EventBridge rules target the dispatcher, so the two cannot disagree
+	// about which jobs fan out.
+	PerTenant bool `json:"per_tenant,omitempty"`
 }
 
 // MaxGap is how long this job may go without launching before it is overdue.
@@ -137,11 +152,20 @@ type runKey struct{ command, userID string }
 //     tenant. That is every job before fan-out and is byte-identical to the old
 //     behaviour, including the "no run on record" case that this check was built
 //     for.
-//   - A tenant that has *never* run within the horizon cannot be discovered here
-//     and is not reported. Detecting an onboarded tenant whose job never launched
-//     even once needs the tenant roster, which lives in the identity store; this
-//     function's guarantee is that a tenant which was running and *stopped* is
-//     always caught.
+//   - A tenant that has *never* run is discovered only if it appears in roster,
+//     the active tenant list the caller supplies (rosterbot-crq.4). Without it
+//     this function could report only a tenant that ran and then stopped, so an
+//     onboarded tenant whose job never launched even once — a misconfigured
+//     fan-out, a directory row the dispatcher skipped — was perfectly silent.
+//     roster is a plain []string precisely so this package stays a stdlib-only
+//     leaf: the caller reads the identity store, this function only judges.
+//
+// roster applies ONLY to schedules marked PerTenant. Applying it to the
+// league-wide jobs would assert each of them once per tenant and report every
+// one as permanently dark, since no tenant runs them under their own id. A nil
+// or empty roster degrades to exactly the previous ledger-derived behaviour,
+// which matters because the roster arrives over the network and must never make
+// alerting worse than it was.
 //
 // At cutover a mixed ledger briefly holds both untagged and tagged records for
 // one command, so the untagged tenant is reported overdue once and then falls
@@ -155,7 +179,7 @@ type runKey struct{ command, userID string }
 // would make every job look permanently overdue — but its tenant is still
 // remembered, since forgetting it would hide a job that has demonstrably been
 // launching.
-func Overdue(recs []Record, scheds []Schedule, now time.Time) []Missed {
+func Overdue(recs []Record, scheds []Schedule, roster []string, now time.Time) []Missed {
 	newest := map[runKey]Record{}
 	tenants := map[string][]string{} // command -> tenants seen, first-seen order
 	seen := map[runKey]bool{}
@@ -180,6 +204,18 @@ func Overdue(recs []Record, scheds []Schedule, now time.Time) []Missed {
 			continue // no declared cadence; nothing to assert
 		}
 		users := tenants[s.Command]
+		if s.PerTenant {
+			// Union, not replacement: a tenant that ran and then STOPPED must
+			// still be caught after it leaves the active roster — that was this
+			// function's original guarantee and the roster must not weaken it.
+			for _, u := range roster {
+				if u == "" || seen[runKey{s.Command, u}] {
+					continue
+				}
+				seen[runKey{s.Command, u}] = true
+				users = append(users, u)
+			}
+		}
 		if len(users) == 0 {
 			users = []string{""} // nothing has ever run it: one untagged assertion
 		}

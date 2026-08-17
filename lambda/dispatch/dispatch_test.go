@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/opsalert"
 )
 
 type stubTenants struct {
@@ -238,5 +239,84 @@ func TestDispatch_SkipsATenantWithNoID(t *testing.T) {
 	}
 	if res.Skipped != 1 {
 		t.Errorf("result = %+v, want 1 skipped", res)
+	}
+}
+
+type stubRoster struct {
+	puts map[string][]byte
+	err  error
+}
+
+func (r *stubRoster) PutJSON(_ context.Context, key string, data []byte) error {
+	if r.err != nil {
+		return r.err
+	}
+	if r.puts == nil {
+		r.puts = map[string][]byte{}
+	}
+	r.puts[key] = data
+	return nil
+}
+
+// TestDispatch_PublishesTheActiveRoster is rosterbot-crq.4's write half.
+//
+// Overdue derives its tenant set from the ledger, so it can only surface a
+// tenant that ran and then stopped. A tenant whose job never launched once
+// writes no record and is invisible — which is exactly the tenant this
+// dispatcher creates when a launch fails every time. Publishing the roster is
+// what makes "no record" mean "did not run" rather than "not a tenant".
+func TestDispatch_PublishesTheActiveRoster(t *testing.T) {
+	r := &stubRoster{}
+	d := dispatcher{tenants: stubTenants{users: users("alice", "bob")}, launcher: &stubLauncher{}, roster: r}
+
+	if _, err := d.dispatch(context.Background(), event{Command: []string{"optimize"}}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	data, ok := r.puts[opsalert.RosterKey]
+	if !ok {
+		t.Fatalf("no roster published; keys = %v", r.puts)
+	}
+	got := opsalert.ParseRoster(data)
+	if len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
+		t.Errorf("roster = %v, want [alice bob]", got)
+	}
+}
+
+// TestDispatch_RosterFailureDoesNotStopLaunches is the priority rule.
+//
+// The roster improves an alerting check; the launches ARE the job. Letting a
+// storage hiccup on the former cancel the latter would be exactly backwards —
+// it would turn a narrowed blind spot into a real outage.
+func TestDispatch_RosterFailureDoesNotStopLaunches(t *testing.T) {
+	l := &stubLauncher{}
+	d := dispatcher{
+		tenants:  stubTenants{users: users("alice")},
+		launcher: l,
+		roster:   &stubRoster{err: errors.New("s3 down")},
+	}
+
+	res, err := d.dispatch(context.Background(), event{Command: []string{"optimize"}})
+	if err != nil {
+		t.Fatalf("a roster write failure failed the dispatch: %v", err)
+	}
+	if res.Launched != 1 || len(l.launches) != 1 {
+		t.Errorf("result = %+v; the tenant's job must still launch", res)
+	}
+}
+
+// TestDispatch_RosterExcludesUnusableRows keeps the published list consistent
+// with what actually gets launched: a row with no id is skipped for launching,
+// so publishing it would make the heartbeat assert on a tenant that by
+// construction can never run.
+func TestDispatch_RosterExcludesUnusableRows(t *testing.T) {
+	r := &stubRoster{}
+	d := dispatcher{tenants: stubTenants{users: users("alice", "")}, launcher: &stubLauncher{}, roster: r}
+
+	if _, err := d.dispatch(context.Background(), event{Command: []string{"optimize"}}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if got := opsalert.ParseRoster(r.puts[opsalert.RosterKey]); len(got) != 1 || got[0] != "alice" {
+		t.Errorf("roster = %v, want only alice", got)
 	}
 }

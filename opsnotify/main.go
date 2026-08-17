@@ -34,6 +34,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/s3blob"
+	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 )
 
 // send is the Pushover seam. Replaced in tests so handler tests never reach the
@@ -49,6 +50,10 @@ var ledger *ledgerReader
 // is unset or unwritable degrades to the pre-deduplication behaviour rather than
 // to silence.
 var markers *markerStore
+
+// rosterBlob reads the active tenant roster. Nil disables the augmentation and
+// leaves Overdue on its ledger-derived tenant set.
+var rosterBlob *s3blob.Blob
 
 func main() {
 	ctx := context.Background()
@@ -78,6 +83,21 @@ func main() {
 			log.Fatalf("marker store: %v", err)
 		}
 		markers = &markerStore{blob: b}
+
+		// The active tenant roster the fan-out dispatcher publishes
+		// (rosterbot-crq.4). Optional in every direction: a read failure, a
+		// missing object or a malformed body all degrade Overdue to its
+		// ledger-derived tenant set, which is what it used before this existed.
+		// The prefix comes from layout rather than a literal because the WRITER
+		// is in a different Go module with no compiler link to here — the exact
+		// arrangement that let this Lambda's ledger reader drift away from its
+		// writer and blind alerting for three days (rosterbot-3vr).
+		rb, err := s3blob.New(ctx, bucket, layout.TenantRoster.S3Prefix)
+		if err != nil {
+			log.Printf("tenant roster disabled: %v", err)
+		} else {
+			rosterBlob = rb
+		}
 	}
 	schedules = loadSchedules()
 
