@@ -139,6 +139,13 @@ var (
 	// when a trade happens, so a quiet league writes nothing for weeks and
 	// any age check would misread the normal case as stale.
 	FootballTrades = Artifact{Name: "Football Trade Markers", S3Prefix: "football/trades/", LocalDir: ".football/trades", Durable: true, Producer: "FootballTrades"}
+
+	// ILStarts holds one dedup marker per (player, start date) for the
+	// "IL-slotted player has an announced start" alert. Same shape and same
+	// reasoning as FootballTrades: no MaxAge and absent from All(), because a
+	// marker exists only when the condition fires. A healthy roster writes
+	// nothing all season, so an age check would read the normal case as stale.
+	ILStarts = Artifact{Name: "IL Start Markers", S3Prefix: "alerts/il-starts/", LocalDir: ".alerts/il-starts", Durable: true, Producer: "Lineup", PerTenant: true}
 )
 
 // All returns every artifact worth listing, in the order the status page shows

@@ -96,6 +96,15 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("init lineup publisher: %w", err)
 	}
 
+	// Soft: a marker store we cannot build disables dedup, not the alert.
+	// Repeating an IL-start push every hour is recoverable; dropping it is the
+	// failure the alert exists to prevent.
+	ilMarkers, err := statestore.FromEnv().ILStartMarkers()
+	if err != nil {
+		warn("optimize: init IL-start markers: %v (alert will repeat until resolved)", err)
+		ilMarkers = nil
+	}
+
 	opts := lineuprun.Options{
 		Today:              today,
 		NeedsSeasonLookup:  needsSeasonLookup,
@@ -107,6 +116,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		SnapshotRoot:       backtestSnapshotDir,
 		PublishLineupFlag:  publishLineupFlag,
 		Publisher:          pub,
+		ILStartMarkers:     ilMarkers,
 		Out:                os.Stdout,
 		NoCache:            noCache,
 		Verbose:            verbose,

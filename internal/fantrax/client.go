@@ -361,10 +361,17 @@ type SlotCounts struct {
 	MinorsCapacity int
 }
 
-// GetFullHitterRoster returns all hitters including IL and Minors slots,
-// plus slot usage counts (all players, not just hitters).
+// GetFullRoster returns every rostered player — hitters and pitchers, across
+// all four sections including IL and Minors — plus slot usage counts.
 // Capacity must be set externally via config (FANTRAX_IL_SLOTS, FANTRAX_MINORS_SLOTS).
-func (c *Client) GetFullHitterRoster() ([]Player, SlotCounts, error) {
+//
+// This was hitters-only until rosterbot-2hc, which meant roster.CheckRoster's
+// four alert types could never fire for a pitcher: an ace stranded in an IL slot
+// after his club activated him produced no signal anywhere, and since
+// fetchPitcherRosterForPeriod reads only Active+Reserve, the optimizer could not
+// see him either. The filter looked like an oversight rather than a decision —
+// every alert type is as meaningful for a pitcher as for a hitter.
+func (c *Client) GetFullRoster() ([]Player, SlotCounts, error) {
 	var counts SlotCounts
 
 	roster, err := c.auth.GetCurrentPeriodTeamRosterInfo(c.teamID)
@@ -376,20 +383,24 @@ func (c *Client) GetFullHitterRoster() ([]Player, SlotCounts, error) {
 	counts.ILUsed = len(roster.InjuredReserve)
 	counts.MinorsUsed = len(roster.MinorsRoster)
 
+	return collectFullRoster(roster), counts, nil
+}
+
+// collectFullRoster flattens every roster section into Players, unfiltered.
+// Split out from GetFullRoster so the section coverage is testable without an
+// authenticated client.
+func collectFullRoster(roster *models.TeamRoster) []Player {
 	var all []models.RosterPlayer
 	all = append(all, roster.ActiveRoster...)
 	all = append(all, roster.ReserveRoster...)
 	all = append(all, roster.InjuredReserve...)
 	all = append(all, roster.MinorsRoster...)
 
-	var players []Player
+	players := make([]Player, 0, len(all))
 	for _, rp := range all {
-		if !isHitter(rp) {
-			continue
-		}
 		players = append(players, toPlayer(rp))
 	}
-	return players, counts, nil
+	return players
 }
 
 // GetMinorsRoster returns all players (hitters and pitchers) currently

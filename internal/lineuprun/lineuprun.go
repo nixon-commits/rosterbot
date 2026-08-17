@@ -87,6 +87,13 @@ type Options struct {
 	// reads STATE_BUCKET. Nil means "do not publish" (the shadow command).
 	Publisher lineupapi.Publisher
 
+	// ILStartMarkers dedups the IL-start alert, one marker per (player, start
+	// date). Selected by the caller like Publisher, so this package still reads
+	// no environment. Nil disables dedup rather than the alert: with no record
+	// of what was sent, repeating is the safe direction — a duplicate push is
+	// recoverable, a silently dropped one is the failure this alert exists for.
+	ILStartMarkers ilStartMarkers
+
 	// Out is where the run's human-readable output goes — the per-date board,
 	// the planned-moves block, the warning lines and the apply log. The caller
 	// owns stdout (rosterbot-rr1): cmd passes os.Stdout, tests pass a buffer.
@@ -127,7 +134,7 @@ type LineupClient interface {
 	recentStatsClient
 	GetHitterRoster() ([]fantrax.Player, error)
 	GetPitcherRoster() ([]fantrax.Player, error)
-	GetFullHitterRoster() ([]fantrax.Player, fantrax.SlotCounts, error)
+	GetFullRoster() ([]fantrax.Player, fantrax.SlotCounts, error)
 	GetActiveSlots() ([]fantrax.Slot, error)
 	GetPitcherSlots() ([]fantrax.Slot, error)
 	GetScoringWeights() (fantrax.ScoringWeights, error)
@@ -232,9 +239,15 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 
 	prog.Header(projDisplayName[batLoadResult.System], formatDates(dates), cfg.DryRun)
 
+	// Hoisted above the roster-alert block: CheckILStarters needs probables,
+	// and the alert has to run before the per-date optimize pass so an
+	// operator hears about a lost start while it is still recoverable.
+	schedClient := schedule.NewClient()
+	schedClient.CacheDir = cacheDir
+
 	// --- Roster alerts (if requested) ---
 	if opts.CheckRoster {
-		fullRoster, counts, err := ft.GetFullHitterRoster()
+		fullRoster, counts, err := ft.GetFullRoster()
 		if err != nil {
 			return result, fmt.Errorf("get full roster: %w", err)
 		}
@@ -249,6 +262,21 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 			}
 			fmt.Fprintln(out)
 		}
+
+		reportILStarts(ilStartInputs{
+			Roster:  fullRoster,
+			Sched:   schedClient,
+			Today:   today,
+			Markers: opts.ILStartMarkers,
+			Notify: func(message string) error {
+				if cfg.PushoverUserKey == "" || cfg.PushoverAPIToken == "" {
+					return fmt.Errorf("pushover credentials not configured")
+				}
+				return notify.SendPushover(cfg.PushoverUserKey, cfg.PushoverAPIToken, "IL Start Alert", message)
+			},
+			DryRun: cfg.DryRun,
+			Out:    out,
+		})
 	}
 
 	// --- Load the date-invariant Fantrax inputs (six fetches + two period
@@ -356,8 +384,6 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	}
 
 	multiDate := len(dates) > 1
-	schedClient := schedule.NewClient()
-	schedClient.CacheDir = cacheDir
 
 	// Get season start date for period calculation.
 	// If we already fetched the season range for --dates all, reuse seasonStart from above.

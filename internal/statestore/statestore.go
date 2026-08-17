@@ -68,6 +68,7 @@ var (
 	tradeOfferArtifact     = of(layout.TradeOffers)
 	reportsArtifact        = of(layout.Reports)
 	footballTradesArtifact = of(layout.FootballTrades)
+	ilStartsArtifact       = of(layout.ILStarts)
 )
 
 // Bucket is the single os.Getenv("STATE_BUCKET") read in the codebase. Empty
@@ -354,6 +355,14 @@ func (s *Selector) ReportsStore() (lineupapi.BlobStore, error) {
 // called only after a confirmed send (check -> send -> mark, rosterbot-chs).
 func (s *Selector) FootballTradeMarkers() (lineupapi.BlobStore, error) {
 	return blobStore(s, footballTradesArtifact, "")
+}
+
+// ILStartMarkers is one dedup marker per (player, start date) for the IL-start
+// alert. The date is part of the key on purpose: a player stranded on the IL
+// across two separate starts is two distinct things worth being told about,
+// where a player-only key would alert once and then go quiet for the season.
+func (s *Selector) ILStartMarkers() (lineupapi.BlobStore, error) {
+	return blobStore(s, ilStartsArtifact, "")
 }
 
 // TradeOfferWriter is the write side of the durable Trade Offer Log.
