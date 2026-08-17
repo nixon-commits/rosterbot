@@ -1,10 +1,28 @@
 // render.js — shared DOM helpers: HTML-escaping and a generic JSON->DOM
 // renderer used for the run-output viewer (arrays of objects -> table, plain
 // objects -> key/value rows, everything else -> a simple list/text node).
+// escapeHtml escapes a value for interpolation into HTML.
+//
+// IT ESCAPES QUOTES, and that is the whole reason it is not the two-line
+// textContent/innerHTML trick it used to be. That trick delegates to the HTML
+// fragment-serialization algorithm, which escapes only &, <, > and U+00A0 —
+// never " or '. Every use in a TEXT position was therefore fine, and every use
+// in an ATTRIBUTE was a hole: value.js interpolated a Fantrax-supplied logo URL
+// into src="…", where one embedded quote closes the attribute and the rest of
+// the string becomes markup, onerror= included.
+//
+// Escaping here rather than only fixing that one call site is deliberate: the
+// footgun was that the function's name promised safety it did not deliver, and
+// five files interpolate its output. Prefer createElement/textContent for new
+// code regardless — see views.js, trades.js, football.js — but a caller that
+// does reach for this now gets what the name says.
 export function escapeHtml(value) {
-  const div = document.createElement("div");
-  div.textContent = String(value);
-  return div.innerHTML;
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 // ---- Help bubbles ----------------------------------------------------------

@@ -135,7 +135,14 @@ function wireLegend(el, model, state, rerender) {
     const b = document.createElement("button");
     b.type = "button";
     b.dataset.team = t.id;
-    b.innerHTML = `<span class="swatch" style="background:${t.color}"></span> ${escapeHtml(t.name || t.id)}`;
+    // Built rather than templated: the swatch colour went into a style=
+    // attribute with NO escaping at all, safe only because it happens to come
+    // from a hardcoded palette in internal/valuereport. Setting the property
+    // means it cannot become markup whatever the model says.
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    sw.style.background = t.color;
+    b.append(sw, " ", t.name || t.id);
     b.classList.toggle("active", !state.hidden.has(t.id));
     b.addEventListener("click", () => {
       if (state.hidden.has(t.id)) state.hidden.delete(t.id); else state.hidden.add(t.id);
@@ -237,9 +244,14 @@ function coverageCell(matched, rostered) {
 
 function paintStandings(el, model) {
   const rows = model.latest.map((r, i) => {
+    // escapeHtml now escapes quotes, so src= and data-color= are no longer
+    // attribute-escapable; the swatch's colour is escaped too rather than
+    // interpolated raw. This row is still string-built — the honest fix is
+    // createElement like views.js/trades.js/football.js — but the reachable
+    // hole is closed, and the remaining risk is a pattern rather than a bug.
     const badge = r.logo
       ? `<img class="logo" src="${escapeHtml(r.logo)}" data-color="${escapeHtml(r.color)}" alt=""/>`
-      : `<span class="swatch" style="background:${r.color}"></span>`;
+      : `<span class="swatch" style="background:${escapeHtml(r.color)}"></span>`;
     return `<tr class="${i === 0 ? "lead" : ""}">
       <td><div class="team">${badge}<span>${escapeHtml(r.name || r.team)}</span></div></td>
       <td class="num">${fmt(r.total)}</td>
