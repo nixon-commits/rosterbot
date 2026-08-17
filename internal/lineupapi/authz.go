@@ -88,6 +88,10 @@ func (cfg Config) resolveCaller(ctx context.Context, r *http.Request) (Caller, b
 // which is operator information rather than a tenant's own data.
 var adminOnlyRoutes = []string{
 	"/v1/infra",
+	// Every tenant's email, team, connection state and auto_apply setting.
+	// Its presence HERE is what makes it admin-only — this list is an
+	// allowlist, so a route left out of it is reachable by every member.
+	"/v1/tenants",
 }
 
 // leagueWideJobs are jobs a member may not launch: they act on the league or

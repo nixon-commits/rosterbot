@@ -89,6 +89,9 @@ type Config struct {
 //	GET  /v1/trades         -> pending trade offers, HKB-valued
 //	GET  /v1/trades/values  -> league player/pick values table
 //	GET  /v1/reports/{name} -> private dashboard report (model|gap|views)
+//	GET  /v1/tenants        -> all tenants (admin only)
+//	GET  /v1/me             -> the caller's own profile + Fantrax status
+//	POST /v1/me/preferences -> update the caller's own auto_apply
 //	POST /v1/jobs/{name}    -> launch a job (async), 202
 //	POST /v1/auth/*         -> passkey login/register/logout, session mgmt
 func Handler(cfg Config) http.Handler {
@@ -105,6 +108,9 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/trades/values", cfg.handleTradeValues)
 	mux.HandleFunc("GET /v1/reports/{name}", cfg.handleReport)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
+	mux.HandleFunc("GET /v1/me", cfg.handleMe)
+	mux.HandleFunc("GET /v1/tenants", cfg.handleTenants)
+	mux.HandleFunc("POST /v1/me/preferences", cfg.handleSetPreferences)
 	mux.HandleFunc("POST /v1/connect", cfg.handleConnect)
 	mux.HandleFunc("GET /v1/connect", cfg.handleConnectStatus)
 

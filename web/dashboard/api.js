@@ -59,6 +59,11 @@ export const api = {
   //
   // Omit it entirely when adding a device while already logged in; the session
   // cookie authorizes that on its own.
+  me: () => request("GET", "/v1/me"),
+  setPreferences: (prefs) => request("POST", "/v1/me/preferences", prefs),
+  tenants: () => request("GET", "/v1/tenants"),
+  connect: (username, password) => request("POST", "/v1/connect", { username, password }),
+
   authRegisterBegin: (enrollToken) =>
     request("POST", "/v1/auth/register/begin", enrollToken ? { token: enrollToken } : undefined),
   authRegisterFinish: (attestation, enrollToken) =>

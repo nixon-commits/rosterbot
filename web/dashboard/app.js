@@ -12,6 +12,8 @@ import { renderTrades } from "./trades.js";
 import { renderViews } from "./views.js";
 import { renderInfra } from "./infra.js";
 import { renderFootball } from "./football.js";
+import { renderSettings } from "./settings.js";
+import { renderTenants } from "./tenants.js";
 import { startLive, stopLive } from "./live.js";
 
 const ROUTES = {
@@ -25,6 +27,8 @@ const ROUTES = {
   "#views": renderViews,
   "#infra": renderInfra,
   "#football": renderFootball,
+  "#settings": renderSettings,
+  "#tenants": renderTenants,
 };
 const DEFAULT_ROUTE = "#lineup";
 
@@ -113,10 +117,31 @@ function showBootstrap(message) {
   bootstrapError.textContent = message || "";
 }
 
+// applyRole reveals the admin-only navigation.
+//
+// PRESENTATION ONLY. Authorization stays server-side in adminOnlyRoutes, so a
+// member who un-hides this in their browser gets a tab that answers 403. Hiding
+// it is about not offering people doors they cannot open, not about locking
+// them.
+//
+// A failure leaves the tab hidden, which is the harmless direction: an admin
+// sees one fewer link and can still reach #tenants by typing it.
+async function applyRole() {
+  const adminNav = document.querySelectorAll("[data-admin-only]");
+  try {
+    const me = await api.me();
+    const isAdmin = me.role === "admin";
+    for (const n of adminNav) n.hidden = !isAdmin;
+  } catch {
+    for (const n of adminNav) n.hidden = true;
+  }
+}
+
 function showShell() {
   loginScreen.hidden = true;
   bootstrapScreen.hidden = true;
   shell.hidden = false;
+  void applyRole();
   window.addEventListener("hashchange", route);
   route();
   startLive();
