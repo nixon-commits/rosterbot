@@ -132,9 +132,40 @@ async function applyRole() {
     const me = await api.me();
     const isAdmin = me.role === "admin";
     for (const n of adminNav) n.hidden = !isAdmin;
+    showConnectionBanner(me);
   } catch {
     for (const n of adminNav) n.hidden = true;
   }
+}
+
+// showConnectionBanner is the TENANT-facing half of crq.14's failure routing.
+//
+// The admin Tenants tab answers "who needs to act" for the operator. This
+// answers it for the person who can actually act, and it has to be unmissable:
+// a broken connection means the bot has silently stopped managing their team,
+// and a user who only discovers that by visiting Settings will discover it
+// late.
+//
+// It deliberately does NOT fire for bot_challenge. That is operator-actionable
+// — the credentials are fine and nothing the user does helps — so telling them
+// to reconnect would waste their time and mislead them, which is the specific
+// failure the taxonomy exists to prevent.
+function showConnectionBanner(me) {
+  const host = document.getElementById("status-line");
+  if (!host || !me.fantrax) return;
+  const conn = me.fantrax;
+  if (conn.status !== "needs_reconnect") return;
+  if (conn.last_error === "bot_challenge") return;
+
+  const b = document.createElement("div");
+  b.className = "banner bad";
+  b.append(document.createTextNode(
+    "rosterbot is not connected to your Fantrax account, so it is not managing your team. "));
+  const a = document.createElement("a");
+  a.href = "#settings";
+  a.textContent = "Reconnect in Settings";
+  b.append(a);
+  host.prepend(b);
 }
 
 function showShell() {
