@@ -127,7 +127,15 @@ function impactTable(imp) {
   const table = el("table", "data-table");
   const thead = el("thead");
   const hr = el("tr");
-  for (const h of ["", "Before", "After", "Change", "Rank"]) hr.appendChild(el("th", null, h));
+  // A header carries its column's alignment class, not just its label. Every
+  // column but the label is right-aligned in the body via .num, and style.css
+  // right-aligns th.num for exactly this reason — omitting it left the headers
+  // hanging left over right-aligned figures, which reads as a spacing bug
+  // rather than a style choice. Rank is textual ("6 of 10") but still tracks
+  // its own body cells: the rule is header-matches-column, not header-matches-type.
+  for (const [h, cls] of [["", null], ["Before", "num"], ["After", "num"], ["Change", "num"], ["Rank", "num"]]) {
+    hr.appendChild(el("th", cls, h));
+  }
   thead.appendChild(hr);
   table.appendChild(thead);
 
@@ -273,7 +281,10 @@ function playerTable(rows) {
   const t = el("table", "data-table");
   const thead = el("thead");
   const hr = el("tr");
-  for (const h of ["Player", "Pos", "Team", "Value", "Rank", "Age"]) hr.appendChild(el("th", null, h));
+  for (const [h, cls] of [["Player", null], ["Pos", null], ["Team", null],
+    ["Value", "num"], ["Rank", "num"], ["Age", "num"]]) {
+    hr.appendChild(el("th", cls, h));
+  }
   thead.appendChild(hr);
   t.appendChild(thead);
 
@@ -299,7 +310,9 @@ function pickTable(picks) {
   const t = el("table", "data-table");
   const thead = el("thead");
   const hr = el("tr");
-  for (const h of ["Pick", "Value", "Rank"]) hr.appendChild(el("th", null, h));
+  for (const [h, cls] of [["Pick", null], ["Value", "num"], ["Rank", "num"]]) {
+    hr.appendChild(el("th", cls, h));
+  }
   thead.appendChild(hr);
   t.appendChild(thead);
   const tb = el("tbody");
