@@ -42,6 +42,16 @@ type Config struct {
 	TradeValues   ObjectStore
 	Reports       ObjectStore
 
+	// Tenants resolves the eight stores above PER CALLER. When set it wins;
+	// the flat fields then serve only `rosterbot serve` and the tests, which
+	// have one tenant by construction.
+	//
+	// It exists because those fields were bound once at Lambda cold start from
+	// ROSTERBOT_USER_ID while no route consulted who was asking, so every
+	// signed-in user read the operator's data — the read half of the fan-out
+	// that crq.11 left undone.
+	Tenants TenantStores
+
 	// WebAuthn passkey auth (see webauthn.go).
 	Identities IdentityStore
 
@@ -130,11 +140,16 @@ func isAuthed(r *http.Request, cfg Config) bool {
 }
 
 func (cfg Config) handleLineup(w http.ResponseWriter, r *http.Request) {
-	if cfg.Lineups == nil {
+	view, viewOK := cfg.tenantView(r.Context())
+	if !viewOK {
+		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+		return
+	}
+	if view.Lineups == nil {
 		writeErr(w, http.StatusNotImplemented, "lineup store not configured")
 		return
 	}
-	data, ok, err := cfg.Lineups.Get(r.Context(), TodayKey)
+	data, ok, err := view.Lineups.Get(r.Context(), TodayKey)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "lineup store unavailable")
 		return
@@ -149,7 +164,12 @@ func (cfg Config) handleLineup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg Config) handleRuns(w http.ResponseWriter, r *http.Request) {
-	if cfg.Runs == nil {
+	view, viewOK := cfg.tenantView(r.Context())
+	if !viewOK {
+		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+		return
+	}
+	if view.Runs == nil {
 		writeErr(w, http.StatusNotImplemented, "run ledger not configured")
 		return
 	}
@@ -159,7 +179,7 @@ func (cfg Config) handleRuns(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	runs, err := cfg.Runs.List(r.Context(), limit)
+	runs, err := view.Runs.List(r.Context(), limit)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "run ledger unavailable")
 		return
@@ -171,12 +191,17 @@ func (cfg Config) handleRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg Config) handleRunDetail(w http.ResponseWriter, r *http.Request) {
-	if cfg.Runs == nil {
+	view, viewOK := cfg.tenantView(r.Context())
+	if !viewOK {
+		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+		return
+	}
+	if view.Runs == nil {
 		writeErr(w, http.StatusNotImplemented, "run ledger not configured")
 		return
 	}
 	id := r.PathValue("id")
-	detail, ok, err := cfg.Runs.Get(r.Context(), id)
+	detail, ok, err := view.Runs.Get(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "run ledger unavailable")
 		return
@@ -189,12 +214,17 @@ func (cfg Config) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg Config) handleRunOutput(w http.ResponseWriter, r *http.Request) {
-	if cfg.Output == nil {
+	view, viewOK := cfg.tenantView(r.Context())
+	if !viewOK {
+		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+		return
+	}
+	if view.Output == nil {
 		writeErr(w, http.StatusNotImplemented, "run output not configured")
 		return
 	}
 	id := r.PathValue("id")
-	data, ok, err := cfg.Output.GetOutput(r.Context(), id)
+	data, ok, err := view.Output.GetOutput(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "run output unavailable")
 		return
@@ -213,12 +243,17 @@ func (cfg Config) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 // recorder. The bytes are passed through untouched (never decoded here), so
 // progress.Snapshot is the single source of truth for the wire shape.
 func (cfg Config) handleRunProgress(w http.ResponseWriter, r *http.Request) {
-	if cfg.Progress == nil {
+	view, viewOK := cfg.tenantView(r.Context())
+	if !viewOK {
+		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+		return
+	}
+	if view.Progress == nil {
 		writeErr(w, http.StatusNotImplemented, "run progress not configured")
 		return
 	}
 	id := r.PathValue("id")
-	data, ok, err := cfg.Progress.GetProgress(r.Context(), id)
+	data, ok, err := view.Progress.GetProgress(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "run progress unavailable")
 		return
@@ -233,7 +268,12 @@ func (cfg Config) handleRunProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg Config) handleNotifications(w http.ResponseWriter, r *http.Request) {
-	if cfg.Notifications == nil {
+	view, viewOK := cfg.tenantView(r.Context())
+	if !viewOK {
+		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+		return
+	}
+	if view.Notifications == nil {
 		writeErr(w, http.StatusNotImplemented, "activity feed not configured")
 		return
 	}
@@ -243,7 +283,7 @@ func (cfg Config) handleNotifications(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	notifs, err := cfg.Notifications.List(r.Context(), limit)
+	notifs, err := view.Notifications.List(r.Context(), limit)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "activity feed unavailable")
 		return

@@ -196,6 +196,16 @@ func main() {
 
 	// Only the four non-store fields are set here; every store came from
 	// buildStores above, where the guard test can see them.
+	// PER-CALLER STORES. The eight per-tenant stores buildStores wired above
+	// now serve only as the single-tenant fallback shape; this provider is what
+	// actually answers a request, resolved from the authenticated caller rather
+	// than from the environment variable this process booted with.
+	//
+	// Without it every signed-in user read the operator's lineup, runs, trades,
+	// reports and notification feed — the read half of the fan-out, which
+	// crq.11 left undone while the write half shipped.
+	apiCfg.Tenants = newTenantStores(bucket, lineupapi.UserID(os.Getenv("ROSTERBOT_USER_ID")))
+
 	apiCfg.Token = token
 	apiCfg.Jobs = jobs
 	apiCfg.WebAuthn = wa

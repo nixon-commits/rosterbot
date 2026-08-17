@@ -22,6 +22,12 @@ var nonStoreFields = map[string]string{
 	"Jobs":          "ECS runner, needs an AWS SDK client",
 	"WebAuthn":      "RP config, built from SSM-published RP_ID/RP_ORIGIN",
 	"SessionSecret": "HMAC secret, from SSM",
+	// Owned by main, not buildStores, and deliberately so: it resolves stores
+	// PER CALLER, so it cannot be built from the single tenant buildStores
+	// composes its flat fields from. Those flat fields remain the fallback
+	// shape for `rosterbot serve` and the tests; this provider is what answers
+	// a real request.
+	"Tenants": "per-caller store provider, built in main from the state bucket",
 }
 
 // TestBuildStores_WiresEveryStoreField is the regression guard for the class of
