@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -943,11 +944,109 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// (13:30 UTC) finds and scores its per-system snapshots.
 		{"Shadow", "cron(40 23 * * ? *)", jsii.Strings("shadow"), dailyGap},
 	}
+	// --- Per-tenant fan-out (rosterbot-crq.13) ---
+	//
+	// perTenantJobs names the schedules that run once PER TENANT. Everything
+	// absent from this set stays a league-wide singleton targeting ECS
+	// directly, and that split is what keeps the expensive rate-limited
+	// upstreams (FanGraphs, Savant, HKB, MLB) at one call per day rather than
+	// one per tenant per day — layout.Cache is deliberately NOT PerTenant for
+	// the same reason.
+	//
+	//	Lineup     applies to the tenant's own team; writes Lineup, Backtest,
+	//	           Trades and TradeOffers, all PerTenant.
+	//	Grade      writes Analysis and LineupGaps, both PerTenant.
+	//	Backtest   reads the tenant's own PerTenant Backtest snapshots.
+	//	Shadow     writes per-system snapshots under PerTenant Backtest.
+	//	Prospects  the non-obvious one — cmd/prospects.go has no TeamID in it,
+	//	           but internal/prospects/run.go calls ft.GetMinorsRoster(),
+	//	           which is team-scoped.
+	//
+	// ProjectionSite is deliberately ABSENT despite writing PerTenant Reports:
+	// it also publishes the league-wide PUBLIC report/value.json and
+	// report/football.json with --delete, so N concurrent tasks would each
+	// delete the others' output. It has to be split into a per-tenant half and
+	// a singleton half before it can join this set.
+	//
+	// Waivers, Transactions and GsCheck are league-wide as written — no team
+	// scoping at all — so they are singletons, not per-tenant jobs.
+	perTenantJobs := map[string]bool{
+		"Lineup": true, "Grade": true, "Backtest": true, "Shadow": true, "Prospects": true,
+	}
+	// A typo'd key would not fail — it would silently mean "not per-tenant",
+	// leaving that job running once for the operator forever while looking
+	// wired. Same reason check-pins is a hard error rather than a skip.
+	{
+		known := map[string]bool{}
+		for _, j := range jobs {
+			known[j.id] = true
+		}
+		for id := range perTenantJobs {
+			if !known[id] {
+				panic(fmt.Sprintf("perTenantJobs names %q, which is not a job in the schedule table", id))
+			}
+		}
+	}
+
+	// The dispatcher exists because ONE RULE CAN ONLY EVER PRODUCE ONE
+	// RunTask: awseventstargets.TaskEnvironmentVariable.Value is a required
+	// static string, so "one task per row in a table" cannot be expressed in a
+	// rule at all. The rule hands this function the job's argv; it enumerates
+	// active tenants and launches one task each.
+	dispatchFn := awscdklambdagoalpha.NewGoFunction(stack, jsii.String("Dispatch"), &awscdklambdagoalpha.GoFunctionProps{
+		Entry:        jsii.String("../lambda/dispatch"),
+		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
+		Architecture: awslambda.Architecture_ARM_64(),
+		// Generous next to the API's 10s: this makes one DynamoDB read plus one
+		// RunTask per tenant, and a timeout here silently drops whichever
+		// tenants had not been reached yet.
+		Timeout: awscdk.Duration_Seconds(jsii.Number(60)),
+		Environment: &map[string]*string{
+			"IDENTITY_TABLE":  identityTable.TableName(),
+			"CLUSTER":         cluster.ClusterArn(),
+			"TASK_DEF":        taskDef.TaskDefinitionArn(),
+			"SUBNETS":         awscdk.Fn_Join(jsii.String(","), publicSubnets.SubnetIds),
+			"SECURITY_GROUPS": taskSg.SecurityGroupId(),
+			"CONTAINER_NAME":  jsii.String("bot"),
+		},
+	})
+	// Read-only on the directory: the dispatcher enumerates tenants and must
+	// never be able to alter one. It also gets no KMS grant of either kind — it
+	// never touches a credential, only an id.
+	identityTable.GrantReadData(dispatchFn)
+	// RunTask scoped to the same ARN handed to it as TASK_DEF above, so the
+	// permission and the argument come from one CDK token and cannot drift to
+	// different revisions. Mirrors what apiFn already does for POST /v1/jobs.
+	dispatchFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions:   jsii.Strings("ecs:RunTask"),
+		Resources: jsii.Strings(*taskDef.TaskDefinitionArn()),
+	}))
+	dispatchPassRoles := []*string{taskDef.TaskRole().RoleArn()}
+	if taskDef.ExecutionRole() != nil {
+		dispatchPassRoles = append(dispatchPassRoles, taskDef.ExecutionRole().RoleArn())
+	}
+	dispatchFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions:   jsii.Strings("iam:PassRole"),
+		Resources: &dispatchPassRoles,
+	}))
+
 	for _, j := range jobs {
 		r := awsevents.NewRule(stack, jsii.String(j.id+"Rule"), &awsevents.RuleProps{
 			Schedule: awsevents.Schedule_Expression(jsii.String(j.cron)),
 			Enabled:  jsii.Bool(schedulesEnabled),
 		})
+		if perTenantJobs[j.id] {
+			// The command is passed as DATA, unchanged. It must stay
+			// byte-identical to the JOB_SCHEDULES entry built below, because
+			// entrypoint.sh records the run as CMD="$*" and internal/opsalert
+			// looks the schedule up by that exact string.
+			r.AddTarget(awseventstargets.NewLambdaFunction(dispatchFn, &awseventstargets.LambdaFunctionProps{
+				Event: awsevents.RuleTargetInput_FromObject(&map[string]interface{}{
+					"command": *j.cmd,
+				}),
+			}))
+			continue
+		}
 		r.AddTarget(awseventstargets.NewEcsTask(&awseventstargets.EcsTaskProps{
 			Cluster:         cluster,
 			TaskDefinition:  taskDef,
