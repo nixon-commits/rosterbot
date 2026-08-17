@@ -153,20 +153,157 @@ func TestIdentityTable_SurvivesStackReplacement(t *testing.T) {
 		if got := res["DeletionPolicy"]; got != "Retain" {
 			t.Errorf("identity table DeletionPolicy = %v, want Retain", got)
 		}
-		props, _ := json.Marshal(res["Properties"])
-		if !strings.Contains(string(props), "PointInTimeRecovery") {
-			t.Error("identity table has no point-in-time recovery; its contents are " +
-				"the one thing here that cannot be refetched from an upstream")
+		props, _ := res["Properties"].(map[string]any)
+		if !pitrEnabled(props) {
+			t.Error("identity table does not have point-in-time recovery ENABLED; its " +
+				"contents are the one thing here that cannot be refetched from an upstream")
 		}
 		// ENROLL# items are single-use enrollment tokens carrying an absolute
 		// expiry. Without TTL an unredeemed invite stays a live credential
 		// forever, which is the opposite of "single-use, short-lived".
-		if !strings.Contains(string(props), "expires_at") {
-			t.Error("identity table has no TTL on expires_at; unredeemed enrollment " +
-				"tokens would never expire")
+		if !ttlOnExpiresAt(props) {
+			t.Error("identity table has no ENABLED TTL on expires_at; unredeemed " +
+				"enrollment tokens would never expire")
 		}
 	}
 	if !found {
 		t.Fatal("no DynamoDB table in the synthesized stack")
+	}
+}
+
+// pitrEnabled reports whether every replica has point-in-time recovery on.
+//
+// It navigates to the VALUE rather than searching the marshalled JSON for a
+// key name. The previous check was strings.Contains(props,
+// "PointInTimeRecovery"), and the synthesized key is
+// "PointInTimeRecoveryEnabled" — so the needle was a proper PREFIX of a key
+// that is present whether the flag is true or false. The guard protecting the
+// one store here whose contents cannot be refetched could not fail.
+//
+// Returns false for zero replicas: "nothing to check" must not read as "all
+// good" on a table this one guards.
+func pitrEnabled(props map[string]any) bool {
+	replicas, ok := props["Replicas"].([]any)
+	if !ok || len(replicas) == 0 {
+		return false
+	}
+	for _, r := range replicas {
+		rep, ok := r.(map[string]any)
+		if !ok {
+			return false
+		}
+		spec, ok := rep["PointInTimeRecoverySpecification"].(map[string]any)
+		if !ok {
+			return false
+		}
+		if enabled, _ := spec["PointInTimeRecoveryEnabled"].(bool); !enabled {
+			return false
+		}
+	}
+	return true
+}
+
+// ttlOnExpiresAt reports whether TTL is ENABLED and points at expires_at.
+//
+// Same failure as pitrEnabled: the old check searched for the string
+// "expires_at", which is present in the specification whether Enabled is true
+// or false. An unredeemed enrollment token would then stay a live credential
+// forever, which is the opposite of "single-use, short-lived".
+func ttlOnExpiresAt(props map[string]any) bool {
+	spec, ok := props["TimeToLiveSpecification"].(map[string]any)
+	if !ok {
+		return false
+	}
+	if enabled, _ := spec["Enabled"].(bool); !enabled {
+		return false
+	}
+	name, _ := spec["AttributeName"].(string)
+	return name == "expires_at"
+}
+
+// TestDurabilityGuardsDetectTheDisabledCase is a test OF THE GUARD, because the
+// guard it replaces could not fail.
+//
+// The old assertions were strings.Contains(props, "PointInTimeRecovery") and
+// strings.Contains(props, "expires_at"). Both needles are present in the
+// synthesized template whether the feature is enabled or disabled — the first
+// is a proper prefix of "PointInTimeRecoveryEnabled" — so flipping either flag
+// to false left the guard green. On the one store in this tree whose contents
+// cannot be refetched from an upstream.
+//
+// A guard that cannot go red is worth nothing, and reads as protection. These
+// cases are the disabled templates it must now reject.
+func TestDurabilityGuardsDetectTheDisabledCase(t *testing.T) {
+	on := map[string]any{
+		"Replicas": []any{map[string]any{
+			"PointInTimeRecoverySpecification": map[string]any{"PointInTimeRecoveryEnabled": true},
+		}},
+		"TimeToLiveSpecification": map[string]any{"AttributeName": "expires_at", "Enabled": true},
+	}
+	if !pitrEnabled(on) || !ttlOnExpiresAt(on) {
+		t.Fatal("the guards reject a correctly configured table")
+	}
+
+	for _, tc := range []struct {
+		name  string
+		props map[string]any
+		pitr  bool
+		ttl   bool
+	}{
+		{
+			name: "PITR disabled — the case the old substring check could not see",
+			props: map[string]any{
+				"Replicas": []any{map[string]any{
+					"PointInTimeRecoverySpecification": map[string]any{"PointInTimeRecoveryEnabled": false},
+				}},
+				"TimeToLiveSpecification": map[string]any{"AttributeName": "expires_at", "Enabled": true},
+			},
+			pitr: false, ttl: true,
+		},
+		{
+			name: "TTL disabled — an unredeemed invite would never expire",
+			props: map[string]any{
+				"Replicas": []any{map[string]any{
+					"PointInTimeRecoverySpecification": map[string]any{"PointInTimeRecoveryEnabled": true},
+				}},
+				"TimeToLiveSpecification": map[string]any{"AttributeName": "expires_at", "Enabled": false},
+			},
+			pitr: true, ttl: false,
+		},
+		{
+			name:  "no replicas at all — nothing to check must not read as all good",
+			props: map[string]any{"TimeToLiveSpecification": map[string]any{"AttributeName": "expires_at", "Enabled": true}},
+			pitr:  false, ttl: true,
+		},
+		{
+			name: "TTL on the wrong attribute",
+			props: map[string]any{
+				"Replicas": []any{map[string]any{
+					"PointInTimeRecoverySpecification": map[string]any{"PointInTimeRecoveryEnabled": true},
+				}},
+				"TimeToLiveSpecification": map[string]any{"AttributeName": "created_at", "Enabled": true},
+			},
+			pitr: true, ttl: false,
+		},
+		{
+			name: "one replica of two disabled",
+			props: map[string]any{
+				"Replicas": []any{
+					map[string]any{"PointInTimeRecoverySpecification": map[string]any{"PointInTimeRecoveryEnabled": true}},
+					map[string]any{"PointInTimeRecoverySpecification": map[string]any{"PointInTimeRecoveryEnabled": false}},
+				},
+				"TimeToLiveSpecification": map[string]any{"AttributeName": "expires_at", "Enabled": true},
+			},
+			pitr: false, ttl: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pitrEnabled(tc.props); got != tc.pitr {
+				t.Errorf("pitrEnabled = %v, want %v", got, tc.pitr)
+			}
+			if got := ttlOnExpiresAt(tc.props); got != tc.ttl {
+				t.Errorf("ttlOnExpiresAt = %v, want %v", got, tc.ttl)
+			}
+		})
 	}
 }
