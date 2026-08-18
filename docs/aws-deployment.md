@@ -95,6 +95,35 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
   - **The `OpsNotify` function itself is created unconditionally** — only `BuildNotifyRule` sits behind `enableBuild`, because job-failure alerting must survive a stack deployed without that flag.
   - **Alerts are deduplicated across deliveries** (rosterbot-chs) through small marker objects under the state bucket's `opsalert/` prefix — the one prefix `OpsNotify` may write, and the only write grant it holds. EventBridge can deliver an event twice and async-invoke retries on error, and since the verdict is derived from a ledger that does not change in between, a repeat would push the identical alert again. A 30-day lifecycle rule expires the prefix, far past any retry horizon. Every failure of the marker store degrades to a duplicate alert, never to a missing one.
 
+## Two dependencies that live outside the code
+
+Both are prerequisites no `cdk deploy` recreates. If either disappears, deploys fail in a way
+that does not name the real cause.
+
+- **us-east-1 is bootstrapped** (`CDKToolkit`, created 2026-08-18). The stack runs in us-west-1,
+  but CloudFront reads a viewer certificate from us-east-1 and nowhere else, so `InfraCertStack`
+  lives there — and CDK requires each *region* bootstrapped separately. That region had never been
+  used in this account before rosterbot.dev, so it was bootstrapped by hand:
+  `cdk bootstrap aws://476646938644/us-east-1`. It brings its own staging bucket and ECR repo, so a
+  small line item in an otherwise-unused region is expected, not drift. Delete it and every
+  `InfraCertStack` deploy fails on `BootstrapVersionValidation`; because the certificate is a
+  cross-region reference, `InfraStack` fails with it.
+- **The rosterbot.dev hosted zone** (`Z07503721VYCRE63MNQ5V`) was auto-created by the Route 53
+  registrar at registration, with matching NS delegation. `infra/domain.go` **imports** it via
+  `HostedZone_FromHostedZoneAttributes` — by attributes rather than `FromLookup`, so synth needs no
+  credentials and writes nothing to `cdk.context.json`. CDK must never *create* a zone for this
+  domain: a second zone gets its own nameservers that the registrar does not delegate to, so records
+  written into it are simply ignored while DNS keeps resolving through the original.
+  `TestCertStack_ImportsTheZoneRatherThanCreatingOne` pins the created-zone count at zero.
+
+  Note the two kinds of Route 53 record here behave differently under a deploy, which is worth
+  knowing before diagnosing a partial outage. The `_<hash>` ACM validation CNAMEs are written by ACM
+  itself (`Validation: FromDns(zone)` only stamps the `HostedZoneId` into the certificate's
+  `DomainValidationOptions`), so they are outside CloudFormation's resource graph and no deploy
+  removes them. The four alias records are ordinary `AWS::Route53::RecordSet` resources in
+  `InfraStack` and follow that stack exactly — which is why a deploy from a revision lacking them
+  deletes all four while the validation CNAMEs sit untouched.
+
 ## Common operations
 
 ```bash
