@@ -206,3 +206,27 @@ func TestDown_CleanDownloadReportsSuccess(t *testing.T) {
 		t.Fatalf("cookie.json: %q err=%v", b, err)
 	}
 }
+
+// TestDown_EmptyPrefixStillCreatesTheLocalDir pins the first-ever-tenant
+// contract: a brand-new tenant's session/user=<uid>/ prefix holds no objects,
+// and downstream writers assume the local directory exists — auth_client
+// writes .fantrax-cache/.fantrax_cookie_cache.json with a plain open, which
+// fails ENOENT on a missing parent. That single missing mkdir made every
+// tester's FIRST Fantrax connect fail as login_challenge_or_timeout after a
+// login that had actually succeeded (observed live 2026-08-17: browser landed
+// on the roster page, then "open ./.fantrax-cache/...: no such file or
+// directory", and the cookie was never captured).
+func TestDown_EmptyPrefixStillCreatesTheLocalDir(t *testing.T) {
+	f := &fakeS3{objects: map[string][]byte{}}
+	s := &Syncer{s3: f}
+	dir := filepath.Join(t.TempDir(), ".fantrax-cache")
+
+	if err := s.Down(context.Background(), "b", "session/user=nobody/", dir); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	st, err := os.Stat(dir)
+	if err != nil || !st.IsDir() {
+		t.Fatalf("local dir not created for an empty prefix (stat: %v) — the next "+
+			"writer into it fails ENOENT and a tester's first connect misclassifies", err)
+	}
+}

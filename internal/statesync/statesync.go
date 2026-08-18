@@ -62,10 +62,18 @@ func New(ctx context.Context) (*Syncer, error) {
 
 // Down copies every object under bucket/prefix into localDir, recreating the
 // key's path (minus prefix) under localDir. Existing local files are
-// overwritten. A missing prefix (no objects) is a no-op.
+// overwritten. A missing prefix (no objects) downloads nothing but still
+// creates localDir: downstream writers assume the directory exists —
+// auth_client writes its cookie cache with a plain open, which fails ENOENT on
+// a missing parent — and the one case where nothing has ever been synced is
+// exactly a new tenant's FIRST connect, where that write is the whole point
+// (TestDown_EmptyPrefixStillCreatesTheLocalDir).
 func (s *Syncer) Down(ctx context.Context, bucket, prefix, localDir string) error {
 	keys, err := s.list(ctx, bucket, prefix)
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(localDir, 0o700); err != nil {
 		return err
 	}
 	root, err := filepath.Abs(localDir)
