@@ -434,11 +434,30 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// hashes cdk deploy gates itself on the actual bytes and reports "no
 	// changes" — the decision moves to the one place that can make it correctly.
 	//
-	// -trimpath is deliberately NOT set. It would strip absolute source paths
-	// from panic traces too, and OpsNotify is the failure-alerting path, where
-	// that detail is worth more than the remaining margin.
+	// -trimpath is REQUIRED here, and -buildvcs=false alone was not enough.
+	// Shipping only the latter was measured as a failure: git diff between the
+	// two deploys touched zero Go source (infra/, docs/, web/dashboard only) and
+	// CloudFormation still replaced all three Lambdas. Go embeds the absolute
+	// build directory in the binary unless -trimpath is passed, and CodeBuild's
+	// source directory carries a fresh random component per build --
+	// /codebuild/output/src160962602 then /codebuild/output/src2576922972 on two
+	// consecutive builds -- so the asset hash moved on every push no matter what
+	// the source did.
+	//
+	// The original argument for omitting it (that it strips absolute paths from
+	// panic traces, and OpsNotify is the failure-alerting path) was close to
+	// backwards. The absolute prefix in production is precisely that ephemeral
+	// /codebuild/output/srcNNNNNNNNN/src, which is different on every build and
+	// identifies nothing; -trimpath replaces it with a module-relative path, so
+	// a trace reads github.com/nixon-commits/rosterbot/internal/... and is more
+	// useful, not less.
+	//
+	// Verify any change to this by synthesizing from TWO DIFFERENT DIRECTORIES
+	// and comparing asset hashes -- NOT from two commits in one directory, which
+	// is what let the incomplete version look verified: it held the build path
+	// constant and so could not see the variable that actually dominates in CI.
 	deterministicGoBundling := &awscdklambdagoalpha.BundlingOptions{
-		GoBuildFlags: jsii.Strings("-buildvcs=false"),
+		GoBuildFlags: jsii.Strings("-buildvcs=false", "-trimpath"),
 	}
 
 	apiFn := awscdklambdagoalpha.NewGoFunction(stack, jsii.String("LineupApi"), &awscdklambdagoalpha.GoFunctionProps{
