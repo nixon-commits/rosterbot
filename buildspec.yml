@@ -52,16 +52,21 @@ phases:
       # Apply infra before publishing the dashboard. The outputs file makes the
       # newly-created bucket/distribution available to this very first build;
       # CodeBuild environment variables would not update until the next build.
-      # --all because the app synthesizes TWO stacks: InfraCertStack (us-east-1,
-      # where CloudFront requires its custom-domain certificate to live) and
-      # InfraStack (us-west-1), which consumes the cert ARN across regions. A
-      # bare `cdk deploy` is only valid for a single-stack app and exits 1 with
-      # "specify which stacks to use" the moment a second one exists -- which is
-      # how the rosterbot.dev domain work passed a hand-run `cdk deploy --all`
-      # and then failed its first CI build. The two are ordered by CDK from the
-      # cross-region reference, so --all does not need them named explicitly,
-      # and --outputs-file stays keyed by stack name so the DashboardBucketName
-      # lookup below is unaffected.
+      # --all, not a bare `cdk deploy`. The app has synthesized TWO stacks since
+      # InfraCertStack was added for the us-east-1 rosterbot.dev certificate
+      # (CloudFront reads viewer certs from that region only); InfraStack in
+      # us-west-1 consumes the cert ARN across regions. cdk refuses a bare
+      # deploy on a multi-stack app -- "Since this app includes more than a
+      # single stack, specify which stacks to use ... or specify `--all`" -- and
+      # exits 1, so every push to main fails here until this says --all. That is
+      # exactly how the domain work, which was only ever deployed by a hand-run
+      # `cdk deploy --all`, passed locally and failed its first CI build.
+      # TestBuildspec_NamesStacksExplicitly pins it, asserting explicitness
+      # rather than a stack count so a future third stack cannot reintroduce it.
+      #
+      # CDK orders the two from the cross-region reference, so --all needs no
+      # explicit stack names, and --outputs-file stays keyed by stack name so
+      # the DashboardBucketName lookup below is unaffected.
       #
       # set -e so a failed deploy fails HERE. Without it the block's exit status
       # is `cd ..`, execution continues, and the next block dies on the missing
