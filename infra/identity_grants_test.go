@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/assertions"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awscertificatemanager"
 	"github.com/aws/jsii-runtime-go"
 )
 
@@ -18,6 +19,7 @@ import (
 func synthTemplate(t *testing.T) map[string]any {
 	t.Helper()
 	app := awscdk.NewApp(nil)
+	certScope := awscdk.NewStack(app, jsii.String("TestCertScope"), &awscdk.StackProps{Env: certEnv()})
 	stack := NewInfraStack(app, "TestStack", &InfraStackProps{
 		StackProps: awscdk.StackProps{
 			Env: &awscdk.Environment{
@@ -25,6 +27,10 @@ func synthTemplate(t *testing.T) map[string]any {
 				Region:  jsii.String("us-west-1"),
 			},
 		},
+		// A literal ARN, so this import adds no cross-region reference; nothing
+		// asserted in this file depends on which certificate is attached.
+		Certificate: awscertificatemanager.Certificate_FromCertificateArn(certScope, jsii.String("Cert"),
+			jsii.String("arn:aws:acm:us-east-1:476646938644:certificate/00000000-0000-0000-0000-000000000000")),
 	})
 	raw, err := json.Marshal(assertions.Template_FromStack(stack, nil).ToJSON())
 	if err != nil {
