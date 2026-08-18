@@ -176,3 +176,40 @@ func TestRpParams_StillNameTheCloudFrontDomainNotTheAliasHost(t *testing.T) {
 		t.Fatalf("found %d of the 2 RP parameters; the tripwire is not watching what it thinks it is", seen)
 	}
 }
+
+// The dashboard's own hostname. Asserted by its alias rather than by logical
+// id, which also proves the two distributions did not get each other's name —
+// a swap would serve the SPA on recaps. and the recap site on dash., both with
+// a valid cert, so TLS would look perfectly healthy.
+func TestDashboardCdn_ServesTheDashHostnameUnderTheCert(t *testing.T) {
+	tpl, _ := infraTemplate(t)
+	tpl.HasResourceProperties(jsii.String("AWS::CloudFront::Distribution"), map[string]any{
+		"DistributionConfig": assertions.Match_ObjectLike(&map[string]any{
+			"Aliases": []any{dashHost},
+			"ViewerCertificate": assertions.Match_ObjectLike(&map[string]any{
+				"AcmCertificateArn": assertions.Match_AnyValue(),
+				"SslSupportMethod":  "sni-only",
+			}),
+		}),
+	})
+}
+
+func TestDashAlias_CoversBothAddressFamilies(t *testing.T) {
+	tpl, _ := infraTemplate(t)
+	for _, typ := range []string{"A", "AAAA"} {
+		tpl.HasResourceProperties(jsii.String("AWS::Route53::RecordSet"), map[string]any{
+			"Name":         dashHost + ".",
+			"Type":         typ,
+			"HostedZoneId": hostedZoneID,
+			"AliasTarget":  assertions.Match_AnyValue(),
+		})
+	}
+}
+
+// Exactly four alias records and no more. Each rosterbot.dev record this stack
+// writes lands in a zone the registrar really delegates to, so a stray one is
+// live DNS for a name nobody meant to publish.
+func TestAliasRecords_AreExactlyTheFourWeIntend(t *testing.T) {
+	tpl, _ := infraTemplate(t)
+	tpl.ResourceCountIs(jsii.String("AWS::Route53::RecordSet"), jsii.Number(4))
+}

@@ -557,6 +557,15 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// rejecting the request.
 	dashboardDist := awscloudfront.NewDistribution(stack, jsii.String("DashboardCdn"), &awscloudfront.DistributionProps{
 		DefaultRootObject: jsii.String("index.html"),
+		// The SPA and the /v1 API answer on this hostname from here on. The
+		// default cloudfront.net name keeps serving alongside it, which is what
+		// makes this step non-breaking: the WebAuthn RP ID below still names
+		// that old domain, so every registered passkey keeps working exactly
+		// where it was registered. A ceremony attempted from dash. will be
+		// refused for RP mismatch until rosterbot-jloe.4 deliberately flips it
+		// — that refusal is the designed intermediate state, not a fault.
+		DomainNames: jsii.Strings(dashHost),
+		Certificate: props.Certificate,
 		DefaultBehavior: &awscloudfront.BehaviorOptions{
 			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(dashboardBucket, nil),
 			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
@@ -608,7 +617,20 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	botContainer.AddEnvironment(jsii.String("DASHBOARD_CF_DIST_ID_PARAM"), jsii.String("/rosterbot/DASHBOARD_CF_DIST_ID"))
 
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardUrl"), &awscdk.CfnOutputProps{
+		Value: jsii.String("https://" + dashHost),
+	})
+	// Still emitted, and still the origin every passkey is bound to until the
+	// RP cutover. Losing sight of it would mean losing the URL that still works.
+	awscdk.NewCfnOutput(stack, jsii.String("DashboardCdnDefaultUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
+	})
+
+	dashTarget := awsroute53.RecordTarget_FromAlias(awsroute53targets.NewCloudFrontTarget(dashboardDist))
+	awsroute53.NewARecord(stack, jsii.String("DashAliasA"), &awsroute53.ARecordProps{
+		Zone: zone, RecordName: jsii.String(dashHost), Target: dashTarget,
+	})
+	awsroute53.NewAaaaRecord(stack, jsii.String("DashAliasAAAA"), &awsroute53.AaaaRecordProps{
+		Zone: zone, RecordName: jsii.String(dashHost), Target: dashTarget,
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardCdnId"), &awscdk.CfnOutputProps{Value: dashboardDist.DistributionId()})
 
