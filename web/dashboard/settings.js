@@ -64,7 +64,10 @@ const FAILURE_COPY = {
     "The sign-in did not complete and Fantrax did not say why. Trying again " +
     "sometimes works.",
   team_not_owned: "Those credentials do not control the team you were invited for.",
-  no_team: "No Fantrax team is assigned to your account yet — ask the admin.",
+  no_team:
+    "Your Fantrax sign-in worked. What's missing is a team: this account has " +
+    "no Fantrax team assigned, and only an admin can assign one — re-entering " +
+    "your password won't change this.",
   team_claimed: "That Fantrax team is already claimed by another account.",
 };
 
@@ -105,9 +108,16 @@ function accountCard(me) {
 function fantraxCard(me) {
   const c = card("Fantrax");
   const conn = me.fantrax;
-  const [label, tone] = conn
+  let [label, tone] = conn
     ? CONNECTION_COPY[conn.status] || [conn.status, "badge-info"]
     : ["Not connected", "badge-info"];
+  // no_team is the one failure where the credentials are FINE — the sign-in
+  // succeeded and the refusal came from the missing team assignment. The
+  // generic needs_reconnect headline ("your saved credentials no longer
+  // work") sent people back to re-typing a password that was never wrong.
+  if (conn && conn.last_error === "no_team") {
+    [label, tone] = ["Not connected — no team assigned to this account", "badge-failed"];
+  }
 
   const badge = el("span", "badge " + tone, label);
   c.append(badge);
