@@ -95,6 +95,16 @@ to `.lineup/` and needs neither.
 
 ## Enrolling
 
+> **Which hostname?** Enrollment is a WebAuthn ceremony, so it only succeeds on
+> the origin the RP config currently names — today `https://<DashboardCdnDefaultUrl>`,
+> the `*.cloudfront.net` one, **not** `https://dash.rosterbot.dev`. The dashboard
+> serves on both hostnames since rosterbot-jloe.3, but passkeys are bound to their
+> RP ID forever, so the RP was deliberately left pointing at the old origin; a
+> ceremony from `dash.` is refused for RP mismatch until the cutover in
+> rosterbot-jloe.4. Send enrollment links against the origin in
+> `/rosterbot/DASHBOARD_RP_ORIGIN` rather than whatever `DashboardUrl` currently
+> prints — they are no longer the same value.
+
 The invitee opens the dashboard with the token and enrolls a passkey. Their
 device prompts for Touch ID / Windows Hello / a security key, and on success
 they are logged in immediately.
