@@ -43,6 +43,11 @@ believe owns it. At connect time (once rosterbot-crq.12 lands) Fantrax's own
 rosterbot invite --email dave@example.test --name Dave --team team-7
 ```
 
+The dashboard's admin **Tenants** tab mints the same link (`POST
+/v1/tenants/invite`) — the invite form at the top of the tab shows the link
+once with a copy button. Either path produces the identical record: member
+role, active, `auto_apply` off.
+
 | flag | meaning |
 |---|---|
 | `--email` | required, unique across users. Cannot be changed later without a migration. |
@@ -122,12 +127,11 @@ path that does not involve you.
 
 ## Recovery: a lost device
 
-An invite and a recovery are the same primitive. Mint another link for the same
-person:
-
-```bash
-rosterbot invite --email dave@example.test --name Dave
-```
+An invite and a recovery are the same primitive — an enrollment link scoped to
+an existing account. Mint one from the admin **Tenants** tab ("Recovery link"
+on the user's row, `POST /v1/tenants/{id}/recovery`). Do **not** re-run
+`rosterbot invite` with the same email: invite *creates* a user, so it refuses
+with `email already claimed` rather than minting a recovery link.
 
 They enroll a new passkey with it. Then revoke the lost credential from the
 Passkeys tab — revocation removes both the credential and its lookup index, so a
