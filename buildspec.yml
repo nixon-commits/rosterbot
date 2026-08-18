@@ -83,7 +83,20 @@ phases:
         set -eu
         DASHBOARD_BUCKET="$(python3 -c 'import json; print(json.load(open("cdk-outputs.json"))["InfraStack"]["DashboardBucketName"])')"
         DASHBOARD_CF_DIST_ID="$(python3 -c 'import json; print(json.load(open("cdk-outputs.json"))["InfraStack"]["DashboardCdnId"])')"
-        aws s3 sync web/dashboard "s3://$DASHBOARD_BUCKET" --delete --exclude "report/*"
+        aws s3 sync web/dashboard "s3://$DASHBOARD_BUCKET" --delete --exclude "report/*" --exclude ".well-known/*"
+        # The AASA file is EXCLUDED from the sync above and copied explicitly,
+        # because Apple requires it served as application/json and it has no
+        # file extension -- `aws s3 sync` types extensionless objects as
+        # binary/octet-stream, which fails universal-link and webcredentials
+        # association. This runs on EVERY build, not once: a one-off
+        # `aws s3 cp --content-type` would be silently reverted by the next
+        # sync, and the symptom (passkeys and universal links quietly stop
+        # associating) points nowhere near a content-type. The exclude is what
+        # makes the copy the sole writer, so there is no ordering race between
+        # the two commands.
+        aws s3 cp web/dashboard/.well-known/apple-app-site-association \
+          "s3://$DASHBOARD_BUCKET/.well-known/apple-app-site-association" \
+          --content-type application/json
         aws cloudfront create-invalidation --distribution-id "$DASHBOARD_CF_DIST_ID" --paths '/*'
       # Re-render the projection dashboard with the image just pushed, so a push
       # to main updates the site immediately instead of waiting for the daily

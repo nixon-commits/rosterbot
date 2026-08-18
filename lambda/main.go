@@ -185,13 +185,45 @@ func main() {
 	if err != nil {
 		log.Fatalf("load RP_ID: %v", err)
 	}
-	rpOrigin, err := loadSSMParam(ctx, "RP_ORIGIN_PARAM", "/rosterbot/DASHBOARD_RP_ORIGIN")
+	rpOriginRaw, err := loadSSMParam(ctx, "RP_ORIGIN_PARAM", "/rosterbot/DASHBOARD_RP_ORIGIN")
 	if err != nil {
 		log.Fatalf("load RP_ORIGIN: %v", err)
 	}
-	wa, err := lineupapi.NewWebAuthn(rpID, rpOrigin, "rosterbot")
+	// One parameter, comma-separated, holding both surfaces' origins — the
+	// dashboard's https://dash.rosterbot.dev and the apex an iOS native
+	// ceremony reports. See the comment beside RpOriginParam in infra/infra.go.
+	rpOrigins, dropped := lineupapi.ParseRPOrigins(rpOriginRaw)
+	for _, d := range dropped {
+		log.Printf("RP_ORIGIN: ignoring malformed origin %q (want scheme+host, no path or trailing slash)", d)
+	}
+
+	// DELIBERATELY NOT FATAL, and this is the one place in this function where
+	// that is true of a failure this severe.
+	//
+	// Bearer-token auth is RP-INDEPENDENT: isAuthed accepts a valid session OR
+	// the token from /rosterbot/ROSTERBOT_API_TOKEN, and the token path reads
+	// no WebAuthn config at all. That makes POST /v1/tenants/{id}/recovery —
+	// the break-glass primitive that re-enrolls an operator whose passkey a RP
+	// cutover just invalidated — reachable even with a completely broken RP
+	// config, PROVIDED THIS PROCESS BOOTS. log.Fatalf is therefore the single
+	// worst available response to a bad RP origin: it is the only thing that
+	// can take down the escape hatch along with the thing it exists to escape.
+	// And the moment that value is most likely to be wrong is mid-cutover,
+	// which is exactly when recovery has to work.
+	//
+	// So: start, serve, and let every passkey ceremony fail loudly against an
+	// empty origin list while the token path stays open. A wrong RP config is
+	// recoverable in one SSM write; a Lambda that refuses to boot is
+	// recoverable only by someone with console access and the presence of mind
+	// to guess why.
+	wa, err := lineupapi.NewWebAuthn(rpID, rpOrigins, "rosterbot")
 	if err != nil {
-		log.Fatalf("init webauthn config: %v", err)
+		log.Printf("WARNING: webauthn config rejected (rpID=%q origins=%v): %v — "+
+			"passkey ceremonies will fail; bearer-token recovery remains available", rpID, rpOrigins, err)
+	}
+	if len(rpOrigins) == 0 {
+		log.Printf("WARNING: RP_ORIGIN %q yielded no usable origins — every passkey "+
+			"ceremony will be refused until it is fixed", rpOriginRaw)
 	}
 
 	// Only the four non-store fields are set here; every store came from

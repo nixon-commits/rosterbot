@@ -634,6 +634,32 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// Authorization header) except the Host header — the Function URL origin
 	// doesn't need CloudFront's own Host and forwarding it risks the origin
 	// rejecting the request.
+	// /invite is the universal-link path the iOS app claims in its AASA
+	// applinks block, so it has to render the SPA for anyone who taps the link
+	// WITHOUT the app installed. It does not today: the origin is S3 behind
+	// OAC, which does no directory-index for subpaths, so /invite is a 403.
+	//
+	// A viewer-request function rather than the obvious ErrorResponses
+	// 403/404 -> /index.html. CloudFront custom error responses apply to the
+	// WHOLE DISTRIBUTION, not per behavior, so that version would also rewrite
+	// the API's genuine 401/403 on /v1/* into index.html with status 200 — and
+	// the iOS client reads those 401s to drive its sign-in gate, so it would
+	// sign users out into a page that looks fine. A function association is
+	// per behavior, so attaching this to DefaultBehavior alone leaves /v1/*
+	// semantics untouched. The rewrite is also exact rather than a catch-all:
+	// a genuine 404 stays a 404.
+	inviteRewrite := awscloudfront.NewFunction(stack, jsii.String("InviteRewrite"), &awscloudfront.FunctionProps{
+		Runtime: awscloudfront.FunctionRuntime_JS_2_0(),
+		Comment: jsii.String("serve the dashboard SPA at /invite (universal-link fallback)"),
+		Code: awscloudfront.FunctionCode_FromInline(jsii.String(`function handler(event) {
+    var request = event.request;
+    if (request.uri === '/invite' || request.uri === '/invite/') {
+        request.uri = '/index.html';
+    }
+    return request;
+}`)),
+	})
+
 	dashboardDist := awscloudfront.NewDistribution(stack, jsii.String("DashboardCdn"), &awscloudfront.DistributionProps{
 		DefaultRootObject: jsii.String("index.html"),
 		// The SPA and the /v1 API answer on this hostname from here on. The
@@ -643,11 +669,28 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// where it was registered. A ceremony attempted from dash. will be
 		// refused for RP mismatch until rosterbot-jloe.4 deliberately flips it
 		// — that refusal is the designed intermediate state, not a fault.
-		DomainNames: jsii.Strings(dashHost),
+		// Both names, because the apex is the WebAuthn RP ID from
+		// rosterbot-jloe.6 and iOS native ceremonies report their origin as
+		// https://<rpId> — so the apex has to be a real served origin, not
+		// just a DNS name that redirects. dash. stays because every existing
+		// browser passkey and every bookmark names it.
+		//
+		// The certificate must cover BOTH or this deploy fails with
+		// InvalidViewerCertificate. It does not by default: SiteCert names
+		// dash as its subject and recaps as a SAN, so infra/domain.go adds
+		// the apex as a second SAN. That is a REPLACEMENT of the certificate
+		// (SubjectAlternativeNames is an update-requires-replacement property
+		// on AWS::CertificateManager::Certificate), which is why this deploy
+		// is slower and more failure-prone than its diff suggests.
+		DomainNames: jsii.Strings(dashHost, apexHost),
 		Certificate: props.Certificate,
 		DefaultBehavior: &awscloudfront.BehaviorOptions{
 			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(dashboardBucket, nil),
 			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
+			FunctionAssociations: &[]*awscloudfront.FunctionAssociation{{
+				Function:  inviteRewrite,
+				EventType: awscloudfront.FunctionEventType_VIEWER_REQUEST,
+			}},
 		},
 		AdditionalBehaviors: &map[string]*awscloudfront.BehaviorOptions{
 			"/v1/*": {
@@ -710,6 +753,15 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	})
 	awsroute53.NewAaaaRecord(stack, jsii.String("DashAliasAAAA"), &awsroute53.AaaaRecordProps{
 		Zone: zone, RecordName: jsii.String(dashHost), Target: dashTarget,
+	})
+	// The apex, pointed at the same distribution. Route 53 alias records are
+	// what make this possible at all — a CNAME is illegal at a zone apex, and
+	// CloudFront publishes no stable address to put in an A record.
+	awsroute53.NewARecord(stack, jsii.String("ApexAliasA"), &awsroute53.ARecordProps{
+		Zone: zone, RecordName: jsii.String(apexHost), Target: dashTarget,
+	})
+	awsroute53.NewAaaaRecord(stack, jsii.String("ApexAliasAAAA"), &awsroute53.AaaaRecordProps{
+		Zone: zone, RecordName: jsii.String(apexHost), Target: dashTarget,
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardCdnId"), &awscdk.CfnOutputProps{Value: dashboardDist.DistributionId()})
 

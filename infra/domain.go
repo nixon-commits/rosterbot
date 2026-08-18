@@ -23,6 +23,16 @@ const (
 
 	dashHost  = "dash." + zoneName
 	recapHost = "recaps." + zoneName
+
+	// apexHost is the bare domain, and from rosterbot-jloe.6 onward it is the
+	// WebAuthn RP ID. It is spelled as its own constant rather than reusing
+	// zoneName at each call site because the two names mean different things:
+	// zoneName identifies the hosted zone that answers for the domain, while
+	// apexHost identifies a web surface that is served and that passkeys are
+	// bound to. They are the same string today and would not have to stay that
+	// way, and an RP ID is the last value in this file that should change as a
+	// side effect of someone editing DNS.
+	apexHost = zoneName
 )
 
 // importZone attaches the registrar-created hosted zone to a stack.
@@ -94,7 +104,7 @@ func NewCertStack(scope constructs.Construct, id string, props *CertStackProps) 
 	// ever write, leaving a cert stuck PENDING_VALIDATION behind a green deploy.
 	cert := awscertificatemanager.NewCertificate(stack, jsii.String("SiteCert"), &awscertificatemanager.CertificateProps{
 		DomainName:              jsii.String(dashHost),
-		SubjectAlternativeNames: jsii.Strings(recapHost),
+		SubjectAlternativeNames: jsii.Strings(recapHost, apexHost),
 		Validation:              awscertificatemanager.CertificateValidation_FromDns(zone),
 	})
 

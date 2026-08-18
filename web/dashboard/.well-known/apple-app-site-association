@@ -1,0 +1,21 @@
+{
+  "webcredentials": {
+    "apps": [
+      "8KBU54NP6U.dev.rosterbot.app",
+      "8KBU54NP6U.dev.rosterbot.app.debug"
+    ]
+  },
+  "applinks": {
+    "details": [
+      {
+        "appIDs": [
+          "8KBU54NP6U.dev.rosterbot.app",
+          "8KBU54NP6U.dev.rosterbot.app.debug"
+        ],
+        "components": [
+          { "/": "/invite" }
+        ]
+      }
+    ]
+  }
+}

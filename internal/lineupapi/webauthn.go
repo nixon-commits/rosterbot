@@ -23,14 +23,65 @@ const (
 )
 
 // NewWebAuthn builds the RP config used by every ceremony handler. rpID must
-// be the bare hostname (no scheme/port); rpOrigin must be the full origin
-// (scheme+host, no trailing slash) the browser reports in clientDataJSON.
-func NewWebAuthn(rpID, rpOrigin, rpDisplayName string) (*webauthn.WebAuthn, error) {
+// be the bare hostname (no scheme/port); each rpOrigin must be a full origin
+// (scheme+host, no trailing slash) that a client reports in clientDataJSON.
+//
+// PLURAL since rosterbot-jloe.6, and the two surfaces really do report
+// different origins for the same RP ID: a browser on the dashboard reports
+// https://dash.rosterbot.dev, while an iOS native ceremony has no browser
+// origin at all and reports https://<rpID> — the apex. One list, both
+// surfaces; a single-origin config would refuse every ceremony from the other.
+func NewWebAuthn(rpID string, rpOrigins []string, rpDisplayName string) (*webauthn.WebAuthn, error) {
 	return webauthn.New(&webauthn.Config{
 		RPID:          rpID,
-		RPOrigins:     []string{rpOrigin},
+		RPOrigins:     rpOrigins,
 		RPDisplayName: rpDisplayName,
 	})
+}
+
+// ParseRPOrigins splits the comma-separated RP-origin parameter that infra.go
+// publishes into /rosterbot/DASHBOARD_RP_ORIGIN, returning the origins it
+// accepted and the raw entries it rejected.
+//
+// It reports dropped entries rather than swallowing them because the failure
+// this guards against is silent and surface-specific: one malformed origin in
+// a two-origin list leaves the OTHER surface working perfectly, so the only
+// symptom is that passkeys mysteriously stop working on iOS (or only in the
+// browser) with a generic ceremony error and nothing in the logs connecting it
+// to a typo in an SSM parameter.
+//
+// An entry must be scheme+host with no path, which is exactly what
+// clientDataJSON carries; a trailing slash is rejected rather than trimmed,
+// since "https://x/" never appears in a real clientDataJSON and accepting it
+// would hide the fact that whoever wrote the parameter wrote a URL, not an
+// origin.
+func ParseRPOrigins(raw string) (origins []string, dropped []string) {
+	for _, part := range strings.Split(raw, ",") {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue // a stray or trailing comma is not worth reporting
+		}
+		if !validRPOrigin(trimmed) {
+			dropped = append(dropped, trimmed)
+			continue
+		}
+		origins = append(origins, trimmed)
+	}
+	return origins, dropped
+}
+
+func validRPOrigin(s string) bool {
+	rest, ok := strings.CutPrefix(s, "https://")
+	if !ok {
+		// http:// only for localhost, which is how `rosterbot serve` runs.
+		if rest, ok = strings.CutPrefix(s, "http://"); !ok {
+			return false
+		}
+		if host, _, _ := strings.Cut(rest, ":"); host != "localhost" && host != "127.0.0.1" {
+			return false
+		}
+	}
+	return rest != "" && !strings.ContainsAny(rest, "/?#")
 }
 
 func setCeremonyCookie(w http.ResponseWriter, session *webauthn.SessionData) error {

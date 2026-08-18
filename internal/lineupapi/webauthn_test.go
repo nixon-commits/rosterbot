@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -386,5 +387,95 @@ func TestLogout_ClearsSessionCookie(t *testing.T) {
 	}
 	if !cleared {
 		t.Fatal("want the session cookie cleared (MaxAge < 0)")
+	}
+}
+
+// ParseRPOrigins is the split for the one comma-separated SSM parameter that
+// carries both surfaces' origins (see RpOriginParam in infra/infra.go).
+//
+// The cases that matter are the ones that must NOT silently pass, because a
+// bad origin fails asymmetrically: the surface whose origin parsed keeps
+// working perfectly, so the only symptom is that passkeys stop working on the
+// OTHER surface with a generic ceremony error. Anything rejected here has to
+// come back in `dropped` so the Lambda can name it in a log line.
+func TestParseRPOrigins(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		raw         string
+		wantOrigins []string
+		wantDropped []string
+	}{{
+		name:        "the real production value: both surfaces, apex first",
+		raw:         "https://rosterbot.dev,https://dash.rosterbot.dev",
+		wantOrigins: []string{"https://rosterbot.dev", "https://dash.rosterbot.dev"},
+	}, {
+		name:        "surrounding whitespace is a formatting choice, not an error",
+		raw:         "https://rosterbot.dev , https://dash.rosterbot.dev",
+		wantOrigins: []string{"https://rosterbot.dev", "https://dash.rosterbot.dev"},
+	}, {
+		name:        "a single origin is still the whole list",
+		raw:         "https://rosterbot.dev",
+		wantOrigins: []string{"https://rosterbot.dev"},
+	}, {
+		name:        "localhost over http, which is how `rosterbot serve` runs",
+		raw:         "http://localhost:8080",
+		wantOrigins: []string{"http://localhost:8080"},
+	}, {
+		name:        "http to a real host is refused: a passkey origin is https",
+		raw:         "http://rosterbot.dev",
+		wantDropped: []string{"http://rosterbot.dev"},
+	}, {
+		name:        "a trailing slash is a URL, not an origin; clientDataJSON never carries one",
+		raw:         "https://rosterbot.dev/",
+		wantDropped: []string{"https://rosterbot.dev/"},
+	}, {
+		name:        "a path means whoever wrote the parameter wrote a link",
+		raw:         "https://rosterbot.dev/invite",
+		wantDropped: []string{"https://rosterbot.dev/invite"},
+	}, {
+		name:        "a bare hostname is the RP ID, pasted into the origin parameter",
+		raw:         "rosterbot.dev",
+		wantDropped: []string{"rosterbot.dev"},
+	}, {
+		name:        "one bad entry must not cost the good one",
+		raw:         "https://rosterbot.dev,dash.rosterbot.dev",
+		wantOrigins: []string{"https://rosterbot.dev"},
+		wantDropped: []string{"dash.rosterbot.dev"},
+	}, {
+		name:        "a stray comma is not worth reporting",
+		raw:         "https://rosterbot.dev,,",
+		wantOrigins: []string{"https://rosterbot.dev"},
+	}, {
+		name: "an empty parameter yields nothing, and says nothing was malformed",
+		raw:  "",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			origins, dropped := ParseRPOrigins(tc.raw)
+			if !slices.Equal(origins, tc.wantOrigins) {
+				t.Errorf("origins = %q, want %q", origins, tc.wantOrigins)
+			}
+			if !slices.Equal(dropped, tc.wantDropped) {
+				t.Errorf("dropped = %q, want %q", dropped, tc.wantDropped)
+			}
+		})
+	}
+}
+
+// The config the production values actually produce must be accepted by
+// go-webauthn itself, not merely by our own parser.
+func TestNewWebAuthn_AcceptsBothProductionOrigins(t *testing.T) {
+	origins, dropped := ParseRPOrigins("https://rosterbot.dev,https://dash.rosterbot.dev")
+	if len(dropped) != 0 {
+		t.Fatalf("production origin parameter dropped %q", dropped)
+	}
+	wa, err := NewWebAuthn("rosterbot.dev", origins, "rosterbot")
+	if err != nil {
+		t.Fatalf("NewWebAuthn rejected the production RP config: %v", err)
+	}
+	if got := wa.Config.RPID; got != "rosterbot.dev" {
+		t.Errorf("RPID = %q, want the apex", got)
+	}
+	if !slices.Equal(wa.Config.RPOrigins, origins) {
+		t.Errorf("RPOrigins = %q, want %q", wa.Config.RPOrigins, origins)
 	}
 }

@@ -31,11 +31,12 @@ func TestCertStack_CoversBothHostnamesAndValidatesInTheImportedZone(t *testing.T
 		jsii.String("AWS::CertificateManager::Certificate"),
 		map[string]any{
 			"DomainName":              dashHost,
-			"SubjectAlternativeNames": []any{recapHost},
+			"SubjectAlternativeNames": []any{recapHost, apexHost},
 			"ValidationMethod":        "DNS",
 			"DomainValidationOptions": []any{
 				map[string]any{"DomainName": dashHost, "HostedZoneId": hostedZoneID},
 				map[string]any{"DomainName": recapHost, "HostedZoneId": hostedZoneID},
+				map[string]any{"DomainName": apexHost, "HostedZoneId": hostedZoneID},
 			},
 		},
 	)
@@ -199,7 +200,7 @@ func TestDashboardCdn_ServesTheDashHostnameUnderTheCert(t *testing.T) {
 	tpl, _ := infraTemplate(t)
 	tpl.HasResourceProperties(jsii.String("AWS::CloudFront::Distribution"), map[string]any{
 		"DistributionConfig": assertions.Match_ObjectLike(&map[string]any{
-			"Aliases": []any{dashHost},
+			"Aliases": []any{dashHost, apexHost},
 			"ViewerCertificate": assertions.Match_ObjectLike(&map[string]any{
 				"AcmCertificateArn": assertions.Match_AnyValue(),
 				"SslSupportMethod":  "sni-only",
@@ -220,10 +221,80 @@ func TestDashAlias_CoversBothAddressFamilies(t *testing.T) {
 	}
 }
 
-// Exactly four alias records and no more. Each rosterbot.dev record this stack
-// writes lands in a zone the registrar really delegates to, so a stray one is
-// live DNS for a name nobody meant to publish.
-func TestAliasRecords_AreExactlyTheFourWeIntend(t *testing.T) {
+// Exactly six alias records and no more: recaps, dash and the apex, each in
+// both address families. Each rosterbot.dev record this stack writes lands in a
+// zone the registrar really delegates to, so a stray one is live DNS for a name
+// nobody meant to publish.
+func TestAliasRecords_AreExactlyTheSixWeIntend(t *testing.T) {
 	tpl, _ := infraTemplate(t)
-	tpl.ResourceCountIs(jsii.String("AWS::Route53::RecordSet"), jsii.Number(4))
+	tpl.ResourceCountIs(jsii.String("AWS::Route53::RecordSet"), jsii.Number(6))
+}
+
+// The apex is a served origin, not a redirect, because an iOS native WebAuthn
+// ceremony reports its origin as https://<rpId> — and from rosterbot-jloe.6 the
+// RP ID is the apex. A missing record here does not degrade gracefully: the
+// dashboard keeps working on dash. and only the iOS surface fails, which is the
+// hardest version of this to notice.
+func TestApexAlias_CoversBothAddressFamilies(t *testing.T) {
+	tpl, _ := infraTemplate(t)
+	for _, typ := range []string{"A", "AAAA"} {
+		tpl.HasResourceProperties(jsii.String("AWS::Route53::RecordSet"), map[string]any{
+			"Name":         apexHost + ".",
+			"Type":         typ,
+			"HostedZoneId": hostedZoneID,
+			"AliasTarget":  assertions.Match_AnyValue(),
+		})
+	}
+}
+
+// The /invite rewrite must be attached to the DEFAULT behavior only.
+//
+// This is the whole reason it is a function association rather than the more
+// obvious ErrorResponses 403/404 -> /index.html: custom error responses apply
+// to the entire distribution, so that version would also rewrite the API's
+// genuine 401/403 on /v1/* into index.html with status 200. The iOS client
+// reads those 401s to drive its sign-in gate, so it would sign users out into a
+// page that renders perfectly. Asserting the association's SCOPE is what keeps
+// a future "let's simplify this" from reintroducing that.
+func TestInviteRewrite_IsScopedToTheDefaultBehaviorOnly(t *testing.T) {
+	_, raw := infraTemplate(t)
+	resources, _ := raw["Resources"].(map[string]any)
+
+	var checked int
+	for logicalID, r := range resources {
+		res, _ := r.(map[string]any)
+		if res["Type"] != "AWS::CloudFront::Distribution" {
+			continue
+		}
+		props, _ := res["Properties"].(map[string]any)
+		cfg, _ := props["DistributionConfig"].(map[string]any)
+		aliases, _ := cfg["Aliases"].([]any)
+		if len(aliases) == 0 || aliases[0] != dashHost {
+			continue // the recap distribution; not this test's subject
+		}
+		checked++
+
+		def, _ := cfg["DefaultCacheBehavior"].(map[string]any)
+		if _, ok := def["FunctionAssociations"]; !ok {
+			t.Errorf("%s DefaultCacheBehavior has no FunctionAssociations; /invite will 403 "+
+				"and the universal-link fallback page will not render", logicalID)
+		}
+		for _, b := range asSlice(cfg["CacheBehaviors"]) {
+			beh, _ := b.(map[string]any)
+			if _, ok := beh["FunctionAssociations"]; ok {
+				t.Errorf("%s behavior %v carries a FunctionAssociation; the /invite rewrite must "+
+					"not reach /v1/*, whose 401/403 responses the iOS sign-in gate depends on",
+					logicalID, beh["PathPattern"])
+			}
+		}
+	}
+	if checked != 1 {
+		t.Fatalf("matched %d dashboard distributions, want exactly 1 — the test is not "+
+			"watching what it thinks it is", checked)
+	}
+}
+
+func asSlice(v any) []any {
+	s, _ := v.([]any)
+	return s
 }

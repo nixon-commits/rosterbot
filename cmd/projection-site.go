@@ -35,14 +35,14 @@ aggregated model as JSON, fed to the dashboard SPA.
 Output is split by who may read it. The three private reports — model, gap and
 views — go to the state bucket's reports/ prefix (.reports/ locally), which no
 CloudFront distribution serves; the SPA reaches them through the passkey-gated
-GET /v1/reports/{name}. The league-wide artifacts — value.json, football.json
-and football-trades.json — are written to <out> and published to the dashboard
-bucket's public report/ prefix.`,
+GET /v1/reports/{name}. The league-wide artifacts — value.json and
+football.json — are written to <out> and published to the dashboard bucket's
+public report/ prefix.`,
 	RunE: runProjectionSite,
 }
 
 func init() {
-	projectionSiteCmd.Flags().StringVar(&projSiteOut, "out", "report", "output directory for the publicly-published artifacts (value.json, football.json, football-trades.json)")
+	projectionSiteCmd.Flags().StringVar(&projSiteOut, "out", "report", "output directory for the publicly-published artifacts (value.json, football.json)")
 	projectionSiteCmd.Flags().BoolVar(&projSiteOpen, "open", false, "open the rendered value.json in the default handler")
 	projectionSiteCmd.Flags().StringVar(&projSiteScope, "scope", string(scopeAll),
 		"which half to render: all | tenant (private per-user reports) | league (public value/football)")
@@ -144,30 +144,6 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 	if scopeWritesPublicDir(scope) {
 		if err := renderFootballSite(projSiteOut); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: football.json not written: %v\n", err)
-		}
-	}
-
-	// Emit football-trades.json (the durable Football Trade Log) on the same
-	// terms as football.json, and — load-bearing — as a SEPARATE artifact
-	// rather than a field on it. The Football tab renders two independent
-	// sections, and football.js returns early when the standings model is
-	// missing or empty; folding the trades in would make a fresh deploy with no
-	// value rows yet hide the trade log too.
-	//
-	// Public, beside football.json and value.json: these are completed trades,
-	// already league-visible on Sleeper. That is the opposite call from
-	// baseball's /v1/trades, which is passkey-gated because it serves PENDING
-	// offers — an offer you have not decided on yet is genuinely private.
-	//
-	// Freshness caveat, stated because the view states it too: FootballTrades
-	// polls every six hours but this job runs once daily at 15:00 UTC, so a
-	// trade graded at 18:45 is not on the dashboard for ~20h. The producer
-	// cannot publish it itself — its task has no ./report, and publishSite
-	// mirrors that directory with --delete, so a football-trades task that
-	// created one would orphan value.json and football.json for the league.
-	if scopeWritesPublicDir(scope) {
-		if err := renderFootballTradesSite(projSiteOut); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: football-trades.json not written: %v\n", err)
 		}
 	}
 
@@ -307,29 +283,6 @@ func renderFootballSite(outDir string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "Wrote %s (%d football rows, %d teams)\n", outPath, len(rows), len(fm.Teams))
-	return nil
-}
-
-// renderFootballTradesSite reads the Football Trade Log (S3 when STATE_BUCKET
-// is set, else local .football/trades/log/) and writes
-// <outDir>/football-trades.json. An empty log still writes a valid (empty)
-// model rather than erroring, so a fresh deploy renders "no trades logged yet"
-// instead of a broken tab.
-func renderFootballTradesSite(outDir string) error {
-	reader, err := statestore.FromEnv().FootballTradeLogReader()
-	if err != nil {
-		return fmt.Errorf("init football trade log reader: %w", err)
-	}
-	rows, err := reader.ReadAllTrades()
-	if err != nil {
-		return fmt.Errorf("read football trade log: %w", err)
-	}
-	m := dynasty.BuildTradeLogModel(rows, time.Now())
-	outPath := filepath.Join(outDir, "football-trades.json")
-	if err := writeJSONModel(outPath, m); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "Wrote %s (%d logged rows, %d trades)\n", outPath, len(rows), len(m.Trades))
 	return nil
 }
 

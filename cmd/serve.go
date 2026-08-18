@@ -59,7 +59,7 @@ func init() {
 // which keeps the pre-dashboard `serve` workflow (curl-only lineup testing)
 // working unchanged.
 func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) http.Handler {
-	wa, err := lineupapi.NewWebAuthn("localhost", "http://localhost:8080", "rosterbot (local)")
+	wa, err := lineupapi.NewWebAuthn("localhost", []string{"http://localhost:8080"}, "rosterbot (local)")
 	if err != nil {
 		// Config is static (RPID/origin are compile-time constants for local
 		// dev); a validation failure here means a coding mistake, not a

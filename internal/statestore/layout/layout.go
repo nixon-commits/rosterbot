@@ -139,10 +139,9 @@ var (
 	// dashboard bucket's report/ prefix, where CloudFront's default behavior
 	// served them to anyone with the distribution domain (rosterbot-crq.3).
 	// They live in the state bucket, which no distribution fronts, and reach
-	// the SPA through the passkey-gated GET /v1/reports/{name}. value.json,
-	// football.json and football-trades.json stay on the public prefix: those
-	// are league-wide standings and completed trades every manager can already
-	// read off Fantrax and Sleeper, not one manager's performance.
+	// the SPA through the passkey-gated GET /v1/reports/{name}. value.json and
+	// football.json stay on the public prefix: those are league-wide standings,
+	// not one manager's performance.
 	//
 	// One prefix for all three, unlike the Trades pair: same producer, same
 	// daily schedule, so the newest object's age is an honest reading for the
@@ -177,32 +176,7 @@ var (
 	// MaxAge and absent from All(), like Progress: markers are written only
 	// when a trade happens, so a quiet league writes nothing for weeks and
 	// any age check would misread the normal case as stale.
-	//
-	// The marker's whole body is the rendered verdict string, which is why it
-	// could never back a GUI: no teams, no assets, no per-side values, no date.
-	// FootballTradeLog below is the artifact that can, and it nests UNDER this
-	// prefix rather than beside it — safe because a BlobStore only ever Gets and
-	// Publishes an exact key and never lists, so the log's dt= objects are
-	// invisible to the marker store.
 	FootballTrades = Artifact{Name: "Football Trade Markers", S3Prefix: "football/trades/", LocalDir: ".football/trades", Durable: true, Producer: "FootballTrades"}
-
-	// FootballTradeLog is the durable record of every graded football trade:
-	// per-side teams and assets, each priced in all four StatsGuy formats AS OF
-	// THE MOMENT IT WAS GRADED, plus the verdict.
-	//
-	// Deliberately NOT NoBackfill, and deliberately not fully recoverable
-	// either — the honest statement is that the two halves differ. Sleeper
-	// retains completed trades indefinitely, so a missing day's trade IDENTITY
-	// can always be re-derived; StatsGuy publishes no history, so its GRADE
-	// cannot. `football-trades --relog` rebuilds a missing row at today's
-	// prices and marks it regraded rather than pretending otherwise.
-	//
-	// No MaxAge and absent from All(), for the same reason as FootballTrades: a
-	// partition is written only on a poll that graded something, so a league
-	// with no trades this week writes nothing and an age check would read the
-	// normal case as stale. Partitioned is set anyway — it describes the key
-	// layout, and only All() members are gap-scanned.
-	FootballTradeLog = Artifact{Name: "Football Trade Log", S3Prefix: "football/trades/log/", LocalDir: ".football/trades/log", Durable: true, Producer: "FootballTrades", Partitioned: true}
 
 	// ILStarts holds one dedup marker per (player, start date) for the
 	// "IL-slotted player has an announced start" alert. Same shape and same

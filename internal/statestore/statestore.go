@@ -57,25 +57,24 @@ func of(a layout.Artifact) artifact {
 }
 
 var (
-	cacheArtifact            = artifact{layout.Cache.S3Prefix, "", false} // local: default fsStore, dir unused
-	analysisArtifact         = of(layout.Analysis)
-	teamValueArtifact        = of(layout.TeamValues)
-	footballValueArtifact    = of(layout.FootballValues)
-	lineupGapArtifact        = of(layout.LineupGaps)
-	runLedgerArtifact        = of(layout.RunLedger)
-	runOutputArtifact        = of(layout.RunOutput)
-	notificationArtifact     = of(layout.Notification)
-	progressArtifact         = of(layout.Progress)
-	lineupArtifact           = of(layout.Lineup)
-	tradesArtifact           = of(layout.Trades)
-	tradeValuesArtifact      = of(layout.TradeValues)
-	tradeOfferArtifact       = of(layout.TradeOffers)
-	reportsArtifact          = of(layout.Reports)
-	footballTradesArtifact   = of(layout.FootballTrades)
-	footballTradeLogArtifact = of(layout.FootballTradeLog)
-	ilStartsArtifact         = of(layout.ILStarts)
-	archiveArtifact          = of(layout.Archive)
-	backtestArtifact         = of(layout.Backtest)
+	cacheArtifact          = artifact{layout.Cache.S3Prefix, "", false} // local: default fsStore, dir unused
+	analysisArtifact       = of(layout.Analysis)
+	teamValueArtifact      = of(layout.TeamValues)
+	footballValueArtifact  = of(layout.FootballValues)
+	lineupGapArtifact      = of(layout.LineupGaps)
+	runLedgerArtifact      = of(layout.RunLedger)
+	runOutputArtifact      = of(layout.RunOutput)
+	notificationArtifact   = of(layout.Notification)
+	progressArtifact       = of(layout.Progress)
+	lineupArtifact         = of(layout.Lineup)
+	tradesArtifact         = of(layout.Trades)
+	tradeValuesArtifact    = of(layout.TradeValues)
+	tradeOfferArtifact     = of(layout.TradeOffers)
+	reportsArtifact        = of(layout.Reports)
+	footballTradesArtifact = of(layout.FootballTrades)
+	ilStartsArtifact       = of(layout.ILStarts)
+	archiveArtifact        = of(layout.Archive)
+	backtestArtifact       = of(layout.Backtest)
 )
 
 // Bucket is the single os.Getenv("STATE_BUCKET") read in the codebase. Empty
@@ -387,48 +386,11 @@ func (s *Selector) ReportsStore() (lineupapi.BlobStore, error) {
 
 // FootballTradeMarkers is one dedup marker object per Sleeper trade
 // transaction_id, keyed with no namePrefix -- the transaction_id alone is the
-// key. Get is the "already alerted?" check; Publish is the mark, called only
-// after a confirmed send (check -> send -> mark, rosterbot-chs).
-//
-// The football/trades/ prefix is no longer this store's alone: the durable
-// trade log nests under football/trades/log/ (see FootballTradeLogWriter). That
-// is safe precisely because a BlobStore never lists -- it Gets and Publishes an
-// exact key -- so a marker key and a log partition cannot collide, and neither
-// store can enumerate the other's objects.
+// key, since the football/trades/ prefix (.football/trades/ locally) holds
+// nothing else. Get is the "already alerted?" check; Publish is the mark,
+// called only after a confirmed send (check -> send -> mark, rosterbot-chs).
 func (s *Selector) FootballTradeMarkers() (lineupapi.BlobStore, error) {
 	return blobStore(s, footballTradesArtifact, "")
-}
-
-// FootballTradeLogWriter returns the write side of the Football Trade Log -- S3
-// when STATE_BUCKET is set, else the local .football/trades/log directory.
-//
-// A separate store from FootballValueWriter, not a third method on it: that
-// writer is rooted at analysis/football-values/ and this log lives under
-// football/trades/log/, so one interface would mean two instances on which half
-// the methods must never be called.
-func (s *Selector) FootballTradeLogWriter() (dynasty.TradeLogWriter, error) {
-	return pick(s, footballTradeLogArtifact,
-		func(ctx context.Context, b, p string) (dynasty.TradeLogWriter, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return dynasty.NewTradeLogWriter(st), nil
-		},
-		func(dir string) dynasty.TradeLogWriter { return dynasty.NewFileTradeLogWriter(dir) })
-}
-
-// FootballTradeLogReader returns the read side of the Football Trade Log.
-func (s *Selector) FootballTradeLogReader() (dynasty.TradeLogReader, error) {
-	return pick(s, footballTradeLogArtifact,
-		func(ctx context.Context, b, p string) (dynasty.TradeLogReader, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return dynasty.NewTradeLogReader(st), nil
-		},
-		func(dir string) dynasty.TradeLogReader { return dynasty.NewFileTradeLogReader(dir) })
 }
 
 // ILStartMarkers is one dedup marker per (player, start date) for the IL-start
