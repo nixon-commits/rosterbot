@@ -24,7 +24,7 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
   selected when `STATE_BUCKET` is set) — not bulk-synced by the entrypoint. `session/` (chromedp
   cookie) and `claims/` (ledger+cursor) are still bulk-synced by `entrypoint.sh`. Clear the cache
   with `aws s3 rm s3://<state-bucket>/cache/ --recursive`.
-- **S3 site bucket** (`SITE_BUCKET`) + **CloudFront** (`https://d3g6t1hhf4o9r6.cloudfront.net`) — recap site. `entrypoint.sh` invalidates the distribution (`SITE_CF_DIST_ID`) after each sync so a fresh render isn't masked by the CDN cache TTL.
+- **S3 site bucket** (`SITE_BUCKET`) + **CloudFront** (`SiteCdn`, served at **https://recaps.rosterbot.dev**; the default `d3g6t1hhf4o9r6.cloudfront.net` name still works and is kept as the `SiteCdnDefaultUrl` output) — recap site. `entrypoint.sh` invalidates the distribution (`SITE_CF_DIST_ID`) after each sync so a fresh render isn't masked by the CDN cache TTL.
 - **Recap readership logs** (`RecapLogBucket`, name in the `RecapLogBucketName` stack output) — `SiteCdn` writes CloudFront standard access logs to the `recap/` prefix. The recap site is public and unauthenticated, so these logs are the *only* signal that anyone reads it: they record when each page was fetched, the client IP, the URI, and the edge location (a free coarse geo proxy — CloudFront has no country field in standard logs; that needs standard logging v2 or an IP→geo lookup at query time). Cookies are excluded. Objects expire after **90 days** (`ExpireRecapAccessLogs`), so this prefix can't become the unbounded leak the `cache/` rule exists to prevent. **`DashboardCdn` is deliberately not logged** — it's passkey-gated and out of scope. Query via Glue table `rosterbot_analysis.recap_access_logs` (same Athena workgroup as `grades`; unpartitioned, since CloudFront writes flat `recap/<dist-id>.YYYY-MM-DD-HH.<hash>.gz` keys rather than a Hive `dt=` layout — at this traffic volume a full-prefix scan is a rounding error):
 
   ```sql
@@ -50,19 +50,42 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
   Exposed inside the SPA as the "Projections", "Value" and "Views" nav tabs, which render natively client-side (vendored Chart.js) — no iframe. The old standalone `ReportBucket`/`ReportCdn` (formerly at the `ReportUrl` stack output) has been retired. The `TeamValues` schedule (`cron(30 14 * * ? *)`) writes today's `analysis/team-values/` partition before `ProjectionSite` (15:00 UTC) renders `value.json`.
 
   **Cutover note:** the three old public objects are removed by the next `ProjectionSite` run without any manual step. `publishSite` mirrors `./report` with `--delete` scoped to the `report/` prefix, and `./report` no longer contains them, so `report/model.json`, `report/gap.json` and `report/views.json` are deleted as orphans and the following CloudFront invalidation clears the edge caches. Until that run completes, the stale copies remain readable — verify with an unauthenticated `curl` after the first post-deploy run.
-- **S3 dashboard bucket** (`DashboardBucket`) + **CloudFront** (`DashboardCdn`, URL in `DashboardUrl` stack output) — the private control-panel web UI (`web/dashboard/`, static, no build step). One distribution serves both surfaces: its default behavior serves the static files from `DashboardBucket`; an additional `/v1/*` behavior proxies straight to the `LineupApi` Function URL (`CachePolicy.CACHING_DISABLED`, `OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER` so the `Authorization` header passes through), making the browser's calls same-origin with zero CORS configuration anywhere. CodeBuild deploys the stack first, reads `DashboardBucketName` and `DashboardCdnId` from its outputs, then syncs `web/dashboard/` and invalidates the distribution on every push to `main` — including the first build that creates those resources.
+- **S3 dashboard bucket** (`DashboardBucket`) + **CloudFront** (`DashboardCdn`, served at **https://dash.rosterbot.dev**, also the `DashboardUrl` output; the default cloudfront.net name remains as `DashboardCdnDefaultUrl` and is still the origin every passkey is bound to — see Passkey auth below) — the private control-panel web UI (`web/dashboard/`, static, no build step). One distribution serves both surfaces: its default behavior serves the static files from `DashboardBucket`; an additional `/v1/*` behavior proxies straight to the `LineupApi` Function URL (`CachePolicy.CACHING_DISABLED`, `OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER` so the `Authorization` header passes through), making the browser's calls same-origin with zero CORS configuration anywhere. CodeBuild deploys the stack first, reads `DashboardBucketName` and `DashboardCdnId` from its outputs, then syncs `web/dashboard/` and invalidates the distribution on every push to `main` — including the first build that creates those resources.
 - **Passkey auth** — the dashboard's real login is WebAuthn (`internal/lineupapi/webauthn.go`,
   library `github.com/go-webauthn/webauthn`). One `Identity` record (a stable user handle + every
   registered passkey) lives at `webauthn/identity.json` in the state bucket. Sessions are a
   stateless HMAC-signed cookie — no session datastore — signed with a new SSM SecureString,
   `/rosterbot/DASHBOARD_SESSION_SECRET`, bootstrapped the same way as the token:
   `aws ssm put-parameter --name /rosterbot/DASHBOARD_SESSION_SECRET --type SecureString --value '<random 48+ bytes>'`.
-  `RP_ID`/`RP_ORIGIN` are set on the Lambda via `apiFn.AddEnvironment` *after* `DashboardCdn` is
-  constructed (the distribution's origin is the Lambda's own Function URL, so the two resources
-  reference each other — CDK's standard fix is adding the env var post-construction instead of in
-  the Lambda's initial props). To register the very first passkey (or recover after every passkey is
-  lost), paste `ROSTERBOT_API_TOKEN` into the dashboard's bootstrap screen — it only appears when
-  zero passkeys are registered.
+  The RP config is **not** passed to the Lambda as a value. `DashboardCdn`'s origin is the Lambda's
+  own Function URL, so a direct `apiFn.AddEnvironment(RP_ID, dashboardDist.DistributionDomainName())`
+  is a genuine CloudFormation cycle — deferring the call until after the distribution is constructed
+  does not help, because it defers when the Go code runs, not the resource graph. The stack instead
+  publishes the values into SSM (`/rosterbot/DASHBOARD_RP_ID`, `/rosterbot/DASHBOARD_RP_ORIGIN`) and
+  hands the Lambda only the parameter *names* (`RP_ID_PARAM`/`RP_ORIGIN_PARAM`), which are plain
+  strings carrying no reference; the Lambda resolves them at cold start. `DASHBOARD_CF_DIST_ID`
+  follows the same pattern for the same reason.
+
+  Both RP parameters still name the **cloudfront.net** domain, not `dash.rosterbot.dev`. Passkeys
+  are bound to their RP ID forever, so the hostname migration deliberately stopped short of touching
+  them (rosterbot-jloe.3); a WebAuthn ceremony attempted from `dash.rosterbot.dev` is refused for RP
+  mismatch until the cutover in rosterbot-jloe.4. That refusal is the designed intermediate state.
+
+  **Recovering when a passkey is lost.** Not the bootstrap screen: it only appears when
+  `login/begin` 404s (no identity has *ever* been registered), and the API-token path through it was
+  removed in rosterbot-crq.9 — a user whose identity exists but whose credentials are gone never
+  sees it. `rosterbot invite` cannot help either; it always creates a *new* user and fails on the
+  email/team uniqueness claim. The one working path is the bearer-token break-glass, which
+  authenticates as an admin with no user id before any store read and is indifferent to the RP ID:
+
+  ```bash
+  ROSTERBOT_API_TOKEN=$(aws ssm get-parameter --region us-west-1 \
+    --name /rosterbot/ROSTERBOT_API_TOKEN --with-decryption --query Parameter.Value --output text)
+  curl -X POST -H "Authorization: Bearer $ROSTERBOT_API_TOKEN" \
+    https://<DashboardUrl>/v1/tenants/<user-id>/recovery
+  ```
+
+  Redeem the returned link on the origin the RP config currently names.
 - **SSM Parameter Store** (`/rosterbot/*`, SecureString) — all secrets, injected as task env.
 - **CodeBuild** — on push to `main`, builds + pushes the image to ECR, then runs **`cdk deploy -c enableBuild=true`** so infrastructure changes (schedules, task defs, IAM, Lambda) ship on merge — not just the image — before publishing the dashboard (reading the deploy's own outputs, see above) and launching the `projection-site` task (`ecs:RunTask` via `taskDef.GrantRun`, reusing `TaskSg` + public subnets) so it re-renders immediately with the new image. Before the `cdk deploy` step existed, a PR touching `infra/` merged green but its infra change sat undeployed until someone ran `cdk deploy` by hand (this is what left the `Archive` schedule inert for ~25h); deploying first also means a broken infra change now fails the build before the dashboard/projection-site steps run, rather than shipping around it. The `enableBuild=true` in the buildspec is mandatory — without it the deploy would delete the CodeBuild project running it. cdk works through the bootstrap roles, so the build role is granted only `sts:AssumeRole` on `cdk-hnb659fds-*`. The build host ships Go 1.20 + no cdk CLI, so the `install` phase adds Go 1.25 (`GOTOOLCHAIN=auto` upgrades further if a go.mod requires it) and the pinned cdk CLI. Gated by `enableBuild`.
 - **Ops notifications** — three EventBridge rules target one Lambda (`OpsNotify`, built from `opsnotify/`), which reads `PUSHOVER_USER_KEY` / `PUSHOVER_API_TOKEN` from SSM and posts to the personal ops channel at priority 0.
