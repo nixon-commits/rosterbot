@@ -1,7 +1,7 @@
 // app.js — login/bootstrap gate + hash router + nav wiring. ROUTES maps a URL
 // hash to a view's render(root) function; later tasks add entries here.
 import { api, ApiError } from "./api.js";
-import { registerPasskey, loginWithPasskey } from "./webauthn.js";
+import { registerPasskey, loginWithPasskey, ceremonyErrorMessage } from "./webauthn.js";
 import { renderLineup } from "./lineup.js";
 import { renderJobs } from "./jobs.js";
 import { renderRuns } from "./runs.js";
@@ -47,6 +47,29 @@ const bootstrapError = document.getElementById("bootstrap-error");
 const logoutBtn = document.getElementById("logout-btn");
 
 async function boot() {
+  // Read the enrollment token FIRST, before probing for a session.
+  //
+  // A token names a specific user and a specific intent, and it is single-use.
+  // This check used to live inside showLoginOrBootstrap(), which is reached
+  // only on a 401 — so a token holder who ALSO had a live session fell through
+  // the probe below, landed on the dashboard, and the link was silently
+  // discarded, unread and still sitting in the address bar (rosterbot-lypj).
+  //
+  // Not a rare corner. Sessions are stateless HMAC cookies with a 30-day life
+  // and are untouched by an RP ID change, so the rosterbot-jloe.4 cutover
+  // leaves every tenant holding one while their passkeys are dead — precisely
+  // the population that needs a recovery link to work.
+  //
+  // Honouring it over the session is safe even when the two name different
+  // people: the server resolves the subject from the TOKEN
+  // (registrationSubject), and register/finish issues a fresh session cookie
+  // for that user, so the session follows the enrollment rather than fighting
+  // it.
+  const enrollToken = enrollTokenFromURL();
+  if (enrollToken) {
+    showEnroll(enrollToken);
+    return;
+  }
   try {
     await api.jobs();
     showShell();
@@ -79,19 +102,14 @@ function enrollTokenFromURL() {
 
 // showLoginOrBootstrap decides which pre-login screen to show.
 //
-// An enrollment token in the link wins outright: whoever holds one is being
-// invited to create their FIRST passkey, so there is nothing for them to log in
-// with and offering a login button would be a dead end.
+// The enrollment token is handled in boot(), before the session probe, so by
+// here there is none — see the comment there for why it cannot be read at this
+// point instead.
 //
-// Otherwise it probes login/begin. A 404 means no identity has ever been
-// registered, which is now a state only an enrollment link can resolve — the
-// API token used to and deliberately no longer does (rosterbot-crq.9).
+// This probes login/begin. A 404 means no identity has ever been registered,
+// which is now a state only an enrollment link can resolve — the API token used
+// to and deliberately no longer does (rosterbot-crq.9).
 async function showLoginOrBootstrap() {
-  const token = enrollTokenFromURL();
-  if (token) {
-    showEnroll(token);
-    return;
-  }
   try {
     await api.authLoginBegin();
     showLogin();
@@ -210,11 +228,7 @@ function showEnroll(token) {
       await registerPasskey(token);
       showShell();
     } catch (err) {
-      // The link is single-use and time-limited, so "expired or already used"
-      // is the likeliest cause by far and is worth naming — a bare "failed"
-      // sends someone hunting for a browser problem they do not have.
-      bootstrapError.textContent =
-        "Could not create the passkey. The invite link may have expired or already been used — ask for a new one.";
+      bootstrapError.textContent = ceremonyErrorMessage(err, { enrollment: true });
     }
   };
 }
