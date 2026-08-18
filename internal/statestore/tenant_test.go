@@ -73,11 +73,12 @@ func TestPerTenantArtifactsGainTheSegment(t *testing.T) {
 func TestSharedArtifactsNeverGainTheSegment(t *testing.T) {
 	s := ForTenant("bucket", "u123")
 	for name, a := range map[string]artifact{
-		"cache":          cacheArtifact,
-		"teamvalues":     teamValueArtifact,
-		"tradevalues":    tradeValuesArtifact,
-		"footballvalues": footballValueArtifact,
-		"footballtrades": footballTradesArtifact,
+		"cache":            cacheArtifact,
+		"teamvalues":       teamValueArtifact,
+		"tradevalues":      tradeValuesArtifact,
+		"footballvalues":   footballValueArtifact,
+		"footballtrades":   footballTradesArtifact,
+		"footballtradelog": footballTradeLogArtifact,
 	} {
 		if got := s.prefixFor(a); got != a.s3Prefix {
 			t.Errorf("%s: shared artifact gained a tenant segment (%q); the cache in "+
@@ -117,7 +118,7 @@ func TestPerTenantSplitIsDeliberate(t *testing.T) {
 		"Published Lineup": true, "Pending Offers": true, "Trade Offer Log": true,
 		"Private Dashboard Reports": true, "Fantrax Session": true, "Run Progress": true,
 	}
-	all := append(layout.All(), layout.Progress, layout.FootballTrades)
+	all := append(layout.All(), layout.Progress, layout.FootballTrades, layout.FootballTradeLog)
 	for _, a := range all {
 		if got, want := a.PerTenant, wantPerTenant[a.Name]; got != want {
 			t.Errorf("%q PerTenant = %v, want %v — adding an artifact must be a "+
