@@ -27,11 +27,23 @@ type PendingTrade struct {
 	TradeID    string // groups players in the same trade
 }
 
+// fetchPendingTradesFn is the seam tests use to stub the league-home fetch,
+// mirroring fetchPeriodSnapshotFn in daily_fpts.go.
+var fetchPendingTradesFn = (*Client).fetchPendingTrades
+
 // GetPendingTrades returns all pending trades visible in the league home
-// info. Cached under fantrax-pending-trades-<leagueID> with todayTTL — the
-// pending list mutates as trades resolve, so the short window is right.
+// info. Cached under fantrax-pending-trades-<leagueID>-<teamID> with todayTTL —
+// the pending list mutates as trades resolve, so the short window is right.
+//
+// The key carries the TEAM, unlike the league-wide caches beside it, because
+// the response depends on who is logged in: pendingTransactions is the offer
+// list visible to the authenticated team. Under per-tenant fan-out every
+// tenant shares the cache/ prefix, so a league-scoped key would serve tenant
+// A's offer view to tenant B for the whole TTL window
+// (TestGetPendingTrades_CacheIsScopedToTheCredentialTeam).
 func (c *Client) GetPendingTrades() ([]PendingTrade, error) {
-	return cached(c, cache.Key(keyPendingTrades, c.leagueID), tierToday, c.fetchPendingTrades)
+	return cached(c, cache.Key(keyPendingTrades, c.leagueID, c.teamID), tierToday,
+		func() ([]PendingTrade, error) { return fetchPendingTradesFn(c) })
 }
 
 func (c *Client) fetchPendingTrades() ([]PendingTrade, error) {

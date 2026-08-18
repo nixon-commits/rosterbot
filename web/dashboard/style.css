@@ -1296,3 +1296,12 @@ pre {
   color: var(--danger);
 }
 .banner a { color: inherit; font-weight: 600; }
+
+/* tenants.js management controls (rosterbot-2twx). The action buttons reuse
+   the bare <button> look; the minted-link box is the one place a credential is
+   ever displayed, so it gets width and a visible border rather than blending
+   into the card. */
+.tenant-actions { white-space: nowrap; }
+.tenant-actions button { margin-right: 0.35rem; }
+.minted-link .link-row { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
+.minted-link .link-row input { flex: 1 1 auto; font-family: var(--mono, monospace); }

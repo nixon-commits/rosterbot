@@ -114,9 +114,15 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 
 	// Emit the views report (recap-site readership) on the same terms: its own
 	// source, additive, and soft-failing so a log-read hiccup never blocks the
-	// accuracy dashboard deploy. Private — readership is the operator's.
+	// accuracy dashboard deploy. Private — readership is the operator's, and
+	// UNLIKE the model and gap reports it is the same deployment-wide data on
+	// every run, so under per-tenant fan-out it publishes only into the
+	// operator's partition. Without the gate every tester's Views tab showed
+	// the operator's site analytics, visitor IPs included.
 	if scopeWritesPrivateReports(scope) {
-		if err := renderViewsSite(reports); err != nil {
+		if !viewsReportBelongsHere(statestore.Tenant(), os.Getenv("OPERATOR_USER_ID")) {
+			fmt.Fprintln(os.Stderr, "views report: skipped — recap readership belongs to the operator's partition")
+		} else if err := renderViewsSite(reports); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: views report not written: %v\n", err)
 		}
 	}

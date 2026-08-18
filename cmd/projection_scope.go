@@ -50,6 +50,18 @@ func scopeWritesPrivateReports(s projectionScope) bool {
 	return s == scopeAll || s == scopeTenant
 }
 
+// viewsReportBelongsHere decides whether THIS run's tenant partition is the
+// one the views report (recap readership) belongs in. Model and gap are
+// per-tenant data; views is the same deployment-wide CloudFront log digest on
+// every run, so only the operator's partition gets it. Equality covers local
+// dev (both empty) and fails CLOSED on misconfiguration: a tenant run with no
+// OPERATOR_USER_ID skips, because the operator missing their views report
+// surfaces as a soft-fail warning while a member receiving it surfaces
+// nowhere (TestViewsReportBelongsHere).
+func viewsReportBelongsHere(tenant, operator string) bool {
+	return tenant == operator
+}
+
 // scopeWritesPublicDir reports whether this run produces value.json and
 // football.json.
 func scopeWritesPublicDir(s projectionScope) bool {

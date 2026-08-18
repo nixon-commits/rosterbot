@@ -204,6 +204,14 @@ Passkeys are the only login method — no passwords, no reset flow, no
 verification mail. An admin mints a link, hands it over out-of-band, and the
 person enrolls a passkey with it.
 
+The dashboard's admin **Tenants** tab mints the same invite and recovery links
+(`POST /v1/tenants/invite`, `POST /v1/tenants/{id}/recovery`) and carries the
+per-tenant management controls: park/reactivate (`POST /v1/tenants/{id}/status`
+— a parked tenant can't sign in and their scheduled jobs stop) and a
+lineup-writes kill switch (`POST /v1/tenants/{id}/auto-apply`). Each row also
+shows a passkey count, so "invited but never registered" is visible at a
+glance.
+
 The token is printed **once** and is not recoverable: only its SHA-256 is
 stored, so a leak of the identity table yields no usable links. The link is
 single-use, scoped to one user, and redeemed only when a registration actually

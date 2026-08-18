@@ -229,4 +229,11 @@ type UserStore interface {
 	// migration, and the cost of a premature GSI is a second thing to keep
 	// consistent. Revisit at four digits.
 	ListActive(ctx context.Context) ([]*User, error)
+
+	// ListUsers returns every user regardless of status — the admin
+	// directory. It exists because the two listings answer different
+	// questions and conflating them broke one of them: the fan-out must skip
+	// a parked tenant, while the admin page must keep showing them, since the
+	// row it shows is the only reactivate control there is.
+	ListUsers(ctx context.Context) ([]*User, error)
 }

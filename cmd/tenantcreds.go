@@ -46,28 +46,8 @@ func resolveTenantCredentials(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("tenant credentials: kms opener: %w", err)
 	}
 	uid := lineupapi.UserID(statestore.Tenant())
-	if err := applyTenantCredentials(ctx, cfg, uid, store, opener); err != nil {
+	if err := tenantRunConfig(ctx, cfg, uid, store, opener); err != nil {
 		return err
-	}
-
-	// CONSENT TO BEING WRITTEN TO IS SEPARATE FROM CONNECTING (rosterbot-18wq).
-	//
-	// A manager who connects has agreed to the bot READING their team. Letting
-	// it APPLY a lineup is a second decision, and auto_apply is the field that
-	// records it — false for every new user until a person turns it on.
-	//
-	// cfg.AutoApply arrives here true, which is the correct default for the
-	// single-tenant env path and the wrong one for a tenant, so it is lowered
-	// rather than raised. A read failure lowers it too: acting on an unknown
-	// answer would mean writing to somebody's roster on the strength of a
-	// DynamoDB hiccup, and the safe direction is obvious.
-	cfg.AutoApply = false
-	u, ok, err := store.GetUser(ctx, uid)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "tenant %s: could not read the auto-apply preference (%v); "+
-			"proposing only\n", uid, err)
-	} else if ok {
-		cfg.AutoApply = u.AutoApply
 	}
 
 	// The ladder runs AFTER the session is installed, so its probe tests the
@@ -87,6 +67,47 @@ func resolveTenantCredentials(ctx context.Context, cfg *config.Config) error {
 		mint:   fantraxLogin,
 	}
 	return lad.refresh(ctx, uid, cfg)
+}
+
+// tenantDirectory is the slice of the identity store a tenant run reads: the
+// connection (credentials) and the profile (consent). ddbuser.Store satisfies
+// it; tests satisfy it with stubs, which is the point — the consent lowering
+// used to live where no test could reach it.
+type tenantDirectory interface {
+	lineupapi.ConnectionStore
+	GetUser(ctx context.Context, id lineupapi.UserID) (*lineupapi.User, bool, error)
+}
+
+// tenantRunConfig applies one tenant's credentials AND their consent gate to
+// the config, in that order.
+//
+// CONSENT TO BEING WRITTEN TO IS SEPARATE FROM CONNECTING (rosterbot-18wq).
+// A manager who connects has agreed to the bot READING their team. Letting it
+// APPLY a lineup is a second decision, and auto_apply is the field that
+// records it — false for every new user until a person turns it on.
+//
+// cfg.AutoApply arrives here true, which is the correct default for the
+// single-tenant env path and the wrong one for a tenant, so it is lowered
+// rather than raised. A read failure lowers it too: acting on an unknown
+// answer would mean writing to somebody's roster on the strength of a
+// DynamoDB hiccup, and the safe direction is obvious
+// (TestTenantRunConfig_LowersAutoApplyToTheTenantsConsent).
+func tenantRunConfig(ctx context.Context, cfg *config.Config, uid lineupapi.UserID,
+	dir tenantDirectory, opener lineupapi.Opener) error {
+
+	if err := applyTenantCredentials(ctx, cfg, uid, dir, opener); err != nil {
+		return err
+	}
+
+	cfg.AutoApply = false
+	u, ok, err := dir.GetUser(ctx, uid)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tenant %s: could not read the auto-apply preference (%v); "+
+			"proposing only\n", uid, err)
+	} else if ok {
+		cfg.AutoApply = u.AutoApply
+	}
+	return nil
 }
 
 // applyTenantCredentials replaces the deployment's Fantrax credentials in cfg

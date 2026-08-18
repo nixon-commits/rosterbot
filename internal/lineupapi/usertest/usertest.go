@@ -290,4 +290,32 @@ func Run(t *testing.T, newStore func(t *testing.T) lineupapi.UserStore) {
 				"in the fan-out", ids, alice.ID)
 		}
 	})
+
+	t.Run("ListUsersIncludesParked", func(t *testing.T) {
+		s, _ := seed(t)
+		bob := newUser("bob")
+		bob.Status = lineupapi.UserParked
+		if err := s.CreateUser(ctx, bob); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.ListUsers(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sawParked bool
+		for _, u := range got {
+			if u.ID == bob.ID && u.Status == lineupapi.UserParked {
+				sawParked = true
+			}
+		}
+		if len(got) != 2 || !sawParked {
+			ids := make([]lineupapi.UserID, len(got))
+			for i, u := range got {
+				ids[i] = u.ID
+			}
+			t.Fatalf("ListUsers = %v, want both users with bob parked — the admin "+
+				"directory is the only reactivate control, so a parked tenant must "+
+				"stay on it", ids)
+		}
+	})
 }

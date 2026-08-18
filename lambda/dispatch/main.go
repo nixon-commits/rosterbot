@@ -56,7 +56,10 @@ func main() {
 		log.Fatalf("init task runner: %v", err)
 	}
 
-	d := dispatcher{tenants: users, launcher: runner}
+	// The same ddbuser store serves as both the tenant directory and the
+	// connection checker — GetConnection reads the FANTRAX row of the same
+	// table ListActive scans.
+	d := dispatcher{tenants: users, conns: users, launcher: runner}
 
 	// The roster is OPTIONAL wiring: without STATE_BUCKET the dispatcher still
 	// launches everything, it just stops improving the heartbeat's tenant

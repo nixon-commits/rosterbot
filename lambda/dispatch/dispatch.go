@@ -27,6 +27,12 @@ type tenantLister interface {
 	ListActive(ctx context.Context) ([]*lineupapi.User, error)
 }
 
+// connectionChecker answers whether a tenant's Fantrax connection can carry a
+// run. Satisfied by ddbuser.Store, the same store tenantLister already is.
+type connectionChecker interface {
+	GetConnection(ctx context.Context, id lineupapi.UserID) (*lineupapi.FantraxConnection, bool, error)
+}
+
 // taskLauncher launches one tenant's task.
 type taskLauncher interface {
 	RunWithEnv(ctx context.Context, command []string, env map[string]string) (string, error)
@@ -49,6 +55,13 @@ type dispatcher struct {
 	tenants  tenantLister
 	launcher taskLauncher
 	roster   rosterPublisher
+
+	// conns gates the fan-out on connection state and is REQUIRED — dispatch
+	// errors without it. Optional wiring here would be the fallback-is-a-
+	// valid-value shape: a dispatcher built without the store would silently
+	// launch every tenant, reintroducing the page-storm the gate exists to
+	// stop.
+	conns connectionChecker
 }
 
 func (d dispatcher) dispatch(ctx context.Context, ev event) (result, error) {
@@ -61,6 +74,12 @@ func (d dispatcher) dispatch(ctx context.Context, ev event) (result, error) {
 		return res, fmt.Errorf("dispatch: rule supplied no command")
 	}
 
+	if d.conns == nil {
+		// A wiring mistake, like an empty command: without the connection
+		// store the gate below silently admits everyone.
+		return res, fmt.Errorf("dispatch: no connection store wired")
+	}
+
 	tenants, err := d.tenants.ListActive(ctx)
 	if err != nil {
 		// RETRYABLE, unlike a launch failure below. Nothing was dispatched, so
@@ -69,8 +88,18 @@ func (d dispatcher) dispatch(ctx context.Context, ev event) (result, error) {
 		return res, fmt.Errorf("dispatch: list active tenants: %w", err)
 	}
 
-	d.publishRoster(ctx, tenants)
-
+	// The connection gate: a pre-flight of the refusal every launched task
+	// applies anyway (AuthorizeRun). A tenant who has never connected, is
+	// mid-connect, or needs to reconnect structurally cannot run — launching
+	// them buys a guaranteed FAILED record and a Started/Escalated ops push
+	// per (command, tenant), starting the moment their invite is minted. Their
+	// state stays visible where it belongs: the admin Tenants tab and their
+	// own settings page.
+	//
+	// A connection-read FAILURE launches (fail open): the task's own
+	// AuthorizeRun is the authority and fails loudly, while a DynamoDB blip
+	// silently skipping every tenant would be the invisible direction.
+	launchable := make([]*lineupapi.User, 0, len(tenants))
 	for _, u := range tenants {
 		if u == nil || u.ID == "" {
 			// An empty tenant would not fail — it would write to the
@@ -80,6 +109,29 @@ func (d dispatcher) dispatch(ctx context.Context, ev event) (result, error) {
 			log.Printf("dispatch: skipping a directory row with no user id")
 			continue
 		}
+		conn, ok, cerr := d.conns.GetConnection(ctx, u.ID)
+		if cerr != nil {
+			log.Printf("dispatch: tenant %s: connection read failed (%v); launching anyway — "+
+				"the task's own gate decides", u.ID, cerr)
+		} else if !ok || !conn.Usable() {
+			status := "never connected"
+			if ok {
+				status = string(conn.Status)
+			}
+			res.Skipped++
+			log.Printf("dispatch: tenant %s: skipped — Fantrax connection %s; the run could only refuse", u.ID, status)
+			continue
+		}
+		launchable = append(launchable, u)
+	}
+
+	// The roster carries only the tenants this dispatch actually launches:
+	// it feeds opsalert.Overdue's never-ran discovery, and publishing every
+	// active tenant would make the heartbeat page for exactly the
+	// never-connected testers the gate just stopped paging about.
+	d.publishRoster(ctx, launchable)
+
+	for _, u := range launchable {
 		uid := string(u.ID)
 
 		// BOTH VARIABLES, DELIBERATELY. ROSTERBOT_USER_ID decides the S3

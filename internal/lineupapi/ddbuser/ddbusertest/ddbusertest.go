@@ -223,16 +223,28 @@ func (a *API) Scan(_ context.Context, in *dynamodb.ScanInput, _ ...func(*dynamod
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	// The two filters the store actually sends: the fan-out's status-scoped
+	// scan and the admin directory's unscoped one. Anything else is a typo in
+	// the store, and failing loudly here is this fake's whole job.
 	expr := strings.TrimSpace(*in.FilterExpression)
-	if expr != "sk = :sk AND #st = :active" {
-		return nil, fmt.Errorf("ddbusertest: unrecognised filter %q", expr)
-	}
 	wantSK := str(in.ExpressionAttributeValues[":sk"])
-	wantStatus := str(in.ExpressionAttributeValues[":active"])
-	statusAttr := in.ExpressionAttributeNames["#st"]
-	if statusAttr == "" {
-		return nil, fmt.Errorf("ddbusertest: filter uses #st with no name mapping; " +
-			"status is a DynamoDB reserved word and must be aliased")
+	match := func(it map[string]types.AttributeValue) bool { return str(it["sk"]) == wantSK }
+	switch expr {
+	case "sk = :sk AND #st = :active":
+		wantStatus := str(in.ExpressionAttributeValues[":active"])
+		statusAttr := in.ExpressionAttributeNames["#st"]
+		if statusAttr == "" {
+			return nil, fmt.Errorf("ddbusertest: filter uses #st with no name mapping; " +
+				"status is a DynamoDB reserved word and must be aliased")
+		}
+		skOnly := match
+		match = func(it map[string]types.AttributeValue) bool {
+			return skOnly(it) && str(it[statusAttr]) == wantStatus
+		}
+	case "sk = :sk":
+		// no further predicate
+	default:
+		return nil, fmt.Errorf("ddbusertest: unrecognised filter %q", expr)
 	}
 
 	keys := make([]string, 0, len(a.items))
@@ -267,7 +279,7 @@ func (a *API) Scan(_ context.Context, in *dynamodb.ScanInput, _ ...func(*dynamod
 		}
 		it := a.items[keys[i]]
 		scanned++
-		if str(it["sk"]) == wantSK && str(it[statusAttr]) == wantStatus {
+		if match(it) {
 			out = append(out, clone(it))
 		}
 	}

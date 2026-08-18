@@ -110,6 +110,13 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
 	mux.HandleFunc("GET /v1/me", cfg.handleMe)
 	mux.HandleFunc("GET /v1/tenants", cfg.handleTenants)
+	// Tenant management (rosterbot-2twx). All under /v1/tenants/, which the
+	// adminOnlyRoutes prefix gates as a unit; TestTenantStatus_MemberForbidden
+	// pins that the prefix actually reaches them.
+	mux.HandleFunc("POST /v1/tenants/invite", cfg.handleTenantInvite)
+	mux.HandleFunc("POST /v1/tenants/{id}/status", cfg.handleSetTenantStatus)
+	mux.HandleFunc("POST /v1/tenants/{id}/auto-apply", cfg.handleSetTenantAutoApply)
+	mux.HandleFunc("POST /v1/tenants/{id}/recovery", cfg.handleTenantRecovery)
 	mux.HandleFunc("POST /v1/me/preferences", cfg.handleSetPreferences)
 	mux.HandleFunc("POST /v1/connect", cfg.handleConnect)
 	mux.HandleFunc("GET /v1/connect", cfg.handleConnectStatus)

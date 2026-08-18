@@ -333,7 +333,15 @@ func (s *FileUserStore) UserByCredential(_ context.Context, credID []byte) (User
 	return UserID(b), true, nil
 }
 
-func (s *FileUserStore) ListActive(_ context.Context) ([]*User, error) {
+func (s *FileUserStore) ListActive(ctx context.Context) ([]*User, error) {
+	return s.listWhere(func(u *User) bool { return u.Status == UserActive })
+}
+
+func (s *FileUserStore) ListUsers(ctx context.Context) ([]*User, error) {
+	return s.listWhere(func(*User) bool { return true })
+}
+
+func (s *FileUserStore) listWhere(keep func(*User) bool) ([]*User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -352,7 +360,7 @@ func (s *FileUserStore) ListActive(_ context.Context) ([]*User, error) {
 		// The directory name is the ENCODED id (see userDir), so it has to be
 		// decoded before it is an id again. Passing e.Name() straight through
 		// would re-encode it on the way back into a path and look for a
-		// directory that cannot exist — ListActive silently returning nothing,
+		// directory that cannot exist — the listing silently returning nothing,
 		// which for a fan-out means every tenant quietly skipped.
 		raw, decErr := base64.RawURLEncoding.DecodeString(e.Name())
 		if decErr != nil {
@@ -366,7 +374,7 @@ func (s *FileUserStore) ListActive(_ context.Context) ([]*User, error) {
 		if err != nil {
 			return nil, err
 		}
-		if ok && u.Status == UserActive {
+		if ok && keep(u) {
 			out = append(out, u)
 		}
 	}

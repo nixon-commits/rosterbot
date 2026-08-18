@@ -62,6 +62,15 @@ export const api = {
   me: () => request("GET", "/v1/me"),
   setPreferences: (prefs) => request("POST", "/v1/me/preferences", prefs),
   tenants: () => request("GET", "/v1/tenants"),
+  // Tenant management (admin only; the /v1/tenants prefix is allowlisted
+  // server-side, these calls just 403 for a member).
+  tenantInvite: (body) => request("POST", "/v1/tenants/invite", body),
+  tenantSetStatus: (id, status) =>
+    request("POST", `/v1/tenants/${encodeURIComponent(id)}/status`, { status }),
+  tenantSetAutoApply: (id, autoApply) =>
+    request("POST", `/v1/tenants/${encodeURIComponent(id)}/auto-apply`, { auto_apply: autoApply }),
+  tenantRecovery: (id) =>
+    request("POST", `/v1/tenants/${encodeURIComponent(id)}/recovery`, {}),
   connect: (username, password) => request("POST", "/v1/connect", { username, password }),
 
   authRegisterBegin: (enrollToken) =>

@@ -51,7 +51,7 @@ func users(ids ...string) []*lineupapi.User {
 // environment, so two tenants cannot coexist in one process without forking it.
 func TestDispatch_OneTaskPerActiveTenant(t *testing.T) {
 	l := &stubLauncher{}
-	d := dispatcher{tenants: stubTenants{users: users("alice", "bob")}, launcher: l}
+	d := dispatcher{tenants: stubTenants{users: users("alice", "bob")}, launcher: l, conns: allConnected("alice", "bob")}
 
 	res, err := d.dispatch(context.Background(), event{Command: []string{"optimize", "--matchup"}})
 	if err != nil {
@@ -75,7 +75,7 @@ func TestDispatch_OneTaskPerActiveTenant(t *testing.T) {
 // Streak assertion for that job would silently stop firing.
 func TestDispatch_TenantTravelsInTheEnvironmentNeverTheCommand(t *testing.T) {
 	l := &stubLauncher{}
-	d := dispatcher{tenants: stubTenants{users: users("alice")}, launcher: l}
+	d := dispatcher{tenants: stubTenants{users: users("alice")}, launcher: l, conns: allConnected("alice")}
 	want := []string{"optimize", "--matchup", "--archive-projections"}
 
 	if _, err := d.dispatch(context.Background(), event{Command: want}); err != nil {
@@ -104,7 +104,7 @@ func TestDispatch_TenantTravelsInTheEnvironmentNeverTheCommand(t *testing.T) {
 // exact inversion rosterbot-crq.1 was built to prevent.
 func TestDispatch_SetsBothTenantVariables(t *testing.T) {
 	l := &stubLauncher{}
-	d := dispatcher{tenants: stubTenants{users: users("alice")}, launcher: l}
+	d := dispatcher{tenants: stubTenants{users: users("alice")}, launcher: l, conns: allConnected("alice")}
 
 	if _, err := d.dispatch(context.Background(), event{Command: []string{"grade"}}); err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -129,7 +129,7 @@ func TestDispatch_SetsBothTenantVariables(t *testing.T) {
 // for everyone else on the schedule.
 func TestDispatch_OneTenantsFailureDoesNotStopTheOthers(t *testing.T) {
 	l := &stubLauncher{failFor: map[string]error{"bob": errors.New("throttled")}}
-	d := dispatcher{tenants: stubTenants{users: users("alice", "bob", "carol")}, launcher: l}
+	d := dispatcher{tenants: stubTenants{users: users("alice", "bob", "carol")}, launcher: l, conns: allConnected("alice", "bob", "carol")}
 
 	res, err := d.dispatch(context.Background(), event{Command: []string{"optimize"}})
 	if err != nil {
@@ -161,7 +161,7 @@ func TestDispatch_PartialFailureIsNotReturnedAsAnError(t *testing.T) {
 		"alice": errors.New("throttled"),
 		"bob":   errors.New("throttled"),
 	}}
-	d := dispatcher{tenants: stubTenants{users: users("alice", "bob")}, launcher: l}
+	d := dispatcher{tenants: stubTenants{users: users("alice", "bob")}, launcher: l, conns: allConnected("alice", "bob")}
 
 	res, err := d.dispatch(context.Background(), event{Command: []string{"optimize"}})
 	if err != nil {
@@ -177,7 +177,7 @@ func TestDispatch_PartialFailureIsNotReturnedAsAnError(t *testing.T) {
 // nobody to run for. That is a valid state, not a failure, and must not page.
 func TestDispatch_NoActiveTenantsIsAQuietSuccess(t *testing.T) {
 	l := &stubLauncher{}
-	d := dispatcher{tenants: stubTenants{}, launcher: l}
+	d := dispatcher{tenants: stubTenants{}, launcher: l, conns: allConnected()}
 
 	res, err := d.dispatch(context.Background(), event{Command: []string{"optimize"}})
 	if err != nil {
@@ -196,7 +196,7 @@ func TestDispatch_NoActiveTenantsIsAQuietSuccess(t *testing.T) {
 // correct and only recovery.
 func TestDispatch_ListFailureIsAnError(t *testing.T) {
 	l := &stubLauncher{}
-	d := dispatcher{tenants: stubTenants{err: errors.New("dynamo down")}, launcher: l}
+	d := dispatcher{tenants: stubTenants{err: errors.New("dynamo down")}, launcher: l, conns: allConnected()}
 
 	if _, err := d.dispatch(context.Background(), event{Command: []string{"optimize"}}); err == nil {
 		t.Fatal("a failed tenant listing must be retryable; nothing was launched to duplicate")
@@ -212,7 +212,7 @@ func TestDispatch_ListFailureIsAnError(t *testing.T) {
 // every tenant.
 func TestDispatch_EmptyCommandIsRejected(t *testing.T) {
 	l := &stubLauncher{}
-	d := dispatcher{tenants: stubTenants{users: users("alice")}, launcher: l}
+	d := dispatcher{tenants: stubTenants{users: users("alice")}, launcher: l, conns: allConnected("alice")}
 
 	if _, err := d.dispatch(context.Background(), event{}); err == nil {
 		t.Fatal("expected an empty command to be refused")
@@ -228,7 +228,7 @@ func TestDispatch_EmptyCommandIsRejected(t *testing.T) {
 // state into the pre-migration layout.
 func TestDispatch_SkipsATenantWithNoID(t *testing.T) {
 	l := &stubLauncher{}
-	d := dispatcher{tenants: stubTenants{users: users("alice", "")}, launcher: l}
+	d := dispatcher{tenants: stubTenants{users: users("alice", "")}, launcher: l, conns: allConnected("alice", "")}
 
 	res, err := d.dispatch(context.Background(), event{Command: []string{"optimize"}})
 	if err != nil {
@@ -267,7 +267,7 @@ func (r *stubRoster) PutJSON(_ context.Context, key string, data []byte) error {
 // what makes "no record" mean "did not run" rather than "not a tenant".
 func TestDispatch_PublishesTheActiveRoster(t *testing.T) {
 	r := &stubRoster{}
-	d := dispatcher{tenants: stubTenants{users: users("alice", "bob")}, launcher: &stubLauncher{}, roster: r}
+	d := dispatcher{tenants: stubTenants{users: users("alice", "bob")}, launcher: &stubLauncher{}, roster: r, conns: allConnected("alice", "bob")}
 
 	if _, err := d.dispatch(context.Background(), event{Command: []string{"optimize"}}); err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -294,6 +294,7 @@ func TestDispatch_RosterFailureDoesNotStopLaunches(t *testing.T) {
 		tenants:  stubTenants{users: users("alice")},
 		launcher: l,
 		roster:   &stubRoster{err: errors.New("s3 down")},
+		conns:    allConnected("alice"),
 	}
 
 	res, err := d.dispatch(context.Background(), event{Command: []string{"optimize"}})
@@ -311,7 +312,7 @@ func TestDispatch_RosterFailureDoesNotStopLaunches(t *testing.T) {
 // construction can never run.
 func TestDispatch_RosterExcludesUnusableRows(t *testing.T) {
 	r := &stubRoster{}
-	d := dispatcher{tenants: stubTenants{users: users("alice", "")}, launcher: &stubLauncher{}, roster: r}
+	d := dispatcher{tenants: stubTenants{users: users("alice", "")}, launcher: &stubLauncher{}, roster: r, conns: allConnected("alice", "")}
 
 	if _, err := d.dispatch(context.Background(), event{Command: []string{"optimize"}}); err != nil {
 		t.Fatalf("dispatch: %v", err)

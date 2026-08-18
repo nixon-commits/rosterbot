@@ -386,20 +386,36 @@ func (st *Store) UserByCredential(ctx context.Context, credID []byte) (lineupapi
 // an unpaginated scan silently truncates at 1 MB, and a fan-out that quietly
 // drops tenants past that boundary is the failure mode with no symptom.
 func (st *Store) ListActive(ctx context.Context) ([]*lineupapi.User, error) {
+	return st.scanProfiles(ctx, &dynamodb.ScanInput{
+		TableName:        aws.String(st.table),
+		FilterExpression: aws.String("sk = :sk AND #st = :active"),
+		ExpressionAttributeNames: map[string]string{
+			"#st": attrStatus, // STATUS is a DynamoDB reserved word; must be aliased
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":sk": s(profileSK), ":active": s(string(lineupapi.UserActive)),
+		},
+	})
+}
+
+// ListUsers is ListActive without the status filter — the admin directory,
+// which must keep showing a parked tenant (see lineupapi.UserStore.ListUsers).
+func (st *Store) ListUsers(ctx context.Context) ([]*lineupapi.User, error) {
+	return st.scanProfiles(ctx, &dynamodb.ScanInput{
+		TableName:        aws.String(st.table),
+		FilterExpression: aws.String("sk = :sk"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":sk": s(profileSK),
+		},
+	})
+}
+
+func (st *Store) scanProfiles(ctx context.Context, in *dynamodb.ScanInput) ([]*lineupapi.User, error) {
 	users := []*lineupapi.User{}
 	var start map[string]types.AttributeValue
 	for {
-		out, err := st.api.Scan(ctx, &dynamodb.ScanInput{
-			TableName:        aws.String(st.table),
-			FilterExpression: aws.String("sk = :sk AND #st = :active"),
-			ExpressionAttributeNames: map[string]string{
-				"#st": attrStatus, // STATUS is a DynamoDB reserved word; must be aliased
-			},
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":sk": s(profileSK), ":active": s(string(lineupapi.UserActive)),
-			},
-			ExclusiveStartKey: start,
-		})
+		in.ExclusiveStartKey = start
+		out, err := st.api.Scan(ctx, in)
 		if err != nil {
 			return nil, err
 		}

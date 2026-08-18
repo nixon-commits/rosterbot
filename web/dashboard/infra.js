@@ -161,10 +161,21 @@ function artifactCard(a) {
     detail += `<div class="infra-gap">Listing failed: <span class="mono">${escapeHtml(a.error)}</span></div>`;
   }
 
+  // worst_tenant names the tenant whose partition produced this row's health,
+  // so a red row says WHOSE data is stale rather than sending the operator to
+  // list S3 by hand. Same treatment as fmtGap's uid tag: the 87-char WebAuthn
+  // handle trails as a short muted token with the full id in the title.
+  const worst =
+    a.worst_tenant && a.health !== "ok"
+      ? `<span class="muted" title="${escapeHtml(a.worst_tenant)}">·${escapeHtml(
+          a.worst_tenant.slice(0, 6),
+        )}…</span>`
+      : "";
+
   return `<div class="card infra-card">
     <div class="infra-head">
       <strong>${escapeHtml(a.name)}</strong>
-      ${healthBadge(a.health)}
+      ${healthBadge(a.health)}${worst}
     </div>
     <div class="infra-meta">${bits.join(" · ")}</div>
     ${detail}

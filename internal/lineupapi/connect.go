@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// connectInFlightWindow is how long a pending verification blocks a second
+// submission. Long enough to cover a slow chromedp login with headroom; short
+// enough that a crashed connect task (which leaves the record pending forever)
+// does not lock the tenant out of retrying.
+const connectInFlightWindow = 10 * time.Minute
+
 // handleConnect accepts a tenant's Fantrax credentials, seals them, and launches
 // the task that verifies them.
 //
@@ -45,6 +51,19 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Username == "" || body.Password == "" {
 		writeErr(w, http.StatusBadRequest, "username and password are both required")
+		return
+	}
+
+	// One verification at a time. Each accepted submission launches a chromedp
+	// login against the tenant's real Fantrax account, so a double-click must
+	// not stack parallel logins — that is how a tester's first minutes trip
+	// Fantrax's bot defences. The window bounds the guard: a connect task that
+	// crashed leaves the record pending forever, and refusing past the window
+	// would lock the tenant out of retrying. A store read failure proceeds —
+	// the Put below hits the same store and fails loudly.
+	if cur, ok, gerr := cfg.Connections.GetConnection(r.Context(), caller.UserID); gerr == nil && ok &&
+		cur.Status == ConnPending && time.Since(cur.UpdatedAt) < connectInFlightWindow {
+		writeErr(w, http.StatusConflict, "a verification is already running; wait for it to finish")
 		return
 	}
 

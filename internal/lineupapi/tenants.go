@@ -26,6 +26,13 @@ type TenantSummary struct {
 
 	TeamID string `json:"team_id,omitempty"`
 
+	// Passkeys counts this tenant's registered credentials. Zero is the signal
+	// the operator scans for — invited but never registered. nil means the
+	// credential store could not answer, which must render as unknown rather
+	// than as zero: a masked error that prints 0 would tell the operator to
+	// re-invite someone whose account is fine.
+	Passkeys *int `json:"passkeys,omitempty"`
+
 	// ConnStatus is empty when the tenant has never connected Fantrax, which is
 	// different from a failed connection and is shown differently.
 	ConnStatus ConnStatus `json:"conn_status,omitempty"`
@@ -56,7 +63,9 @@ func (cfg Config) handleTenants(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "user directory not configured")
 		return
 	}
-	users, err := cfg.Users.ListActive(r.Context())
+	// ListUsers, not ListActive: this page is the only reactivate control, so
+	// a parked tenant must stay on it. The fan-out's listing rightly differs.
+	users, err := cfg.Users.ListUsers(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "user directory unavailable")
 		return
@@ -70,6 +79,14 @@ func (cfg Config) handleTenants(w http.ResponseWriter, r *http.Request) {
 		s := TenantSummary{
 			ID: u.ID, DisplayName: u.DisplayName, Email: u.Email,
 			Role: u.Role, Status: u.Status, AutoApply: u.AutoApply, TeamID: u.TeamID,
+		}
+		// Soft, like the connection read below: a credentials-store hiccup
+		// leaves the count nil ("unknown"), never zero — zero is a real value
+		// meaning "invited but never registered", and conflating the two would
+		// tell the operator to re-invite someone whose account is fine.
+		if creds, cerr := cfg.Users.Credentials(r.Context(), u.ID); cerr == nil {
+			n := len(creds)
+			s.Passkeys = &n
 		}
 		// Soft: a connection-store hiccup must not blank the whole page. A row
 		// with no connection state reads as "unknown", which is honest, where a

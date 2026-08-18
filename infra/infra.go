@@ -278,6 +278,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			// render CodeBuild fires after a deploy.
 			"ROSTERBOT_USER_ID": awsssm.StringParameter_ValueForStringParameter(
 				stack, jsii.String("/rosterbot/OPERATOR_USER_ID"), nil),
+			// The operator's id under its OWN name, so a fanned-out task can
+			// tell whether it is the operator's run after the dispatcher
+			// overrides ROSTERBOT_USER_ID. projection-site's views report
+			// (recap readership — deployment-wide data, not per-tenant) gates
+			// on this to publish only into the operator's partition.
+			"OPERATOR_USER_ID": awsssm.StringParameter_ValueForStringParameter(
+				stack, jsii.String("/rosterbot/OPERATOR_USER_ID"), nil),
 		},
 		Secrets: &map[string]awsecs.Secret{
 			"FANTRAX_USERNAME":     secret("FANTRAX_USERNAME"),
