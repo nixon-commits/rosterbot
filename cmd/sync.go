@@ -44,8 +44,11 @@ type statePair struct {
 // carried the same write timestamp — the un-tenanted copy was being actively
 // maintained, not left behind by the crq.11 backfill.
 //
-// backtest/ is the same mechanism with lower stakes: projection snapshots
-// mixing between tenants rather than a credential.
+// backtest/ was the same mechanism with lower stakes (projection snapshots
+// mixing between tenants rather than a credential). It left this bulk sync in
+// rosterbot-iqso for the reason archive/ did in rosterbot-s25n: every task
+// re-uploaded all ~485 objects and re-downloaded them first. It is still
+// PerTenant — statestore.SnapshotStore composes the same user= segment.
 //
 // claims/ is deliberately NOT PerTenant — a league-wide transaction ledger —
 // and PrefixFor leaves it alone, so this stays one rule rather than a list of
@@ -67,7 +70,6 @@ func statePairsFor(tenant string) []statePair {
 	return []statePair{
 		{".fantrax-cache/", layout.Session.PrefixFor(tenant)},
 		{".waivers/", layout.Claims.PrefixFor(tenant)},
-		{".backtest/", layout.Backtest.PrefixFor(tenant)},
 	}
 }
 

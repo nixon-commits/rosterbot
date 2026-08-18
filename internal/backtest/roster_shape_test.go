@@ -183,7 +183,7 @@ func TestSummarizeRosterShape_AccumulatesBothSides(t *testing.T) {
 		},
 	)
 
-	got := SummarizeRosterShape(dir, []time.Time{day("2026-08-06")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06")}, 13, 6)
 
 	if got.DaysWithSnapshot != 1 || got.Days != 1 {
 		t.Errorf("Days = %d / DaysWithSnapshot = %d, want 1 / 1", got.Days, got.DaysWithSnapshot)
@@ -216,7 +216,7 @@ func TestSummarizeRosterShape_ExcludesPreSchemaDay(t *testing.T) {
 		[]SnapshotPlayer{{PlayerID: "p1", IsPitcher: true, Role: "SP", IsStarter: true, HasGame: true, ProjPtsPerGame: 16}},
 	)
 
-	got := SummarizeRosterShape(dir, []time.Time{day("2026-08-06")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06")}, 13, 6)
 
 	if got.DaysPreSchema != 1 {
 		t.Errorf("DaysPreSchema = %d, want 1", got.DaysPreSchema)
@@ -244,7 +244,7 @@ func TestSummarizeRosterShape_MixedStatusSnapshotIsMeasuredNotPreSchema(t *testi
 		[]SnapshotPlayer{{PlayerID: "p1", IsPitcher: true, Role: "SP", Status: "Active", IsStarter: true, HasGame: true, WasStarted: true, ProjPtsPerGame: 16}},
 	)
 
-	got := SummarizeRosterShape(dir, []time.Time{day("2026-08-06")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06")}, 13, 6)
 
 	if got.DaysWithSnapshot != 1 {
 		t.Errorf("DaysWithSnapshot = %d, want 1 — a mixed-status snapshot is measured, not pre-schema", got.DaysWithSnapshot)
@@ -271,7 +271,7 @@ func TestSummarizeRosterShape_ExcludesStaleDay(t *testing.T) {
 		nil,
 	)
 
-	got := SummarizeRosterShape(dir, []time.Time{d}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{d}, 13, 6)
 
 	if got.DaysStale != 1 || got.DaysWithSnapshot != 0 {
 		t.Errorf("DaysStale = %d / DaysWithSnapshot = %d, want 1 / 0", got.DaysStale, got.DaysWithSnapshot)
@@ -291,7 +291,7 @@ func TestSummarizeRosterShape_MissingDayIsNotMeasured(t *testing.T) {
 		nil,
 	)
 
-	got := SummarizeRosterShape(dir, []time.Time{day("2026-08-06"), day("2026-08-07")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06"), day("2026-08-07")}, 13, 6)
 
 	if got.Days != 2 || got.DaysWithSnapshot != 1 {
 		t.Errorf("Days = %d / DaysWithSnapshot = %d, want 2 / 1", got.Days, got.DaysWithSnapshot)
@@ -312,7 +312,7 @@ func TestSummarizeRosterShape_IsValueWeightedNotMeanOfRates(t *testing.T) {
 	writeShapeSnapshot(t, dir, day("2026-08-07"), 12,
 		[]SnapshotPlayer{{PlayerID: "h2", Status: "Active", HasGame: true, WasStarted: true, ProjPtsPerGame: 10}}, nil)
 
-	got := SummarizeRosterShape(dir, []time.Time{day("2026-08-06"), day("2026-08-07")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06"), day("2026-08-07")}, 13, 6)
 
 	rate, ok := got.Hitters.FieldedRate()
 	if !ok {
@@ -337,7 +337,7 @@ func TestSummarizeRosterShape_CapRangeIgnoresUntrackedDays(t *testing.T) {
 	writeShapeSnapshot(t, dir, day("2026-08-07"), 0, hitters, nil)
 	writeShapeSnapshot(t, dir, day("2026-08-08"), 12, hitters, nil)
 
-	got := SummarizeRosterShape(dir, []time.Time{day("2026-08-06"), day("2026-08-07"), day("2026-08-08")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06"), day("2026-08-07"), day("2026-08-08")}, 13, 6)
 
 	if got.GSCapMin != 12 || got.GSCapMax != 18 {
 		t.Errorf("cap = %d–%d, want 12–18", got.GSCapMin, got.GSCapMax)

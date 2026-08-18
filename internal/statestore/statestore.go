@@ -15,6 +15,8 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/analysis"
 	"github.com/nixon-commits/rosterbot/internal/archive"
 	"github.com/nixon-commits/rosterbot/internal/archive/s3archive"
+	"github.com/nixon-commits/rosterbot/internal/backtest"
+	"github.com/nixon-commits/rosterbot/internal/backtest/s3backtest"
 	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/cachestore/s3store"
 	"github.com/nixon-commits/rosterbot/internal/dynasty"
@@ -72,6 +74,7 @@ var (
 	footballTradesArtifact = of(layout.FootballTrades)
 	ilStartsArtifact       = of(layout.ILStarts)
 	archiveArtifact        = of(layout.Archive)
+	backtestArtifact       = of(layout.Backtest)
 )
 
 // Bucket is the single os.Getenv("STATE_BUCKET") read in the codebase. Empty
@@ -199,6 +202,18 @@ func (s *Selector) TeamValueWriter() (teamvalue.Writer, error) {
 			return teamvalue.NewWriter(st), nil
 		},
 		func(dir string) teamvalue.Writer { return teamvalue.NewFileWriter(dir) })
+}
+
+// SnapshotStore returns the Projection Snapshot store. Like the Daily Archive
+// before rosterbot-s25n, this rode cmd/sync.go's bulk directory sync, so every
+// task re-uploaded all ~485 snapshot objects after running and re-downloaded
+// them before running. It is PerTenant, so pick composes the user= segment.
+func (s *Selector) SnapshotStore() (backtest.SnapshotStore, error) {
+	return pick(s, backtestArtifact,
+		func(ctx context.Context, b, p string) (backtest.SnapshotStore, error) {
+			return s3backtest.New(ctx, b, p)
+		},
+		func(dir string) backtest.SnapshotStore { return backtest.NewFileSnapshotStore(dir) })
 }
 
 // ArchiveWriter returns the Daily Archive writer. Unlike the other durable

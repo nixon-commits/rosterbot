@@ -54,10 +54,10 @@ type GateDay struct {
 // DaysStale instead of DaysWithSnapshot and also contribute nothing, since a
 // stale --matchup pre-write always carries GSSuppressed=false and would
 // otherwise be misread as a fully-measured, suppression-free day.
-func SummarizeGSGate(dir string, dates []time.Time) GateSummary {
+func SummarizeGSGate(st SnapshotStore, dir string, dates []time.Time) GateSummary {
 	sum := GateSummary{Days: len(dates)}
 	for _, d := range dates {
-		snap, ok := LoadSnapshot(dir, d)
+		snap, ok := LoadSnapshot(st, dir, d)
 		if !ok {
 			continue
 		}

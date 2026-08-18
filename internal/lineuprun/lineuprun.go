@@ -15,6 +15,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
@@ -70,12 +71,18 @@ type Options struct {
 	// encoding one behaviour plus an inline os.Getenv in Run (rosterbot-6rv).
 	WriteSnapshots bool
 
-	// SnapshotRoot is the exact directory snapshots are written into. A
-	// normal optimize run passes the flat .backtest/snapshots/ path; shadow
-	// passes a per-system partition (.backtest/snapshots-systems/system=<sys>).
-	// Always required — there is no implicit default (this replaces the old
-	// captureSystemRoot global, whose emptiness used to double as both "not
-	// in shadow mode" and "use the default directory").
+	// SnapshotStore is where projection snapshots are persisted. Supplied by
+	// cmd (S3 when STATE_BUCKET is set, else local .backtest/) so this package
+	// never reads the environment itself — the same arrangement as
+	// Options.Publisher. Required whenever WriteSnapshots is true.
+	SnapshotStore backtest.SnapshotStore
+
+	// SnapshotRoot is the directory within SnapshotStore that snapshots are
+	// written into, RELATIVE to the store root: "snapshots" for a normal
+	// optimize run, or a per-system shadow partition
+	// ("snapshots-systems/system=<sys>"). It stopped being a filesystem path in
+	// rosterbot-iqso, when snapshots moved off the bulk directory sync onto a
+	// typed store; the store owns the root, this names the partition.
 	SnapshotRoot string
 
 	// PublishLineupFlag force-publishes today's read-only API lineup JSON
@@ -509,6 +516,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		GSBudget:       gsBudget,
 		ShowPipeline:   opts.ShowPipeline,
 		WriteSnapshots: opts.WriteSnapshots,
+		SnapshotStore:  opts.SnapshotStore,
 		SnapshotRoot:   opts.SnapshotRoot,
 		ProjSystem:     batLoadResult.System,
 		HittersNoData:  batLoadResult.NoData,

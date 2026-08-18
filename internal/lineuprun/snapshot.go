@@ -29,11 +29,11 @@ type dateResult struct {
 
 // writeProjectionSnapshot archives the per-date projection values the optimizer
 // used so a future `rosterbot backtest` can grade projection accuracy exactly
-// (no reconstruction). snapshotRoot is the exact directory to write into —
-// callers pass either the flat .backtest/snapshots/ path (normal optimize run)
-// or a per-system shadow-capture partition (see Options.SnapshotRoot).
-func writeProjectionSnapshot(dr dateResult, projSystem string, slotName map[string]string, hittersNoData, pitchersNoData bool, snapshotRoot string) error {
-	return backtest.WriteSnapshot(snapshotRoot, buildSnapshot(dr, projSystem, slotName, hittersNoData, pitchersNoData))
+// (no reconstruction). snapshotRoot names the partition WITHIN st — "snapshots"
+// for a normal optimize run, or a per-system shadow-capture partition (see
+// Options.SnapshotRoot).
+func writeProjectionSnapshot(dr dateResult, projSystem string, slotName map[string]string, hittersNoData, pitchersNoData bool, st backtest.SnapshotStore, snapshotRoot string) error {
+	return backtest.WriteSnapshot(st, snapshotRoot, buildSnapshot(dr, projSystem, slotName, hittersNoData, pitchersNoData))
 }
 
 // buildSnapshot is the pure mapping from a day's optimizer results to the

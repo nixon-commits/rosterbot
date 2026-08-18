@@ -49,7 +49,7 @@ func TestSummarizeGSGate_SumsSuppressedStartsAcrossDays(t *testing.T) {
 		{PlayerID: "p4", IsPitcher: true, ProjPtsPerGame: 4.0, GSSuppressed: true},
 	})
 
-	got := SummarizeGSGate(dir, []time.Time{day("2026-04-10"), day("2026-04-11")})
+	got := SummarizeGSGate(NewFileSnapshotStore(dir), "", []time.Time{day("2026-04-10"), day("2026-04-11")})
 
 	if got.SuppressedStarts != 3 {
 		t.Errorf("SuppressedStarts = %d, want 3", got.SuppressedStarts)
@@ -76,7 +76,7 @@ func TestSummarizeGSGate_MissingDayIsNotAZero(t *testing.T) {
 		{PlayerID: "p1", IsPitcher: true, ProjPtsPerGame: 12.5, GSSuppressed: true},
 	})
 
-	got := SummarizeGSGate(dir, []time.Time{day("2026-04-10"), day("2026-04-11")})
+	got := SummarizeGSGate(NewFileSnapshotStore(dir), "", []time.Time{day("2026-04-10"), day("2026-04-11")})
 
 	if got.Days != 2 {
 		t.Errorf("Days = %d, want 2 (the window asked for)", got.Days)
@@ -101,7 +101,7 @@ func TestSummarizeGSGate_IgnoresHitters(t *testing.T) {
 	b, _ := json.Marshal(snap)
 	os.WriteFile(filepath.Join(dir, "2026-04-10.json"), b, 0o644)
 
-	got := SummarizeGSGate(dir, []time.Time{day("2026-04-10")})
+	got := SummarizeGSGate(NewFileSnapshotStore(dir), "", []time.Time{day("2026-04-10")})
 
 	if got.SuppressedStarts != 1 || got.SuppressedPts != 8 {
 		t.Errorf("got %d starts / %v pts, want 1 / 8 (hitter ignored)", got.SuppressedStarts, got.SuppressedPts)
@@ -109,7 +109,7 @@ func TestSummarizeGSGate_IgnoresHitters(t *testing.T) {
 }
 
 func TestSummarizeGSGate_EmptyWindow(t *testing.T) {
-	got := SummarizeGSGate(t.TempDir(), nil)
+	got := SummarizeGSGate(NewFileSnapshotStore(t.TempDir()), "", nil)
 	if got.SuppressedStarts != 0 || got.Days != 0 || len(got.ByDate) != 0 {
 		t.Errorf("empty window = %+v, want zero value", got)
 	}
@@ -128,7 +128,7 @@ func TestSummarizeGSGate_StaleSnapshotIsNotCountedAsMeasured(t *testing.T) {
 			{PlayerID: "p1", IsPitcher: true, ProjPtsPerGame: 12.5}, // GSSuppressed never set — the gate ran for 04-08, not 04-11
 		})
 
-	got := SummarizeGSGate(dir, []time.Time{day("2026-04-11")})
+	got := SummarizeGSGate(NewFileSnapshotStore(dir), "", []time.Time{day("2026-04-11")})
 
 	if got.DaysStale != 1 {
 		t.Errorf("DaysStale = %d, want 1", got.DaysStale)
@@ -154,7 +154,7 @@ func TestSummarizeGSGate_ZeroSuppressionDayExcludedFromByDate(t *testing.T) {
 		{PlayerID: "p1", IsPitcher: true, ProjPtsPerGame: 12.5}, // GSSuppressed false: gate ran, declined nothing
 	})
 
-	got := SummarizeGSGate(dir, []time.Time{day("2026-04-10")})
+	got := SummarizeGSGate(NewFileSnapshotStore(dir), "", []time.Time{day("2026-04-10")})
 
 	if got.DaysWithSnapshot != 1 {
 		t.Errorf("DaysWithSnapshot = %d, want 1", got.DaysWithSnapshot)

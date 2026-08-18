@@ -123,10 +123,15 @@ func runGrade(cmd *cobra.Command, args []string) error {
 	// differs per system. Each system's rows land in its own Hive partition
 	// (grades/dt=X/system=Y/...). The depthcharts-ros slice keeps feeding the
 	// existing detailed dashboard; the others power the comparison panel.
+	snapStore, err := statestore.FromEnv().SnapshotStore()
+	if err != nil {
+		return fmt.Errorf("snapshot store: %w", err)
+	}
+
 	bySystemDate := map[string]map[string][]analysis.GradeRow{}
 	for _, sys := range shadowSystems {
 		dir := systemSnapshotDir(shadowSnapshotRoot, sys)
-		results := backtest.RunProjectionAnalysis(days, dir)
+		results := backtest.RunProjectionAnalysis(days, snapStore, dir)
 		byDate := map[string][]analysis.GradeRow{}
 		for _, d := range results {
 			if d.Source == "missing" || d.Source == "stale" || d.Source == "no-data" {

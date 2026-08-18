@@ -105,6 +105,11 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		ilMarkers = nil
 	}
 
+	snapStore, err := statestore.FromEnv().SnapshotStore()
+	if err != nil {
+		return fmt.Errorf("snapshot store: %w", err)
+	}
+
 	opts := lineuprun.Options{
 		Today:              today,
 		NeedsSeasonLookup:  needsSeasonLookup,
@@ -113,6 +118,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		CheckRoster:        checkRoster,
 		ShowPipeline:       showPipeline,
 		WriteSnapshots:     resolveWriteSnapshots(cfg.DryRun, snapshotFlag, archiveProjections, os.Getenv("BACKTEST_ARCHIVE")),
+		SnapshotStore:      snapStore,
 		SnapshotRoot:       backtestSnapshotDir,
 		PublishLineupFlag:  publishLineupFlag,
 		Publisher:          pub,

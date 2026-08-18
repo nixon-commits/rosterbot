@@ -11,11 +11,14 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/spf13/cobra"
 )
 
 const (
-	backtestSnapshotDir = ".backtest/snapshots"
+	// Relative to the snapshot store root (statestore.SnapshotStore), not a
+	// filesystem path: snapshots moved off the bulk dir sync in rosterbot-iqso.
+	backtestSnapshotDir = "snapshots"
 
 	// experimentSystem is the base projection every recency variant blends on
 	// top of — the system the bot runs in production.
@@ -103,11 +106,16 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 		return runRecencyExperiment(ft, cfg, days, start, end, seasonStart, snapTTL, hitterSlots, pitcherSlots)
 	}
 
+	snapStore, err := statestore.FromEnv().SnapshotStore()
+	if err != nil {
+		return fmt.Errorf("snapshot store: %w", err)
+	}
+
 	lineup := backtest.RunLineupAnalysis(days, hitterSlots, pitcherSlots)
 
 	var proj []backtest.ProjectionDayResult
 	if !backtestSkipProjections {
-		proj = backtest.RunProjectionAnalysis(days, backtestSnapshotDir)
+		proj = backtest.RunProjectionAnalysis(days, snapStore, backtestSnapshotDir)
 	}
 
 	report := backtest.BuildReport(start, end, lineup, proj)
@@ -126,14 +134,14 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	for i, d := range days {
 		dates[i] = d.Date
 	}
-	if gate := backtest.SummarizeGSGate(backtestSnapshotDir, dates); gate.Days > 0 {
+	if gate := backtest.SummarizeGSGate(snapStore, backtestSnapshotDir, dates); gate.Days > 0 {
 		fmt.Print(backtest.FormatGateSummary(gate))
 	}
 	// Roster shape is the analytical companion to the gate summary: the gate
 	// measures which starts the cap declined, this measures the structural
 	// imbalance that keeps producing them. Printed after so the measurement
 	// comes before its explanation.
-	if shape := backtest.SummarizeRosterShape(backtestSnapshotDir, dates, len(hitterSlots), len(pitcherSlots)); shape.Days > 0 {
+	if shape := backtest.SummarizeRosterShape(snapStore, backtestSnapshotDir, dates, len(hitterSlots), len(pitcherSlots)); shape.Days > 0 {
 		fmt.Print(backtest.FormatRosterShape(shape))
 	}
 	return nil

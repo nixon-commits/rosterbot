@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
@@ -39,6 +40,7 @@ type EmitInputs struct {
 	// Snapshot archival. WriteSnapshots is the caller's single resolved
 	// decision (see Options.WriteSnapshots).
 	WriteSnapshots bool
+	SnapshotStore  backtest.SnapshotStore
 	SnapshotRoot   string
 	ProjSystem     string
 	HittersNoData  bool
@@ -95,8 +97,16 @@ func writeSnapshots(in EmitInputs) {
 	if !in.WriteSnapshots {
 		return
 	}
+	// A caller that asked for snapshots but supplied no store is a wiring bug,
+	// not a runtime condition. Say so once, rather than panicking per date —
+	// snapshot archival is best-effort here (every failure below is a warning),
+	// so a nil dereference would take down a run that was otherwise fine.
+	if in.SnapshotStore == nil {
+		fmt.Fprintf(in.Out, "  ⚠ snapshot archive skipped: no snapshot store configured\n")
+		return
+	}
 	for _, dr := range in.Results {
-		if err := writeProjectionSnapshot(dr, in.ProjSystem, in.SlotName, in.HittersNoData, in.PitchersNoData, in.SnapshotRoot); err != nil {
+		if err := writeProjectionSnapshot(dr, in.ProjSystem, in.SlotName, in.HittersNoData, in.PitchersNoData, in.SnapshotStore, in.SnapshotRoot); err != nil {
 			fmt.Fprintf(in.Out, "  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)
 		}
 	}

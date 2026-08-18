@@ -38,7 +38,10 @@ func TestStatePairsFor_ScopesPerTenantPrefixes(t *testing.T) {
 		want string
 	}{
 		{".fantrax-cache/", "session/user=alice/"},
-		{".backtest/", "backtest/user=alice/"},
+		// .backtest/ was here until rosterbot-iqso moved snapshots onto a typed
+		// store; its tenant scoping is now asserted by
+		// statestore.TestPerTenantArtifactsGainTheSegment, which is where the
+		// prefix is actually composed.
 	} {
 		got, ok := byDir[tc.dir]
 		if !ok {
@@ -50,10 +53,10 @@ func TestStatePairsFor_ScopesPerTenantPrefixes(t *testing.T) {
 	}
 }
 
-// TestStatePairsFor_LeavesSharedPrefixesAlone: claims/ and archive/ are NOT
-// PerTenant. claims is a league-wide transaction ledger and archive holds
-// upstream snapshots that are identical for everyone, so scoping them per
-// tenant would duplicate storage and split a shared history for no reason.
+// TestStatePairsFor_LeavesSharedPrefixesAlone: claims/ is NOT PerTenant — it is
+// a league-wide transaction ledger, so scoping it per tenant would duplicate
+// storage and split a shared history for no reason. (archive/ was the other
+// such case until rosterbot-s25n moved it out of this sync.)
 //
 // This is the other half of the property: the fix must scope exactly the
 // artifacts the layout declares PerTenant, not everything it syncs.
@@ -61,7 +64,7 @@ func TestStatePairsFor_LeavesSharedPrefixesAlone(t *testing.T) {
 	pairs := statePairsFor("alice")
 	for _, p := range pairs {
 		switch p.dir {
-		case ".waivers/", ".archive/":
+		case ".waivers/":
 			if strings.Contains(p.prefix, "user=") {
 				t.Errorf("%s -> %q: a non-PerTenant artifact was tenant-scoped", p.dir, p.prefix)
 			}
@@ -94,11 +97,10 @@ func TestStatePairsFor_MatchesTheLayoutDeclaration(t *testing.T) {
 	want := map[string]string{
 		".fantrax-cache/": layout.Session.PrefixFor(tenant),
 		".waivers/":       layout.Claims.PrefixFor(tenant),
-		".backtest/":      layout.Backtest.PrefixFor(tenant),
-		// No ".archive/": rosterbot-s25n took the Daily Archive out of this bulk
-		// sync and gave it a typed per-partition store, because every task was
-		// downloading the whole 877 MB tree at startup for a directory only
-		// cmd/archive.go ever touches. Its absence here is the assertion.
+		// Neither ".archive/" nor ".backtest/": rosterbot-s25n and -iqso gave
+		// both typed stores, because every task was re-uploading all of both
+		// trees after running and re-downloading them before. Their absence
+		// here is the assertion.
 	}
 	pairs := statePairsFor(tenant)
 	if len(pairs) != len(want) {
