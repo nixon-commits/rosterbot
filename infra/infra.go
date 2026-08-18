@@ -1185,6 +1185,20 @@ func main() {
 
 	app := awscdk.NewApp(nil)
 
+	// The rosterbot.dev certificate, in us-east-1 because CloudFront reads
+	// viewer certs from nowhere else (see infra/domain.go). Both return values
+	// are dropped on purpose: this slice creates the certificate and stops
+	// there, so InfraStack still holds no reference to it and its diff stays
+	// empty. The capture — and CrossRegionReferences on InfraStack, which is
+	// only required once a reference actually crosses — arrives with the first
+	// alias domain.
+	_, _ = NewCertStack(app, "InfraCertStack", &CertStackProps{
+		awscdk.StackProps{
+			Env:                   certEnv(),
+			CrossRegionReferences: jsii.Bool(true),
+		},
+	})
+
 	NewInfraStack(app, "InfraStack", &InfraStackProps{
 		awscdk.StackProps{
 			Env: env(),
