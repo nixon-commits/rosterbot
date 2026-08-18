@@ -191,7 +191,7 @@ func TestWriteLoadSnapshot_Roundtrip(t *testing.T) {
 			{PlayerID: "p1", Name: "Test SP", MLBTeam: "LAD", ProjPtsPerGame: 14.2, HasGame: true, WasStarted: true, IsStarter: true, Role: "SP"},
 		},
 	}
-	if err := WriteSnapshot(dir, s); err != nil {
+	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {
 		t.Fatalf("WriteSnapshot: %v", err)
 	}
 	// Verify file at expected path.
@@ -199,7 +199,7 @@ func TestWriteLoadSnapshot_Roundtrip(t *testing.T) {
 		t.Fatalf("bad abs path: %v", err)
 	}
 
-	loaded, ok := LoadSnapshot(dir, time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC))
+	loaded, ok := LoadSnapshot(NewFileSnapshotStore(dir), "", time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC))
 	if !ok {
 		t.Fatal("LoadSnapshot missed roundtrip")
 	}
@@ -215,7 +215,7 @@ func TestWriteLoadSnapshot_Roundtrip(t *testing.T) {
 }
 
 func TestLoadSnapshot_MissingReturnsFalse(t *testing.T) {
-	_, ok := LoadSnapshot(t.TempDir(), time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
+	_, ok := LoadSnapshot(NewFileSnapshotStore(t.TempDir()), "", time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
 	if ok {
 		t.Error("LoadSnapshot should return false for missing file")
 	}
@@ -231,7 +231,7 @@ func TestRunProjectionAnalysis_MatchesSnapshot(t *testing.T) {
 			{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", ProjPtsPerGame: 10.0, HasGame: true},
 		},
 	}
-	if err := WriteSnapshot(dir, s); err != nil {
+	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {
 		t.Fatal(err)
 	}
 	days := []fantrax.DayRoster{
@@ -243,7 +243,7 @@ func TestRunProjectionAnalysis_MatchesSnapshot(t *testing.T) {
 			},
 		},
 	}
-	results := RunProjectionAnalysis(days, dir)
+	results := RunProjectionAnalysis(days, NewFileSnapshotStore(dir), "")
 	if len(results) != 1 {
 		t.Fatalf("want 1 day, got %d", len(results))
 	}
@@ -277,7 +277,7 @@ func TestRunProjectionAnalysis_StaleSnapshotMarkedStale(t *testing.T) {
 			{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", ProjPtsPerGame: 10.0, HasGame: true},
 		},
 	}
-	if err := WriteSnapshot(dir, s); err != nil {
+	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {
 		t.Fatal(err)
 	}
 	days := []fantrax.DayRoster{
@@ -286,7 +286,7 @@ func TestRunProjectionAnalysis_StaleSnapshotMarkedStale(t *testing.T) {
 			Players: []fantrax.DayPlayerFP{{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", FPts: 14.0, HadGame: true}},
 		},
 	}
-	results := RunProjectionAnalysis(days, dir)
+	results := RunProjectionAnalysis(days, NewFileSnapshotStore(dir), "")
 	if len(results) != 1 {
 		t.Fatalf("want 1 result, got %d", len(results))
 	}
@@ -315,7 +315,7 @@ func TestRunProjectionAnalysis_NoDataSnapshotExcluded(t *testing.T) {
 			{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", ProjPtsPerGame: 0, HasGame: true},
 		},
 	}
-	if err := WriteSnapshot(dir, s); err != nil {
+	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {
 		t.Fatal(err)
 	}
 	days := []fantrax.DayRoster{
@@ -324,7 +324,7 @@ func TestRunProjectionAnalysis_NoDataSnapshotExcluded(t *testing.T) {
 			Players: []fantrax.DayPlayerFP{{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", FPts: 14.0, HadGame: true}},
 		},
 	}
-	results := RunProjectionAnalysis(days, dir)
+	results := RunProjectionAnalysis(days, NewFileSnapshotStore(dir), "")
 	if len(results) != 1 {
 		t.Fatalf("want 1 result, got %d", len(results))
 	}
@@ -352,7 +352,7 @@ func TestRunProjectionAnalysis_PitchersNoDataAlsoExcludesDay(t *testing.T) {
 			{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", ProjPtsPerGame: 10.0, HasGame: true},
 		},
 	}
-	if err := WriteSnapshot(dir, s); err != nil {
+	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {
 		t.Fatal(err)
 	}
 	days := []fantrax.DayRoster{
@@ -361,7 +361,7 @@ func TestRunProjectionAnalysis_PitchersNoDataAlsoExcludesDay(t *testing.T) {
 			Players: []fantrax.DayPlayerFP{{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", FPts: 14.0, HadGame: true}},
 		},
 	}
-	results := RunProjectionAnalysis(days, dir)
+	results := RunProjectionAnalysis(days, NewFileSnapshotStore(dir), "")
 	if results[0].Source != "no-data" {
 		t.Errorf("source = %q, want no-data", results[0].Source)
 	}
@@ -383,7 +383,7 @@ func TestRunProjectionAnalysis_SameDaySnapshotGraded(t *testing.T) {
 			{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", ProjPtsPerGame: 10.0, HasGame: true},
 		},
 	}
-	if err := WriteSnapshot(dir, s); err != nil {
+	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {
 		t.Fatal(err)
 	}
 	days := []fantrax.DayRoster{
@@ -392,7 +392,7 @@ func TestRunProjectionAnalysis_SameDaySnapshotGraded(t *testing.T) {
 			Players: []fantrax.DayPlayerFP{{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", FPts: 14.0, HadGame: true}},
 		},
 	}
-	results := RunProjectionAnalysis(days, dir)
+	results := RunProjectionAnalysis(days, NewFileSnapshotStore(dir), "")
 	if results[0].Source != "snapshot" {
 		t.Errorf("source = %q, want snapshot", results[0].Source)
 	}
@@ -417,7 +417,7 @@ func TestRunProjectionAnalysis_EveningETRefreshGraded(t *testing.T) {
 			{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", ProjPtsPerGame: 10.0, HasGame: true},
 		},
 	}
-	if err := WriteSnapshot(dir, s); err != nil {
+	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {
 		t.Fatal(err)
 	}
 	days := []fantrax.DayRoster{
@@ -426,7 +426,7 @@ func TestRunProjectionAnalysis_EveningETRefreshGraded(t *testing.T) {
 			Players: []fantrax.DayPlayerFP{{PlayerID: "h1", Name: "H1", MLBTeam: "NYY", FPts: 14.0, HadGame: true}},
 		},
 	}
-	results := RunProjectionAnalysis(days, dir)
+	results := RunProjectionAnalysis(days, NewFileSnapshotStore(dir), "")
 	if results[0].Source != "snapshot" {
 		t.Errorf("source = %q, want snapshot (evening-ET refresh must grade)", results[0].Source)
 	}
@@ -463,7 +463,7 @@ func TestRunProjectionAnalysis_MissingSnapshotMarkedMissing(t *testing.T) {
 			Players: []fantrax.DayPlayerFP{{PlayerID: "h1", HadGame: true, FPts: 5}},
 		},
 	}
-	results := RunProjectionAnalysis(days, t.TempDir())
+	results := RunProjectionAnalysis(days, NewFileSnapshotStore(t.TempDir()), "")
 	if len(results) != 1 {
 		t.Fatalf("want 1 result, got %d", len(results))
 	}
@@ -644,7 +644,7 @@ func TestRunProjectionAnalysis_SetsBucketFromSnapshot(t *testing.T) {
 			{PlayerID: "sp1", Name: "SP One", MLBTeam: "LAD", ProjPtsPerGame: 15, HasGame: true, IsPitcher: true, Role: "SP"},
 		},
 	}
-	if err := WriteSnapshot(dir, s); err != nil {
+	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {
 		t.Fatal(err)
 	}
 	days := []fantrax.DayRoster{{
@@ -654,7 +654,7 @@ func TestRunProjectionAnalysis_SetsBucketFromSnapshot(t *testing.T) {
 			{PlayerID: "sp1", Name: "SP One", MLBTeam: "LAD", FPts: 5, HadGame: true, IsPitcher: true},
 		},
 	}}
-	results := RunProjectionAnalysis(days, dir)
+	results := RunProjectionAnalysis(days, NewFileSnapshotStore(dir), "")
 	got := map[string]string{}
 	for _, p := range results[0].Players {
 		got[p.PlayerID] = p.Bucket
@@ -676,10 +676,10 @@ func TestWriteLoadSnapshot_RichFieldsRoundtrip(t *testing.T) {
 				HasGame: true, WasStarted: true, Slot: "OF", Locked: true, Eligibility: []string{"012", "014"}},
 		},
 	}
-	if err := WriteSnapshot(dir, s); err != nil {
+	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {
 		t.Fatal(err)
 	}
-	loaded, ok := LoadSnapshot(dir, time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC))
+	loaded, ok := LoadSnapshot(NewFileSnapshotStore(dir), "", time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC))
 	if !ok {
 		t.Fatal("roundtrip missed")
 	}
@@ -705,7 +705,7 @@ func TestProjectionReport_EndToEnd(t *testing.T) {
 			{PlayerID: "sp1", Name: "Rampup Arm", MLBTeam: "LAD", ProjPtsPerGame: 18, HasGame: true, IsPitcher: true, Role: "SP"},
 		},
 	}
-	if err := WriteSnapshot(dir, s); err != nil {
+	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {
 		t.Fatal(err)
 	}
 	days := []fantrax.DayRoster{{
@@ -715,7 +715,7 @@ func TestProjectionReport_EndToEnd(t *testing.T) {
 			{PlayerID: "sp1", Name: "Rampup Arm", MLBTeam: "LAD", FPts: 2, HadGame: true, IsPitcher: true}, // big over-projection
 		},
 	}}
-	proj := RunProjectionAnalysis(days, dir)
+	proj := RunProjectionAnalysis(days, NewFileSnapshotStore(dir), "")
 	report := BuildReport(date, date, nil, proj)
 	out := FormatReport(report)
 

@@ -36,3 +36,8 @@ infra/cdk.context.json.bak
 .dolt/
 *.db
 .beads-credential-key
+
+# Beads passive exports — real sync is via refs/dolt/data on the git remote,
+# not these files; tracking them just churns every commit (see CLAUDE.md).
+.beads/issues.jsonl
+.beads/interactions.jsonl

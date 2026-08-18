@@ -52,19 +52,27 @@ phases:
       # Apply infra before publishing the dashboard. The outputs file makes the
       # newly-created bucket/distribution available to this very first build;
       # CodeBuild environment variables would not update until the next build.
+      # --all, not a bare `cdk deploy`. The app has synthesized TWO stacks since
+      # InfraCertStack was added for the us-east-1 rosterbot.dev certificate
+      # (CloudFront reads viewer certs from that region only); InfraStack in
+      # us-west-1 consumes the cert ARN across regions. cdk refuses a bare
+      # deploy on a multi-stack app -- "Since this app includes more than a
+      # single stack, specify which stacks to use ... or specify `--all`" -- and
+      # exits 1, so every push to main fails here until this says --all. That is
+      # exactly how the domain work, which was only ever deployed by a hand-run
+      # `cdk deploy --all`, passed locally and failed its first CI build.
+      # TestBuildspec_NamesStacksExplicitly pins it, asserting explicitness
+      # rather than a stack count so a future third stack cannot reintroduce it.
+      #
+      # CDK orders the two from the cross-region reference, so --all needs no
+      # explicit stack names, and --outputs-file stays keyed by stack name so
+      # the DashboardBucketName lookup below is unaffected.
+      #
       # set -e so a failed deploy fails HERE. Without it the block's exit status
       # is `cd ..`, execution continues, and the next block dies on the missing
       # cdk-outputs.json — so CodeBuild names the dashboard sync as the failing
       # command for an error that happened in cdk deploy 90 seconds earlier
       # (rosterbot-ill).
-      #
-      # `--all`, not a bare `cdk deploy`. The app has held more than one stack
-      # since InfraCertStack was added for the us-east-1 rosterbot.dev
-      # certificate (CloudFront reads viewer certs from that region only), and
-      # cdk refuses a bare deploy on a multi-stack app: "Since this app includes
-      # more than a single stack, specify which stacks to use ... or specify
-      # `--all`". It exits 1, so every push to main fails here until this says
-      # --all. TestBuildspec_NamesStacksExplicitly pins it.
       - |
         set -e
         cd infra && cdk deploy --all -c enableBuild=true --require-approval never --outputs-file ../cdk-outputs.json

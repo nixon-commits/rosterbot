@@ -15,6 +15,25 @@
           }
         ],
         "matcher": "Edit|Write"
+      },
+      {
+        "hooks": [
+          {
+            "command": ". ~/.zshenv 2>/dev/null; jq -r '.tool_input.command // empty' | { read -r cmd; ids=$(printf '%s\\n' \"$cmd\" | sed -E 's/^.*bd close[[:space:]]+//' | awk '{out=\"\";for(i=1;i<=NF;i++){if($i ~ /^[a-zA-Z][a-zA-Z0-9]*-[a-zA-Z0-9]+(\\.[0-9]+)?$/){if(out==\"\")out=$i;else out=out\",\"$i}else break}print out}'); if [ -n \"$ids\" ]; then nohup bd -C /Users/jnixon/rosterbot github sync --issues \"$ids\" >>/tmp/bd-github-sync.log 2>&1 & fi; }; exit 0",
+            "if": "Bash(bd close *)",
+            "statusMessage": "Syncing closed bead(s) to GitHub...",
+            "timeout": 15,
+            "type": "command"
+          },
+          {
+            "command": ". ~/.zshenv 2>/dev/null; id=$(tr -d '[:space:]' < /Users/jnixon/rosterbot/.beads/last-touched 2>/dev/null); if [ -n \"$id\" ]; then nohup bd -C /Users/jnixon/rosterbot github sync --issues \"$id\" >>/tmp/bd-github-sync.log 2>&1 & fi; exit 0",
+            "if": "Bash(bd create *)",
+            "statusMessage": "Syncing new bead to GitHub...",
+            "timeout": 15,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
       }
     ],
     "PreCompact": [

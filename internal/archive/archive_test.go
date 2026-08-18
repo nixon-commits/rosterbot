@@ -13,7 +13,7 @@ import (
 
 func TestWriterWritesDatePartition(t *testing.T) {
 	root := t.TempDir()
-	w := Writer{Root: root}
+	w := NewFileWriter(root)
 	date := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
 
 	err := w.Write(date, "hkb", []Artifact{{Filename: "rankings.html", Bytes: []byte("hello")}})
@@ -32,7 +32,7 @@ func TestWriterWritesDatePartition(t *testing.T) {
 
 func TestWriterLastWriteWinsAndNoTempLeft(t *testing.T) {
 	root := t.TempDir()
-	w := Writer{Root: root}
+	w := NewFileWriter(root)
 	date := time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC)
 
 	if err := w.Write(date, "savant", []Artifact{{Filename: "a.csv", Bytes: []byte("v1")}, {Filename: "b.csv", Bytes: []byte("x")}}); err != nil {

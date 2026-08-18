@@ -21,7 +21,7 @@ func TestRunArchiveSourcesIsolatesFailures(t *testing.T) {
 	}}
 	date := time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC)
 
-	err := runArchiveSources(context.Background(), []archive.Source{good, bad}, archive.Writer{Root: root}, date, false)
+	err := runArchiveSources(context.Background(), []archive.Source{good, bad}, archive.NewFileWriter(root), date, false)
 	if err != nil {
 		t.Fatalf("one failure should not fail the command: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestRunArchiveSourcesAllFailedIsError(t *testing.T) {
 	bad := archive.FuncSource{N: "bad", F: func(_ context.Context, _ time.Time) ([]archive.Artifact, error) {
 		return nil, errors.New("boom")
 	}}
-	err := runArchiveSources(context.Background(), []archive.Source{bad}, archive.Writer{Root: t.TempDir()},
+	err := runArchiveSources(context.Background(), []archive.Source{bad}, archive.NewFileWriter(t.TempDir()),
 		time.Now(), false)
 	if err == nil {
 		t.Fatal("all sources failing must return an error")
@@ -46,7 +46,7 @@ func TestRunArchiveSourcesDryRunWritesNothing(t *testing.T) {
 	good := archive.FuncSource{N: "good", F: func(_ context.Context, _ time.Time) ([]archive.Artifact, error) {
 		return []archive.Artifact{{Filename: "ok.json", Bytes: []byte("1")}}, nil
 	}}
-	if err := runArchiveSources(context.Background(), []archive.Source{good}, archive.Writer{Root: root},
+	if err := runArchiveSources(context.Background(), []archive.Source{good}, archive.NewFileWriter(root),
 		time.Now(), true); err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}

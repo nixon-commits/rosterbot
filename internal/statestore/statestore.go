@@ -13,6 +13,10 @@ import (
 	"os"
 
 	"github.com/nixon-commits/rosterbot/internal/analysis"
+	"github.com/nixon-commits/rosterbot/internal/archive"
+	"github.com/nixon-commits/rosterbot/internal/archive/s3archive"
+	"github.com/nixon-commits/rosterbot/internal/backtest"
+	"github.com/nixon-commits/rosterbot/internal/backtest/s3backtest"
 	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/cachestore/s3store"
 	"github.com/nixon-commits/rosterbot/internal/dynasty"
@@ -69,6 +73,8 @@ var (
 	reportsArtifact        = of(layout.Reports)
 	footballTradesArtifact = of(layout.FootballTrades)
 	ilStartsArtifact       = of(layout.ILStarts)
+	archiveArtifact        = of(layout.Archive)
+	backtestArtifact       = of(layout.Backtest)
 )
 
 // Bucket is the single os.Getenv("STATE_BUCKET") read in the codebase. Empty
@@ -196,6 +202,36 @@ func (s *Selector) TeamValueWriter() (teamvalue.Writer, error) {
 			return teamvalue.NewWriter(st), nil
 		},
 		func(dir string) teamvalue.Writer { return teamvalue.NewFileWriter(dir) })
+}
+
+// SnapshotStore returns the Projection Snapshot store. Like the Daily Archive
+// before rosterbot-s25n, this rode cmd/sync.go's bulk directory sync, so every
+// task re-uploaded all ~485 snapshot objects after running and re-downloaded
+// them before running. It is PerTenant, so pick composes the user= segment.
+func (s *Selector) SnapshotStore() (backtest.SnapshotStore, error) {
+	return pick(s, backtestArtifact,
+		func(ctx context.Context, b, p string) (backtest.SnapshotStore, error) {
+			return s3backtest.New(ctx, b, p)
+		},
+		func(dir string) backtest.SnapshotStore { return backtest.NewFileSnapshotStore(dir) })
+}
+
+// ArchiveWriter returns the Daily Archive writer. Unlike the other durable
+// stores this one used to reach S3 through cmd/sync.go's bulk directory sync
+// instead of a typed store, which meant every task downloaded the whole archive
+// tree (679 objects / 877 MB, measured 2026-08-18) before doing any work, and
+// re-uploaded it afterwards. Only cmd/archive.go ever reads or writes it, so it
+// now writes per-partition here like every other artifact (rosterbot-s25n).
+func (s *Selector) ArchiveWriter() (archive.Writer, error) {
+	return pick(s, archiveArtifact,
+		func(ctx context.Context, b, p string) (archive.Writer, error) {
+			st, err := s3archive.New(ctx, b, p)
+			if err != nil {
+				return archive.Writer{}, err
+			}
+			return archive.NewWriter(st), nil
+		},
+		func(dir string) archive.Writer { return archive.NewFileWriter(dir) })
 }
 
 func (s *Selector) TeamValueReader() (teamvalue.Reader, error) {

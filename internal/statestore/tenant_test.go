@@ -48,6 +48,12 @@ func TestPerTenantArtifactsGainTheSegment(t *testing.T) {
 		"runledger": {runLedgerArtifact, "runledger/user=u123/"},
 		"reports":   {reportsArtifact, "reports/user=u123/"},
 		"analysis":  {analysisArtifact, "analysis/grades/user=u123/"},
+		// backtest arrived here in rosterbot-iqso, when projection snapshots
+		// moved off cmd/sync.go's bulk directory sync onto SnapshotStore. The
+		// sync's own test used to assert this scoping; it has to be asserted
+		// somewhere, because the concern it protects against — one tenant's
+		// snapshots grading against another's — did not go away with the sync.
+		"backtest": {backtestArtifact, "backtest/user=u123/"},
 	}
 	for name, c := range cases {
 		if got := s.prefixFor(c.art); got != c.want {

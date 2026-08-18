@@ -44,13 +44,18 @@ type statePair struct {
 // carried the same write timestamp — the un-tenanted copy was being actively
 // maintained, not left behind by the crq.11 backfill.
 //
-// backtest/ is the same mechanism with lower stakes: projection snapshots
-// mixing between tenants rather than a credential.
+// backtest/ was the same mechanism with lower stakes (projection snapshots
+// mixing between tenants rather than a credential). It left this bulk sync in
+// rosterbot-iqso for the reason archive/ did in rosterbot-s25n: every task
+// re-uploaded all ~485 objects and re-downloaded them first. It is still
+// PerTenant — statestore.SnapshotStore composes the same user= segment.
 //
-// claims/ and archive/ are deliberately NOT PerTenant — a league-wide
-// transaction ledger and upstream snapshots identical for everyone — and
-// PrefixFor leaves them alone, so this stays one rule rather than a list of
-// exceptions.
+// claims/ is deliberately NOT PerTenant — a league-wide transaction ledger —
+// and PrefixFor leaves it alone, so this stays one rule rather than a list of
+// exceptions. (archive/ was the other such case until rosterbot-s25n moved it
+// out of this bulk sync entirely; it now writes per-partition through
+// statestore.ArchiveWriter, because only cmd/archive.go ever touches it and
+// every task was paying 877 MB of downloads for a tree it never read.)
 //
 // The LOCAL side keeps its plain directory: a task runs for exactly one tenant,
 // so the container's own filesystem needs no tenant segment, and adding one
@@ -65,8 +70,6 @@ func statePairsFor(tenant string) []statePair {
 	return []statePair{
 		{".fantrax-cache/", layout.Session.PrefixFor(tenant)},
 		{".waivers/", layout.Claims.PrefixFor(tenant)},
-		{".backtest/", layout.Backtest.PrefixFor(tenant)},
-		{".archive/", layout.Archive.PrefixFor(tenant)},
 	}
 }
 
@@ -117,7 +120,7 @@ func runSyncUp(cmd *cobra.Command, args []string) error {
 
 	if bucket := statestore.Bucket(); bucket != "" {
 		for _, p := range syncPairs() {
-			if err := s.Up(ctx, bucket, p.prefix, p.dir, false); err != nil {
+			if err := s.Up(ctx, bucket, p.prefix, p.dir, statesync.UpOptions{}); err != nil {
 				warn("sync-up %s: %v", p.prefix, err)
 			}
 		}
@@ -181,7 +184,7 @@ func publishSite(ctx context.Context, s *statesync.Syncer, dir, bucket, distID, 
 	if _, err := os.Stat(dir); err != nil {
 		return // nothing rendered this run
 	}
-	if err := s.Up(ctx, bucket, prefix, dir, true); err != nil {
+	if err := s.Up(ctx, bucket, prefix, dir, statesync.UpOptions{Delete: true}); err != nil {
 		warn("publish %s: %v", dir, err)
 		return
 	}

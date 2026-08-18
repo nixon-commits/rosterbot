@@ -10,6 +10,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineuprun"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/spf13/cobra"
 )
 
@@ -17,7 +18,8 @@ import (
 // snapshots. Each system gets its own Hive-style partition beneath it
 // (system=<sys>/<date>.json), graded later by `grade` and synced to S3 like
 // the rest of .backtest/.
-const shadowSnapshotRoot = ".backtest/snapshots-systems"
+// Relative to the snapshot store root; see backtestSnapshotDir.
+const shadowSnapshotRoot = "snapshots-systems"
 
 // shadowSystems are the projection systems captured side-by-side for the
 // model-comparison report. In season these are the rest-of-season variants —
@@ -73,6 +75,13 @@ func runShadow(cmd *cobra.Command, args []string) error {
 	state := loadShadowNoDataState(shadowNoDataStateFile)
 	var transitions strings.Builder
 
+	// One store for every system: the per-system split is a partition WITHIN
+	// the store (systemSnapshotDir), not a separate root.
+	snapStore, err := statestore.FromEnv().SnapshotStore()
+	if err != nil {
+		return fmt.Errorf("snapshot store: %w", err)
+	}
+
 	for _, sys := range shadowSystems {
 		if err := projections.SetProjectionSystem(sys); err != nil {
 			return err
@@ -88,6 +97,7 @@ func runShadow(cmd *cobra.Command, args []string) error {
 			NeedsSeasonLookup: needsSeasonLookup,
 			ProjectionSystem:  sys,
 			CheckRoster:       false, // roster-alert noise is irrelevant to a capture run
+			SnapshotStore:     snapStore,
 			SnapshotRoot:      systemSnapshotDir(shadowSnapshotRoot, sys),
 			WriteSnapshots:    true, // capture mode: always write, regardless of dry-run
 			Out:               os.Stdout,

@@ -21,6 +21,7 @@ import (
 type fakeS3 struct {
 	objects      map[string][]byte
 	contentTypes map[string]string
+	puts         int
 }
 
 func (f *fakeS3) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
@@ -31,7 +32,11 @@ func (f *fakeS3) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input, _ .
 	}
 	for k := range f.objects {
 		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
-			contents = append(contents, types.Object{Key: aws.String(k)})
+			// Size is reported because Up's skip decision reads it. A fake that
+			// left it nil would make every remote object compare as size -1,
+			// so a skip test would "pass" while never once skipping — the same
+			// failure shape as a fake that rubber-stamps conditional writes.
+			contents = append(contents, types.Object{Key: aws.String(k), Size: aws.Int64(int64(len(f.objects[k])))})
 		}
 	}
 	return &s3.ListObjectsV2Output{Contents: contents}, nil
@@ -44,6 +49,7 @@ func (f *fakeS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*
 	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(b))}, nil
 }
 func (f *fakeS3) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	f.puts++
 	b, _ := io.ReadAll(in.Body)
 	f.objects[*in.Key] = b
 	if f.contentTypes == nil {
@@ -100,7 +106,7 @@ func TestUp_WithDelete_RemovesOnlyOrphansUnderPrefix(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("new"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Up(context.Background(), "b", "dist/", dir, true); err != nil {
+	if err := s.Up(context.Background(), "b", "dist/", dir, UpOptions{Delete: true}); err != nil {
 		t.Fatal(err)
 	}
 	got := keys(f.objects)
@@ -117,7 +123,7 @@ func TestUp_NoDelete_LeavesRemoteUntouched(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "new.json"), []byte("n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Up(context.Background(), "b", "backtest/", dir, false); err != nil {
+	if err := s.Up(context.Background(), "b", "backtest/", dir, UpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := f.objects["backtest/old.json"]; !ok {
@@ -135,7 +141,7 @@ func TestUp_SetsContentTypeFromExtension(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<h1>x</h1>"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Up(context.Background(), "b", "", dir, false); err != nil {
+	if err := s.Up(context.Background(), "b", "", dir, UpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	ct := f.contentTypes["index.html"]
@@ -159,7 +165,7 @@ func TestDown_RejectsPathEscape(t *testing.T) {
 func TestUp_MissingLocalDirIsNoop(t *testing.T) {
 	f := &fakeS3{objects: map[string][]byte{}}
 	s := &Syncer{s3: f}
-	if err := s.Up(context.Background(), "b", "session/", filepath.Join(t.TempDir(), "absent"), true); err != nil {
+	if err := s.Up(context.Background(), "b", "session/", filepath.Join(t.TempDir(), "absent"), UpOptions{Delete: true}); err != nil {
 		t.Fatalf("missing dir should be a no-op, got %v", err)
 	}
 }
@@ -228,5 +234,38 @@ func TestDown_EmptyPrefixStillCreatesTheLocalDir(t *testing.T) {
 	if err != nil || !st.IsDir() {
 		t.Fatalf("local dir not created for an empty prefix (stat: %v) — the next "+
 			"writer into it fails ENOENT and a tester's first connect misclassifies", err)
+	}
+}
+
+// Up must never skip on size. session/.fantrax_cookie_cache.json is
+// fixed-layout, so a refreshed cookie is very likely byte-length-identical to
+// the stale one it replaces; skipping it would pin every tenant to a dead
+// cookie and force a chromedp login on every task. A size-only skip lived here
+// briefly for the archive tree and was removed with it (rosterbot-s25n) — this
+// test is what stops it coming back for the trees that remain.
+func TestUp_AlwaysRewritesEvenAnIdenticallySizedFile(t *testing.T) {
+	f := &fakeS3{objects: map[string][]byte{"session/.fantrax_cookie_cache.json": []byte("STALE-COOKIE")}}
+	s := &Syncer{s3: f}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".fantrax_cookie_cache.json"), "FRESH-COOKIE") // same length
+
+	if err := s.Up(context.Background(), "b", "session/", dir, UpOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(f.objects["session/.fantrax_cookie_cache.json"]); got != "FRESH-COOKIE" {
+		t.Fatalf("a refreshed same-size cookie must still upload, remote holds %q", got)
+	}
+}
+
+// writeFile writes body to path, creating parent directories. The nested form
+// matters: archive/ keys carry a dt= partition segment, so a helper that could
+// only write flat files would not exercise the key mapping the skip compares.
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

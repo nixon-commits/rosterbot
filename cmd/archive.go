@@ -10,6 +10,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/prospects"
 	"github.com/nixon-commits/rosterbot/internal/statcast"
+	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/spf13/cobra"
 )
 
@@ -43,7 +44,17 @@ func runArchive(cmd *cobra.Command, args []string) error {
 		archive.FuncSource{N: "savant", F: statcast.ArchiveArtifacts},
 		archive.FuncSource{N: "prospects", F: prospects.ArchiveArtifacts},
 	}
-	return runArchiveSources(context.Background(), sources, archive.Writer{Root: ".archive"}, date, archiveDryRun)
+	// Dry-run must not need a store: it only fetches and reports sizes, and the
+	// S3 constructor would otherwise demand credentials to do nothing.
+	var w archive.Writer
+	if !archiveDryRun {
+		var err error
+		w, err = statestore.FromEnv().ArchiveWriter()
+		if err != nil {
+			return fmt.Errorf("archive store: %w", err)
+		}
+	}
+	return runArchiveSources(context.Background(), sources, w, date, archiveDryRun)
 }
 
 // runArchiveSources runs each source independently. A single source failure is

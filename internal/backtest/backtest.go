@@ -521,10 +521,10 @@ func (s *hindsightPitcherSource) GetPitcherPtsPerGame(name, _ string, _ fantrax.
 // For each date, it first checks snapshotDir/<YYYY-MM-DD>.json. Rows found
 // there use "snapshot" as their source. Otherwise, the player is skipped
 // (reconstruction is implemented as a separate path; see LoadSnapshot).
-func RunProjectionAnalysis(days []fantrax.DayRoster, snapshotDir string) []ProjectionDayResult {
+func RunProjectionAnalysis(days []fantrax.DayRoster, st SnapshotStore, snapshotDir string) []ProjectionDayResult {
 	results := make([]ProjectionDayResult, 0, len(days))
 	for _, day := range days {
-		snap, snapOK := LoadSnapshot(snapshotDir, day.Date)
+		snap, snapOK := LoadSnapshot(st, snapshotDir, day.Date)
 		if !snapOK {
 			results = append(results, ProjectionDayResult{
 				Date:   day.Date,
@@ -695,13 +695,63 @@ func sameETDate(t, date time.Time) bool {
 	return ty == dy && tm == dm && td == dd
 }
 
-// LoadSnapshot reads a snapshot JSON from snapshotDir for the given date.
-// Returns (snapshot, true) on success or (_, false) if the file is missing
-// or malformed.
-func LoadSnapshot(dir string, date time.Time) (Snapshot, bool) {
-	path := filepath.Join(dir, date.Format("2006-01-02")+".json")
-	data, err := os.ReadFile(path)
+// SnapshotStore is the byte-level seam under the snapshot read/write path,
+// mirroring cache.Store: Get reports absence as (nil, false, nil) because a
+// missing snapshot is an ordinary outcome here, not an error — a day the
+// producer never ran is exactly what the "missing" grading source represents.
+//
+// It exists so projection snapshots reach S3 through a typed store like every
+// other durable artifact, instead of through cmd/sync.go's bulk directory sync,
+// which re-uploaded all ~485 objects after every task and re-downloaded them
+// before every task (rosterbot-iqso, following rosterbot-s25n for archive/).
+type SnapshotStore interface {
+	Get(key string) ([]byte, bool, error)
+	Put(key string, b []byte) error
+}
+
+// SnapshotKey is the single place the snapshot key layout is built. dir is
+// relative to the store root ("snapshots", or "snapshots-systems/system=<sys>"
+// for a shadow capture), and is slash-separated because it is an S3 key
+// prefix; FileSnapshotStore converts.
+func SnapshotKey(dir, date string) string {
+	if dir == "" {
+		return date + ".json"
+	}
+	return dir + "/" + date + ".json"
+}
+
+// FileSnapshotStore reads and writes snapshots under Root on local disk.
+type FileSnapshotStore struct{ Root string }
+
+// NewFileSnapshotStore returns a SnapshotStore rooted at dir.
+func NewFileSnapshotStore(dir string) *FileSnapshotStore { return &FileSnapshotStore{Root: dir} }
+
+func (f *FileSnapshotStore) Get(key string) ([]byte, bool, error) {
+	b, err := os.ReadFile(filepath.Join(f.Root, filepath.FromSlash(key)))
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
 	if err != nil {
+		return nil, false, err
+	}
+	return b, true, nil
+}
+
+func (f *FileSnapshotStore) Put(key string, b []byte) error {
+	full := filepath.Join(f.Root, filepath.FromSlash(key))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(full, b, 0o644)
+}
+
+// LoadSnapshot reads the snapshot for date under dir. Returns (snapshot, true)
+// on success or (_, false) if it is absent, unreadable or malformed — every
+// caller treats all three the same way (the day is simply not graded), so they
+// are deliberately not distinguished.
+func LoadSnapshot(st SnapshotStore, dir string, date time.Time) (Snapshot, bool) {
+	data, found, err := st.Get(SnapshotKey(dir, date.Format("2006-01-02")))
+	if err != nil || !found {
 		return Snapshot{}, false
 	}
 	var s Snapshot
@@ -711,17 +761,13 @@ func LoadSnapshot(dir string, date time.Time) (Snapshot, bool) {
 	return s, true
 }
 
-// WriteSnapshot serializes a snapshot to snapshotDir/<YYYY-MM-DD>.json.
-func WriteSnapshot(dir string, s Snapshot) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	path := filepath.Join(dir, s.Date+".json")
+// WriteSnapshot serializes a snapshot to dir/<YYYY-MM-DD>.json in the store.
+func WriteSnapshot(st SnapshotStore, dir string, s Snapshot) error {
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	return st.Put(SnapshotKey(dir, s.Date), b)
 }
 
 // BuildReport assembles a Report from lineup + projection results.

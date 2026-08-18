@@ -80,7 +80,11 @@ func (s *Syncer) Down(ctx context.Context, bucket, prefix, localDir string) erro
 	if err != nil {
 		return err
 	}
-	for _, key := range keys {
+	// Ranging the map's keys: list now reports sizes too, which Down has no use
+	// for. Iteration order is therefore random, which is fine here — each key
+	// writes an independent file — but it is why nothing below may depend on
+	// encounter order.
+	for key := range keys {
 		rel := strings.TrimPrefix(key, prefix)
 		if rel == "" || strings.HasSuffix(rel, "/") {
 			continue // the prefix "folder" placeholder, nothing to write
@@ -102,11 +106,30 @@ func (s *Syncer) Down(ctx context.Context, bucket, prefix, localDir string) erro
 	return nil
 }
 
+// UpOptions carries the behaviour that differs between Up's call sites. It is a
+// struct rather than a positional bool because `Up(ctx, b, p, d, true)` says
+// nothing at the call site about which knob is which.
+type UpOptions struct {
+	// Delete removes remote objects under prefix that no longer have a local
+	// counterpart, matching `aws s3 sync --delete`.
+	Delete bool
+}
+
 // Up uploads every file under localDir to bucket/prefix, mapping each file's
-// path (relative to localDir) onto the key. When del is true it then removes
-// remote objects under prefix that no longer have a local counterpart, matching
-// `aws s3 sync --delete`. A non-existent localDir is a no-op.
-func (s *Syncer) Up(ctx context.Context, bucket, prefix, localDir string, del bool) error {
+// path (relative to localDir) onto the key. A non-existent localDir is a no-op.
+//
+// It uploads unconditionally, and that is a deliberate choice rather than an
+// oversight. A size-only skip lived here briefly for the archive tree
+// (rosterbot-s25n moved that tree out of this sync altogether), and reinstating
+// one for the trees that remain would be unsafe: session/.fantrax_cookie_cache
+// is fixed-layout JSON holding a fixed-length token and an ISO timestamp — the
+// live tenant copies are all 3947 bytes — so a REFRESHED cookie almost
+// certainly matches the stale one's size, and skipping it would pin every
+// tenant to a dead cookie and force a chromedp login every run. The claims
+// cursor has the same shape. The remaining trees are small; the right fix for
+// their request volume is a typed per-key store, the way archive/ went, not a
+// heuristic that cannot see a same-length content change.
+func (s *Syncer) Up(ctx context.Context, bucket, prefix, localDir string, opts UpOptions) error {
 	if _, err := os.Stat(localDir); os.IsNotExist(err) {
 		return nil
 	}
@@ -133,7 +156,7 @@ func (s *Syncer) Up(ctx context.Context, bucket, prefix, localDir string, del bo
 	if err != nil {
 		return err
 	}
-	if !del {
+	if !opts.Delete {
 		return nil
 	}
 	return s.deleteOrphans(ctx, bucket, prefix, uploaded)
@@ -148,7 +171,7 @@ func (s *Syncer) deleteOrphans(ctx context.Context, bucket, prefix string, keep 
 	if err != nil {
 		return err
 	}
-	for _, key := range remote {
+	for key := range remote {
 		if keep[key] {
 			continue
 		}
@@ -177,9 +200,13 @@ func (s *Syncer) Invalidate(ctx context.Context, distID string) error {
 	return err
 }
 
-// list returns every object key under bucket/prefix, paginating as needed.
-func (s *Syncer) list(ctx context.Context, bucket, prefix string) ([]string, error) {
-	var keys []string
+// list returns every object key under bucket/prefix mapped to its size,
+// paginating as needed. Size rides along because Up's skip decision needs it
+// and a second listing to fetch it would cost exactly what the skip saves; a
+// nil Size (which the API models as optional) is reported as -1 so it can never
+// compare equal to a real file length and accidentally suppress an upload.
+func (s *Syncer) list(ctx context.Context, bucket, prefix string) (map[string]int64, error) {
+	sizes := map[string]int64{}
 	var token *string
 	for {
 		out, err := s.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
@@ -189,16 +216,21 @@ func (s *Syncer) list(ctx context.Context, bucket, prefix string) ([]string, err
 			return nil, err
 		}
 		for _, o := range out.Contents {
-			if o.Key != nil {
-				keys = append(keys, *o.Key)
+			if o.Key == nil {
+				continue
 			}
+			if o.Size == nil {
+				sizes[*o.Key] = -1
+				continue
+			}
+			sizes[*o.Key] = *o.Size
 		}
 		if out.IsTruncated == nil || !*out.IsTruncated {
 			break
 		}
 		token = out.NextContinuationToken
 	}
-	return keys, nil
+	return sizes, nil
 }
 
 func (s *Syncer) download(ctx context.Context, bucket, key, dst string) error {

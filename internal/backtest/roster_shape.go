@@ -169,11 +169,11 @@ type RosterShape struct {
 // hitterSlots and pitcherSlots are carried through for rendering only — they
 // are never divided by. Normalizing by slot count is exactly the reduction this
 // measure exists to avoid (see SideShape.FieldedRate).
-func SummarizeRosterShape(dir string, dates []time.Time, hitterSlots, pitcherSlots int) RosterShape {
+func SummarizeRosterShape(st SnapshotStore, dir string, dates []time.Time, hitterSlots, pitcherSlots int) RosterShape {
 	s := RosterShape{Days: len(dates), HitterSlots: hitterSlots, PitcherSlots: pitcherSlots}
 
 	for _, d := range dates {
-		snap, ok := LoadSnapshot(dir, d)
+		snap, ok := LoadSnapshot(st, dir, d)
 		if !ok {
 			continue
 		}
