@@ -40,15 +40,36 @@ func (s FuncSource) Fetch(ctx context.Context, date time.Time) ([]Artifact, erro
 	return s.F(ctx, date)
 }
 
-// Writer lays artifacts down under Root/<source>/dt=YYYY-MM-DD/<filename>.
-type Writer struct{ Root string }
+// Store is the byte-level seam under Writer, mirroring cache.Store and
+// ndjsonstore.Store. The unit is the PARTITION, not the key, and that is
+// load-bearing: FileStore's guarantee below is all-or-nothing across a whole
+// day's artifacts, and a key-at-a-time interface would have quietly discarded
+// it on the way to supporting S3.
+type Store interface {
+	// WritePartition writes every artifact under dir (slash-separated, e.g.
+	// "hkb/dt=2026-08-18"), replacing whatever was there.
+	WritePartition(dir string, arts []Artifact) error
+}
 
-// Write is atomic per (source, date): it stages artifacts in a sibling temp dir,
-// then swaps it into place, so a partial fetch never lands as a complete
-// partition. Re-writing a date fully replaces that day's blobs (last-write-wins).
-func (w Writer) Write(date time.Time, source string, arts []Artifact) error {
-	dir := filepath.Join(w.Root, source, "dt="+date.UTC().Format("2006-01-02"))
-	tmp := dir + ".tmp"
+// PartitionDir is the single place the layout <source>/dt=YYYY-MM-DD is built.
+// Slash-separated because it is an S3 key prefix; FileStore converts.
+func PartitionDir(source string, date time.Time) string {
+	return source + "/dt=" + date.UTC().Format("2006-01-02")
+}
+
+// FileStore writes partitions under Root on the local filesystem.
+type FileStore struct{ Root string }
+
+// NewFileStore returns a Store rooted at dir.
+func NewFileStore(dir string) *FileStore { return &FileStore{Root: dir} }
+
+// WritePartition is atomic: it stages artifacts in a sibling temp dir, then
+// swaps it into place, so a crash mid-write never leaves a partition that looks
+// complete. Re-writing a date fully replaces that day's blobs
+// (last-write-wins), including removing files the new set no longer has.
+func (f *FileStore) WritePartition(dir string, arts []Artifact) error {
+	full := filepath.Join(f.Root, filepath.FromSlash(dir))
+	tmp := full + ".tmp"
 	if err := os.RemoveAll(tmp); err != nil {
 		return err
 	}
@@ -60,10 +81,22 @@ func (w Writer) Write(date time.Time, source string, arts []Artifact) error {
 			return err
 		}
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	if err := os.RemoveAll(full); err != nil {
 		return err
 	}
-	return os.Rename(tmp, dir)
+	return os.Rename(tmp, full)
+}
+
+// Writer resolves (source, date) to a partition and hands it to a Store.
+type Writer struct{ Store Store }
+
+// NewWriter wraps any Store; NewFileWriter is the local-filesystem shorthand.
+func NewWriter(s Store) Writer        { return Writer{Store: s} }
+func NewFileWriter(dir string) Writer { return Writer{Store: NewFileStore(dir)} }
+
+// Write persists one source's artifacts for one capture date.
+func (w Writer) Write(date time.Time, source string, arts []Artifact) error {
+	return w.Store.WritePartition(PartitionDir(source, date), arts)
 }
 
 // archiveHTTPClient is the shared client for raw archival fetches. Timeout is

@@ -95,7 +95,10 @@ func TestStatePairsFor_MatchesTheLayoutDeclaration(t *testing.T) {
 		".fantrax-cache/": layout.Session.PrefixFor(tenant),
 		".waivers/":       layout.Claims.PrefixFor(tenant),
 		".backtest/":      layout.Backtest.PrefixFor(tenant),
-		".archive/":       layout.Archive.PrefixFor(tenant),
+		// No ".archive/": rosterbot-s25n took the Daily Archive out of this bulk
+		// sync and gave it a typed per-partition store, because every task was
+		// downloading the whole 877 MB tree at startup for a directory only
+		// cmd/archive.go ever touches. Its absence here is the assertion.
 	}
 	pairs := statePairsFor(tenant)
 	if len(pairs) != len(want) {

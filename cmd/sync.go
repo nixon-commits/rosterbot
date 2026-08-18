@@ -23,14 +23,6 @@ import (
 type statePair struct {
 	dir    string
 	prefix string
-	// immutable marks a tree whose objects never change once written, which is
-	// what makes statesync's size-only skip safe to turn on for it. Anything
-	// rewritten in place must leave this false: the skip cannot see a content
-	// change that preserves length, and .fantrax-cache/ (a fixed-layout cookie
-	// JSON) and .waivers/ (a fixed-shape timestamp cursor) are both exactly
-	// that shape — skipping them would pin the bot to a stale session cookie
-	// and force a chromedp login every run. See statesync.Up.
-	immutable bool
 }
 
 // statePairsFor returns the bulk dir<->prefix mappings under STATE_BUCKET for
@@ -55,10 +47,12 @@ type statePair struct {
 // backtest/ is the same mechanism with lower stakes: projection snapshots
 // mixing between tenants rather than a credential.
 //
-// claims/ and archive/ are deliberately NOT PerTenant — a league-wide
-// transaction ledger and upstream snapshots identical for everyone — and
-// PrefixFor leaves them alone, so this stays one rule rather than a list of
-// exceptions.
+// claims/ is deliberately NOT PerTenant — a league-wide transaction ledger —
+// and PrefixFor leaves it alone, so this stays one rule rather than a list of
+// exceptions. (archive/ was the other such case until rosterbot-s25n moved it
+// out of this bulk sync entirely; it now writes per-partition through
+// statestore.ArchiveWriter, because only cmd/archive.go ever touches it and
+// every task was paying 877 MB of downloads for a tree it never read.)
 //
 // The LOCAL side keeps its plain directory: a task runs for exactly one tenant,
 // so the container's own filesystem needs no tenant segment, and adding one
@@ -71,14 +65,9 @@ func syncPairs() []statePair { return statePairsFor(statestore.Tenant()) }
 
 func statePairsFor(tenant string) []statePair {
 	return []statePair{
-		{".fantrax-cache/", layout.Session.PrefixFor(tenant), false},
-		{".waivers/", layout.Claims.PrefixFor(tenant), false},
-		{".backtest/", layout.Backtest.PrefixFor(tenant), false},
-		// The only immutable tree here, and the reason the skip exists:
-		// archive/ is append-only daily snapshots (docs say "keep-forever"),
-		// and re-uploading it after every task had grown it to 635 GB of
-		// noncurrent versions against 877 MB of live data.
-		{".archive/", layout.Archive.PrefixFor(tenant), true},
+		{".fantrax-cache/", layout.Session.PrefixFor(tenant)},
+		{".waivers/", layout.Claims.PrefixFor(tenant)},
+		{".backtest/", layout.Backtest.PrefixFor(tenant)},
 	}
 }
 
@@ -129,7 +118,7 @@ func runSyncUp(cmd *cobra.Command, args []string) error {
 
 	if bucket := statestore.Bucket(); bucket != "" {
 		for _, p := range syncPairs() {
-			if err := s.Up(ctx, bucket, p.prefix, p.dir, statesync.UpOptions{SkipUnchanged: p.immutable}); err != nil {
+			if err := s.Up(ctx, bucket, p.prefix, p.dir, statesync.UpOptions{}); err != nil {
 				warn("sync-up %s: %v", p.prefix, err)
 			}
 		}

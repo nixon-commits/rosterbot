@@ -237,55 +237,13 @@ func TestDown_EmptyPrefixStillCreatesTheLocalDir(t *testing.T) {
 	}
 }
 
-// The regression that motivated SkipUnchanged: without it, Up re-PUT every file
-// on every call, and entrypoint.sh calls sync_up after every task.
-func TestUp_SkipUnchanged_DoesNotRewriteAFileAlreadyPresentAtTheSameSize(t *testing.T) {
-	f := &fakeS3{objects: map[string][]byte{"archive/hkb/dt=2026-07-02/rankings.html": []byte("same-bytes")}}
-	s := &Syncer{s3: f}
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "hkb/dt=2026-07-02/rankings.html"), "same-bytes")
-
-	f.puts = 0
-	if err := s.Up(context.Background(), "b", "archive/", dir, UpOptions{SkipUnchanged: true}); err != nil {
-		t.Fatal(err)
-	}
-	if f.puts != 0 {
-		t.Fatalf("expected the unchanged file to be skipped, got %d PutObject calls", f.puts)
-	}
-}
-
-func TestUp_SkipUnchanged_StillUploadsWhenTheSizeDiffers(t *testing.T) {
-	f := &fakeS3{objects: map[string][]byte{"archive/a.json": []byte("old")}}
-	s := &Syncer{s3: f}
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "a.json"), "a-longer-body")
-
-	if err := s.Up(context.Background(), "b", "archive/", dir, UpOptions{SkipUnchanged: true}); err != nil {
-		t.Fatal(err)
-	}
-	if got := string(f.objects["archive/a.json"]); got != "a-longer-body" {
-		t.Fatalf("expected the changed file to be uploaded, remote holds %q", got)
-	}
-}
-
-func TestUp_SkipUnchanged_UploadsAKeyThatDoesNotExistRemotely(t *testing.T) {
-	f := &fakeS3{objects: map[string][]byte{}}
-	s := &Syncer{s3: f}
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "new.json"), "fresh")
-
-	if err := s.Up(context.Background(), "b", "archive/", dir, UpOptions{SkipUnchanged: true}); err != nil {
-		t.Fatal(err)
-	}
-	if got := string(f.objects["archive/new.json"]); got != "fresh" {
-		t.Fatalf("expected a new key to be uploaded, remote holds %q", got)
-	}
-}
-
-// Off by default, because the comparison is size-only and cannot see a content
-// change that preserves length — which is exactly the shape of the session
-// cookie and the claims cursor.
-func TestUp_WithoutSkipUnchanged_RewritesEvenAnIdenticallySizedFile(t *testing.T) {
+// Up must never skip on size. session/.fantrax_cookie_cache.json is
+// fixed-layout, so a refreshed cookie is very likely byte-length-identical to
+// the stale one it replaces; skipping it would pin every tenant to a dead
+// cookie and force a chromedp login on every task. A size-only skip lived here
+// briefly for the archive tree and was removed with it (rosterbot-s25n) — this
+// test is what stops it coming back for the trees that remain.
+func TestUp_AlwaysRewritesEvenAnIdenticallySizedFile(t *testing.T) {
 	f := &fakeS3{objects: map[string][]byte{"session/.fantrax_cookie_cache.json": []byte("STALE-COOKIE")}}
 	s := &Syncer{s3: f}
 	dir := t.TempDir()
@@ -296,28 +254,6 @@ func TestUp_WithoutSkipUnchanged_RewritesEvenAnIdenticallySizedFile(t *testing.T
 	}
 	if got := string(f.objects["session/.fantrax_cookie_cache.json"]); got != "FRESH-COOKIE" {
 		t.Fatalf("a refreshed same-size cookie must still upload, remote holds %q", got)
-	}
-}
-
-// A skipped file is still "ours" — if it fell out of the keep-set, --delete
-// would reap the very files the skip just decided were already correct.
-func TestUp_SkippedKeysAreNotTreatedAsOrphansByDelete(t *testing.T) {
-	f := &fakeS3{objects: map[string][]byte{
-		"archive/keep.json":  []byte("same"),
-		"archive/stale.json": []byte("gone"),
-	}}
-	s := &Syncer{s3: f}
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "keep.json"), "same")
-
-	if err := s.Up(context.Background(), "b", "archive/", dir, UpOptions{Delete: true, SkipUnchanged: true}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := f.objects["archive/keep.json"]; !ok {
-		t.Fatal("the skipped file was deleted as an orphan")
-	}
-	if _, ok := f.objects["archive/stale.json"]; ok {
-		t.Fatal("the genuine orphan survived")
 	}
 }
 

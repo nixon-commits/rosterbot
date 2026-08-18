@@ -106,73 +106,34 @@ func (s *Syncer) Down(ctx context.Context, bucket, prefix, localDir string) erro
 	return nil
 }
 
-// UpOptions carries the two behaviours that differ between Up's call sites.
-// They are a struct rather than positional bools because `Up(ctx, b, p, d,
-// false, true)` says nothing at the call site about which knob is which.
+// UpOptions carries the behaviour that differs between Up's call sites. It is a
+// struct rather than a positional bool because `Up(ctx, b, p, d, true)` says
+// nothing at the call site about which knob is which.
 type UpOptions struct {
 	// Delete removes remote objects under prefix that no longer have a local
 	// counterpart, matching `aws s3 sync --delete`.
 	Delete bool
-	// SkipUnchanged suppresses the upload of any file whose size already
-	// matches the remote object's. See Up's comment for why this is opt-in
-	// per call site rather than the default.
-	SkipUnchanged bool
 }
 
-// Up uploads files under localDir to bucket/prefix, mapping each file's path
-// (relative to localDir) onto the key. A non-existent localDir is a no-op.
+// Up uploads every file under localDir to bucket/prefix, mapping each file's
+// path (relative to localDir) onto the key. A non-existent localDir is a no-op.
 //
-// This used to upload EVERY file unconditionally, which the doc comment
-// described as "matching `aws s3 sync --delete`" — but aws s3 sync skips files
-// it judges unchanged, and that half of the semantics was lost when
-// internal/statesync replaced awscli (to drop ~120MB of python from the image).
-// The result: entrypoint.sh runs sync_up after every task, so every task
-// rewrote every file in every synced tree. With bucket versioning on and a
-// NoncurrentVersionExpiration rule that covered only cache/, the archive/
-// prefix reached 486,877 versions / 635 GB against 679 live objects / 877 MB
-// (measured 2026-08-18). One immutable July 2 snapshot,
-// archive/hkb/dt=2026-07-02/rankings.html, held 1,363 versions occupying
-// 3.21 GB and was still being rewritten six weeks later.
-//
-// SkipUnchanged is OPT-IN PER CALL SITE, and that is the load-bearing part.
-// The comparison is size-only — no checksum — so it cannot see a content change
-// that preserves length, and two of the four synced trees are full of exactly
-// that shape. session/.fantrax_cookie_cache.json is a fixed-layout JSON holding
-// a fixed-length session token and an ISO timestamp: three of the four live
-// tenant copies are byte-identical in length (3947, 3947, 3947), so a REFRESHED
-// cookie almost certainly serialises to the same size as the stale one it
-// replaces. Skipping it would pin every tenant to a dead cookie and silently
-// force a chromedp browser login on every task — a worse failure than the cost
-// it saves, and an invisible one. The claims cursor (.waivers/last-claims.json,
-// a fixed-shape timestamp) has the same hazard.
-//
-// So callers enable this only for trees whose objects are immutable once
-// written. Today that is .archive/ alone, which is also ~635 of the 636 GB, so
-// the narrow scope costs nothing measurable: the remaining trees total under
-// 1 MB and re-uploading them each run is ~60 PUTs.
+// It uploads unconditionally, and that is a deliberate choice rather than an
+// oversight. A size-only skip lived here briefly for the archive tree
+// (rosterbot-s25n moved that tree out of this sync altogether), and reinstating
+// one for the trees that remain would be unsafe: session/.fantrax_cookie_cache
+// is fixed-layout JSON holding a fixed-length token and an ISO timestamp — the
+// live tenant copies are all 3947 bytes — so a REFRESHED cookie almost
+// certainly matches the stale one's size, and skipping it would pin every
+// tenant to a dead cookie and force a chromedp login every run. The claims
+// cursor has the same shape. The remaining trees are small; the right fix for
+// their request volume is a typed per-key store, the way archive/ went, not a
+// heuristic that cannot see a same-length content change.
 func (s *Syncer) Up(ctx context.Context, bucket, prefix, localDir string, opts UpOptions) error {
 	if _, err := os.Stat(localDir); os.IsNotExist(err) {
 		return nil
 	}
-	// One listing up front, reused for every skip decision — the alternative is
-	// a HeadObject per file, which trades the PUTs we are removing for an equal
-	// number of HEADs. Populated only when skipping is on, so the non-skipping
-	// call sites pay nothing. A listing failure is not fatal: it degrades to
-	// uploading everything, which is exactly the old behaviour, because being
-	// slow and correct beats silently not uploading a changed file.
-	var remoteSize map[string]int64
-	if opts.SkipUnchanged {
-		sizes, err := s.list(ctx, bucket, prefix)
-		if err != nil {
-			remoteSize = nil
-		} else {
-			remoteSize = sizes
-		}
-	}
-	// uploaded holds every key that should exist remotely after this call —
-	// both the ones written and the ones skipped as already-current. Skipped
-	// keys MUST be in here: it is the keep-set for --delete reconciliation, and
-	// omitting them would make a skipped file look like an orphan and delete it.
+	// uploaded holds the set of keys we just wrote, used for --delete reconciliation.
 	uploaded := map[string]bool{}
 	err := filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -186,13 +147,10 @@ func (s *Syncer) Up(ctx context.Context, bucket, prefix, localDir string, opts U
 			return err
 		}
 		key := prefix + filepath.ToSlash(rel)
-		uploaded[key] = true
-		if sz, ok := remoteSize[key]; ok && sz == info.Size() {
-			return nil
-		}
 		if err := s.upload(ctx, bucket, key, path); err != nil {
 			return fmt.Errorf("upload %s: %w", path, err)
 		}
+		uploaded[key] = true
 		return nil
 	})
 	if err != nil {
