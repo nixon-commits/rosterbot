@@ -367,8 +367,13 @@ func (st *Store) DeleteCredential(ctx context.Context, id lineupapi.UserID, cred
 	}); err != nil {
 		return err
 	}
-	_, err := st.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	if _, err := st.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(st.table), Key: st.key(userPK(id), credSK(credID)),
+	}); err != nil {
+		return err
+	}
+	_, err := st.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(st.table), Key: st.key(userPK(id), credMetaSK(credID)),
 	})
 	return err
 }
@@ -388,6 +393,60 @@ func (st *Store) UserByCredential(ctx context.Context, credID []byte) (lineupapi
 		return "", false, fmt.Errorf("ddbuser: credential index item for %s has no uid", b64(credID))
 	}
 	return lineupapi.UserID(uid.Value), true, nil
+}
+
+// credMetaSK is the sort key for one passkey's user-facing meta (name,
+// created-at). It sits in the USER# item collection so DeleteUser's pk sweep
+// removes it for free, under its OWN key so a rename and the login ceremony's
+// sign-counter overwrite cannot contend — and its prefix must never satisfy
+// begins_with(sk, "CRED#"), or the credential listing would try to unmarshal
+// meta rows as webauthn.Credentials. "CREDMETA#" does not: its fifth byte is
+// 'M' where the credential prefix has '#'.
+func credMetaSK(credID []byte) string { return "CREDMETA#" + b64(credID) }
+
+const credMetaPrefix = "CREDMETA#"
+
+func (st *Store) PutCredentialMeta(ctx context.Context, id lineupapi.UserID, credID []byte, meta lineupapi.CredentialMeta) error {
+	item, err := attributevalue.MarshalMap(meta)
+	if err != nil {
+		return err
+	}
+	item["pk"] = s(userPK(id))
+	item["sk"] = s(credMetaSK(credID))
+	_, err = st.api.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(st.table), Item: item,
+	})
+	return err
+}
+
+func (st *Store) CredentialMetas(ctx context.Context, id lineupapi.UserID) (map[string]lineupapi.CredentialMeta, error) {
+	out := map[string]lineupapi.CredentialMeta{}
+	var start map[string]types.AttributeValue
+	for {
+		res, err := st.api.Query(ctx, &dynamodb.QueryInput{
+			TableName:              aws.String(st.table),
+			KeyConditionExpression: aws.String("pk = :pk AND begins_with(sk, :sk)"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":pk": s(userPK(id)), ":sk": s(credMetaPrefix),
+			},
+			ExclusiveStartKey: start,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range res.Items {
+			var m lineupapi.CredentialMeta
+			if err := attributevalue.UnmarshalMap(item, &m); err != nil {
+				return nil, err
+			}
+			out[strings.TrimPrefix(strAttr(item["sk"]), credMetaPrefix)] = m
+		}
+		if len(res.LastEvaluatedKey) == 0 {
+			break
+		}
+		start = res.LastEvaluatedKey
+	}
+	return out, nil
 }
 
 // DeleteUser sweeps the whole USER# item collection (profile, FANTRAX

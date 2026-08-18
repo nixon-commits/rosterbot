@@ -80,6 +80,8 @@ export const api = {
     request("POST", "/v1/auth/register/finish",
       enrollToken ? { ...attestation, token: enrollToken } : attestation),
   authPasskeys: () => request("GET", "/v1/auth/passkeys"),
+  authRenamePasskey: (id, name) =>
+    request("POST", `/v1/auth/passkeys/${encodeURIComponent(id)}/name`, { name }),
   authRevokePasskey: (id) => request("DELETE", `/v1/auth/passkeys/${encodeURIComponent(id)}`),
   authLogout: () => request("POST", "/v1/auth/logout"),
 

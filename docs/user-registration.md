@@ -6,12 +6,10 @@ Passkeys are the only login method. There is no password to set, no password to
 reset, and no email verification — which means the whole flow is: an admin mints
 a link, hands it over, and the person enrolls a passkey with it.
 
-> **Status.** Registration and login are live in production. What is *not* built
-> yet is the rest of the tenancy: every account currently reads the same lineup,
-> runs and trades, because the S3 state is not partitioned per user
-> (rosterbot-crq.11), and there is no way for a user to connect their own
-> Fantrax account (rosterbot-crq.12). Onboarding someone today gives them a
-> login, not their own bot.
+> **Status.** The full tenancy is live in production: per-user state
+> (rosterbot-crq.11), self-serve Fantrax connect (rosterbot-crq.12), per-tenant
+> job fan-out, and the admin Tenants tab. Onboarding someone gives them their
+> own bot, propose-only until they enable writes.
 
 ## The model
 
@@ -119,8 +117,10 @@ accounts exist.
 
 ## Adding a second device
 
-A logged-in user can enroll another passkey from the **Passkeys** tab. No invite
-link is needed; the existing session authorizes it.
+A logged-in user can enroll another passkey from the **Passkeys** section of
+the Settings page — where each passkey can also be named ("Jon's phone") and
+shows its registration date. No invite link is needed; the existing session
+authorizes it.
 
 This is worth encouraging at onboarding. A user with two devices has a recovery
 path that does not involve you.
@@ -134,7 +134,7 @@ on the user's row, `POST /v1/tenants/{id}/recovery`). Do **not** re-run
 with `email already claimed` rather than minting a recovery link.
 
 They enroll a new passkey with it. Then revoke the lost credential from the
-Passkeys tab — revocation removes both the credential and its lookup index, so a
+Passkeys section of the Settings page — revocation removes both the credential and its lookup index, so a
 revoked passkey stops working immediately rather than merely being hidden.
 
 If **everyone** is locked out (for the CloudFront caveat below, or any other
@@ -158,7 +158,7 @@ curl -H "Authorization: Bearer $ROSTERBOT_API_TOKEN" https://<DashboardUrl>/v1/r
 | `GET /v1/infra` (deployment health) | ❌ 403 | ✅ |
 | Launch own-team jobs (`optimize`) | ✅ | ✅ |
 | Launch league-wide jobs (`archive`, `recap-site`, …) | ❌ 403 | ✅ |
-| Mint invites | ❌ | ✅ (CLI) |
+| Mint invites | ❌ | ✅ (CLI or Tenants tab) |
 
 New users are created as **members** with `auto_apply` **off**. Auto-apply is
 the setting that lets the bot write to a roster, and it is turned on

@@ -316,7 +316,61 @@ func (s *FileUserStore) DeleteCredential(_ context.Context, id UserID, credID []
 	if err := os.Remove(filepath.Join(s.credsDir(id), credFileName(credID))); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
+	if err := os.Remove(s.credMetaPath(id, credID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	return nil
+}
+
+// credMetaPath keeps a passkey's meta beside its credential — under the user's
+// own directory, so DeleteUser's RemoveAll sweeps it — but in a separate file,
+// so a rename and the login ceremony's sign-counter overwrite touch different
+// paths and cannot contend.
+func (s *FileUserStore) credMetaPath(id UserID, credID []byte) string {
+	return filepath.Join(s.userDir(id), "credmeta", credFileName(credID))
+}
+
+func (s *FileUserStore) PutCredentialMeta(_ context.Context, id UserID, credID []byte, meta CredentialMeta) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(s.credMetaPath(id, credID), data)
+}
+
+func (s *FileUserStore) CredentialMetas(_ context.Context, id UserID) (map[string]CredentialMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dir := filepath.Join(s.userDir(id), "credmeta")
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]CredentialMeta{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]CredentialMeta{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		var m CredentialMeta
+		if err := json.Unmarshal(b, &m); err != nil {
+			return nil, err
+		}
+		// The filename is credFileName(credID) = <b64>.json, so the map key is
+		// the name minus its extension — the same CredentialKey encoding.
+		out[strings.TrimSuffix(e.Name(), ".json")] = m
+	}
+	return out, nil
 }
 
 func (s *FileUserStore) DeleteUser(_ context.Context, id UserID) error {

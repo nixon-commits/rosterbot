@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 
@@ -288,6 +289,98 @@ func Run(t *testing.T, newStore func(t *testing.T) lineupapi.UserStore) {
 			}
 			t.Fatalf("ListActive = %v, want [%s] — a parked tenant must cost nothing "+
 				"in the fan-out", ids, alice.ID)
+		}
+	})
+
+	t.Run("CredentialMetaRoundTripsSeparatelyFromTheCredential", func(t *testing.T) {
+		s, alice := seed(t)
+		cred := webauthn.Credential{ID: []byte("cred-meta")}
+		if err := s.PutCredential(ctx, alice.ID, cred); err != nil {
+			t.Fatal(err)
+		}
+		t0 := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+		meta := lineupapi.CredentialMeta{Name: "Jon's phone", CreatedAt: t0}
+		if err := s.PutCredentialMeta(ctx, alice.ID, cred.ID, meta); err != nil {
+			t.Fatalf("PutCredentialMeta: %v", err)
+		}
+
+		metas, err := s.CredentialMetas(ctx, alice.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := metas[lineupapi.CredentialKey(cred.ID)]
+		if !ok {
+			t.Fatalf("meta missing from CredentialMetas: %v", metas)
+		}
+		if got.Name != "Jon's phone" || !got.CreatedAt.Equal(t0) {
+			t.Errorf("meta = %+v, want name + created_at round-tripped", got)
+		}
+
+		// The credential record itself must be untouched — metadata rides its
+		// own key precisely so the login ceremony's sign-counter overwrite and
+		// a rename can never clobber each other.
+		creds, err := s.Credentials(ctx, alice.ID)
+		if err != nil || len(creds) != 1 || string(creds[0].ID) != "cred-meta" {
+			t.Fatalf("credential listing disturbed by meta write: %v (%v)", creds, err)
+		}
+	})
+
+	t.Run("CredentialMetaAbsentForAnUnannotatedCredential", func(t *testing.T) {
+		s, alice := seed(t)
+		if err := s.PutCredential(ctx, alice.ID, webauthn.Credential{ID: []byte("bare")}); err != nil {
+			t.Fatal(err)
+		}
+		metas, err := s.CredentialMetas(ctx, alice.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(metas) != 0 {
+			t.Errorf("metas = %v, want none — a pre-metadata passkey must read as "+
+				"unannotated, not error and not invent a date", metas)
+		}
+	})
+
+	t.Run("DeleteCredentialRemovesItsMeta", func(t *testing.T) {
+		s, alice := seed(t)
+		cred := webauthn.Credential{ID: []byte("cred-gone")}
+		if err := s.PutCredential(ctx, alice.ID, cred); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.PutCredentialMeta(ctx, alice.ID, cred.ID,
+			lineupapi.CredentialMeta{Name: "old phone"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DeleteCredential(ctx, alice.ID, cred.ID); err != nil {
+			t.Fatal(err)
+		}
+		metas, err := s.CredentialMetas(ctx, alice.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(metas) != 0 {
+			t.Errorf("meta survives its credential's revocation: %v", metas)
+		}
+	})
+
+	t.Run("DeleteUserRemovesCredentialMetas", func(t *testing.T) {
+		s, alice := seed(t)
+		cred := webauthn.Credential{ID: []byte("cred-user-gone")}
+		if err := s.PutCredential(ctx, alice.ID, cred); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.PutCredentialMeta(ctx, alice.ID, cred.ID,
+			lineupapi.CredentialMeta{Name: "x"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DeleteUser(ctx, alice.ID); err != nil {
+			t.Fatal(err)
+		}
+		metas, err := s.CredentialMetas(ctx, alice.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(metas) != 0 {
+			t.Errorf("metas survive user deletion: %v", metas)
 		}
 	})
 

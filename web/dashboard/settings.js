@@ -6,6 +6,7 @@
 // page renders a user's own email and a Fantrax error string, both of which
 // reach an attribute context.
 import { api, ApiError } from "./api.js";
+import { renderPasskeysSection } from "./passkeys.js";
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -79,6 +80,9 @@ export async function renderSettings(root) {
   root.append(accountCard(me));
   root.append(fantraxCard(me));
   root.append(autoApplyCard(me));
+  // Passkeys are account state, so they live here rather than on a tab of
+  // their own (rosterbot-jxjq). The section manages its own refreshes.
+  renderPasskeysSection(root);
 }
 
 function accountCard(me) {

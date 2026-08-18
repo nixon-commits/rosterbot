@@ -133,6 +133,25 @@ type User struct {
 	Version IdentityVersion `json:"-"`
 }
 
+// CredentialMeta is the user-facing decoration on one passkey: a name the
+// user chose and when it was registered. It lives in its OWN store key, never
+// inside the webauthn.Credential record, because the login ceremony overwrites
+// that record (sign counter) and a rename racing a login must not be able to
+// clobber either side — the same per-key no-contention rule that keeps
+// registration and login from contending.
+type CredentialMeta struct {
+	Name      string    `json:"name,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+}
+
+// CredentialKey is how CredentialMetas maps are keyed: the base64url of the
+// credential id, the same encoding the HTTP surface already uses for passkey
+// ids. A []byte cannot be a map key, and re-encoding at every call site is how
+// two spellings of one id drift apart.
+func CredentialKey(credID []byte) string {
+	return base64.RawURLEncoding.EncodeToString(credID)
+}
+
 // UserCredentials pairs a user with their passkeys for the WebAuthn ceremony,
 // which needs both together even though the store keeps them apart.
 type UserCredentials struct {
@@ -213,8 +232,19 @@ type UserStore interface {
 
 	// DeleteCredential removes one passkey. Removing an absent credential is
 	// not an error — the caller's intent is satisfied either way, and the
-	// alternative invites a check-then-act race.
+	// alternative invites a check-then-act race. It removes the credential's
+	// meta alongside it.
 	DeleteCredential(ctx context.Context, id UserID, credID []byte) error
+
+	// PutCredentialMeta writes one passkey's user-facing decoration (name,
+	// created-at), whole. It is unconditional for the same reason
+	// PutCredential is: no other writer touches this key.
+	PutCredentialMeta(ctx context.Context, id UserID, credID []byte, meta CredentialMeta) error
+
+	// CredentialMetas returns every annotated passkey's meta, keyed by
+	// CredentialKey. A passkey registered before metadata existed simply has
+	// no entry — absent, never an error and never an invented date.
+	CredentialMetas(ctx context.Context, id UserID) (map[string]CredentialMeta, error)
 
 	// UserByCredential resolves a credential id to its owner, for the
 	// non-discoverable login fallback. The everyday path does not use it: a

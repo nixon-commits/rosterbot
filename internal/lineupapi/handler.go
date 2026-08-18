@@ -130,6 +130,7 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("POST /v1/auth/login/begin", cfg.handleAuthLoginBegin)
 	mux.HandleFunc("POST /v1/auth/login/finish", cfg.handleAuthLoginFinish)
 	mux.HandleFunc("GET /v1/auth/passkeys", cfg.handleListPasskeys)
+	mux.HandleFunc("POST /v1/auth/passkeys/{id}/name", cfg.handleRenamePasskey)
 	mux.HandleFunc("DELETE /v1/auth/passkeys/{id}", cfg.handleRevokePasskey)
 	mux.HandleFunc("POST /v1/auth/logout", cfg.handleLogout)
 

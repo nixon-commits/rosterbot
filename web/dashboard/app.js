@@ -5,7 +5,7 @@ import { registerPasskey, loginWithPasskey } from "./webauthn.js";
 import { renderLineup } from "./lineup.js";
 import { renderJobs } from "./jobs.js";
 import { renderRuns } from "./runs.js";
-import { renderPasskeys } from "./passkeys.js";
+
 import { renderProjections } from "./projections.js";
 import { renderValue } from "./value.js";
 import { renderTrades } from "./trades.js";
@@ -20,7 +20,8 @@ const ROUTES = {
   "#lineup": renderLineup,
   "#jobs": renderJobs,
   "#runs": renderRuns,
-  "#passkeys": renderPasskeys,
+  // Passkeys moved into Settings; the old hash keeps landing somewhere sane.
+  "#passkeys": renderSettings,
   "#projections": renderProjections,
   "#value": renderValue,
   "#trades": renderTrades,

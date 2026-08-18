@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -224,6 +225,12 @@ func (cfg Config) handleAuthRegisterFinish(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, "could not save passkey")
 		return
 	}
+	// Stamp the registration date, best-effort: the credential above is what
+	// signs the user in, and failing a working registration over a missing
+	// date would be exactly backwards. An unstamped passkey reads as
+	// unannotated, same as every pre-metadata one.
+	_ = cfg.Users.PutCredentialMeta(r.Context(), u.ID, cred.ID,
+		CredentialMeta{CreatedAt: time.Now().UTC()})
 
 	clearCeremonyCookie(w)
 	setSessionCookie(w, cfg.SessionSecret, u.ID, u.TokenVersion, time.Now())
@@ -332,6 +339,10 @@ func (cfg Config) handleAuthLoginFinish(w http.ResponseWriter, r *http.Request) 
 
 type passkeyOut struct {
 	ID string `json:"id"`
+	// Name and CreatedAt come from the credential's meta key (CredentialMeta);
+	// a passkey registered before metadata existed carries neither.
+	Name      string    `json:"name,omitzero"`
+	CreatedAt time.Time `json:"created_at,omitzero"`
 }
 
 // sessionUser resolves the logged-in user for the passkey-management routes.
@@ -363,11 +374,86 @@ func (cfg Config) handleListPasskeys(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "user store unavailable")
 		return
 	}
+	// Meta is decoration on the listing, so its failure degrades to a list
+	// without names and dates rather than a 500 on the page that manages the
+	// credentials themselves.
+	metas, merr := cfg.Users.CredentialMetas(r.Context(), u.ID)
+	if merr != nil {
+		metas = nil
+	}
 	out := []passkeyOut{}
 	for _, c := range creds {
-		out = append(out, passkeyOut{ID: base64.RawURLEncoding.EncodeToString(c.ID)})
+		row := passkeyOut{ID: CredentialKey(c.ID)}
+		if m, ok := metas[CredentialKey(c.ID)]; ok {
+			row.Name, row.CreatedAt = m.Name, m.CreatedAt
+		}
+		out = append(out, row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"passkeys": out})
+}
+
+// maxPasskeyNameLen bounds a passkey's display name; it renders in a table
+// cell beside a date, not an essay field.
+const maxPasskeyNameLen = 64
+
+// handleRenamePasskey sets one passkey's display name. Session-only like the
+// other passkey-management routes, and scoped to the caller's own credentials:
+// the id must be among THEIR credentials, or meta would be written for a
+// passkey that does not exist under their account — and a later registration
+// landing on that id would inherit a stranger's label.
+func (cfg Config) handleRenamePasskey(w http.ResponseWriter, r *http.Request) {
+	u, ok := cfg.sessionUser(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	targetID, err := base64.RawURLEncoding.DecodeString(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid passkey id")
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "malformed request")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if len([]rune(name)) > maxPasskeyNameLen {
+		writeErr(w, http.StatusBadRequest, "name is too long")
+		return
+	}
+
+	creds, err := cfg.Users.Credentials(r.Context(), u.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "user store unavailable")
+		return
+	}
+	owned := false
+	for _, c := range creds {
+		if CredentialKey(c.ID) == CredentialKey(targetID) {
+			owned = true
+			break
+		}
+	}
+	if !owned {
+		writeErr(w, http.StatusNotFound, "no such passkey")
+		return
+	}
+
+	// Preserve the registration date: the rename touches the name alone.
+	meta := CredentialMeta{Name: name}
+	if metas, merr := cfg.Users.CredentialMetas(r.Context(), u.ID); merr == nil {
+		if m, ok := metas[CredentialKey(targetID)]; ok {
+			meta.CreatedAt = m.CreatedAt
+		}
+	}
+	if err := cfg.Users.PutCredentialMeta(r.Context(), u.ID, targetID, meta); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not save the name")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": CredentialKey(targetID), "name": name})
 }
 
 func (cfg Config) handleRevokePasskey(w http.ResponseWriter, r *http.Request) {
