@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsathena"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awscertificatemanager"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfront"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfrontorigins"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscodebuild"
@@ -22,6 +23,8 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awskms"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsroute53"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsroute53targets"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsssm"
 	"github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2"
@@ -31,6 +34,15 @@ import (
 
 type InfraStackProps struct {
 	awscdk.StackProps
+
+	// Certificate is the us-east-1 ACM cert covering every rosterbot.dev name
+	// this stack serves (see infra/domain.go). It is REQUIRED, not optional:
+	// treating a missing cert as "skip the alias domains" would let the custom
+	// hostnames silently stop being served while the deploy stayed green — the
+	// stack would come up healthy on its cloudfront.net names and nothing would
+	// say the domain had dropped off. Failing loudly at synth is the only
+	// version of this that can be noticed.
+	Certificate awscertificatemanager.ICertificate
 }
 
 func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps) awscdk.Stack {
@@ -38,7 +50,15 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	if props != nil {
 		sprops = props.StackProps
 	}
+	if props == nil || props.Certificate == nil {
+		panic("InfraStackProps.Certificate is required: the alias domains on both " +
+			"distributions cannot be attached without it (see infra/domain.go)")
+	}
 	stack := awscdk.NewStack(scope, &id, &sprops)
+
+	// The zone that answers for the alias records below. Imported, never
+	// created — see importZone.
+	zone := importZone(stack, "Zone")
 
 	// --- Phase 1: foundation (ECR, S3 state + site buckets, log group) ---
 
@@ -190,6 +210,11 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// rendered page is served immediately instead of after the ~24h cache TTL.
 	dist := awscloudfront.NewDistribution(stack, jsii.String("SiteCdn"), &awscloudfront.DistributionProps{
 		DefaultRootObject: jsii.String("index.html"),
+		// Adding an alias does NOT retire the default cloudfront.net name —
+		// CloudFront keeps serving both — so every published or bookmarked
+		// recap URL keeps working through this change and after it.
+		DomainNames: jsii.Strings(recapHost),
+		Certificate: props.Certificate,
 		DefaultBehavior: &awscloudfront.BehaviorOptions{
 			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(siteBucket, nil),
 			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
@@ -324,7 +349,21 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// --- Phase 5: CloudFront URLs (distributions are created above, before the
 	// container, so their IDs can be injected as env vars for cache invalidation) ---
 	awscdk.NewCfnOutput(stack, jsii.String("SiteUrl"), &awscdk.CfnOutputProps{
+		Value: jsii.String("https://" + recapHost),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("SiteCdnDefaultUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dist.DistributionDomainName()}),
+	})
+
+	// A *and* AAAA. CloudFront serves dual-stack, so an A-only record leaves
+	// IPv6-only clients resolving nothing — a failure invisible from any
+	// dual-stack machine, which is every machine we would notice it from.
+	recapTarget := awsroute53.RecordTarget_FromAlias(awsroute53targets.NewCloudFrontTarget(dist))
+	awsroute53.NewARecord(stack, jsii.String("RecapAliasA"), &awsroute53.ARecordProps{
+		Zone: zone, RecordName: jsii.String(recapHost), Target: recapTarget,
+	})
+	awsroute53.NewAaaaRecord(stack, jsii.String("RecapAliasAAAA"), &awsroute53.AaaaRecordProps{
+		Zone: zone, RecordName: jsii.String(recapHost), Target: recapTarget,
 	})
 
 	// --- Lineup + control API: Go Lambda behind a Function URL ---
@@ -1192,17 +1231,24 @@ func main() {
 	// empty. The capture — and CrossRegionReferences on InfraStack, which is
 	// only required once a reference actually crosses — arrives with the first
 	// alias domain.
-	_, _ = NewCertStack(app, "InfraCertStack", &CertStackProps{
+	_, siteCert := NewCertStack(app, "InfraCertStack", &CertStackProps{
 		awscdk.StackProps{
 			Env:                   certEnv(),
 			CrossRegionReferences: jsii.Bool(true),
 		},
 	})
 
+	// CrossRegionReferences is required on BOTH stacks now that the cert ARN
+	// actually crosses: CDK carries it through generated SSM parameters plus a
+	// reader custom resource. Note the one-way cost — CloudFormation refuses to
+	// delete an export still in use, so unwinding this reference later is a
+	// staged weakening across several deploys, not a plain revert.
 	NewInfraStack(app, "InfraStack", &InfraStackProps{
-		awscdk.StackProps{
-			Env: env(),
+		StackProps: awscdk.StackProps{
+			Env:                   env(),
+			CrossRegionReferences: jsii.Bool(true),
 		},
+		Certificate: siteCert,
 	})
 
 	app.Synth(nil)
