@@ -50,7 +50,10 @@
       <div class="nav-secondary" id="nav-secondary">
         <a href="#projections">Projections</a>
         <a href="#value">Value</a>
-        <a href="#views">Views</a>
+        <!-- Presentation only, like Infra below: the views report (recap
+             readership) publishes only into the operator's partition, so a
+             member's Views tab would sit on its empty state forever. -->
+        <a href="#views" data-admin-only hidden>Views</a>
         <!-- Presentation only, like Tenants: GET /v1/infra is already in
              adminOnlyRoutes, so a member reaching #infra by URL gets the 403
              card. Hiding the link just stops handing testers a dead tab. -->
