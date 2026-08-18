@@ -162,6 +162,23 @@ function actionsCell(t, root, parked) {
   });
   td.append(recoverBtn);
 
+  // Delete is the removal park cannot be, and the confirm spells out the
+  // difference: everything about the account goes, and there is no undo —
+  // only a fresh invite (which their released email makes possible again).
+  const deleteBtn = el("button", "danger", "Delete");
+  deleteBtn.addEventListener("click", async () => {
+    const name = t.display_name || t.email || String(t.id);
+    if (!window.confirm(
+      `Delete ${name}? Their account, passkeys and Fantrax connection are ` +
+      `removed permanently — there is no undo. Their email and team become ` +
+      `available to invite again. (To pause them instead, use Park.)`)) return;
+    try {
+      await api.tenantDelete(t.id);
+      rerender();
+    } catch (err) { fail(err); }
+  });
+  td.append(deleteBtn);
+
   return td;
 }
 

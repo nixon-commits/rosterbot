@@ -202,12 +202,19 @@ func (a *API) Query(_ context.Context, in *dynamodb.QueryInput, _ ...func(*dynam
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	// The two conditions the store actually sends: the sk-prefixed credential
+	// listing and DeleteUser's whole-item-collection sweep.
 	expr := strings.TrimSpace(*in.KeyConditionExpression)
-	if expr != "pk = :pk AND begins_with(sk, :sk)" {
+	prefix := ""
+	switch expr {
+	case "pk = :pk AND begins_with(sk, :sk)":
+		prefix = str(in.ExpressionAttributeValues[":sk"])
+	case "pk = :pk":
+		// every sk under the partition
+	default:
 		return nil, fmt.Errorf("ddbusertest: unrecognised key condition %q", expr)
 	}
 	pk := str(in.ExpressionAttributeValues[":pk"])
-	prefix := str(in.ExpressionAttributeValues[":sk"])
 
 	var out []map[string]types.AttributeValue
 	for _, it := range a.items {

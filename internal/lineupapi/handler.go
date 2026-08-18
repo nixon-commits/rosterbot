@@ -117,6 +117,7 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("POST /v1/tenants/{id}/status", cfg.handleSetTenantStatus)
 	mux.HandleFunc("POST /v1/tenants/{id}/auto-apply", cfg.handleSetTenantAutoApply)
 	mux.HandleFunc("POST /v1/tenants/{id}/recovery", cfg.handleTenantRecovery)
+	mux.HandleFunc("DELETE /v1/tenants/{id}", cfg.handleDeleteTenant)
 	mux.HandleFunc("POST /v1/me/preferences", cfg.handleSetPreferences)
 	mux.HandleFunc("POST /v1/connect", cfg.handleConnect)
 	mux.HandleFunc("GET /v1/connect", cfg.handleConnectStatus)

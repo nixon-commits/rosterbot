@@ -79,6 +79,15 @@ func teamPK(teamID string) string       { return "TEAM#" + teamID }
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func s(v string) types.AttributeValue { return &types.AttributeValueMemberS{Value: v} }
+
+// strAttr reads a string attribute, "" when absent or not a string.
+func strAttr(v types.AttributeValue) string {
+	sv, _ := v.(*types.AttributeValueMemberS)
+	if sv == nil {
+		return ""
+	}
+	return sv.Value
+}
 func n(v int64) types.AttributeValue {
 	return &types.AttributeValueMemberN{Value: strconv.FormatInt(v, 10)}
 }
@@ -379,6 +388,85 @@ func (st *Store) UserByCredential(ctx context.Context, credID []byte) (lineupapi
 		return "", false, fmt.Errorf("ddbuser: credential index item for %s has no uid", b64(credID))
 	}
 	return lineupapi.UserID(uid.Value), true, nil
+}
+
+// DeleteUser sweeps the whole USER# item collection (profile, FANTRAX
+// connection, every CRED# row), each credential's CRED#→USER index row, and
+// then releases the EMAIL#/TEAM# claims — read-check-delete against the uid
+// the claim names, so a half-written state can never release somebody else's
+// claim. (A conditional delete would close the residual race; at an
+// admin-clicks-a-button cadence the read-check-delete window is accepted.)
+func (st *Store) DeleteUser(ctx context.Context, id lineupapi.UserID) error {
+	u, ok, err := st.GetUser(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	var start map[string]types.AttributeValue
+	for {
+		out, err := st.api.Query(ctx, &dynamodb.QueryInput{
+			TableName:                 aws.String(st.table),
+			KeyConditionExpression:    aws.String("pk = :pk"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{":pk": s(userPK(id))},
+			ExclusiveStartKey:         start,
+		})
+		if err != nil {
+			return err
+		}
+		for _, item := range out.Items {
+			sk := strAttr(item["sk"])
+			// Index row first, like DeleteCredential: a credential that still
+			// resolves is usable.
+			if strings.HasPrefix(sk, "CRED#") {
+				if _, err := st.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+					TableName: aws.String(st.table), Key: st.key(sk, pointerSK),
+				}); err != nil {
+					return err
+				}
+			}
+			if _, err := st.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+				TableName: aws.String(st.table), Key: st.key(userPK(id), sk),
+			}); err != nil {
+				return err
+			}
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		start = out.LastEvaluatedKey
+	}
+
+	if !ok {
+		return nil
+	}
+	for _, pk := range []string{claimPKFor(emailPK, u.Email), claimPKFor(teamPK, u.TeamID)} {
+		if pk == "" {
+			continue
+		}
+		got, err := st.api.GetItem(ctx, &dynamodb.GetItemInput{
+			TableName: aws.String(st.table), Key: st.key(pk, pointerSK),
+		})
+		if err != nil {
+			return err
+		}
+		if got.Item == nil || strAttr(got.Item["uid"]) != string(id) {
+			continue
+		}
+		if _, err := st.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(st.table), Key: st.key(pk, pointerSK),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// claimPKFor applies a claim key builder to a possibly-empty value.
+func claimPKFor(build func(string) string, val string) string {
+	if val == "" {
+		return ""
+	}
+	return build(val)
 }
 
 // ListActive scans the table for active profiles. A scan is the deliberate

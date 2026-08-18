@@ -208,9 +208,11 @@ The dashboard's admin **Tenants** tab mints the same invite and recovery links
 (`POST /v1/tenants/invite`, `POST /v1/tenants/{id}/recovery`) and carries the
 per-tenant management controls: park/reactivate (`POST /v1/tenants/{id}/status`
 — a parked tenant can't sign in and their scheduled jobs stop) and a
-lineup-writes kill switch (`POST /v1/tenants/{id}/auto-apply`). Each row also
-shows a passkey count, so "invited but never registered" is visible at a
-glance.
+lineup-writes kill switch (`POST /v1/tenants/{id}/auto-apply`), and permanent
+removal (`DELETE /v1/tenants/{id}` — deletes the account, passkeys and Fantrax
+connection, and releases the email/team claims so both can be reused). Each
+row also shows a passkey count, so "invited but never registered" is visible
+at a glance.
 
 The token is printed **once** and is not recoverable: only its SHA-256 is
 stored, so a leak of the identity table yields no usable links. The link is

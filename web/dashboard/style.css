@@ -1305,3 +1305,10 @@ pre {
 .tenant-actions button { margin-right: 0.35rem; }
 .minted-link .link-row { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
 .minted-link .link-row input { flex: 1 1 auto; font-family: var(--mono, monospace); }
+.tenant-actions button.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.tenant-actions button.danger:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}

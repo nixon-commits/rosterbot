@@ -71,6 +71,7 @@ export const api = {
     request("POST", `/v1/tenants/${encodeURIComponent(id)}/auto-apply`, { auto_apply: autoApply }),
   tenantRecovery: (id) =>
     request("POST", `/v1/tenants/${encodeURIComponent(id)}/recovery`, {}),
+  tenantDelete: (id) => request("DELETE", `/v1/tenants/${encodeURIComponent(id)}`),
   connect: (username, password) => request("POST", "/v1/connect", { username, password }),
 
   authRegisterBegin: (enrollToken) =>

@@ -319,6 +319,56 @@ func (s *FileUserStore) DeleteCredential(_ context.Context, id UserID, credID []
 	return nil
 }
 
+func (s *FileUserStore) DeleteUser(_ context.Context, id UserID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, _, ok, err := s.readProfile(id)
+	if err != nil {
+		return err
+	}
+
+	// Indexes first, like DeleteCredential: a credential that still resolves
+	// is usable, and a crash mid-delete must leave the passkey dead rather
+	// than the profile gone with a live login.
+	if entries, err := os.ReadDir(s.credsDir(id)); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if err := os.Remove(filepath.Join(s.dir, "credindex", e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+
+	if err := os.RemoveAll(filepath.Dir(s.profilePath(id))); err != nil {
+		return err
+	}
+
+	// Release the uniqueness claims this user held. Checked against the
+	// holder so a half-written state can never release somebody else's claim.
+	if ok {
+		for _, c := range []struct{ kind, val string }{{"email", u.Email}, {"team", u.TeamID}} {
+			if c.val == "" {
+				continue
+			}
+			holder, has, err := s.claimHolder(c.kind, c.val)
+			if err != nil {
+				return err
+			}
+			if has && holder == id {
+				if err := os.Remove(s.claimPath(c.kind, c.val)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (s *FileUserStore) UserByCredential(_ context.Context, credID []byte) (UserID, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

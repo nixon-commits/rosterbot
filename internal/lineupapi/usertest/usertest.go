@@ -291,6 +291,65 @@ func Run(t *testing.T, newStore func(t *testing.T) lineupapi.UserStore) {
 		}
 	})
 
+	t.Run("DeleteUserRemovesProfileCredentialsAndIndex", func(t *testing.T) {
+		s, alice := seed(t)
+		cred := webauthn.Credential{ID: []byte("cred-del")}
+		if err := s.PutCredential(ctx, alice.ID, cred); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DeleteUser(ctx, alice.ID); err != nil {
+			t.Fatalf("DeleteUser: %v", err)
+		}
+		if _, ok, _ := s.GetUser(ctx, alice.ID); ok {
+			t.Error("profile still readable after delete")
+		}
+		if creds, _ := s.Credentials(ctx, alice.ID); len(creds) != 0 {
+			t.Errorf("credentials survive delete: %d", len(creds))
+		}
+		if _, ok, _ := s.UserByCredential(ctx, cred.ID); ok {
+			t.Error("credential index still resolves after delete — a deleted " +
+				"tenant's passkey must stop working, not merely lose its profile")
+		}
+		users, err := s.ListUsers(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, u := range users {
+			if u.ID == alice.ID {
+				t.Error("deleted user still listed")
+			}
+		}
+	})
+
+	t.Run("DeleteUserReleasesTheEmailAndTeamClaims", func(t *testing.T) {
+		s := newStore(t)
+		gone := newUser("gone")
+		gone.TeamID = "team-9"
+		if err := s.CreateUser(ctx, gone); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DeleteUser(ctx, gone.ID); err != nil {
+			t.Fatalf("DeleteUser: %v", err)
+		}
+		// The claims must be RELEASED, not orphaned: a delete that leaves them
+		// behind permanently poisons the email and the team — the same person
+		// could never be re-invited and their team never reassigned.
+		successor := newUser("successor")
+		successor.Email = gone.Email
+		successor.TeamID = gone.TeamID
+		if err := s.CreateUser(ctx, successor); err != nil {
+			t.Fatalf("re-creating with the deleted user's email+team: %v", err)
+		}
+	})
+
+	t.Run("DeleteUserOnAnAbsentUserIsNotAnError", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.DeleteUser(ctx, "nobody"); err != nil {
+			t.Fatalf("DeleteUser(absent) = %v — the caller's intent is satisfied "+
+				"either way, and erroring invites a check-then-act race", err)
+		}
+	})
+
 	t.Run("ListUsersIncludesParked", func(t *testing.T) {
 		s, _ := seed(t)
 		bob := newUser("bob")

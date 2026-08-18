@@ -348,3 +348,97 @@ func TestTenants_ReportsPasskeyCount(t *testing.T) {
 			"tenant is exactly what this column exists to show", byID["admin1"].Passkeys)
 	}
 }
+
+// deleteReq builds an authenticated DELETE the way postJSON builds a POST.
+func deleteReq(t *testing.T, secret []byte, path, uid string) *http.Request {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	setSessionCookie(rec, secret, UserID(uid), 0, time.Now())
+	r := httptest.NewRequest(http.MethodDelete, path, nil)
+	for _, c := range rec.Result().Cookies() {
+		r.AddCookie(c)
+	}
+	return r
+}
+
+// TestTenantDelete_RemovesTheTenantAndReleasesTheirEmail: delete is the
+// removal park cannot be — the profile, credentials and claims all go, their
+// live session stops working, and the email can be re-invited. The claim
+// release is the load-bearing half: without it a deleted tester's email and
+// team are poisoned forever.
+func TestTenantDelete_RemovesTheTenantAndReleasesTheirEmail(t *testing.T) {
+	h, secret, _ := adminFixture(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, deleteReq(t, secret, "/v1/tenants/bob", "admin1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete bob = %d, want 200: %s", rec.Code, rec.Body)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, signedReq(t, secret, http.MethodGet, "/v1/me", "bob", 0))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("deleted bob's session still works (%d)", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, signedReq(t, secret, http.MethodGet, "/v1/tenants", "admin1", 0))
+	var listed TenantsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode tenants: %v (%s)", err, rec.Body)
+	}
+	for _, tn := range listed.Tenants {
+		if tn.ID == "bob" {
+			t.Error("deleted tenant still listed")
+		}
+	}
+
+	// The email claim is released: the same address can be invited again.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, secret, "/v1/tenants/invite", "admin1", `{"email":"bob@e.test"}`))
+	if rec.Code != http.StatusOK {
+		t.Errorf("re-inviting a deleted tenant's email = %d, want 200 — the claim "+
+			"was not released: %s", rec.Code, rec.Body)
+	}
+}
+
+// TestTenantDelete_RefusesDeletingYourself, on the same reasoning as
+// self-park: irreversible self-lockout with no dashboard path back.
+func TestTenantDelete_RefusesDeletingYourself(t *testing.T) {
+	h, secret := tenantsFixture(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, deleteReq(t, secret, "/v1/tenants/admin1", "admin1"))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("self-delete = %d, want 400", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, signedReq(t, secret, http.MethodGet, "/v1/me", "admin1", 0))
+	if rec.Code != http.StatusOK {
+		t.Errorf("admin gone after refused self-delete: GET /v1/me = %d", rec.Code)
+	}
+}
+
+// TestTenantDelete_MemberForbidden pins the allowlist prefix onto the DELETE
+// verb too.
+func TestTenantDelete_MemberForbidden(t *testing.T) {
+	h, secret := tenantsFixture(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, deleteReq(t, secret, "/v1/tenants/admin1", "bob"))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("member delete = %d, want 403", rec.Code)
+	}
+}
+
+// TestTenantDelete_UnknownTenant404s, with the handler's own body so a bare
+// mux 404 (route absent) cannot pass.
+func TestTenantDelete_UnknownTenant404s(t *testing.T) {
+	h, secret := tenantsFixture(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, deleteReq(t, secret, "/v1/tenants/nobody", "admin1"))
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "no such user") {
+		t.Errorf("delete unknown tenant = %d %q, want a handler 404 naming the missing user", rec.Code, rec.Body)
+	}
+}

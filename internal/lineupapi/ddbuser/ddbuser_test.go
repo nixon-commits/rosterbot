@@ -81,7 +81,10 @@ func TestListActive_PaginatesTheScan(t *testing.T) {
 // suite goes green regardless.
 func TestUnknownConditionIsRejected(t *testing.T) {
 	api := ddbusertest.New()
-	_, err := api.Query(context.Background(), queryWithCondition("pk = :pk"))
+	// "pk = :pk" became a known form when DeleteUser's item-collection sweep
+	// arrived, so the unknown example here must stay one step ahead of the
+	// store's real vocabulary.
+	_, err := api.Query(context.Background(), queryWithCondition("pk = :pk AND sk = :sk"))
 	if err == nil {
 		t.Fatal("double accepted an unrecognised key condition; it must fail loudly " +
 			"so a new expression cannot pass unchecked")

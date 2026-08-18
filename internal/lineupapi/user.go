@@ -236,4 +236,16 @@ type UserStore interface {
 	// a parked tenant, while the admin page must keep showing them, since the
 	// row it shows is the only reactivate control there is.
 	ListUsers(ctx context.Context) ([]*User, error)
+
+	// DeleteUser removes a tenant entirely: profile, every credential and its
+	// lookup index, the Fantrax connection record where the backend holds one,
+	// and the email/team uniqueness claims. RELEASING THE CLAIMS IS THE POINT:
+	// a delete that left them behind would permanently poison that email and
+	// that team — the person could never be re-invited and the team never
+	// reassigned, the same trap that makes ClaimTeam refuse moves. Deleting an
+	// absent user is not an error (the caller's intent is satisfied either
+	// way; erroring invites a check-then-act race). The tenant's durable S3
+	// artifacts are deliberately NOT touched — inert orphans, same class as
+	// the crq.11 cutover copies.
+	DeleteUser(ctx context.Context, id UserID) error
 }

@@ -134,6 +134,47 @@ func (cfg Config) handleSetTenantAutoApply(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"id": u.ID, "auto_apply": u.AutoApply})
 }
 
+// handleDeleteTenant removes a tenant entirely — the removal park cannot be.
+//
+// The store contract (UserStore.DeleteUser) carries the substance: profile,
+// credentials and their indexes, the connection record, and the email/team
+// claims RELEASED so the person can be re-invited and the team reassigned.
+// The tenant's durable S3 artifacts stay behind as inert orphans, same class
+// as the crq.11 cutover copies.
+//
+// Self-delete is refused on the self-park reasoning, one notch stronger:
+// parking yourself is a lockout with a recovery, deleting yourself is a
+// lockout without one. The bearer-token admin has no UserID and can delete
+// anyone — it is the break-glass.
+func (cfg Config) handleDeleteTenant(w http.ResponseWriter, r *http.Request) {
+	if cfg.Users == nil {
+		writeErr(w, http.StatusNotImplemented, "user directory not configured")
+		return
+	}
+	id := UserID(r.PathValue("id"))
+	if caller := CallerFrom(r.Context()); caller.UserID != "" && caller.UserID == id {
+		writeErr(w, http.StatusBadRequest, "cannot delete your own account")
+		return
+	}
+
+	// The existence check is for the 404 alone; DeleteUser itself treats an
+	// absent user as success, so the race between the two is harmless.
+	_, ok, err := cfg.Users.GetUser(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "user directory unavailable")
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such user")
+		return
+	}
+	if err := cfg.Users.DeleteUser(r.Context(), id); err != nil {
+		writeErr(w, http.StatusBadGateway, "could not delete tenant")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
+}
+
 // inviteResponse is the one place a minted token ever appears. Only its hash
 // is stored, so this response is shown once and is not recoverable.
 type inviteResponse struct {
