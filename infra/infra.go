@@ -648,13 +648,44 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// literal parameter *names* — a plain string, not a resource reference —
 	// so apiFn has zero CloudFormation dependency on dashboardDist. The Lambda
 	// fetches the actual values from SSM at cold start (see lambda/main.go).
+	//
+	// THE CUTOVER (rosterbot-jloe.4). These two values used to be a GetAtt on
+	// dashboardDist.DistributionDomainName() — the cloudfront.net name — and
+	// slices 2/3 deliberately left them that way so the hostname migration
+	// shipped with zero passkey impact. This is the one-way door: every
+	// passkey registered against the old RP ID stops validating the instant
+	// this deploys. There is no dual-RP-ID mode. Recovery is the break-glass
+	// primitive proven end-to-end on 2026-08-18 (bearer token -> POST
+	// /v1/tenants/{id}/recovery -> redeem on the NEW origin) — see
+	// docs/user-registration.md and TestRpParams_NameTheAliasHostAfterCutover
+	// below, which now asserts the opposite of what it asserted before this
+	// commit. That is deliberate, not drift: the two literal strings ARE the
+	// cutover.
+	//
+	// A LITERAL STRING, not dashboardDist.DistributionDomainName(), for a
+	// second reason beyond "that's the whole point": a GetAtt here would make
+	// the RP ID track the distribution's domain automatically, so a future
+	// distribution REPLACEMENT (new logical id, new cloudfront.net name) would
+	// silently rewrite the RP ID again and invalidate every passkey a second
+	// time with no code change and no one deciding it. A literal is inert to
+	// that — it changes only when someone edits this line.
+	//
+	// Existing warm Lambda execution environments read these values ONCE, in
+	// main() (lambda/main.go), so a bare `cdk deploy` does not itself force a
+	// recycle: the SSM value changes but nothing about apiFn's own
+	// CloudFormation properties does, so CloudFormation has no reason to
+	// replace the function. Force one explicitly after this deploys:
+	//   aws lambda update-function-configuration --region us-west-1 \
+	//     --function-name <LineupApi> --description "rp-cutover-$(date -u +%Y%m%dT%H%M%SZ)"
+	// A configuration update is enough to start fresh execution environments
+	// without a code change.
 	awsssm.NewStringParameter(stack, jsii.String("RpIdParam"), &awsssm.StringParameterProps{
 		ParameterName: jsii.String("/rosterbot/DASHBOARD_RP_ID"),
-		StringValue:   dashboardDist.DistributionDomainName(),
+		StringValue:   jsii.String(dashHost),
 	})
 	awsssm.NewStringParameter(stack, jsii.String("RpOriginParam"), &awsssm.StringParameterProps{
 		ParameterName: jsii.String("/rosterbot/DASHBOARD_RP_ORIGIN"),
-		StringValue:   awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
+		StringValue:   jsii.String("https://" + dashHost),
 	})
 	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Actions: jsii.Strings("ssm:GetParameter"),
