@@ -80,7 +80,11 @@ func (s *Syncer) Down(ctx context.Context, bucket, prefix, localDir string) erro
 	if err != nil {
 		return err
 	}
-	for _, key := range keys {
+	// Ranging the map's keys: list now reports sizes too, which Down has no use
+	// for. Iteration order is therefore random, which is fine here — each key
+	// writes an independent file — but it is why nothing below may depend on
+	// encounter order.
+	for key := range keys {
 		rel := strings.TrimPrefix(key, prefix)
 		if rel == "" || strings.HasSuffix(rel, "/") {
 			continue // the prefix "folder" placeholder, nothing to write
@@ -102,15 +106,73 @@ func (s *Syncer) Down(ctx context.Context, bucket, prefix, localDir string) erro
 	return nil
 }
 
-// Up uploads every file under localDir to bucket/prefix, mapping each file's
-// path (relative to localDir) onto the key. When del is true it then removes
-// remote objects under prefix that no longer have a local counterpart, matching
-// `aws s3 sync --delete`. A non-existent localDir is a no-op.
-func (s *Syncer) Up(ctx context.Context, bucket, prefix, localDir string, del bool) error {
+// UpOptions carries the two behaviours that differ between Up's call sites.
+// They are a struct rather than positional bools because `Up(ctx, b, p, d,
+// false, true)` says nothing at the call site about which knob is which.
+type UpOptions struct {
+	// Delete removes remote objects under prefix that no longer have a local
+	// counterpart, matching `aws s3 sync --delete`.
+	Delete bool
+	// SkipUnchanged suppresses the upload of any file whose size already
+	// matches the remote object's. See Up's comment for why this is opt-in
+	// per call site rather than the default.
+	SkipUnchanged bool
+}
+
+// Up uploads files under localDir to bucket/prefix, mapping each file's path
+// (relative to localDir) onto the key. A non-existent localDir is a no-op.
+//
+// This used to upload EVERY file unconditionally, which the doc comment
+// described as "matching `aws s3 sync --delete`" — but aws s3 sync skips files
+// it judges unchanged, and that half of the semantics was lost when
+// internal/statesync replaced awscli (to drop ~120MB of python from the image).
+// The result: entrypoint.sh runs sync_up after every task, so every task
+// rewrote every file in every synced tree. With bucket versioning on and a
+// NoncurrentVersionExpiration rule that covered only cache/, the archive/
+// prefix reached 486,877 versions / 635 GB against 679 live objects / 877 MB
+// (measured 2026-08-18). One immutable July 2 snapshot,
+// archive/hkb/dt=2026-07-02/rankings.html, held 1,363 versions occupying
+// 3.21 GB and was still being rewritten six weeks later.
+//
+// SkipUnchanged is OPT-IN PER CALL SITE, and that is the load-bearing part.
+// The comparison is size-only — no checksum — so it cannot see a content change
+// that preserves length, and two of the four synced trees are full of exactly
+// that shape. session/.fantrax_cookie_cache.json is a fixed-layout JSON holding
+// a fixed-length session token and an ISO timestamp: three of the four live
+// tenant copies are byte-identical in length (3947, 3947, 3947), so a REFRESHED
+// cookie almost certainly serialises to the same size as the stale one it
+// replaces. Skipping it would pin every tenant to a dead cookie and silently
+// force a chromedp browser login on every task — a worse failure than the cost
+// it saves, and an invisible one. The claims cursor (.waivers/last-claims.json,
+// a fixed-shape timestamp) has the same hazard.
+//
+// So callers enable this only for trees whose objects are immutable once
+// written. Today that is .archive/ alone, which is also ~635 of the 636 GB, so
+// the narrow scope costs nothing measurable: the remaining trees total under
+// 1 MB and re-uploading them each run is ~60 PUTs.
+func (s *Syncer) Up(ctx context.Context, bucket, prefix, localDir string, opts UpOptions) error {
 	if _, err := os.Stat(localDir); os.IsNotExist(err) {
 		return nil
 	}
-	// uploaded holds the set of keys we just wrote, used for --delete reconciliation.
+	// One listing up front, reused for every skip decision — the alternative is
+	// a HeadObject per file, which trades the PUTs we are removing for an equal
+	// number of HEADs. Populated only when skipping is on, so the non-skipping
+	// call sites pay nothing. A listing failure is not fatal: it degrades to
+	// uploading everything, which is exactly the old behaviour, because being
+	// slow and correct beats silently not uploading a changed file.
+	var remoteSize map[string]int64
+	if opts.SkipUnchanged {
+		sizes, err := s.list(ctx, bucket, prefix)
+		if err != nil {
+			remoteSize = nil
+		} else {
+			remoteSize = sizes
+		}
+	}
+	// uploaded holds every key that should exist remotely after this call —
+	// both the ones written and the ones skipped as already-current. Skipped
+	// keys MUST be in here: it is the keep-set for --delete reconciliation, and
+	// omitting them would make a skipped file look like an orphan and delete it.
 	uploaded := map[string]bool{}
 	err := filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -124,16 +186,19 @@ func (s *Syncer) Up(ctx context.Context, bucket, prefix, localDir string, del bo
 			return err
 		}
 		key := prefix + filepath.ToSlash(rel)
+		uploaded[key] = true
+		if sz, ok := remoteSize[key]; ok && sz == info.Size() {
+			return nil
+		}
 		if err := s.upload(ctx, bucket, key, path); err != nil {
 			return fmt.Errorf("upload %s: %w", path, err)
 		}
-		uploaded[key] = true
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	if !del {
+	if !opts.Delete {
 		return nil
 	}
 	return s.deleteOrphans(ctx, bucket, prefix, uploaded)
@@ -148,7 +213,7 @@ func (s *Syncer) deleteOrphans(ctx context.Context, bucket, prefix string, keep 
 	if err != nil {
 		return err
 	}
-	for _, key := range remote {
+	for key := range remote {
 		if keep[key] {
 			continue
 		}
@@ -177,9 +242,13 @@ func (s *Syncer) Invalidate(ctx context.Context, distID string) error {
 	return err
 }
 
-// list returns every object key under bucket/prefix, paginating as needed.
-func (s *Syncer) list(ctx context.Context, bucket, prefix string) ([]string, error) {
-	var keys []string
+// list returns every object key under bucket/prefix mapped to its size,
+// paginating as needed. Size rides along because Up's skip decision needs it
+// and a second listing to fetch it would cost exactly what the skip saves; a
+// nil Size (which the API models as optional) is reported as -1 so it can never
+// compare equal to a real file length and accidentally suppress an upload.
+func (s *Syncer) list(ctx context.Context, bucket, prefix string) (map[string]int64, error) {
+	sizes := map[string]int64{}
 	var token *string
 	for {
 		out, err := s.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
@@ -189,16 +258,21 @@ func (s *Syncer) list(ctx context.Context, bucket, prefix string) ([]string, err
 			return nil, err
 		}
 		for _, o := range out.Contents {
-			if o.Key != nil {
-				keys = append(keys, *o.Key)
+			if o.Key == nil {
+				continue
 			}
+			if o.Size == nil {
+				sizes[*o.Key] = -1
+				continue
+			}
+			sizes[*o.Key] = *o.Size
 		}
 		if out.IsTruncated == nil || !*out.IsTruncated {
 			break
 		}
 		token = out.NextContinuationToken
 	}
-	return keys, nil
+	return sizes, nil
 }
 
 func (s *Syncer) download(ctx context.Context, bucket, key, dst string) error {

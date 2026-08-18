@@ -81,6 +81,35 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			Id:         jsii.String("ExpireOpsAlertMarkers"),
 			Prefix:     jsii.String("opsalert/"),
 			Expiration: awscdk.Duration_Days(jsii.Number(30)),
+		}, {
+			// Bucket-wide noncurrent-version expiry. The cache/ rule above was
+			// written on the reasoning that "analysis/, backtest/, runs/,
+			// lineup/, session/ and claims/ are intentionally durable/bounded
+			// (append-only archives or small ledgers) and stay untouched" —
+			// correct about their LIVE objects, and wrong about their versions,
+			// because nothing on the write path checked whether the bytes had
+			// changed. entrypoint.sh runs sync_up after every task and
+			// statesync.Up re-PUT every file unconditionally, so append-only
+			// trees were rewritten ~29x/day.
+			//
+			// Measured 2026-08-18, before the statesync fix: this bucket held
+			// 563 GB across 701,781 objects against ~975 MB of live data, of
+			// which archive/ alone was 486,877 versions / 635 GB against 679
+			// live objects. archive/ is not even named in the list above — it
+			// postdates that comment, which is precisely how it escaped.
+			//
+			// Deliberately unscoped by prefix. The cache/ rule enumerated who
+			// needed trimming, and the artifact that went on to cost 635 GB was
+			// the one added afterwards; a rule that has to be extended for each
+			// new prefix fails silently in exactly that way, and the default it
+			// fails to is unbounded growth. 30 days rather than cache/'s 14
+			// because versioning's remaining job here is recovery from a bad
+			// overwrite of a NoBackfill artifact (the Team Value Store, see
+			// docs/adr/0002) — a month is a realistic window to notice one.
+			// Noncurrent versions only: live objects are never touched, so this
+			// cannot delete an artifact that is merely old.
+			Id:                          jsii.String("ExpireNoncurrentVersions"),
+			NoncurrentVersionExpiration: awscdk.Duration_Days(jsii.Number(30)),
 		}},
 	})
 
@@ -343,8 +372,39 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	})
 	publicSubnets := vpc.SelectSubnets(&awsec2.SubnetSelection{SubnetType: awsec2.SubnetType_PUBLIC})
 
+	// Every GoFunction below bundles with -buildvcs=false, and it is a cost
+	// control rather than a build preference. `go build` defaults to
+	// -buildvcs=auto, which stamps the current git commit into the binary — so
+	// every push produced a different binary for all three Lambdas even when
+	// their own source had not changed, a different CDK asset hash, and
+	// therefore a real CloudFormation update on every single build. Measured
+	// 2026-08-17: the build for 36a865d changed exactly one file
+	// (web/dashboard/settings.js, a static dashboard asset that cannot affect a
+	// Go binary) and still replaced LineupApi, Dispatch and OpsNotify.
+	//
+	// The cost was ~94s of `cdk deploy` per build — 47% of a 201s build — on the
+	// ~64% of builds that touch no Lambda input at all, plus three needless
+	// Lambda code replacements per push and ~3 new objects/build in the CDK
+	// assets bucket (561 objects / 4.1 GB when this was written).
+	//
+	// Fixing the HASH rather than gating the deploy on changed paths is
+	// deliberate. lambda/go.mod carries `replace ../`, so a change to
+	// internal/lineupapi genuinely changes the API Lambda while touching neither
+	// infra/ nor lambda/; a path allowlist cannot see through a module replace
+	// and would ship stale Lambda code with nothing reporting it. With stable
+	// hashes cdk deploy gates itself on the actual bytes and reports "no
+	// changes" — the decision moves to the one place that can make it correctly.
+	//
+	// -trimpath is deliberately NOT set. It would strip absolute source paths
+	// from panic traces too, and OpsNotify is the failure-alerting path, where
+	// that detail is worth more than the remaining margin.
+	deterministicGoBundling := &awscdklambdagoalpha.BundlingOptions{
+		GoBuildFlags: jsii.Strings("-buildvcs=false"),
+	}
+
 	apiFn := awscdklambdagoalpha.NewGoFunction(stack, jsii.String("LineupApi"), &awscdklambdagoalpha.GoFunctionProps{
-		Entry: jsii.String("../lambda"),
+		Entry:    jsii.String("../lambda"),
+		Bundling: deterministicGoBundling,
 		// Pin to provided.al2023: provided.al2 (the GoFunction default) loses
 		// support 2026-07-31. The Go binary is statically linked, so the AL
 		// version under it is immaterial — this is a base-OS swap only.
@@ -619,6 +679,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// duration actually used, so a generous ceiling costs nothing.
 	opsNotifyFn := awscdklambdagoalpha.NewGoFunction(stack, jsii.String("OpsNotify"), &awscdklambdagoalpha.GoFunctionProps{
 		Entry:        jsii.String("../opsnotify"),
+		Bundling:     deterministicGoBundling,
 		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
 		Architecture: awslambda.Architecture_ARM_64(),
 		Timeout:      awscdk.Duration_Seconds(jsii.Number(60)),
@@ -686,7 +747,21 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				// golang 1.20-1.26, so buildspec.yml pins the ones this build uses
 				// rather than inheriting a default that shifts on each EOL.
 				BuildImage: awscodebuild.LinuxArmBuildImage_AMAZON_LINUX_2023_STANDARD_3_0(),
-				Privileged: jsii.Bool(true), // docker build
+				// SMALL, not LinuxArmBuildImage's default of LARGE — which was
+				// inherited, never chosen. us-west-1 on-demand: ARM g1.large is
+				// $0.0175/min against g1.small at $0.00425/min, 4.1x. Measured on a
+				// representative build (2026-08-17), only `docker build` (46s of
+				// 201s) is CPU-bound: cdk deploy, both docker pushes and the Node
+				// runtime install are network-bound and do not move with vCPU count.
+				// So the build stretches but the bill does not follow it — even at 6
+				// billed minutes instead of 4 this is ~2.7x cheaper.
+				//
+				// The constraint to watch is 4 GB of RAM against 16, and the thing
+				// most likely to notice is the headless chromium smoke test in the
+				// Dockerfile. If that starts failing here while still passing
+				// locally on Apple Silicon, this line is the first suspect.
+				ComputeType: awscodebuild.ComputeType_SMALL,
+				Privileged:  jsii.Bool(true), // docker build
 			},
 			EnvironmentVariables: &map[string]*awscodebuild.BuildEnvironmentVariable{
 				"ECR_URI": {Value: repo.RepositoryUri()},
@@ -1019,6 +1094,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// active tenants and launches one task each.
 	dispatchFn := awscdklambdagoalpha.NewGoFunction(stack, jsii.String("Dispatch"), &awscdklambdagoalpha.GoFunctionProps{
 		Entry:        jsii.String("../lambda/dispatch"),
+		Bundling:     deterministicGoBundling,
 		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
 		Architecture: awslambda.Architecture_ARM_64(),
 		// Generous next to the API's 10s: this makes one DynamoDB read plus one

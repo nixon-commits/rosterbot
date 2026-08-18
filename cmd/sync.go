@@ -23,6 +23,14 @@ import (
 type statePair struct {
 	dir    string
 	prefix string
+	// immutable marks a tree whose objects never change once written, which is
+	// what makes statesync's size-only skip safe to turn on for it. Anything
+	// rewritten in place must leave this false: the skip cannot see a content
+	// change that preserves length, and .fantrax-cache/ (a fixed-layout cookie
+	// JSON) and .waivers/ (a fixed-shape timestamp cursor) are both exactly
+	// that shape — skipping them would pin the bot to a stale session cookie
+	// and force a chromedp login every run. See statesync.Up.
+	immutable bool
 }
 
 // statePairsFor returns the bulk dir<->prefix mappings under STATE_BUCKET for
@@ -63,10 +71,14 @@ func syncPairs() []statePair { return statePairsFor(statestore.Tenant()) }
 
 func statePairsFor(tenant string) []statePair {
 	return []statePair{
-		{".fantrax-cache/", layout.Session.PrefixFor(tenant)},
-		{".waivers/", layout.Claims.PrefixFor(tenant)},
-		{".backtest/", layout.Backtest.PrefixFor(tenant)},
-		{".archive/", layout.Archive.PrefixFor(tenant)},
+		{".fantrax-cache/", layout.Session.PrefixFor(tenant), false},
+		{".waivers/", layout.Claims.PrefixFor(tenant), false},
+		{".backtest/", layout.Backtest.PrefixFor(tenant), false},
+		// The only immutable tree here, and the reason the skip exists:
+		// archive/ is append-only daily snapshots (docs say "keep-forever"),
+		// and re-uploading it after every task had grown it to 635 GB of
+		// noncurrent versions against 877 MB of live data.
+		{".archive/", layout.Archive.PrefixFor(tenant), true},
 	}
 }
 
@@ -117,7 +129,7 @@ func runSyncUp(cmd *cobra.Command, args []string) error {
 
 	if bucket := statestore.Bucket(); bucket != "" {
 		for _, p := range syncPairs() {
-			if err := s.Up(ctx, bucket, p.prefix, p.dir, false); err != nil {
+			if err := s.Up(ctx, bucket, p.prefix, p.dir, statesync.UpOptions{SkipUnchanged: p.immutable}); err != nil {
 				warn("sync-up %s: %v", p.prefix, err)
 			}
 		}
@@ -181,7 +193,7 @@ func publishSite(ctx context.Context, s *statesync.Syncer, dir, bucket, distID, 
 	if _, err := os.Stat(dir); err != nil {
 		return // nothing rendered this run
 	}
-	if err := s.Up(ctx, bucket, prefix, dir, true); err != nil {
+	if err := s.Up(ctx, bucket, prefix, dir, statesync.UpOptions{Delete: true}); err != nil {
 		warn("publish %s: %v", dir, err)
 		return
 	}
