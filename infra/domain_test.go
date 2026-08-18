@@ -137,20 +137,30 @@ func TestRecapAlias_CoversBothAddressFamilies(t *testing.T) {
 	}
 }
 
-// THE TRIPWIRE. Slice 3 attaches dash.rosterbot.dev to the dashboard
-// distribution but must NOT touch the WebAuthn RP config; slice 4 is where that
-// happens, deliberately and with humans standing by, because it invalidates
-// every registered passkey and nothing can migrate them.
+// THE TRIPWIRE, INVERTED (rosterbot-jloe.4).
 //
-// The two are one line apart in infra.go and look interchangeable, so this
-// asserts the RP parameters still resolve to the CloudFront domain (a GetAtt,
-// i.e. a structure) rather than to the literal hostname (a plain string). If
-// this test ever fails without rosterbot-jloe.4 being the reason, a passkey
-// wipe is about to ship.
-func TestRpParams_StillNameTheCloudFrontDomainNotTheAliasHost(t *testing.T) {
+// Before this commit, this test asserted the opposite: that the RP params
+// resolved to a GetAtt on the CloudFront domain, NOT to the literal alias
+// hostname — because slices 2/3 deliberately shipped the hostname migration
+// with zero passkey impact, and the cutover was a separate, deliberate step
+// with humans standing by. That step has now happened. This test flipping is
+// not drift; it IS the change under review, same as the two literal strings
+// in infra.go it is pinned to.
+//
+// It stays valuable in its new polarity for a reason distinct from the one
+// above: the RP config is a literal string specifically so a future
+// distribution REPLACEMENT cannot silently rewrite it (see the comment beside
+// RpIdParam in infra.go). If a future edit reverts to a GetAtt — even with
+// good intentions, e.g. "let's DRY this up" — this test catches it before a
+// distribution replacement turns that into an unplanned second passkey wipe.
+func TestRpParams_NameTheAliasHostAfterCutover(t *testing.T) {
 	_, raw := infraTemplate(t)
 	resources, _ := raw["Resources"].(map[string]any)
-	seen := 0
+	want := map[string]string{
+		"/rosterbot/DASHBOARD_RP_ID":     dashHost,
+		"/rosterbot/DASHBOARD_RP_ORIGIN": "https://" + dashHost,
+	}
+	seen := map[string]bool{}
 	for logicalID, r := range resources {
 		res, _ := r.(map[string]any)
 		if res["Type"] != "AWS::SSM::Parameter" {
@@ -158,22 +168,26 @@ func TestRpParams_StillNameTheCloudFrontDomainNotTheAliasHost(t *testing.T) {
 		}
 		props, _ := res["Properties"].(map[string]any)
 		name, _ := props["Name"].(string)
-		if name != "/rosterbot/DASHBOARD_RP_ID" && name != "/rosterbot/DASHBOARD_RP_ORIGIN" {
+		wantVal, ok := want[name]
+		if !ok {
 			continue
 		}
-		seen++
-		switch v := props["Value"].(type) {
-		case string:
-			t.Errorf("%s (%s) has literal Value %q — the RP is being cut over to the alias "+
-				"hostname. That invalidates EVERY registered passkey. If this is "+
-				"rosterbot-jloe.4, update this test deliberately; otherwise revert.",
-				name, logicalID, v)
-		default:
-			_ = v // a GetAtt/Join on the distribution domain: correct.
+		seen[name] = true
+		gotVal, isStr := props["Value"].(string)
+		if !isStr {
+			t.Errorf("%s (%s) is not a literal string — got a structured value (GetAtt/Join?). "+
+				"The RP ID must be inert to a future distribution replacement; see the comment "+
+				"beside RpIdParam in infra.go.", name, logicalID)
+			continue
+		}
+		if gotVal != wantVal {
+			t.Errorf("%s (%s) = %q, want %q", name, logicalID, gotVal, wantVal)
 		}
 	}
-	if seen != 2 {
-		t.Fatalf("found %d of the 2 RP parameters; the tripwire is not watching what it thinks it is", seen)
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("did not find expected SSM parameter %s; the tripwire is not watching what it thinks it is", name)
+		}
 	}
 }
 
