@@ -51,7 +51,10 @@
         <a href="#projections">Projections</a>
         <a href="#value">Value</a>
         <a href="#views">Views</a>
-        <a href="#infra">Infra</a>
+        <!-- Presentation only, like Tenants: GET /v1/infra is already in
+             adminOnlyRoutes, so a member reaching #infra by URL gets the 403
+             card. Hiding the link just stops handing testers a dead tab. -->
+        <a href="#infra" data-admin-only hidden>Infra</a>
         <a href="#football">Football</a>
         <a href="#passkeys">Passkeys</a>
         <a href="#settings">Settings</a>
