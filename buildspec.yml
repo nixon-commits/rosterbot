@@ -57,9 +57,17 @@ phases:
       # cdk-outputs.json — so CodeBuild names the dashboard sync as the failing
       # command for an error that happened in cdk deploy 90 seconds earlier
       # (rosterbot-ill).
+      #
+      # `--all`, not a bare `cdk deploy`. The app has held more than one stack
+      # since InfraCertStack was added for the us-east-1 rosterbot.dev
+      # certificate (CloudFront reads viewer certs from that region only), and
+      # cdk refuses a bare deploy on a multi-stack app: "Since this app includes
+      # more than a single stack, specify which stacks to use ... or specify
+      # `--all`". It exits 1, so every push to main fails here until this says
+      # --all. TestBuildspec_NamesStacksExplicitly pins it.
       - |
         set -e
-        cd infra && cdk deploy -c enableBuild=true --require-approval never --outputs-file ../cdk-outputs.json
+        cd infra && cdk deploy --all -c enableBuild=true --require-approval never --outputs-file ../cdk-outputs.json
         cd ..
       # Publish the static dashboard on every build, including the first build
       # that created its bucket and distribution above.

@@ -115,4 +115,4 @@ Every schedule fires the **same** Fargate task definition with a different comma
 - **No Fantrax/Chrome on the request path.** The heavy headless-Chrome login + projection work happens on the Fargate producer; the Lambda only serves precomputed S3 JSON, so it stays fast and cheap.
 - **Two state lifecycles.** `cache/` is the ephemeral TTL cache, read/written per-key live via `cache.Store` (never bulk-synced). `session/`, `claims/`, `backtest/` are durable and bulk-synced by `entrypoint.sh`.
 - **Secrets never in plaintext config.** Fargate pulls `/rosterbot/*` SSM SecureStrings as container secrets; the Lambda fetches the API token from SSM at cold start.
-- **Build is gated.** CodeBuild is only created with `-c enableBuild=true` (needs a one-time GitHub source credential). Always deploy with `cdk deploy -c enableBuild=true` so it isn't destroyed.
+- **Build is gated.** CodeBuild is only created with `-c enableBuild=true` (needs a one-time GitHub source credential). Always deploy with `cdk deploy --all -c enableBuild=true` so it isn't destroyed (`--all` because the app is multi-stack since `InfraCertStack`; a bare `cdk deploy` exits 1).

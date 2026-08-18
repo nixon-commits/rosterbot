@@ -87,7 +87,7 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
 
   Redeem the returned link on the origin the RP config currently names.
 - **SSM Parameter Store** (`/rosterbot/*`, SecureString) — all secrets, injected as task env.
-- **CodeBuild** — on push to `main`, builds + pushes the image to ECR, then runs **`cdk deploy -c enableBuild=true`** so infrastructure changes (schedules, task defs, IAM, Lambda) ship on merge — not just the image — before publishing the dashboard (reading the deploy's own outputs, see above) and launching the `projection-site` task (`ecs:RunTask` via `taskDef.GrantRun`, reusing `TaskSg` + public subnets) so it re-renders immediately with the new image. Before the `cdk deploy` step existed, a PR touching `infra/` merged green but its infra change sat undeployed until someone ran `cdk deploy` by hand (this is what left the `Archive` schedule inert for ~25h); deploying first also means a broken infra change now fails the build before the dashboard/projection-site steps run, rather than shipping around it. The `enableBuild=true` in the buildspec is mandatory — without it the deploy would delete the CodeBuild project running it. cdk works through the bootstrap roles, so the build role is granted only `sts:AssumeRole` on `cdk-hnb659fds-*`. The build host ships Go 1.20 + no cdk CLI, so the `install` phase adds Go 1.25 (`GOTOOLCHAIN=auto` upgrades further if a go.mod requires it) and the pinned cdk CLI. Gated by `enableBuild`.
+- **CodeBuild** — on push to `main`, builds + pushes the image to ECR, then runs **`cdk deploy --all -c enableBuild=true`** so infrastructure changes (schedules, task defs, IAM, Lambda) ship on merge — not just the image — before publishing the dashboard (reading the deploy's own outputs, see above) and launching the `projection-site` task (`ecs:RunTask` via `taskDef.GrantRun`, reusing `TaskSg` + public subnets) so it re-renders immediately with the new image. Before the `cdk deploy` step existed, a PR touching `infra/` merged green but its infra change sat undeployed until someone ran `cdk deploy` by hand (this is what left the `Archive` schedule inert for ~25h); deploying first also means a broken infra change now fails the build before the dashboard/projection-site steps run, rather than shipping around it. The `--all` is mandatory too, and for a blunter reason: the app has held more than one stack since `InfraCertStack` (the us-east-1 rosterbot.dev certificate), and cdk refuses a bare `cdk deploy` on a multi-stack app — it exits 1, so every push to `main` fails at this step until the flag is there. Nothing local catches that; `go build`/`go vet`/`go test`/`make build-modules`/`make check-pins` are all green and a developer running `cdk deploy --all` by hand sees it work, so it surfaces only in CodeBuild after merge (`infra/buildspec_test.go` now pins it). The `enableBuild=true` is mandatory — without it the deploy would delete the CodeBuild project running it. cdk works through the bootstrap roles, so the build role is granted only `sts:AssumeRole` on `cdk-hnb659fds-*`. The build host ships Go 1.20 + no cdk CLI, so the `install` phase adds Go 1.25 (`GOTOOLCHAIN=auto` upgrades further if a go.mod requires it) and the pinned cdk CLI. Gated by `enableBuild`.
 - **Ops notifications** — three EventBridge rules target one Lambda (`OpsNotify`, built from `opsnotify/`), which reads `PUSHOVER_USER_KEY` / `PUSHOVER_API_TOKEN` from SSM and posts to the personal ops channel at priority 0.
   - `BuildNotifyRule` matches the `Build` project's `CodeBuild Build State Change` events for `SUCCEEDED` / `FAILED` / `STOPPED`. This catches every failure phase (install/pre_build/build/deploy) — a buildspec curl would miss install/pre_build failures since `post_build` never runs then. Created only under `-c enableBuild=true`; the first build that introduces the rule won't notify itself, every subsequent build does.
   - `TaskFailRule` matches `ECS Task State Change` for any task in the cluster reaching `STOPPED` (rosterbot-naz). Whether that stop was a *failure* is decided in Go, not by the event pattern — see `internal/opsalert`. The Lambda derives a failure streak from the run ledger and pushes only on transitions: first failure, third consecutive, and recovery. A stopped task with no ledger record at all never reached the entrypoint's final write (OOM, image-pull, SIGKILL) and always alerts.
@@ -101,8 +101,8 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
 cd infra
 export JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1
 
-cdk diff                              # preview changes
-cdk deploy --require-approval never   # apply (schedules stay disabled)
+cdk diff --all                              # preview changes
+cdk deploy --all --require-approval never    # apply (schedules stay disabled)
 ```
 
 Run a job by hand (networking IDs from the default VPC; substitute the cluster name from
@@ -127,7 +127,7 @@ fetch before the first `cdk deploy`:
 cd lambda && go mod tidy                                   # resolve aws-lambda-go + sdk
 cd ../infra && go get github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2@latest && go mod tidy
 aws ssm put-parameter --name /rosterbot/ROSTERBOT_API_TOKEN --type SecureString --value '<token>' --overwrite
-cdk deploy --require-approval never                        # grab LineupApiUrl from the outputs
+cdk deploy --all --require-approval never                  # grab LineupApiUrl from the outputs
 ```
 
 GoFunction bundles the Lambda with local Go (cross-compiles to ARM64), so Docker
@@ -176,7 +176,7 @@ CodeBuild's GitHub webhook source needs a one-time source credential:
    import a GitHub PAT: `aws codebuild import-source-credentials --server-type GITHUB --auth-type PERSONAL_ACCESS_TOKEN --token <PAT>`.
 2. Deploy with the build project enabled:
    ```bash
-   cd infra && cdk deploy -c enableBuild=true --require-approval never
+   cd infra && cdk deploy --all -c enableBuild=true --require-approval never
    ```
 3. Push a commit to `main`; confirm a build appears in CodeBuild and a new image lands in ECR
    (`aws ecr describe-images --repository-name rosterbot --region us-west-1`).
@@ -189,7 +189,7 @@ hand-run on Fargate and verified (compare their Pushover output to the GHA twins
 1. **Parallel-run check (2–3 days):** hand-run each job, watch CloudWatch + Pushover.
 2. **Atomic swap** — enable AWS schedules and retire GHA in the same change window:
    ```bash
-   cd infra && cdk deploy -c schedulesEnabled=true -c enableBuild=true --require-approval never
+   cd infra && cdk deploy --all -c schedulesEnabled=true -c enableBuild=true --require-approval never
    ```
    ```bash
    git rm .github/workflows/lineup.yml .github/workflows/prospects.yml \
@@ -201,12 +201,12 @@ hand-run on Fargate and verified (compare their Pushover output to the GHA twins
 4. **Update docs** — point `README.md` / `CLAUDE.md` GHA sections at this runbook.
 5. Confirm the first scheduled AWS run of each job fires and notifies as expected.
 
-> Post-cutover, schedules are **ENABLED by default** — a plain `cdk deploy` keeps the 8 jobs
+> Post-cutover, schedules are **ENABLED by default** — a plain `cdk deploy --all` keeps the 8 jobs
 > running. To pause everything, deploy with `-c schedulesEnabled=false` (explicit kill switch).
 > CodeBuild stays absent unless `-c enableBuild=true`.
 
 ## Cost control while idle
 
-`cd infra && cdk destroy` tears down everything except the state bucket (RETAIN) and ECR. The
-SSM params and state survive, so a later `cdk deploy` brings it back. Destroy to stop the few
+`cd infra && cdk destroy --all` tears down everything except the state bucket (RETAIN) and ECR. The
+SSM params and state survive, so a later `cdk deploy --all` brings it back. Destroy to stop the few
 dollars/month between experiments.
