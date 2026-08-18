@@ -4,7 +4,7 @@
 // is Settings. createElement/textContent throughout, following settings.js —
 // names are user-supplied and reach the DOM.
 import { api } from "./api.js";
-import { registerPasskey } from "./webauthn.js";
+import { registerPasskey, ceremonyErrorMessage } from "./webauthn.js";
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -113,7 +113,7 @@ function addButton(cardEl) {
       await fillPasskeysCard(cardEl);
     } catch (err) {
       btn.disabled = false;
-      error.textContent = "Could not add a passkey — try again.";
+      error.textContent = ceremonyErrorMessage(err);
     }
   });
   wrap.append(btn, error);
