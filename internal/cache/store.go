@@ -54,9 +54,34 @@ var defaultStore Store
 // SetDefaultStore makes every FileCache use s instead of a filesystem store.
 func SetDefaultStore(s Store) { defaultStore = s }
 
+// noopStore is the storage for a cache that has none: every read misses, every
+// write succeeds by doing nothing. It exists so "there is no cache" is a state
+// the seam can represent, rather than an fsStore rooted at "" that fails every
+// Put with `mkdir : no such file or directory` (rosterbot-9uqx).
+type noopStore struct{}
+
+func (noopStore) Get(string) ([]byte, bool, error) { return nil, false, nil }
+func (noopStore) Put(string, []byte) error         { return nil }
+func (noopStore) Remove(string) error              { return nil }
+
+// storeForDir resolves the backing store for a cache dir.
+//
+// The defaultStore check MUST stay first. SetDefaultStore backs every
+// FileCache regardless of the dir passed to New, so on AWS an empty dir is an
+// ordinary S3-backed cache and must not be made inert — the empty-dir guard
+// below applies only to the filesystem branch it belongs to.
+//
+// An empty dir on the filesystem branch means there is nowhere to store
+// anything, which is a legitimate state (`--no-cache`, and the several callers
+// that thread a cacheDir straight through from it), not a broken path. It was
+// previously an fsStore rooted at "", which read as a miss and then failed
+// every write loudly enough to bury a real cache warning.
 func storeForDir(dir string) Store {
 	if defaultStore != nil {
 		return defaultStore
+	}
+	if dir == "" {
+		return noopStore{}
 	}
 	return fsStore{root: dir}
 }

@@ -55,8 +55,13 @@ func (c *FileCache[T]) Get(key string, fetch func() (T, error)) (T, error) {
 	if err != nil {
 		return data, err
 	}
-	if err := c.save(key, data); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to save cache %s: %v\n", key, err)
+	// The write obeys the same bypass as the read above. A zero TTL means every
+	// Get refetches, so anything written here could never be read back — the
+	// documented "TTL of 0 bypasses cache" was true of the read half only.
+	if c.ttl > 0 {
+		if err := c.save(key, data); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to save cache %s: %v\n", key, err)
+		}
 	}
 	return data, nil
 }
