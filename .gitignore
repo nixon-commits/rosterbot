@@ -1,4 +1,9 @@
+# Credentials. `.env` alone matches only that exact name, so a backup or
+# variant (.env.bak, .env.local, an editor save) was untracked-but-committable
+# — observed live 2026-08-19 with a .env.bak-* holding FANTRAX_PASSWORD.
 .env
+.env.*
+!.env.example
 rosterbot
 *.test
 .claude/settings.local.json
