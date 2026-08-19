@@ -763,6 +763,11 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	awsroute53.NewAaaaRecord(stack, jsii.String("ApexAliasAAAA"), &awsroute53.AaaaRecordProps{
 		Zone: zone, RecordName: jsii.String(apexHost), Target: dashTarget,
 	})
+
+	// Mail for the apex, so the privacy contact published at
+	// rosterbot.dev/privacy.html actually receives deletion requests. Web
+	// records above, mail records here — same zone, unrelated failure modes.
+	addMailRecords(stack, zone)
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardCdnId"), &awscdk.CfnOutputProps{Value: dashboardDist.DistributionId()})
 
 	// The Lambda's WebAuthn RP config needs the dashboard's own origin, which

@@ -112,3 +112,97 @@ func NewCertStack(scope constructs.Construct, id string, props *CertStackProps) 
 
 	return stack, cert
 }
+
+// Apple-issued values for the iCloud+ Custom Email Domain on rosterbot.dev.
+//
+// They are transcribed verbatim from the setup wizard rather than assembled
+// from zoneName. dkimTarget contains the string "rosterbot.dev" and it is
+// tempting to build it — but it is an identifier Apple minted on their side,
+// not a name this zone controls, and a renamed domain would get a new one from
+// Apple rather than a re-interpolated one from us. appleVerifyTxt is likewise
+// account-specific and means nothing anywhere else.
+const (
+	appleVerifyTxt = "apple-domain=FVwanc4YuvGbc7U6"
+	spfTxt         = "v=spf1 include:icloud.com ~all"
+	dkimHost       = "sig1._domainkey"
+	dkimTarget     = "sig1.dkim.rosterbot.dev.at.icloudmailadmin.com."
+	dmarcHost      = "_dmarc"
+	dmarcTxt       = "v=DMARC1; p=none;"
+)
+
+// addMailRecords points rosterbot.dev's mail at iCloud so privacy@rosterbot.dev
+// receives it.
+//
+// This exists because web/dashboard/privacy.html publishes that address as the
+// channel for data access and deletion requests, and until these records
+// existed the zone had no MX at all — every such request bounced. A privacy
+// contact that silently rejects mail is worse than none: it makes the rights
+// the policy grants unexercisable while looking, from the outside, like they
+// were granted.
+//
+// Three details here are load-bearing, and two of them fail in ways a reviewer
+// would not predict from the diff:
+//
+//  1. THE TWO APEX TXT VALUES ARE ONE RECORD, NOT TWO. Apple lists the domain
+//     verification string and the SPF policy as separate rows, and the obvious
+//     transcription is two NewTxtRecord calls at the apex. That does not
+//     deploy: DNS permits exactly one RRSet per (name, type), so the second
+//     fails with "RRSet of type TXT with DNS name rosterbot.dev. already
+//     exists" — and it fails mid-deploy, after the MX record has landed, so
+//     the zone is left half-configured. One record with two values is the
+//     same DNS result and the only synthesizable spelling of it.
+//
+//  2. THE VALUES CARRY NO QUOTES. Apple's wizard displays the SPF row already
+//     quoted, and CDK quotes it again: TxtRecord runs each value through
+//     JSON.stringify (aws-route53/lib/record-set.js, formatTxt), so a value
+//     passed in as "v=spf1 ..." is published as ""v=spf1 ..."". That is not a
+//     deploy error — it synths, deploys, and resolves green — it is simply an
+//     SPF record no receiver can parse, which surfaces weeks later as mail
+//     landing in spam with nothing in any log pointing here.
+//
+//  3. SPF ENDS IN ~all, NOT -all. A domain that sends no mail should publish
+//     "v=spf1 -all" and this one did not send any until now. Connecting iCloud
+//     changes that premise: the domain now has a legitimate sender, and a hard
+//     fail alongside an include: is a rejection policy for anything the include
+//     does not cover. Apple specifies the softfail; take theirs.
+//
+// DMARC is deliberately inert. p=none asserts ownership and makes tightening a
+// one-word edit, but it instructs receivers to do nothing, so it is not yet the
+// anti-spoofing control the record type implies. Raise it to p=quarantine and
+// then p=reject once mail through this domain has been observed working and
+// DKIM-signed — tightening before that turns a misconfigured DKIM key into
+// silently discarded mail, and the first mail this address is likely to carry
+// is somebody's deletion request.
+//
+// Records live in CDK rather than the Route 53 console for the reason the zone
+// import already documents: a console edit is invisible to review and survives
+// only until someone wonders what wrote it.
+func addMailRecords(scope constructs.Construct, zone awsroute53.IHostedZone) {
+	awsroute53.NewMxRecord(scope, jsii.String("MailMx"), &awsroute53.MxRecordProps{
+		Zone:       zone,
+		RecordName: jsii.String(apexHost),
+		Values: &[]*awsroute53.MxRecordValue{
+			{HostName: jsii.String("mx01.mail.icloud.com."), Priority: jsii.Number(10)},
+			{HostName: jsii.String("mx02.mail.icloud.com."), Priority: jsii.Number(10)},
+		},
+	})
+
+	// Both apex TXT values, one RRSet — see (1) above.
+	awsroute53.NewTxtRecord(scope, jsii.String("MailTxt"), &awsroute53.TxtRecordProps{
+		Zone:       zone,
+		RecordName: jsii.String(apexHost),
+		Values:     jsii.Strings(appleVerifyTxt, spfTxt),
+	})
+
+	awsroute53.NewCnameRecord(scope, jsii.String("MailDkim"), &awsroute53.CnameRecordProps{
+		Zone:       zone,
+		RecordName: jsii.String(dkimHost),
+		DomainName: jsii.String(dkimTarget),
+	})
+
+	awsroute53.NewTxtRecord(scope, jsii.String("MailDmarc"), &awsroute53.TxtRecordProps{
+		Zone:       zone,
+		RecordName: jsii.String(dmarcHost),
+		Values:     jsii.Strings(dmarcTxt),
+	})
+}
