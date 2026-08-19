@@ -10,7 +10,10 @@ package statestore
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/nixon-commits/rosterbot/internal/analysis"
 	"github.com/nixon-commits/rosterbot/internal/archive"
@@ -45,6 +48,7 @@ import (
 // grades/dt=.../ itself, whereas the status page lists the leaf where the
 // objects actually land.
 type artifact struct {
+	name               string
 	s3Prefix, localDir string
 	perTenant          bool
 }
@@ -53,11 +57,11 @@ type artifact struct {
 // the single declaration rather than restated here — a second copy is exactly
 // what layout exists to prevent.
 func of(a layout.Artifact) artifact {
-	return artifact{a.S3Prefix, a.LocalDir, a.PerTenant}
+	return artifact{a.Name, a.S3Prefix, a.LocalDir, a.PerTenant}
 }
 
 var (
-	cacheArtifact            = artifact{layout.Cache.S3Prefix, "", false} // local: default fsStore, dir unused
+	cacheArtifact            = artifact{name: layout.Cache.Name, s3Prefix: layout.Cache.S3Prefix} // local: default fsStore, dir unused
 	analysisArtifact         = of(layout.Analysis)
 	teamValueArtifact        = of(layout.TeamValues)
 	footballValueArtifact    = of(layout.FootballValues)
@@ -128,7 +132,58 @@ func pick[T any](s *Selector, a artifact,
 	if s.bucket != "" {
 		return s3New(context.Background(), s.bucket, s.prefixFor(a))
 	}
-	return fileNew(s.dirFor(a)), nil
+	dir := s.dirFor(a)
+	if segs := strandedTenants(a, s.tenant, dir); len(segs) > 0 {
+		var zero T
+		return zero, fmt.Errorf(
+			"%s: no tenant is set, but %s holds tenant data (%s): this read cannot say whose "+
+				"data it wants, and the un-segmented path it would fall back to is the frozen "+
+				"pre-migration copy, so it would grade recent days as missing rather than fail. "+
+				"Set ROSTERBOT_USER_ID (rosterbot-4b9)",
+			a.name, dir, strings.Join(segs, ", "))
+	}
+	return fileNew(dir), nil
+}
+
+// strandedTenants reports the user= segments sitting beside the un-segmented
+// path a tenant-less read would resolve. Empty means there is no ambiguity to
+// refuse.
+//
+// The guard is LOCAL-ONLY on purpose, and the asymmetry is not an oversight.
+// A deployed task always declares its tenant — infra sets ROSTERBOT_USER_ID on
+// the task definition from SSM and the fan-out overrides it per tenant — and a
+// deployed run that somehow did not is already refused by
+// resolveCredentialMode before any store is built, on the same reasoning: a
+// tenancy that is real but unattributable has no safe default. Local dev has no
+// user directory, so nothing refused it there, which is exactly where
+// rosterbot-4b9 landed. Probing S3 instead would cost a ListObjectsV2 on every
+// store construction to re-derive what the environment already states.
+//
+// EVIDENCE-BASED RATHER THAN UNCONDITIONAL, deliberately. Refusing every
+// tenant-less local read would break existing local trees, every hermetic test
+// and every fresh checkout for a mistake nobody made: a machine that never
+// synced tenant data has exactly one copy, and it is the right one. Absence of
+// evidence is not evidence — the same rule that stops internal/roster listing a
+// player with no position data as ineligible.
+//
+// A missing or unreadable directory yields no segments for the same reason: it
+// is the fresh-machine case, not a concealed second copy.
+func strandedTenants(a artifact, tenant, dir string) []string {
+	if !a.perTenant || tenant != "" || dir == "" {
+		return nil
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var segs []string
+	for _, e := range ents {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "user=") {
+			segs = append(segs, strings.TrimPrefix(e.Name(), "user="))
+		}
+	}
+	sort.Strings(segs)
+	return segs
 }
 
 // prefixFor inserts user=<tenant>/ directly after the artifact prefix, for
