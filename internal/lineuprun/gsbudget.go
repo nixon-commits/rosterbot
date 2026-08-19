@@ -154,8 +154,16 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 
 	spNames := rosterSPNames(in.PitcherRoster)
 	usedGS := pastGS
-	forecast, fcWarnings := buildGSForecast(sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts)
-	d.Logs = append(d.Logs, fcWarnings...)
+	// The forecast is the last step of the cascade and obeys the same rule as
+	// every step before it: no gate beats a gate running on a number nobody can
+	// vouch for. Unlike the GS-limit fetch this raises no Pushover — a statsapi
+	// blip is transient and self-healing on the next hourly run, where a
+	// Fantrax config read that stops working is not.
+	forecast, fcErr := buildGSForecast(sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts)
+	if fcErr != nil {
+		d.logf("WARNING: %v — GS limit disabled", fcErr)
+		return d
+	}
 
 	// Today's already-locked starts count as used, not forecast demand.
 	// Both lookups must succeed — a partial view would undercount.
@@ -241,43 +249,42 @@ func countTodayStarts(pitcherRoster []fantrax.Player, lockedTeams map[string]boo
 //
 // projPts is injected rather than taking a projection source directly, so the
 // forecast can be tested without building one.
-// The second return is the warnings the caller should surface. Both schedule
-// lookups used to discard their errors, which made an upstream outage
-// indistinguishable from a genuinely quiet week — the forecast simply read zero
-// and nothing said why. Neither failure is fatal (a degraded forecast still
-// beats no gate at all, and both under-count rather than over-claim), but
-// neither may be silent.
+// A schedule-seam failure is FATAL and returns an error rather than a degraded
+// forecast. Both lookups used to discard their errors outright, which made an
+// upstream outage indistinguishable from a genuinely quiet week — the forecast
+// read zero and nothing said why.
+//
+// Reporting a partial forecast instead was the tempting middle ground, on the
+// reasoning that an under-count only makes the gate suppress less. That does
+// not survive the probables case: losing the map drops confirmed starts (1.0
+// each) while promoting every already-settled club into the estimate (0.2
+// each), so the error runs in an unknown direction. ComputeGSBudget's rule
+// exists so nobody has to adjudicate that per failure mode — a wrong budget
+// silently mis-shapes pitcher usage for the rest of the week, and no budget
+// does not. The cost is bounded by cadence rather than by severity: the lineup
+// job runs hourly, so a statsapi blip costs one run's gate.
 func buildGSForecast(
 	sched gsScheduleClient,
 	spNames map[string]fantrax.Player,
 	numPSlots int,
 	today, weekEnd time.Time,
 	projPts func(fantrax.Player) float64,
-) ([]optimizer.DayForecast, []string) {
+) ([]optimizer.DayForecast, error) {
 	var forecast []optimizer.DayForecast
-	var warnings []string
 	for d := today.AddDate(0, 0, 1); !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
 		ds := d.Format("2006-01-02")
 
-		// A failed schedule lookup leaves the day with no rotation demand: the
-		// estimate needs to know which clubs play and there is no second source
-		// for that. Confirmed probables still land, since a published probable
-		// is itself evidence of a game.
-		playing, playErr := sched.TeamsPlayingOn(d)
-		if playErr != nil {
-			warnings = append(warnings, fmt.Sprintf(
-				"WARNING: schedule unavailable for %s (%v) — that day forecasts no rotation demand", ds, playErr))
+		// Both reads abort the whole forecast on the first failure. There is
+		// nothing to learn from the remaining days once the week's total is
+		// already disqualified, and no reason to spend more round-trips on a
+		// seam that just failed.
+		playing, err := sched.TeamsPlayingOn(d)
+		if err != nil {
+			return nil, fmt.Errorf("schedule unavailable for %s: %w", ds, err)
 		}
-
-		// A failed probables lookup leaves every playing club UNANNOUNCED
-		// rather than settled. The alternative reading — "no club named anyone
-		// we own" — is precisely the silent zero this bug was, and it is the
-		// less honest of the two: not knowing who is announced is not the same
-		// as knowing nobody is.
-		probs, probErr := sched.ProbableStarters(d)
-		if probErr != nil {
-			warnings = append(warnings, fmt.Sprintf(
-				"WARNING: probable starters unavailable for %s (%v) — every playing club counted as unannounced", ds, probErr))
+		probs, err := sched.ProbableStarters(d)
+		if err != nil {
+			return nil, fmt.Errorf("probable starters unavailable for %s: %w", ds, err)
 		}
 
 		// Clubs that have already named a starter for this day.
@@ -329,5 +336,5 @@ func buildGSForecast(
 
 		forecast = append(forecast, df)
 	}
-	return forecast, warnings
+	return forecast, nil
 }

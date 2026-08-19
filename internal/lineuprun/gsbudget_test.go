@@ -374,39 +374,77 @@ func TestBuildGSForecast_OurSPOnAClubThatNamedSomeoneElseContributesNothing(t *t
 	}
 }
 
-// A failed probables fetch must not read as "every club has settled and none of
-// them picked us" — that is indistinguishable from a genuine zero and is
-// exactly how an upstream outage would silently zero the week's forecast. An
-// unanswerable question about who is announced leaves every playing club
-// unannounced, which is the honest reading, and says so.
-func TestBuildGSForecast_ProbablesFetchErrorWarnsAndStillEstimates(t *testing.T) {
+// A schedule-seam failure is FATAL to the forecast, not a degraded day.
+//
+// The soft reading is tempting because a partial forecast under-counts, and an
+// under-count only makes the gate suppress less. That reasoning does not
+// survive the probables case: losing the probables map drops confirmed starts
+// (worth 1.0 each) while promoting every already-settled club into the estimate
+// (worth 0.2 each), so the error is in an unknown direction. The house rule in
+// ComputeGSBudget exists precisely so nobody has to adjudicate that per failure
+// mode — a wrong budget mis-shapes pitcher usage all week, and no budget does
+// not.
+func TestBuildGSForecast_ProbablesFetchErrorIsFatal(t *testing.T) {
 	today := day(2026, 7, 25)
-	playing := map[string]bool{}
-	spNames := map[string]fantrax.Player{}
-	for i := 0; i < 7; i++ {
-		team := string(rune('A' + i))
-		playing[team] = true
-		spNames[team] = activeSP(team, team, team)
-	}
 	sched := &fakeSchedule{
-		playing:      map[string]map[string]bool{"2026-07-26": playing},
+		playing:      map[string]map[string]bool{"2026-07-26": {"AAA": true}},
 		probablesErr: map[string]error{"2026-07-26": errors.New("statsapi 503")},
 	}
+	spNames := map[string]fantrax.Player{"our arm": activeSP("1", "Our Arm", "AAA")}
 
-	got, warnings := buildGSForecast(sched, spNames, 6, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 0 })
+	got, err := buildGSForecast(sched, spNames, 6, today, day(2026, 7, 26),
+		func(fantrax.Player) float64 { return 10 })
 
-	if got[0].Estimated != 7.0/5.0 {
-		t.Errorf("estimated = %v, want 1.4 — a fetch failure must not read as zero demand", got[0].Estimated)
+	if err == nil {
+		t.Fatalf("want an error, got forecast %+v", got)
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "statsapi 503") {
-		t.Errorf("warnings = %v, want one naming the underlying error", warnings)
+	if !strings.Contains(err.Error(), "statsapi 503") || !strings.Contains(err.Error(), "2026-07-26") {
+		t.Errorf("error = %q, want it to name the failing day and the underlying cause", err)
+	}
+	if got != nil {
+		t.Errorf("a failed forecast must not also return a partial one, got %+v", got)
 	}
 }
 
-// The healthy path stays silent, so a warning in the run log always means
+func TestBuildGSForecast_ScheduleFetchErrorIsFatal(t *testing.T) {
+	today := day(2026, 7, 25)
+	sched := &fakeSchedule{
+		playingErr: map[string]error{"2026-07-26": errors.New("statsapi timeout")},
+	}
+
+	got, err := buildGSForecast(sched, nil, 6, today, day(2026, 7, 26),
+		func(fantrax.Player) float64 { return 10 })
+
+	if err == nil {
+		t.Fatalf("want an error, got forecast %+v", got)
+	}
+	if !strings.Contains(err.Error(), "statsapi timeout") {
+		t.Errorf("error = %q, want it to name the underlying cause", err)
+	}
+}
+
+// Fail fast: once a day is unreadable the forecast is already disqualified, so
+// there is nothing to learn from the remaining days and no reason to spend more
+// statsapi round-trips on a seam that just failed.
+func TestBuildGSForecast_StopsAtTheFirstUnreadableDay(t *testing.T) {
+	today := day(2026, 7, 25)
+	sched := &countingSchedule{fakeSchedule: fakeSchedule{
+		playingErr: map[string]error{"2026-07-26": errors.New("boom")},
+	}}
+
+	if _, err := buildGSForecast(sched, nil, 6, today, day(2026, 7, 30),
+		func(fantrax.Player) float64 { return 0 }); err == nil {
+		t.Fatal("want an error")
+	}
+	if sched.playingCalls != 1 {
+		t.Errorf("TeamsPlayingOn called %d times, want 1 — the loop must abort on the first failure",
+			sched.playingCalls)
+	}
+}
+
+// The healthy path returns no error, so an error in the run log always means
 // something actually failed.
-func TestBuildGSForecast_HealthyDaysWarnAboutNothing(t *testing.T) {
+func TestBuildGSForecast_HealthyDaysReportNoError(t *testing.T) {
 	today := day(2026, 7, 25)
 	sched := &fakeSchedule{
 		playing:   map[string]map[string]bool{"2026-07-26": {"AAA": true}},
@@ -414,10 +452,19 @@ func TestBuildGSForecast_HealthyDaysWarnAboutNothing(t *testing.T) {
 	}
 	spNames := map[string]fantrax.Player{"our arm": activeSP("1", "Our Arm", "AAA")}
 
-	_, warnings := buildGSForecast(sched, spNames, 6, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 10 })
-
-	if len(warnings) != 0 {
-		t.Errorf("warnings = %v, want none on a healthy day", warnings)
+	if _, err := buildGSForecast(sched, spNames, 6, today, day(2026, 7, 26),
+		func(fantrax.Player) float64 { return 10 }); err != nil {
+		t.Errorf("healthy day returned %v, want nil", err)
 	}
+}
+
+// countingSchedule records how many times the seam was reached.
+type countingSchedule struct {
+	fakeSchedule
+	playingCalls int
+}
+
+func (c *countingSchedule) TeamsPlayingOn(d time.Time) (map[string]bool, error) {
+	c.playingCalls++
+	return c.fakeSchedule.TeamsPlayingOn(d)
 }

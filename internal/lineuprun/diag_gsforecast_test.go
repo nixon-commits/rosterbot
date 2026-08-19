@@ -29,9 +29,9 @@ func TestDiagGSForecastAgainstLiveSchedule(t *testing.T) {
 	if teamsCSV == "" {
 		t.Skip("set DIAG_SP_TEAMS=ARI,BAL,... to run")
 	}
-	weekEnd, err := time.Parse("2006-01-02", os.Getenv("DIAG_WEEK_END"))
-	if err != nil {
-		t.Fatalf("DIAG_WEEK_END must be YYYY-MM-DD: %v", err)
+	weekEnd, perr := time.Parse("2006-01-02", os.Getenv("DIAG_WEEK_END"))
+	if perr != nil {
+		t.Fatalf("DIAG_WEEK_END must be YYYY-MM-DD: %v", perr)
 	}
 
 	spNames := map[string]fantrax.Player{}
@@ -46,8 +46,11 @@ func TestDiagGSForecastAgainstLiveSchedule(t *testing.T) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	sched := schedule.NewClient()
 
-	forecast, warnings := buildGSForecast(sched, spNames, 6, today, weekEnd,
+	forecast, err := buildGSForecast(sched, spNames, 6, today, weekEnd,
 		func(fantrax.Player) float64 { return 12 })
+	if err != nil {
+		t.Fatalf("forecast failed: %v", err)
+	}
 
 	var total float64
 	for _, f := range forecast {
@@ -71,9 +74,6 @@ func TestDiagGSForecastAgainstLiveSchedule(t *testing.T) {
 		total += float64(len(f.ConfirmedStarters)) + f.Estimated
 		t.Logf("%s  leagueProbables=%-3d ourClubsPlaying=%d unannounced=%d -> confirmed=%d estimated=%.2f",
 			f.Date.Format("2006-01-02"), len(probs), play, unann, len(f.ConfirmedStarters), f.Estimated)
-	}
-	for _, w := range warnings {
-		t.Logf("%s", w)
 	}
 	t.Logf("TOTAL FutureDemand = %.2f over %d days", total, len(forecast))
 	if total == 0 {

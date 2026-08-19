@@ -281,3 +281,47 @@ type failingLockedSchedule struct{ fakeSchedule }
 func (f *failingLockedSchedule) LockedTeams(time.Time) (map[string]bool, error) {
 	return nil, errors.New("locked teams unavailable")
 }
+
+// rosterbot-1jvj: the forecast is the last step of the cascade, and it obeys
+// the same rule as every step before it — a failure disables the gate rather
+// than running it on a number nobody can vouch for.
+//
+// The cost is bounded by cadence, not by severity: the lineup job runs hourly,
+// so a statsapi blip costs one run's gate, and the next run rebuilds it.
+func TestComputeGSBudget_ForecastScheduleFailureDisablesGate(t *testing.T) {
+	sched := &fakeSchedule{
+		locked:     map[string]map[string]bool{"2026-07-25": {"LAD": true}},
+		probables:  map[string]map[string]string{"2026-07-25": {"ace arm": "LAD"}},
+		playingErr: map[string]error{"2026-07-26": errors.New("statsapi timeout")},
+	}
+
+	d := ComputeGSBudget(healthyGS(), sched, gsInputs())
+
+	if d.Budget != nil {
+		t.Errorf("Budget = %+v, want nil — an unverifiable forecast must disable the gate", d.Budget)
+	}
+	logs := logsJoined(d)
+	if !strings.Contains(logs, "statsapi timeout") || !strings.Contains(logs, "GS limit disabled") {
+		t.Errorf("logs = %q, want the cause and the consequence", logs)
+	}
+	if d.Alert != nil {
+		t.Errorf("Alert = %+v, want none — a schedule blip is not the GS-limit-fetch alert", d.Alert)
+	}
+}
+
+func TestComputeGSBudget_ForecastProbablesFailureDisablesGate(t *testing.T) {
+	sched := &fakeSchedule{
+		locked:       map[string]map[string]bool{"2026-07-25": {"LAD": true}},
+		probables:    map[string]map[string]string{"2026-07-25": {"ace arm": "LAD"}},
+		probablesErr: map[string]error{"2026-07-26": errors.New("statsapi 503")},
+	}
+
+	d := ComputeGSBudget(healthyGS(), sched, gsInputs())
+
+	if d.Budget != nil {
+		t.Errorf("Budget = %+v, want nil", d.Budget)
+	}
+	if !strings.Contains(logsJoined(d), "statsapi 503") {
+		t.Errorf("logs = %q, want the underlying cause named", logsJoined(d))
+	}
+}
