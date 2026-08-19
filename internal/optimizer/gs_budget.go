@@ -79,9 +79,14 @@ func (b *GSBudget) Remaining() int {
 }
 
 // FutureDemand returns the projected count of SP starts on days strictly
-// after today through the end of the matchup week. For each day, prefers the
-// count of confirmed probables; falls back to the rotation-math estimate when
-// no probables are announced.
+// after today through the end of the matchup week.
+//
+// A day's two regimes ADD, they do not substitute: ConfirmedStarters covers the
+// clubs that have named a starter and Estimated covers the clubs that have not,
+// so they describe disjoint sets of our pitchers (rosterbot-1jvj). Preferring
+// confirmed when non-empty discarded the estimate on every partially-announced
+// day — and since MLB trickles probables out days ahead, that is nearly every
+// day of the week.
 func (b *GSBudget) FutureDemand() float64 {
 	if b == nil {
 		return 0
@@ -91,11 +96,7 @@ func (b *GSBudget) FutureDemand() float64 {
 		if !f.Date.After(b.Today) {
 			continue
 		}
-		if len(f.ConfirmedStarters) > 0 {
-			total += float64(len(f.ConfirmedStarters))
-		} else {
-			total += f.Estimated
-		}
+		total += float64(len(f.ConfirmedStarters)) + f.Estimated
 	}
 	return total
 }
@@ -163,17 +164,19 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) ([]ScoredPitcher, GSG
 		return scored, report
 	}
 
+	// Confirmed and estimated ADD within a day — they describe disjoint sets of
+	// our pitchers (named clubs vs unnamed ones), so an either/or read here
+	// would drop the estimate on every partially-announced day and let the gate
+	// under-count planned starts (rosterbot-1jvj). This must stay in step with
+	// FutureDemand, which the operator display reports.
 	var futureConfirmed []float64
 	var futureEstimated float64
 	for _, f := range budget.Forecast {
 		if !f.Date.After(budget.Today) {
 			continue
 		}
-		if len(f.ConfirmedStarters) > 0 {
-			futureConfirmed = append(futureConfirmed, f.ConfirmedStarters...)
-		} else {
-			futureEstimated += f.Estimated
-		}
+		futureConfirmed = append(futureConfirmed, f.ConfirmedStarters...)
+		futureEstimated += f.Estimated
 	}
 
 	totalKnown := len(todayStarters) + len(futureConfirmed)
