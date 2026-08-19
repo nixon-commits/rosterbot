@@ -154,7 +154,16 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 
 	spNames := rosterSPNames(in.PitcherRoster)
 	usedGS := pastGS
-	forecast := buildGSForecast(sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts)
+	// The forecast is the last step of the cascade and obeys the same rule as
+	// every step before it: no gate beats a gate running on a number nobody can
+	// vouch for. Unlike the GS-limit fetch this raises no Pushover — a statsapi
+	// blip is transient and self-healing on the next hourly run, where a
+	// Fantrax config read that stops working is not.
+	forecast, fcErr := buildGSForecast(sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts)
+	if fcErr != nil {
+		d.logf("WARNING: %v — GS limit disabled", fcErr)
+		return d
+	}
 
 	// Today's already-locked starts count as used, not forecast demand.
 	// Both lookups must succeed — a partial view would undercount.
@@ -214,62 +223,118 @@ func countTodayStarts(pitcherRoster []fantrax.Player, lockedTeams map[string]boo
 // remaining day of the matchup week — today+1 through weekEnd, since today's
 // starts are already counted as used.
 //
-// Two regimes per day, mirroring what the upstream actually knows:
-//   - probables published: each rostered SP confirmed to start contributes its
-//     projected points, so the gate can rank across the week by value rather
-//     than by count. Capped at numPSlots (only active-slot SPs accrue a start),
-//     keeping the highest-value ones.
-//   - no probables yet: estimate by rotation math — rostered SPs whose team
-//     plays, divided by a 5-man rotation, then capped at numPSlots. The cap is
-//     on starts, so it applies after the division, not before it.
+// The two regimes are PER CLUB, not per day, and that is the whole correctness
+// story (rosterbot-1jvj). Each rostered SP lands in exactly one bucket:
+//   - named as its club's probable → a confirmed start, contributing its
+//     projected points so the gate can rank across the week by value rather
+//     than by count;
+//   - club plays but has not named anyone yet → rotation-math demand, since a
+//     start is coming from that club and we do not yet know whose;
+//   - club plays and named someone else → nothing, the day is settled for us;
+//   - club does not play → nothing.
+//
+// Splitting per day instead — gating the estimate on len(probs) > 0 — made the
+// fallback unreachable in production. MLB trickles probables out up to a week
+// ahead, so the league-wide map is essentially never empty: measured against
+// statsapi on 2026-08-19, the four remaining days of the week had 14, 6, 4 and
+// 2 announced probables against 18-30 clubs playing. A single announcement for
+// ANY club, ours or not, zeroed the entire day, and FutureDemand() read 0.0 all
+// week — which in turn meant applyGSGate saw no competition for the remaining
+// budget and never suppressed anything.
+//
+// Which clubs have named a starter comes from the probables map's VALUES. That
+// is per-club information carried in the same statsapi payload (a club appears
+// there iff one of its games has a non-null probablePitcher); len(probs) is a
+// league-wide count and says nothing about any particular club.
 //
 // projPts is injected rather than taking a projection source directly, so the
 // forecast can be tested without building one.
+// A schedule-seam failure is FATAL and returns an error rather than a degraded
+// forecast. Both lookups used to discard their errors outright, which made an
+// upstream outage indistinguishable from a genuinely quiet week — the forecast
+// read zero and nothing said why.
+//
+// Reporting a partial forecast instead was the tempting middle ground, on the
+// reasoning that an under-count only makes the gate suppress less. That does
+// not survive the probables case: losing the map drops confirmed starts (1.0
+// each) while promoting every already-settled club into the estimate (0.2
+// each), so the error runs in an unknown direction. ComputeGSBudget's rule
+// exists so nobody has to adjudicate that per failure mode — a wrong budget
+// silently mis-shapes pitcher usage for the rest of the week, and no budget
+// does not. The cost is bounded by cadence rather than by severity: the lineup
+// job runs hourly, so a statsapi blip costs one run's gate.
 func buildGSForecast(
 	sched gsScheduleClient,
 	spNames map[string]fantrax.Player,
 	numPSlots int,
 	today, weekEnd time.Time,
 	projPts func(fantrax.Player) float64,
-) []optimizer.DayForecast {
+) ([]optimizer.DayForecast, error) {
 	var forecast []optimizer.DayForecast
 	for d := today.AddDate(0, 0, 1); !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
-		playing, _ := sched.TeamsPlayingOn(d)
-		probs, _ := sched.ProbableStarters(d)
+		ds := d.Format("2006-01-02")
+
+		// Both reads abort the whole forecast on the first failure. There is
+		// nothing to learn from the remaining days once the week's total is
+		// already disqualified, and no reason to spend more round-trips on a
+		// seam that just failed.
+		playing, err := sched.TeamsPlayingOn(d)
+		if err != nil {
+			return nil, fmt.Errorf("schedule unavailable for %s: %w", ds, err)
+		}
+		probs, err := sched.ProbableStarters(d)
+		if err != nil {
+			return nil, fmt.Errorf("probable starters unavailable for %s: %w", ds, err)
+		}
+
+		// Clubs that have already named a starter for this day.
+		announced := make(map[string]bool, len(probs))
+		for _, team := range probs {
+			announced[team] = true
+		}
 
 		df := optimizer.DayForecast{Date: d}
-		if len(probs) > 0 {
-			for normName, team := range probs {
-				p, ours := spNames[normName]
-				if !ours || p.MLBTeam != team {
-					continue
-				}
+		var unannouncedSPs float64
+		for normName, p := range spNames {
+			if team, ok := probs[normName]; ok && team == p.MLBTeam {
 				df.ConfirmedStarters = append(df.ConfirmedStarters, projPts(p))
+				continue
 			}
-			// Cap at active P slots, keeping the highest-value probables.
-			if len(df.ConfirmedStarters) > numPSlots {
-				sort.Slice(df.ConfirmedStarters, func(i, j int) bool {
-					return df.ConfirmedStarters[i] > df.ConfirmedStarters[j]
-				})
-				df.ConfirmedStarters = df.ConfirmedStarters[:numPSlots]
+			if playing[p.MLBTeam] && !announced[p.MLBTeam] {
+				unannouncedSPs++
 			}
-		} else {
-			var spPlaying float64
-			for _, p := range spNames {
-				if playing[p.MLBTeam] {
-					spPlaying++
-				}
-			}
-			// Cap STARTS at the slot count, not pitchers-whose-team-plays.
-			// numPSlots bounds how many starts can accrue in a day; the
-			// rotation divisor converts pitchers into expected starts, so the
-			// cap has to come after it (rosterbot-abd). Capping first mixes
-			// units and understates every day where more rostered SPs have a
-			// game than there are pitcher slots — with 10 rostered SPs and 6
-			// slots that is nearly every day.
-			df.Estimated = min(spPlaying/rotationSize, float64(numPSlots))
 		}
+
+		// Sorted unconditionally, not only when the cap binds: spNames is a
+		// map, so the append order above is Go's randomized iteration order and
+		// the slice would otherwise differ between two runs on identical
+		// inputs. Nothing downstream reads the order today, but this package
+		// owes idempotency and a randomized slice is a standing invitation to
+		// break it.
+		sort.Slice(df.ConfirmedStarters, func(i, j int) bool {
+			return df.ConfirmedStarters[i] > df.ConfirmedStarters[j]
+		})
+		// Cap at active P slots, keeping the highest-value probables.
+		if len(df.ConfirmedStarters) > numPSlots {
+			df.ConfirmedStarters = df.ConfirmedStarters[:numPSlots]
+		}
+
+		// Cap STARTS at the slot count, not pitchers-whose-team-plays.
+		// numPSlots bounds how many starts can accrue in a day; the rotation
+		// divisor converts pitchers into expected starts, so the cap has to
+		// come after it (rosterbot-abd). Capping first mixes units and
+		// understates every day where more rostered SPs have a game than there
+		// are pitcher slots — with 10 rostered SPs and 6 slots that is nearly
+		// every day.
+		//
+		// The cap is on the day's COMBINED total: confirmed starts have already
+		// claimed slots, so the estimate may only fill what they left. Capping
+		// each regime at numPSlots separately would forecast up to 2x the
+		// starts the roster can physically field.
+		df.Estimated = max(min(unannouncedSPs/rotationSize,
+			float64(numPSlots-len(df.ConfirmedStarters))), 0)
+
 		forecast = append(forecast, df)
 	}
-	return forecast
+	return forecast, nil
 }

@@ -547,3 +547,57 @@ func TestApplyGSGate_NilBudgetReportIsEmpty(t *testing.T) {
 		t.Errorf("nil-budget report = %+v, want zero value", report)
 	}
 }
+
+// rosterbot-1jvj: a forecast day now carries BOTH regimes at once — the clubs
+// that have named a starter and the clubs that have not. Reading them as
+// either/or discards the estimate on every partially-announced day, which is
+// most of them.
+func TestGSBudget_FutureDemand_SumsConfirmedAndEstimatedOnTheSameDay(t *testing.T) {
+	budget := &GSBudget{
+		Limit:   12,
+		Today:   date("2026-04-06"),
+		WeekEnd: date("2026-04-12"),
+		Forecast: []DayForecast{
+			{Date: date("2026-04-07"), ConfirmedStarters: []float64{15.0}, Estimated: 1.4},
+		},
+	}
+	got := budget.FutureDemand()
+	want := 2.4 // 1 confirmed + 1.4 estimated
+	if got < want-0.01 || got > want+0.01 {
+		t.Errorf("FutureDemand() = %.2f, want %.2f", got, want)
+	}
+}
+
+// The gate's own accumulation must agree with FutureDemand(): a mixed day's
+// estimate has to reach the ranking as a placeholder entry, or the gate
+// under-counts planned starts and declines to suppress when it should.
+//
+// The numbers sit exactly on the boundary the estimate moves. Two starters
+// today, one confirmed start tomorrow, three GS remaining: without the day's
+// 1.0 estimate the plan is 3 against 3 and the gate correctly stands down.
+// With it the plan is 4, and the cheapest start has to give way.
+func TestApplyGSGate_MixedDayEstimateStillCompetesForBudget(t *testing.T) {
+	scored := []ScoredPitcher{
+		{Player: fantrax.Player{ID: "p1", Name: "Low", PosShortNames: "SP"}, ExpectedPts: 4, IsStarter: true},
+		{Player: fantrax.Player{ID: "p2", Name: "High", PosShortNames: "SP"}, ExpectedPts: 30, IsStarter: true},
+	}
+	budget := &GSBudget{
+		Limit:   12,
+		Used:    9,
+		Today:   date("2026-04-06"),
+		WeekEnd: date("2026-04-12"),
+		Forecast: []DayForecast{
+			{Date: date("2026-04-07"), ConfirmedStarters: []float64{40}, Estimated: 1.0},
+		},
+	}
+
+	got, report := applyGSGate(scored, budget)
+
+	if len(report.Suppressed) != 1 || report.Suppressed[0].Name != "Low" {
+		t.Fatalf("suppressed = %+v, want exactly the low-value starter", report.Suppressed)
+	}
+	if got[0].IsStarter || !got[1].IsStarter {
+		t.Errorf("IsStarter = [%v %v], want the low start cut and the high one kept",
+			got[0].IsStarter, got[1].IsStarter)
+	}
+}
