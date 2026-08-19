@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -225,9 +226,35 @@ func TestDashAlias_CoversBothAddressFamilies(t *testing.T) {
 // both address families. Each rosterbot.dev record this stack writes lands in a
 // zone the registrar really delegates to, so a stray one is live DNS for a name
 // nobody meant to publish.
+//
+// This counted AWS::Route53::RecordSet resources outright until the iCloud mail
+// records were added, which was a faithful proxy for exactly as long as every
+// record in the stack happened to be an alias. It is not any more, and a bare
+// count bumped from 6 to 10 would have kept the number passing while silently
+// dropping the property the comment above claims — a seventh alias could then
+// land as long as a mail record left. Filtering on AliasTarget keeps the
+// original assertion; the total below keeps the "no stray records" half, which
+// nothing else covers now that the stack writes non-alias records.
 func TestAliasRecords_AreExactlyTheSixWeIntend(t *testing.T) {
-	tpl, _ := infraTemplate(t)
-	tpl.ResourceCountIs(jsii.String("AWS::Route53::RecordSet"), jsii.Number(6))
+	_, raw := infraTemplate(t)
+	var aliases, total int
+	for _, r := range raw["Resources"].(map[string]any) {
+		res, _ := r.(map[string]any)
+		if res["Type"] != "AWS::Route53::RecordSet" {
+			continue
+		}
+		total++
+		if props, _ := res["Properties"].(map[string]any); props["AliasTarget"] != nil {
+			aliases++
+		}
+	}
+	if aliases != 6 {
+		t.Errorf("alias records = %d, want 6 (recaps/dash/apex x A/AAAA)", aliases)
+	}
+	// 6 aliases + 4 mail records (MX, apex TXT, DKIM CNAME, DMARC TXT).
+	if total != 10 {
+		t.Errorf("Route53 record sets = %d, want 10 — a record this stack writes is live DNS, so adding one should be a deliberate edit here", total)
+	}
 }
 
 // The apex is a served origin, not a redirect, because an iOS native WebAuthn
@@ -297,4 +324,155 @@ func TestInviteRewrite_IsScopedToTheDefaultBehaviorOnly(t *testing.T) {
 func asSlice(v any) []any {
 	s, _ := v.([]any)
 	return s
+}
+
+// txtRecordsAt returns every synthesized TXT RRSet at a record name, with its
+// raw values. The raw template rather than Template.HasResourceProperties
+// because the invariant under test is a COUNT — and HasResourceProperties
+// passes as soon as ONE resource matches, which is exactly the state a second,
+// conflicting RRSet would produce.
+func txtRecordsAt(t *testing.T, name string) [][]string {
+	t.Helper()
+	_, raw := infraTemplate(t)
+	var out [][]string
+	for _, r := range raw["Resources"].(map[string]any) {
+		res, _ := r.(map[string]any)
+		if res["Type"] != "AWS::Route53::RecordSet" {
+			continue
+		}
+		props, _ := res["Properties"].(map[string]any)
+		if props["Type"] != "TXT" || props["Name"] != name {
+			continue
+		}
+		var vals []string
+		for _, v := range asSlice(props["ResourceRecords"]) {
+			s, ok := v.(string)
+			if !ok {
+				t.Fatalf("TXT value at %s is a %T, not a literal — a token here means the record is computed at deploy time, which no DNS policy record should be", name, v)
+			}
+			vals = append(vals, s)
+		}
+		out = append(out, vals)
+	}
+	return out
+}
+
+// DNS permits one RRSet per (name, type), so Apple's domain-verification string
+// and its SPF policy — two separate rows in the setup wizard — have to
+// synthesize as ONE TXT record carrying two values. Transcribing them as two
+// NewTxtRecord calls synths clean and dies during deploy with "RRSet of type
+// TXT with DNS name rosterbot.dev. already exists", after the MX record has
+// already landed, leaving the zone half configured. The count is the assertion;
+// a passing HasResourceProperties would miss precisely this.
+func TestMailRecords_ApexTxtValuesShareOneRecordSet(t *testing.T) {
+	got := txtRecordsAt(t, apexHost+".")
+	if len(got) != 1 {
+		t.Fatalf("apex TXT RRSets = %d, want exactly 1 — a second one fails the deploy, not the synth; got %v", len(got), got)
+	}
+	if len(got[0]) != 2 {
+		t.Fatalf("apex TXT values = %d, want 2 (Apple domain verification + SPF); got %v", len(got[0]), got[0])
+	}
+}
+
+// The silent one. Apple's wizard shows the SPF row already wrapped in quotes,
+// and CDK's TxtRecord wraps every value again (JSON.stringify, in
+// aws-route53/lib/record-set.js formatTxt). Passing the displayed string
+// through verbatim publishes ""v=spf1 ..."", which synths green, deploys green
+// and resolves green, and is unparseable to every receiver — surfacing weeks
+// later as mail landing in spam with nothing pointing back here. Exactly one
+// layer of quoting is right; this fails on two.
+func TestMailRecords_TxtValuesCarryExactlyOneLayerOfQuoting(t *testing.T) {
+	got := txtRecordsAt(t, apexHost+".")
+	if len(got) != 1 {
+		t.Fatalf("apex TXT RRSets = %d, want 1", len(got))
+	}
+	// The expectation is SHAPE, not `"` + spfTxt + `"`. Deriving it from the
+	// same constant makes the test pass on the very bug it exists to catch:
+	// paste Apple's displayed value with its quotes into spfTxt and both the
+	// published record and the expected string gain the extra layer together,
+	// and the comparison still matches. Assert instead that the constants are
+	// quote-free and that CDK added exactly one layer.
+	for _, c := range []string{appleVerifyTxt, spfTxt, dmarcTxt} {
+		if strings.Contains(c, `"`) {
+			t.Errorf("constant %q contains a quote — Apple's wizard displays the SPF row pre-quoted, and CDK quotes every value again", c)
+		}
+	}
+	want := map[string]bool{appleVerifyTxt: false, spfTxt: false}
+	for _, v := range got[0] {
+		inner, ok := strings.CutPrefix(v, `"`)
+		if !ok {
+			t.Errorf("apex TXT value %q is not quoted at all", v)
+			continue
+		}
+		inner, ok = strings.CutSuffix(inner, `"`)
+		if !ok {
+			t.Errorf("apex TXT value %q is not quoted at all", v)
+			continue
+		}
+		if strings.Contains(inner, `"`) {
+			t.Errorf("apex TXT value %q carries more than one layer of quoting; receivers cannot parse it", v)
+			continue
+		}
+		if _, known := want[inner]; !known {
+			t.Errorf("unexpected apex TXT value %q", v)
+			continue
+		}
+		want[inner] = true
+	}
+	for v, seen := range want {
+		if !seen {
+			t.Errorf("missing apex TXT value %q", v)
+		}
+	}
+}
+
+// A hard fail (-all) beside an include: rejects everything the include does not
+// cover. This domain sent no mail before iCloud was connected, so -all was
+// right then and is a mail-losing policy now. Apple specifies the softfail.
+func TestMailRecords_SpfSoftFailsRatherThanHardFails(t *testing.T) {
+	if !strings.HasSuffix(spfTxt, " ~all") {
+		t.Errorf("SPF = %q, want it to end in ~all — -all beside an include: discards legitimate mail", spfTxt)
+	}
+	if !strings.Contains(spfTxt, "include:icloud.com") {
+		t.Errorf("SPF = %q, want it to include icloud.com, the only sender this domain has", spfTxt)
+	}
+}
+
+// Both iCloud exchangers, at the equal priority Apple specifies. Publishing one
+// of the two makes a single host a point of failure for the address the privacy
+// policy names for deletion requests.
+func TestMailRecords_MxCoversBothIcloudExchangers(t *testing.T) {
+	tpl, _ := infraTemplate(t)
+	tpl.HasResourceProperties(jsii.String("AWS::Route53::RecordSet"), map[string]any{
+		"Name":            apexHost + ".",
+		"Type":            "MX",
+		"HostedZoneId":    hostedZoneID,
+		"ResourceRecords": []any{"10 mx01.mail.icloud.com.", "10 mx02.mail.icloud.com."},
+	})
+}
+
+// DKIM is what makes tightening DMARC past p=none survivable: without an
+// aligned signature, raising the policy discards this domain's own outbound
+// mail. Publishing the CNAME now is what lets that later edit be one word.
+func TestMailRecords_DkimCnameIsPublishedForAlignment(t *testing.T) {
+	tpl, _ := infraTemplate(t)
+	tpl.HasResourceProperties(jsii.String("AWS::Route53::RecordSet"), map[string]any{
+		"Name":            dkimHost + "." + apexHost + ".",
+		"Type":            "CNAME",
+		"ResourceRecords": []any{dkimTarget},
+	})
+}
+
+// p=none instructs receivers to do nothing, so this record asserts ownership
+// without yet being the anti-spoofing control its type implies. Pinned so the
+// gap is a stated position rather than an oversight — and so raising it is a
+// deliberate edit made after outbound mail has been seen working.
+func TestMailRecords_DmarcIsDeliberatelyInertForNow(t *testing.T) {
+	got := txtRecordsAt(t, dmarcHost+"."+apexHost+".")
+	if len(got) != 1 || len(got[0]) != 1 {
+		t.Fatalf("_dmarc TXT = %v, want exactly one record with one value", got)
+	}
+	if !strings.Contains(got[0][0], "p=none") {
+		t.Errorf("_dmarc = %q; if this was tightened deliberately, update this test and confirm DKIM signs first", got[0][0])
+	}
 }
