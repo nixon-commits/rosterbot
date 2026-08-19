@@ -810,13 +810,32 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	//     --function-name <LineupApi> --description "rp-cutover-$(date -u +%Y%m%dT%H%M%SZ)"
 	// A configuration update is enough to start fresh execution environments
 	// without a code change.
+	// THE SECOND CUTOVER (rosterbot-jloe.6). jloe.4 moved the RP ID from the
+	// cloudfront.net name to dash.; this moves it to the apex, which is the
+	// permanent, subdomain-portable identity the iOS app associates its
+	// webcredentials with. Same one-way door, same recovery primitive, and
+	// deliberately taken now: only the operator's passkey exists, so the cost
+	// is one re-enrollment by one person.
+	//
+	// RP ID is the APEX while the origin list contains BOTH. Those are
+	// different things and the asymmetry is the point. RP ID is the identity a
+	// credential is bound to, and a credential scoped to rosterbot.dev is
+	// usable from any subdomain of it — that is what makes the apex the
+	// portable choice. Origin is the concrete URL a ceremony was performed
+	// from, and there are genuinely two: the browser reports
+	// https://dash.rosterbot.dev, while an iOS native ceremony has no browser
+	// origin at all and reports https://<rpId>. Listing only one would refuse
+	// every ceremony from the other surface.
 	awsssm.NewStringParameter(stack, jsii.String("RpIdParam"), &awsssm.StringParameterProps{
 		ParameterName: jsii.String("/rosterbot/DASHBOARD_RP_ID"),
-		StringValue:   jsii.String(dashHost),
+		StringValue:   jsii.String(apexHost),
 	})
+	// Comma-separated rather than a second parameter: one value to keep in
+	// sync, one IAM resource, one cold-start read, and the list is read as a
+	// unit by the one caller that needs it. lambda/main.go splits it.
 	awsssm.NewStringParameter(stack, jsii.String("RpOriginParam"), &awsssm.StringParameterProps{
 		ParameterName: jsii.String("/rosterbot/DASHBOARD_RP_ORIGIN"),
-		StringValue:   jsii.String("https://" + dashHost),
+		StringValue:   jsii.String("https://" + apexHost + ",https://" + dashHost),
 	})
 	apiFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Actions: jsii.Strings("ssm:GetParameter"),

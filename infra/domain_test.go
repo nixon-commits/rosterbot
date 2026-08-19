@@ -158,8 +158,8 @@ func TestRpParams_NameTheAliasHostAfterCutover(t *testing.T) {
 	_, raw := infraTemplate(t)
 	resources, _ := raw["Resources"].(map[string]any)
 	want := map[string]string{
-		"/rosterbot/DASHBOARD_RP_ID":     dashHost,
-		"/rosterbot/DASHBOARD_RP_ORIGIN": "https://" + dashHost,
+		"/rosterbot/DASHBOARD_RP_ID":     apexHost,
+		"/rosterbot/DASHBOARD_RP_ORIGIN": "https://" + apexHost + ",https://" + dashHost,
 	}
 	seen := map[string]bool{}
 	for logicalID, r := range resources {
