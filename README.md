@@ -318,7 +318,7 @@ rosterbot team-values --date 2026-07-12
 # Render dashboard data from the stores. Output is split by who may read it:
 #   private (state bucket's reports/ prefix, .reports/ locally, served only via
 #            the passkey-gated GET /v1/reports/{name}): model, gap, views
-#   public  (<out>, published to the dashboard bucket's report/ prefix): value.json, football.json
+#   public  (<out>, published to the dashboard bucket's report/ prefix): value.json, football.json, football-trades.json
 # The dashboard SPA fetches both sets and renders them client-side — projection-site writes no HTML.
 rosterbot projection-site --out report
 rosterbot projection-site --out report --open
@@ -338,9 +338,10 @@ rosterbot football-values --date 2026-08-11
 
 # Poll Sleeper for newly completed trades and push a graded Pushover alert
 rosterbot football-trades --dry-run
+rosterbot football-trades --relog --dry-run   # one-shot log backfill for already-alerted trades
 ```
 
-Starters value is the headline (not the full-roster total) — starters coverage against StatsGuy's value grid is consistently near-complete, full-roster coverage isn't. The full-roster total still prints, alongside its own matched/rostered coverage counts. Trade grading is a local sum over the same StatsGuy bundle the value store reads (no package-decay adjustment — measured: StatsGuy applies none); a trade with any unpriced asset (an unresolvable pick round, a FAAB-only side — StatsGuy prices players and picks, not cash) suppresses the verdict rather than reporting a partial total. `football-trades` is idempotent across repeated runs via a per-trade dedup marker.
+Starters value is the headline (not the full-roster total) — starters coverage against StatsGuy's value grid is consistently near-complete, full-roster coverage isn't. The full-roster total still prints, alongside its own matched/rostered coverage counts. Trade grading is a local sum over the same StatsGuy bundle the value store reads (no package-decay adjustment — measured: StatsGuy applies none); a trade with any unpriced asset (an unresolvable pick round, a FAAB-only side — StatsGuy prices players and picks, not cash) suppresses the verdict rather than reporting a partial total. `football-trades` is idempotent across repeated runs via a per-trade dedup marker, and appends every alerted trade to a durable log (`football/trades/log/`, or `.football/trades/log/` locally) that the dashboard's Football tab renders beneath the standings. Each row stores its values **as priced when the trade was graded**, in all four StatsGuy formats — StatsGuy publishes no history, so re-deriving an old trade would price it against today and present that as what it was worth then. Trades alerted before the log existed can be rebuilt with `football-trades --relog`, which recovers their identity from Sleeper, prices them at today's values, and marks the rows `regraded` so the tab says so rather than implying otherwise. The log is written by the six-hourly poller but published by the daily `projection-site` run, so a brand-new trade can take up to a day to reach the dashboard.
 
 </details>
 
@@ -412,7 +413,7 @@ The bot's game day, ordered by clock (times shown in ET for reading; the authori
 | 7:00a Mon | Weekly recap site | `recap-site --out dist` | 7am ET Mondays |
 | 7:40p | Shadow capture | `shadow` | 23:40 UTC daily |
 
-`entrypoint.sh` publishes the recap site from `./dist` to `SITE_BUCKET`, and the **public** dashboard data (`report/value.json` + `report/football.json`) into `DASHBOARD_BUCKET`'s `report/` prefix — the same CloudFront distribution as the dashboard SPA. Any job can also be launched on demand as a one-off Fargate task (or via `POST /v1/jobs/{name}` — see below).
+`entrypoint.sh` publishes the recap site from `./dist` to `SITE_BUCKET`, and the **public** dashboard data (`report/value.json`, `report/football.json` + `report/football-trades.json`) into `DASHBOARD_BUCKET`'s `report/` prefix — the same CloudFront distribution as the dashboard SPA. Any job can also be launched on demand as a one-off Fargate task (or via `POST /v1/jobs/{name}` — see below).
 
 The **private** dashboard data — the projection-accuracy model, the lineup gap and recap readership — does not go there. That prefix is served by CloudFront's default behavior with no auth, and those three are your own performance: how many points your lineup left on your bench, how your projections graded, who reads your site. They are written to `STATE_BUCKET`'s `reports/` prefix, which no distribution fronts, and reach the SPA through the passkey-gated `GET /v1/reports/{name}` — the same reasoning that put the Trades tab on `/v1/*`. Only league-wide standings, which every manager can already read off Fantrax and Sleeper, stay public.
 

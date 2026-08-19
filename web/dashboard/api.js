@@ -104,5 +104,8 @@ export const api = {
   // already read these numbers off Fantrax and Sleeper.
   reportValue: () => request("GET", "/report/value.json"),
   reportFootball: () => request("GET", "/report/football.json"),
+  // Completed trades, already league-visible on Sleeper — so public, unlike
+  // baseball's /v1/trades, which serves PENDING offers.
+  reportFootballTrades: () => request("GET", "/report/football-trades.json"),
   runProgress: (id) => request("GET", `/v1/runs/${encodeURIComponent(id)}/progress`),
 };
