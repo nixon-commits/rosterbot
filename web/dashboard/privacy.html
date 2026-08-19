@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Privacy Policy — rosterbot</title>
+<meta name="description" content="How rosterbot collects, uses, stores, and deletes your data.">
+<!--
+  Deliberately self-contained: no <link> to style.css, no scripts, no external
+  requests. This page is the URL App Review and users are pointed at, so it has
+  to render correctly regardless of what the dashboard SPA's stylesheet is doing
+  — the eight design tokens below are copied from style.css rather than imported
+  so a future SPA CSS change cannot break the legal page.
+-->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #2563eb;
+    --prose: 68ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --fg: #e5e7eb;
+      --muted: #9ca3af;
+      --border: #2a2d33;
+      --accent: #60a5fa;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2rem 1.25rem 4rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: var(--prose); margin: 0 auto; }
+  h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .25rem; }
+  h2 { font-size: 1.15rem; margin: 2.25rem 0 .5rem; }
+  p, li { margin: 0 0 .75rem; }
+  ul { padding-left: 1.25rem; }
+  a { color: var(--accent); }
+  .muted { color: var(--muted); }
+  .dateline { margin: 0 0 1.5rem; font-size: .9rem; }
+  .summary {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem .5rem;
+    margin: 1.5rem 0 0;
+  }
+  .summary p:last-child { margin-bottom: .75rem; }
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    font-size: .9rem;
+    color: var(--muted);
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .9em;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>rosterbot Privacy Policy</h1>
+<p class="dateline muted">Effective 19 August 2026</p>
+
+<div class="summary">
+  <p><strong>In short.</strong> rosterbot is a personal fantasy-sports automation tool. It stores your
+  email address, your fantasy league account credentials, and the roster data it needs to set your
+  lineup on your behalf. It exists to run your team &mdash; nothing else. There is no advertising, no
+  analytics or tracking, no profiling, and your data is never sold, rented, or shared for anyone
+  else&rsquo;s marketing.</p>
+</div>
+
+<h2>1. Who this covers</h2>
+<p>This policy covers the rosterbot iOS app, the rosterbot web dashboard at
+<code>rosterbot.dev</code> and <code>dash.rosterbot.dev</code>, the public recap site at
+<code>recaps.rosterbot.dev</code>, and the backend service behind them. rosterbot is operated by an
+individual, not a company, as a personal project.</p>
+
+<p>rosterbot is invite-only. You cannot create an account without an invite link issued by the
+operator.</p>
+
+<h2>2. What we collect</h2>
+
+<p><strong>Account information.</strong> Your email address and display name. Your email is entered by
+the operator when your invite is created and is checked against the address on your Fantrax account
+when you connect; we record who vouched for it and when. We do not send you email, and there is no
+mailing list.</p>
+
+<p><strong>Fantasy platform credentials.</strong> To set your lineup, rosterbot signs in to your
+Fantrax account as you. It stores your Fantrax username and password, and the session cookie obtained
+from them. These are encrypted before storage &mdash; see &ldquo;How credentials are protected&rdquo;
+below. It also stores your Fantrax user ID and the ID of the team you manage.</p>
+
+<p><strong>Passkeys.</strong> When you register a passkey, rosterbot stores its public key, credential
+ID, and signature counter. A passkey&rsquo;s private key never leaves your device and is never
+transmitted to us. rosterbot has no password of yours other than the fantasy-platform credential
+above.</p>
+
+<p><strong>Fantasy data.</strong> Roster contents, lineups set, projections, trade offers and completed
+trades, game-start budgets, and the historical analytics derived from them. This is data about your
+fantasy team, retrieved from your league, and it is what the service is for.</p>
+
+<p><strong>Server logs.</strong> The public recap site is served through a content delivery network
+that records standard web access logs, including IP addresses and requested URLs. Those logs are
+deleted automatically after 90 days. They are used to count how many people read the weekly recap and
+for nothing else.</p>
+
+<p><strong>What we do not collect.</strong> No location data, no contacts, no photos, no health data,
+no advertising identifiers, no device fingerprints, no browsing history outside this service. The app
+contains no third-party analytics, advertising, or tracking SDKs.</p>
+
+<h2>3. Why we collect it</h2>
+<p>Every category above is collected for one purpose: operating the service you asked for. Concretely,
+that means signing in to your league to read your roster, computing an optimal lineup, applying that
+lineup when you have enabled automatic apply, sending you notifications about lineup changes and
+trades, and showing you your own performance history in the dashboard.</p>
+
+<p>rosterbot does not use your data to build advertising profiles, does not track you across other
+apps or websites, and does not sell or rent your data to anyone. Nothing here is used for automated
+decision-making that has legal effects.</p>
+
+<h2>4. How credentials are protected</h2>
+<p>Your Fantrax username, password, and session cookie are encrypted with AWS Key Management Service
+before being written to storage, under an encryption context scoped to your account &mdash; so a
+ciphertext taken from one user&rsquo;s record cannot be decrypted as another&rsquo;s.</p>
+
+<p>The split is enforced in infrastructure, not merely by convention: the public-facing API component
+is granted permission to <em>encrypt</em> only, and the background job component is granted permission
+to <em>decrypt</em> only. Neither holds both. A compromise of the public API therefore yields
+ciphertext without a key.</p>
+
+<p>No security measure is absolute, and rosterbot is a personal project rather than an audited
+commercial service. You should treat the fantasy-platform credential you give it accordingly, and use
+a password unique to that account.</p>
+
+<h2>5. Who your data is shared with</h2>
+<p>rosterbot has no advertising partners, no data brokers, and no analytics vendors. It communicates
+with the following services:</p>
+
+<ul>
+  <li><strong>Fantrax</strong> &mdash; your own fantasy account, signed in as you, to read your roster
+  and set your lineup. This is the purpose of the service.</li>
+  <li><strong>Pushover</strong> &mdash; delivers your notifications. Notification text (for example, a
+  lineup change or a trade alert) passes through it.</li>
+  <li><strong>Amazon Web Services</strong> &mdash; hosts the service and stores its data.</li>
+  <li><strong>Read-only data sources</strong> &mdash; MLB Stats API, FanGraphs, Baseball Savant,
+  HittersKeepBatting, Sleeper, and StatsGuy. rosterbot fetches public statistics and projections from
+  these. It sends them no personal information about you.</li>
+</ul>
+
+<p>We may also disclose data where required by law, or where necessary to protect the rights or safety
+of users of the service.</p>
+
+<h2>6. Where your data is stored</h2>
+<p>On Amazon Web Services infrastructure in the United States (the <code>us-west-1</code> region). If
+you use rosterbot from outside the United States, your data is processed there.</p>
+
+<h2>7. Retention and deletion</h2>
+<p>Account data is kept for as long as your account exists. You can ask the operator to delete your
+account at any time using the contact address below; deletion is also available to the operator from
+the dashboard.</p>
+
+<p>Deleting an account removes your profile, your email address, your registered passkeys, and your
+encrypted fantasy-platform credentials and connection record, and releases your email address and team
+so they can be used again.</p>
+
+<p>To be precise about what deletion does <em>not</em> remove: historical fantasy analytics files
+already written to storage &mdash; daily projection accuracy records, team-value history, and similar
+&mdash; are retained. After deletion these are orphaned, meaning nothing links them back to your
+account, your email, or your credentials. If you want these purged as well, say so in your deletion
+request and they will be removed manually.</p>
+
+<p>Recap-site access logs are deleted automatically after 90 days.</p>
+
+<h2>8. Your choices and rights</h2>
+<ul>
+  <li><strong>Automatic lineup changes are off by default</strong> and are only enabled by your own
+  deliberate action. You can turn them off again at any time in Settings.</li>
+  <li><strong>Disconnect your fantasy account</strong> at any time, which stops rosterbot from signing
+  in as you.</li>
+  <li><strong>Revoke a passkey</strong> from the dashboard, or sign out every device at once.</li>
+  <li><strong>Access, correct, or delete your data</strong> &mdash; write to the address below. Because
+  rosterbot has very few users, these requests are handled by hand; expect a reply within 30 days.</li>
+</ul>
+
+<p>Depending on where you live, you may have additional rights under laws such as the GDPR or the
+CCPA, including the right to a copy of your data and the right to object to processing. rosterbot does
+not sell personal information as those laws define it. Exercise any of these rights at the address
+below.</p>
+
+<h2>9. Children</h2>
+<p>rosterbot is not directed at children under 13, and we do not knowingly collect data from them. The
+service is invite-only, so accounts are not created without the operator&rsquo;s involvement. If you
+believe a child has an account, contact us and it will be removed.</p>
+
+<h2>10. Changes to this policy</h2>
+<p>If this policy changes materially, the effective date at the top will be updated and, where the
+change affects how your data is used, you will be notified through the app before it takes effect.</p>
+
+<h2>11. Contact</h2>
+<p>Questions, data requests, or deletion requests:
+<a href="mailto:privacy@rosterbot.dev">privacy@rosterbot.dev</a></p>
+
+<footer>
+  <p><a href="/">rosterbot</a> &middot; Privacy Policy &middot; Effective 19 August 2026</p>
+</footer>
+
+</main>
+</body>
+</html>
