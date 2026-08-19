@@ -145,7 +145,7 @@ func TestProducerAndReaderComposeIdenticalPrefixes(t *testing.T) {
 		sel := ForTenant("bucket", tenant)
 		for _, a := range append(layout.All(), layout.Progress) {
 			// The producer path, as statestore composes it.
-			producer := sel.prefixFor(artifact{a.S3Prefix, a.LocalDir, a.PerTenant})
+			producer := sel.prefixFor(artifact{name: a.Name, s3Prefix: a.S3Prefix, localDir: a.LocalDir, perTenant: a.PerTenant})
 			// The reader path, as lambda/main.go composes it.
 			reader := a.PrefixFor(tenant)
 			if producer != reader {
