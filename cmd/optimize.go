@@ -127,7 +127,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		NoCache:            noCache,
 		Verbose:            verbose,
 	}
-	if _, err := lineuprun.Run(ft, cfg, opts); err != nil {
+	if _, err := lineuprun.Run(cmd.Context(), ft, cfg, opts); err != nil {
 		return err
 	}
 

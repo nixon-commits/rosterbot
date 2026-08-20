@@ -1,6 +1,7 @@
 package transactions
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
@@ -86,7 +87,7 @@ type Trade struct {
 }
 
 // CheckTrades fetches recent and pending trades, values them via HKB, and sends a notification.
-func CheckTrades(ft TradeClient, cacheDir string, pushoverUserKey, pushoverAPIToken string, dryRun bool) error {
+func CheckTrades(ctx context.Context, ft TradeClient, cacheDir string, dryRun bool) error {
 	since := time.Now().Add(-24 * time.Hour)
 	txs, err := ft.GetRecentTrades(since)
 	if err != nil {
@@ -128,11 +129,6 @@ func CheckTrades(ft TradeClient, cacheDir string, pushoverUserKey, pushoverAPITo
 		return nil
 	}
 
-	if pushoverUserKey == "" || pushoverAPIToken == "" {
-		log.Println("Pushover credentials not set, skipping notification.")
-		return nil
-	}
-
 	var notifyParts []string
 	if len(pendingGrouped) > 0 {
 		notifyParts = append(notifyParts, formatTrades("Pending Trades", pendingGrouped, false))
@@ -142,7 +138,7 @@ func CheckTrades(ft TradeClient, cacheDir string, pushoverUserKey, pushoverAPITo
 	}
 	if len(notifyParts) > 0 {
 		plain := strings.Join(notifyParts, "\n")
-		if err := notify.SendPushover(pushoverUserKey, pushoverAPIToken, "Trade Alert", plain); err != nil {
+		if err := notify.Send(ctx, notify.Event{Kind: "transactions", Title: "Trade Alert", Message: plain}); err != nil {
 			log.Printf("notification failed: %v", err)
 		}
 	}

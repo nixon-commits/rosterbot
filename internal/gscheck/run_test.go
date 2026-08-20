@@ -85,7 +85,7 @@ func TestRunGSCheck_ViolationsAndCleanTallies(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		if err := RunGSCheck(f, cfg); err != nil {
+		if err := RunGSCheck(t.Context(), f, cfg); err != nil {
 			t.Fatalf("RunGSCheck: %v", err)
 		}
 	})
@@ -115,7 +115,7 @@ func TestRunGSCheck_CorrectTallyNoFalseUnderMin(t *testing.T) {
 		gsByTeam: map[string]int{"a": 8, "b": 10}, // both ≥ min, ≤ max
 	}
 	out := captureStdout(t, func() {
-		if err := RunGSCheck(f, cfg); err != nil {
+		if err := RunGSCheck(t.Context(), f, cfg); err != nil {
 			t.Fatalf("RunGSCheck: %v", err)
 		}
 	})
@@ -138,7 +138,7 @@ func TestRunGSCheck_NotEndOfPeriod(t *testing.T) {
 	}}
 	f := &fakeGSClient{periods: periods, teams: map[string]string{"a": "Alpha"}, min: ptrInt(7), max: ptrInt(12)}
 	out := captureStdout(t, func() {
-		if err := RunGSCheck(f, config.Config{TeamID: "t1", DryRun: true}); err != nil {
+		if err := RunGSCheck(t.Context(), f, config.Config{TeamID: "t1", DryRun: true}); err != nil {
 			t.Fatalf("RunGSCheck: %v", err)
 		}
 	})

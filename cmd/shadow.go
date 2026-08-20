@@ -104,7 +104,7 @@ func runShadow(cmd *cobra.Command, args []string) error {
 			NoCache:           noCache,
 			Verbose:           verbose,
 		}
-		res, err := lineuprun.Run(ft, cfg, opts)
+		res, err := lineuprun.Run(cmd.Context(), ft, cfg, opts)
 		if err != nil {
 			return fmt.Errorf("shadow capture %s: %w", sys, err)
 		}

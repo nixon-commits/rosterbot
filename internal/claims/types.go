@@ -64,14 +64,12 @@ func (m Move) NetValue() int {
 
 // Options configures a claims run.
 type Options struct {
-	CacheDir         string // defaults to ".cache"
-	DryRun           bool
-	NoSignals        bool
-	Since            time.Time // zero = use cursor
-	DropsMin         int       // notable-drops HKB threshold
-	PushoverUserKey  string
-	PushoverAPIToken string
-	LedgerDir        string       // defaults to ".waivers/claims"
-	CursorPath       string       // defaults to ".cache/last-claims.json"
-	HKBPlayers       []hkb.Player // optional injection for tests; when non-nil, skips the hkb.GetPlayers fetch
+	CacheDir   string // defaults to ".cache"
+	DryRun     bool
+	NoSignals  bool
+	Since      time.Time    // zero = use cursor
+	DropsMin   int          // notable-drops HKB threshold
+	LedgerDir  string       // defaults to ".waivers/claims"
+	CursorPath string       // defaults to ".cache/last-claims.json"
+	HKBPlayers []hkb.Player // optional injection for tests; when non-nil, skips the hkb.GetPlayers fetch
 }
