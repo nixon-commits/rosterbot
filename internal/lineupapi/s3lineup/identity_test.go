@@ -12,13 +12,13 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/s3blob/s3blobtest"
 )
 
-func TestIdentityStoreRoundTrip(t *testing.T) {
+// TestIdentityStore_StoresAtIdentityJSONKey pins the one claim not already
+// covered by TestIdentityStore_Conformance's shared identitytest.Run suite
+// (EmptyStoreReportsNotFound, RoundTrip): where in the bucket the record
+// lands.
+func TestIdentityStore_StoresAtIdentityJSONKey(t *testing.T) {
 	f := s3blobtest.New()
 	s := &IdentityStore{blob: f.Blob("b", "webauthn/")}
-
-	if _, ok, err := s.GetIdentity(context.Background()); err != nil || ok {
-		t.Fatalf("GetIdentity on empty store: ok=%v err=%v, want ok=false err=nil", ok, err)
-	}
 
 	want := &lineupapi.Identity{
 		WebAuthnUserID: []byte("handle-123"),
@@ -29,14 +29,6 @@ func TestIdentityStoreRoundTrip(t *testing.T) {
 	}
 	if _, stored := f.Objects["webauthn/identity.json"]; !stored {
 		t.Fatalf("object not stored at expected key; got keys %v", f.Keys())
-	}
-
-	got, ok, err := s.GetIdentity(context.Background())
-	if err != nil || !ok {
-		t.Fatalf("GetIdentity after Put: ok=%v err=%v", ok, err)
-	}
-	if string(got.WebAuthnUserID) != "handle-123" || len(got.Credentials) != 1 {
-		t.Fatalf("got = %+v, want %+v", got, want)
 	}
 }
 

@@ -32,10 +32,6 @@ func (f *fakeS3) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input, _ .
 	}
 	for k := range f.objects {
 		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
-			// Size is reported because Up's skip decision reads it. A fake that
-			// left it nil would make every remote object compare as size -1,
-			// so a skip test would "pass" while never once skipping — the same
-			// failure shape as a fake that rubber-stamps conditional writes.
 			contents = append(contents, types.Object{Key: aws.String(k), Size: aws.Int64(int64(len(f.objects[k])))})
 		}
 	}

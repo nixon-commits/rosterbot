@@ -35,23 +35,23 @@ func (v FormatValues) Get(format string) int {
 // (measured 2026-08-10: 396/396 valued ids resolve against Sleeper's player
 // dump) — no name normalization needed to join against Sleeper rosters.
 type Player struct {
-	ID       string
-	Name     string
-	Team     string
-	Position string
-	Value    FormatValues
+	ID       string       `json:"id"`
+	Name     string       `json:"name"`
+	Team     string       `json:"team"`
+	Position string       `json:"position"`
+	Value    FormatValues `json:"value"`
 }
 
 // Pick is one StatsGuy-valued draft pick slot. A pick is identified either by
 // Variant ("early"/"mid"/"late", tier-averaged within a round) or by Slot
 // (1-based, once the round's draft order is settled) — exactly one is set.
 type Pick struct {
-	ID      string
-	Year    int
-	Round   int
-	Variant string
-	Slot    int
-	Value   FormatValues
+	ID      string       `json:"id"`
+	Year    int          `json:"year"`
+	Round   int          `json:"round"`
+	Variant string       `json:"variant"`
+	Slot    int          `json:"slot"`
+	Value   FormatValues `json:"value"`
 }
 
 // Bundle is the joined StatsGuy value set: every valued player keyed by

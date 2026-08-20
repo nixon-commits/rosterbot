@@ -7,7 +7,6 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
@@ -412,13 +411,7 @@ func parseInningsPitched(s string, outs int) float64 {
 	if s == "" {
 		return float64(outs) / 3.0
 	}
-	parts := strings.SplitN(s, ".", 2)
-	full, _ := strconv.Atoi(parts[0])
-	partial := 0
-	if len(parts) == 2 {
-		partial, _ = strconv.Atoi(parts[1])
-	}
-	return float64(full) + float64(partial)/3.0
+	return scoring.ParseIP(s)
 }
 
 // computeFPtsFromGameLog finds every game-log entry on `date` (multiple entries

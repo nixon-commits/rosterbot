@@ -107,11 +107,6 @@ func versionOf(item map[string]types.AttributeValue) lineupapi.IdentityVersion {
 	return ""
 }
 
-func nextVersion(cur lineupapi.IdentityVersion) int64 {
-	v, _ := strconv.ParseInt(string(cur), 10, 64)
-	return v + 1
-}
-
 func (s *Store) key(pk, sk string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"pk": &types.AttributeValueMemberS{Value: pk}, "sk": &types.AttributeValueMemberS{Value: sk}}
 }
@@ -617,9 +612,7 @@ func (st *Store) enrollItem(tokenHash string, e lineupapi.Enrollment) (map[strin
 	// HOUSEKEEPING ONLY: TTL deletion is asynchronous and documented to lag by
 	// up to 48 hours, so RedeemEnrollment checks expiry itself rather than
 	// inferring it from the row being gone.
-	if e.ExpiresAt.IsZero() {
-		delete(item, "expires_at")
-	} else {
+	if !e.ExpiresAt.IsZero() {
 		item["expires_at"] = n(e.ExpiresAt.Unix())
 	}
 	return item, nil

@@ -29,12 +29,6 @@ func RunKey(startedAt, id string) string {
 	return fmt.Sprintf("%010d-%s", inv, id)
 }
 
-// runKeyMatchesID reports whether a storage key (without extension) belongs to
-// the given run id — i.e. ends with "-<id>".
-func runKeyMatchesID(key, id string) bool {
-	return strings.HasSuffix(key, "-"+id)
-}
-
 // FileRunStore is a local-filesystem run ledger: one file per run at
 // <dir>/run-<key>.json. Used by `rosterbot serve` and by the run-ledger writer
 // when STATE_BUCKET is unset (local dev).

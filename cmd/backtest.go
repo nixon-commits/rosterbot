@@ -89,10 +89,7 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	}
 
 	// Past periods are immutable — use a long TTL so repeat runs avoid the API.
-	snapTTL := fantrax.PastPeriodTTL
-	if noCache {
-		snapTTL = 0
-	}
+	snapTTL := cacheTTL(fantrax.PastPeriodTTL)
 
 	fmt.Printf("Fetching daily fantasy points for %s to %s...\n",
 		start.Format("2006-01-02"), end.Format("2006-01-02"))

@@ -12,7 +12,6 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
-	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/tradevalue"
 	"github.com/pmurley/go-fantrax/models"
 )
@@ -332,7 +331,7 @@ func formatTrades(header string, trades []Trade, color bool) string {
 			// by construction and the second number is noise.
 			adj := ""
 			if math.Abs(float64(side.Total)-side.Adjusted) >= 1 {
-				adj = fmt.Sprintf(" · adj %s", formatValue(int(math.Round(side.Adjusted))))
+				adj = fmt.Sprintf(" · adj %s", hkb.FormatValue(int(math.Round(side.Adjusted))))
 			}
 			if diff != 0 {
 				diffSign := "+"
@@ -341,9 +340,9 @@ func formatTrades(header string, trades []Trade, color bool) string {
 					diffSign = "-"
 					absDiff = -diff
 				}
-				fmt.Fprintf(&b, "Total: %s%s (%s%s)%s%s\n", sideClr, formatValue(side.Total), diffSign, formatValue(absDiff), reset, adj)
+				fmt.Fprintf(&b, "Total: %s%s (%s%s)%s%s\n", sideClr, hkb.FormatValue(side.Total), diffSign, hkb.FormatValue(absDiff), reset, adj)
 			} else {
-				fmt.Fprintf(&b, "Total: %s%s\n", formatValue(side.Total), adj)
+				fmt.Fprintf(&b, "Total: %s%s\n", hkb.FormatValue(side.Total), adj)
 			}
 		}
 		fmt.Fprintf(&b, "→ %s\n", formatVerdict(t.Verdict))
@@ -386,7 +385,7 @@ func formatPlayer(b *strings.Builder, p TradePlayer, indent string, color bool) 
 	// tell which one this is or it no longer lists one to average.
 	if p.IsPick {
 		if p.Ranked {
-			fmt.Fprintf(b, "• %s\n%s~%s (avg of Early/Mid/Late)\n", p.Name, indent, formatValue(p.Value))
+			fmt.Fprintf(b, "• %s\n%s~%s (avg of Early/Mid/Late)\n", p.Name, indent, hkb.FormatValue(p.Value))
 		} else {
 			fmt.Fprintf(b, "• %s\n", p.Name)
 		}
@@ -415,7 +414,7 @@ func formatPlayer(b *strings.Builder, p TradePlayer, indent string, color bool) 
 	b.WriteString("\n")
 
 	// Line 2: rank · value · 30d trend, indented under bullet
-	fmt.Fprintf(b, "%s#%d · %s ", indent, p.Rank, formatValue(p.Value))
+	fmt.Fprintf(b, "%s#%d · %s ", indent, p.Rank, hkb.FormatValue(p.Value))
 	formatTrend(b, p.ValueChange30D, color)
 	b.WriteString("\n")
 
@@ -424,7 +423,7 @@ func formatPlayer(b *strings.Builder, p TradePlayer, indent string, color bool) 
 		if p.IsPitcher {
 			fmt.Fprintf(b, "%s%.2f ERA · %.2f WHIP\n", indent, p.ERA, p.WHIP)
 		} else {
-			fmt.Fprintf(b, "%s%s OPS\n", indent, formatOPS(p.OPS))
+			fmt.Fprintf(b, "%s%s OPS\n", indent, hkb.FormatOPS(p.OPS))
 		}
 	}
 }
@@ -436,7 +435,7 @@ func formatTrend(b *strings.Builder, delta int, color bool) {
 		if color {
 			b.WriteString(colorGreen)
 		}
-		fmt.Fprintf(b, "▲+%s", formatValue(delta))
+		fmt.Fprintf(b, "▲+%s", hkb.FormatValue(delta))
 		if color {
 			b.WriteString(colorReset)
 		}
@@ -444,7 +443,7 @@ func formatTrend(b *strings.Builder, delta int, color bool) {
 		if color {
 			b.WriteString(colorRed)
 		}
-		fmt.Fprintf(b, "▼-%s", formatValue(-delta))
+		fmt.Fprintf(b, "▼-%s", hkb.FormatValue(-delta))
 		if color {
 			b.WriteString(colorReset)
 		}
@@ -457,30 +456,6 @@ func formatTrend(b *strings.Builder, delta int, color bool) {
 			b.WriteString(colorReset)
 		}
 	}
-}
-
-// formatOPS formats an OPS value like ".812" (no leading zero).
-func formatOPS(ops float64) string {
-	s := fmt.Sprintf("%.3f", ops)
-	if strings.HasPrefix(s, "0") {
-		return s[1:] // ".812" instead of "0.812"
-	}
-	return s // "1.012" stays as-is
-}
-
-// formatValue formats an HKB value integer with comma separators.
-func formatValue(v int) string {
-	s := fmt.Sprintf("%d", v)
-	if len(s) <= 3 {
-		return s
-	}
-	var parts []string
-	for len(s) > 3 {
-		parts = append([]string{s[len(s)-3:]}, parts...)
-		s = s[:len(s)-3]
-	}
-	parts = append([]string{s}, parts...)
-	return strings.Join(parts, ",")
 }
 
 // groupPendingTrades groups pending trade moves by TradeID into Trade structs.
@@ -566,9 +541,4 @@ func newDraftPickTradePlayer(tx models.Transaction, players []hkb.Player) TradeP
 		IsPick:    true,
 		Estimated: a.Estimated,
 	}
-}
-
-// normalizeName normalizes a player name for cross-source matching.
-func normalizeName(name string) string {
-	return playername.Normalize(name)
 }

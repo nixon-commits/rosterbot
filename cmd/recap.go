@@ -57,10 +57,7 @@ func runRecap(cmd *cobra.Command, args []string) (err error) {
 
 	// Past matchup weeks are immutable, so reuse the same long TTL the
 	// backtest command uses to avoid re-hitting Fantrax on rerun.
-	snapTTL := fantrax.PastPeriodTTL
-	if noCache {
-		snapTTL = 0
-	}
+	snapTTL := cacheTTL(fantrax.PastPeriodTTL)
 
 	fmt.Fprintf(os.Stderr, "Building recap for %s – %s...\n",
 		weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"))

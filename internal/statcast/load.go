@@ -56,63 +56,42 @@ func LoadBundle(cacheDir string, year int, today time.Time, ttl time.Duration) (
 		PitcherExp30d: map[int]PitcherRow{},
 	}
 
-	hitExpC := cache.New[[]HitterRow](cacheDir, ttl)
-	hitSCC := cache.New[[]HitterStatcastRow](cacheDir, ttl)
-	hitExp14C := cache.New[[]HitterRow](cacheDir, ttl)
-	pitExpC := cache.New[[]PitcherRow](cacheDir, ttl)
-	pitExp30C := cache.New[[]PitcherRow](cacheDir, ttl)
-
-	if rows, err := hitExpC.Get(cache.Key(keySavant, "hit", "exp", strconv.Itoa(year)), func() ([]HitterRow, error) {
+	loadSlice(cacheDir, ttl, cache.Key(keySavant, "hit", "exp", strconv.Itoa(year)), func() ([]HitterRow, error) {
 		return fetchHitterExp(fmt.Sprintf(savantHitterExpURL, year))
-	}); err == nil {
-		for _, r := range rows {
-			bundle.HitterExp[r.MLBAMID] = r
-		}
-	} else {
-		log.Printf("WARNING: savant hit-exp fetch failed: %v", err)
-	}
+	}, func(r HitterRow) int { return r.MLBAMID }, bundle.HitterExp, "hit-exp")
 
-	if rows, err := hitSCC.Get(cache.Key(keySavant, "hit", "sc", strconv.Itoa(year)), func() ([]HitterStatcastRow, error) {
+	loadSlice(cacheDir, ttl, cache.Key(keySavant, "hit", "sc", strconv.Itoa(year)), func() ([]HitterStatcastRow, error) {
 		return fetchHitterSC(fmt.Sprintf(savantHitterSCURL, year))
-	}); err == nil {
-		for _, r := range rows {
-			bundle.HitterSC[r.MLBAMID] = r
-		}
-	} else {
-		log.Printf("WARNING: savant hit-sc fetch failed: %v", err)
-	}
+	}, func(r HitterStatcastRow) int { return r.MLBAMID }, bundle.HitterSC, "hit-sc")
 
-	if rows, err := hitExp14C.Get(cache.Key(keySavant, "hit", "exp14", strconv.Itoa(year), dateKey), func() ([]HitterRow, error) {
+	loadSlice(cacheDir, ttl, cache.Key(keySavant, "hit", "exp14", strconv.Itoa(year), dateKey), func() ([]HitterRow, error) {
 		return fetchHitterExp(fmt.Sprintf(savantHitterExp14dURL, year, start14.Format("2006-01-02"), end.Format("2006-01-02")))
-	}); err == nil {
-		for _, r := range rows {
-			bundle.HitterExp14d[r.MLBAMID] = r
-		}
-	} else {
-		log.Printf("WARNING: savant hit-exp14 fetch failed: %v", err)
-	}
+	}, func(r HitterRow) int { return r.MLBAMID }, bundle.HitterExp14d, "hit-exp14")
 
-	if rows, err := pitExpC.Get(cache.Key(keySavant, "pit", "exp", strconv.Itoa(year)), func() ([]PitcherRow, error) {
+	loadSlice(cacheDir, ttl, cache.Key(keySavant, "pit", "exp", strconv.Itoa(year)), func() ([]PitcherRow, error) {
 		return fetchPitcherExp(fmt.Sprintf(savantPitcherExpURL, year))
-	}); err == nil {
-		for _, r := range rows {
-			bundle.PitcherExp[r.MLBAMID] = r
-		}
-	} else {
-		log.Printf("WARNING: savant pit-exp fetch failed: %v", err)
-	}
+	}, func(r PitcherRow) int { return r.MLBAMID }, bundle.PitcherExp, "pit-exp")
 
-	if rows, err := pitExp30C.Get(cache.Key(keySavant, "pit", "exp30", strconv.Itoa(year), dateKey), func() ([]PitcherRow, error) {
+	loadSlice(cacheDir, ttl, cache.Key(keySavant, "pit", "exp30", strconv.Itoa(year), dateKey), func() ([]PitcherRow, error) {
 		return fetchPitcherExp(fmt.Sprintf(savantPitcherExp30URL, year, start30.Format("2006-01-02"), end.Format("2006-01-02")))
-	}); err == nil {
-		for _, r := range rows {
-			bundle.PitcherExp30d[r.MLBAMID] = r
-		}
-	} else {
-		log.Printf("WARNING: savant pit-exp30 fetch failed: %v", err)
-	}
+	}, func(r PitcherRow) int { return r.MLBAMID }, bundle.PitcherExp30d, "pit-exp30")
 
 	return bundle, nil
+}
+
+// loadSlice fetches one Savant CSV slice through the given cache (via key and
+// fetch), indexes the resulting rows into dst by id, and logs a warning
+// (labeled by label, matching the format every call site used before this
+// helper existed) on any cache/fetch error rather than failing the bundle.
+func loadSlice[T any](cacheDir string, ttl time.Duration, key string, fetch func() ([]T, error), id func(T) int, dst map[int]T, label string) {
+	rows, err := cache.New[[]T](cacheDir, ttl).Get(key, fetch)
+	if err != nil {
+		log.Printf("WARNING: savant %s fetch failed: %v", label, err)
+		return
+	}
+	for _, r := range rows {
+		dst[id(r)] = r
+	}
 }
 
 // fetchCSV does a GET, parses the first row as a header, and returns

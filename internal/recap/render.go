@@ -274,15 +274,16 @@ func barWidth(eff float64) int {
 // sparkPath returns an SVG <path d="..."> string for an inline sparkline.
 // Width/height match the .matchup .spark CSS rule (60×24). Maps WP in [0,1]
 // linearly to vertical pixel position (HomeWP=1.0 → top, =0.0 → bottom).
-func sparkPath(curve MatchupWPCurve) string {
-	if len(curve.Points) < 2 {
+// wpPathD renders the shared SVG <path> "d" attribute for a WP curve at the
+// given viewBox width/height.
+func wpPathD(points []WPPoint, w, h float64) string {
+	if len(points) < 2 {
 		return ""
 	}
-	const w, h = 60.0, 24.0
-	n := len(curve.Points)
+	n := len(points)
 	step := w / float64(n-1)
 	var out strings.Builder
-	for i, p := range curve.Points {
+	for i, p := range points {
 		x := float64(i) * step
 		y := (1.0 - p.HomeWP) * h
 		if i == 0 {
@@ -294,26 +295,14 @@ func sparkPath(curve MatchupWPCurve) string {
 	return out.String()
 }
 
+func sparkPath(curve MatchupWPCurve) string {
+	return wpPathD(curve.Points, 60, 24)
+}
+
 // fullChartPath returns an SVG <path> for the Game of the Week hero chart.
 // Width/height match the .game-of-week .wp-chart CSS (320×120 viewBox).
 func fullChartPath(curve MatchupWPCurve) string {
-	if len(curve.Points) < 2 {
-		return ""
-	}
-	const w, h = 320.0, 120.0
-	n := len(curve.Points)
-	step := w / float64(n-1)
-	var out strings.Builder
-	for i, p := range curve.Points {
-		x := float64(i) * step
-		y := (1.0 - p.HomeWP) * h
-		if i == 0 {
-			fmt.Fprintf(&out, "M%.2f,%.2f", x, y)
-		} else {
-			fmt.Fprintf(&out, " L%.2f,%.2f", x, y)
-		}
-	}
-	return out.String()
+	return wpPathD(curve.Points, 320, 120)
 }
 
 // curveForMatchup looks up the WP curve matching the given matchup. Returns
@@ -333,40 +322,28 @@ func matchupWinnerName(m *MatchupResult) string {
 	if m == nil {
 		return ""
 	}
-	if m.WinnerID == m.HomeTeamID {
-		return m.HomeTeamName
-	}
-	return m.AwayTeamName
+	return winnerSide(*m).TeamName
 }
 
 func matchupLoserName(m *MatchupResult) string {
 	if m == nil {
 		return ""
 	}
-	if m.LoserID == m.HomeTeamID {
-		return m.HomeTeamName
-	}
-	return m.AwayTeamName
+	return loserSide(*m).TeamName
 }
 
 func matchupWinnerPts(m *MatchupResult) float64 {
 	if m == nil {
 		return 0
 	}
-	if m.WinnerID == m.HomeTeamID {
-		return m.HomePts
-	}
-	return m.AwayPts
+	return winnerSide(*m).Pts
 }
 
 func matchupLoserPts(m *MatchupResult) float64 {
 	if m == nil {
 		return 0
 	}
-	if m.LoserID == m.HomeTeamID {
-		return m.HomePts
-	}
-	return m.AwayPts
+	return loserSide(*m).Pts
 }
 
 // matchupSideClass returns "win", "lose", or "" (tie) for the team's side of

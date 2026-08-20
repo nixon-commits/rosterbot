@@ -188,6 +188,34 @@ type inviteResponse struct {
 // from the dashboard and one minted from the CLI expire on the same schedule.
 const defaultEnrollmentTTL = 72 * time.Hour
 
+// mintEnrollmentAndRespond is the shared tail of handleTenantInvite and
+// handleTenantRecovery: mint a single-use enrollment token, store it, and
+// write the inviteResponse. ttlHours <= 0 defaults to defaultEnrollmentTTL,
+// matching both callers' own default logic.
+func (cfg Config) mintEnrollmentAndRespond(w http.ResponseWriter, r *http.Request, uid UserID, teamID, email string, ttlHours int) {
+	ttl := defaultEnrollmentTTL
+	if ttlHours > 0 {
+		ttl = time.Duration(ttlHours) * time.Hour
+	}
+
+	token, hash, err := MintEnrollmentToken()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not mint enrollment token")
+		return
+	}
+	expires := time.Now().UTC().Add(ttl)
+	err = cfg.Enrollments.CreateEnrollment(r.Context(), hash, Enrollment{
+		UserID: uid, TeamID: teamID, Email: email, ExpiresAt: expires,
+	})
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "could not create enrollment link")
+		return
+	}
+	writeJSON(w, http.StatusOK, inviteResponse{
+		UserID: uid, Email: email, Token: string(token), ExpiresAt: expires,
+	})
+}
+
 // handleTenantInvite mints a new user and their single-use enrollment link —
 // the dashboard twin of cmd/invite.go, producing the same record shape: member
 // role, active, AutoApply false, and the email/team claims enforced at create
@@ -211,10 +239,6 @@ func (cfg Config) handleTenantInvite(w http.ResponseWriter, r *http.Request) {
 	if body.Email == "" {
 		writeErr(w, http.StatusBadRequest, "email is required")
 		return
-	}
-	ttl := defaultEnrollmentTTL
-	if body.TTLHours > 0 {
-		ttl = time.Duration(body.TTLHours) * time.Hour
 	}
 
 	handle, err := NewWebAuthnUserID()
@@ -254,22 +278,7 @@ func (cfg Config) handleTenantInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, hash, err := MintEnrollmentToken()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not mint enrollment token")
-		return
-	}
-	expires := now.Add(ttl)
-	err = cfg.Enrollments.CreateEnrollment(r.Context(), hash, Enrollment{
-		UserID: uid, TeamID: body.TeamID, Email: body.Email, ExpiresAt: expires,
-	})
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "could not create enrollment link")
-		return
-	}
-	writeJSON(w, http.StatusOK, inviteResponse{
-		UserID: uid, Email: body.Email, Token: string(token), ExpiresAt: expires,
-	})
+	cfg.mintEnrollmentAndRespond(w, r, uid, body.TeamID, body.Email, body.TTLHours)
 }
 
 // handleTenantRecovery mints an enrollment link for an EXISTING user — the
@@ -291,10 +300,6 @@ func (cfg Config) handleTenantRecovery(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "malformed request")
 		return
 	}
-	ttl := defaultEnrollmentTTL
-	if body.TTLHours > 0 {
-		ttl = time.Duration(body.TTLHours) * time.Hour
-	}
 
 	u, ok, err := cfg.Users.GetUser(r.Context(), id)
 	if err != nil {
@@ -306,20 +311,5 @@ func (cfg Config) handleTenantRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, hash, err := MintEnrollmentToken()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not mint enrollment token")
-		return
-	}
-	expires := time.Now().UTC().Add(ttl)
-	err = cfg.Enrollments.CreateEnrollment(r.Context(), hash, Enrollment{
-		UserID: u.ID, TeamID: u.TeamID, Email: u.Email, ExpiresAt: expires,
-	})
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "could not create enrollment link")
-		return
-	}
-	writeJSON(w, http.StatusOK, inviteResponse{
-		UserID: u.ID, Email: u.Email, Token: string(token), ExpiresAt: expires,
-	})
+	cfg.mintEnrollmentAndRespond(w, r, u.ID, u.TeamID, u.Email, body.TTLHours)
 }

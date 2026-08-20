@@ -7,13 +7,7 @@
 // reach an attribute context.
 import { api, ApiError } from "./api.js";
 import { renderPasskeysSection } from "./passkeys.js";
-
-function el(tag, cls, text) {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
-  return n;
-}
+import { el } from "./render.js";
 
 function card(title) {
   const c = el("section", "card");

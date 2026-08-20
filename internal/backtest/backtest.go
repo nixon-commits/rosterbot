@@ -441,17 +441,14 @@ func hindsightValue(fpts float64) float64 {
 
 // hindsightHitterSource returns actual FPts as projected pts/game.
 type hindsightHitterSource struct {
-	byID   map[string]float64
 	byName map[string]float64
 }
 
 func newHindsightHitterSource(players []fantrax.DayPlayerFP) *hindsightHitterSource {
 	s := &hindsightHitterSource{
-		byID:   make(map[string]float64),
 		byName: make(map[string]float64),
 	}
 	for _, p := range players {
-		s.byID[p.PlayerID] = hindsightValue(p.FPts)
 		s.byName[projections.NormalizeName(p.Name)] = hindsightValue(p.FPts)
 	}
 	return s
@@ -483,17 +480,14 @@ func (s *hindsightHitterSource) GetPtsPerGame(name, _ string, _ fantrax.ScoringW
 
 // hindsightPitcherSource is the pitcher analogue.
 type hindsightPitcherSource struct {
-	byID   map[string]float64
 	byName map[string]float64
 }
 
 func newHindsightPitcherSource(players []fantrax.DayPlayerFP) *hindsightPitcherSource {
 	s := &hindsightPitcherSource{
-		byID:   make(map[string]float64),
 		byName: make(map[string]float64),
 	}
 	for _, p := range players {
-		s.byID[p.PlayerID] = hindsightValue(p.FPts)
 		s.byName[projections.NormalizeName(p.Name)] = hindsightValue(p.FPts)
 	}
 	return s

@@ -3,8 +3,6 @@ package lineupapi
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -136,12 +134,6 @@ func (s *FileIdentityStore) path() string {
 	return filepath.Join(s.dir, "webauthn-identity.json")
 }
 
-// identityVersionOf derives the version token for a stored body.
-func identityVersionOf(data []byte) IdentityVersion {
-	sum := sha256.Sum256(data)
-	return IdentityVersion(hex.EncodeToString(sum[:]))
-}
-
 // readIdentity loads the record and its version, reporting absence as
 // (nil, "", false, nil).
 func (s *FileIdentityStore) readIdentity() (*Identity, IdentityVersion, bool, error) {
@@ -156,7 +148,7 @@ func (s *FileIdentityStore) readIdentity() (*Identity, IdentityVersion, bool, er
 	if err := json.Unmarshal(data, &id); err != nil {
 		return nil, "", false, err
 	}
-	id.Version = identityVersionOf(data)
+	id.Version = versionOf(data)
 	return &id, id.Version, true, nil
 }
 
@@ -195,7 +187,7 @@ func (s *FileIdentityStore) PutIdentity(_ context.Context, id *Identity) error {
 	if err := s.writeAtomic(data); err != nil {
 		return err
 	}
-	id.Version = identityVersionOf(data)
+	id.Version = versionOf(data)
 	return nil
 }
 

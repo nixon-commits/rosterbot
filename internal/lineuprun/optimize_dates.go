@@ -3,12 +3,12 @@ package lineuprun
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 	"github.com/nixon-commits/rosterbot/internal/projections"
-	"golang.org/x/sync/errgroup"
 )
 
 // dateRosterClient is the Fantrax surface the per-date pass needs: resolve a
@@ -79,21 +79,20 @@ type OptimizeInputs struct {
 // The results slice is preallocated and each goroutine writes only its own
 // index, so the parallelism needs no lock and the output order is the input
 // order regardless of completion order.
-func OptimizeDates(ft dateRosterClient, sched dateScheduleClient, in OptimizeInputs) ([]dateResult, error) {
+func OptimizeDates(ft dateRosterClient, sched dateScheduleClient, in OptimizeInputs) []dateResult {
 	results := make([]dateResult, len(in.Dates))
 
-	var g errgroup.Group
+	var wg sync.WaitGroup
 	for i, date := range in.Dates {
 		i, date := i, date
-		g.Go(func() error {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			results[i] = optimizeOneDate(ft, sched, in, date)
-			return nil
-		})
+		}()
 	}
-	if err := g.Wait(); err != nil {
-		return nil, fmt.Errorf("parallel optimize: %w", err)
-	}
-	return results, nil
+	wg.Wait()
+	return results
 }
 
 // optimizeOneDate is the whole per-date pipeline for a single day: resolve the

@@ -39,7 +39,7 @@ var userCmd = &cobra.Command{
 // was therefore unrepairable without hand-editing DynamoDB.
 //
 // The operator's own record is the case that matters: neither migrate-identity
-// nor the bootstrap profile in ensureUserForIdentity sets a TeamID.
+// nor the invite bootstrap sets a TeamID.
 var userSetTeamCmd = &cobra.Command{
 	Use:   "set-team",
 	Short: "Admin: bind a Fantrax team to an existing user",

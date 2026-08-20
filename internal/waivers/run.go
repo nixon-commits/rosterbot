@@ -2,6 +2,7 @@ package waivers
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
@@ -12,9 +13,9 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
+	positionspkg "github.com/nixon-commits/rosterbot/internal/positions"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/statcast"
-	"github.com/pmurley/go-fantrax/auth_client"
 	"github.com/pmurley/go-fantrax/models"
 	"golang.org/x/sync/errgroup"
 )
@@ -239,7 +240,7 @@ func matchesPositionFilter(p models.PoolPlayer, filters []string) bool {
 // isSPEligible returns true when the player has SP eligibility.
 func isSPEligible(positions []string) bool {
 	for _, pos := range positions {
-		if pos == auth_client.PosSP {
+		if pos == positionspkg.SP {
 			return true
 		}
 	}
@@ -250,10 +251,7 @@ func isSPEligible(positions []string) bool {
 // position (i.e. could fill a hitter slot).
 func isHitterEligible(positions []string) bool {
 	for _, pos := range positions {
-		switch pos {
-		case auth_client.PosSP, auth_client.PosRP, auth_client.PosP, auth_client.PosRP2, auth_client.PosRP3:
-			continue
-		default:
+		if !positionspkg.IsPitcherSlot(pos) {
 			return true
 		}
 	}
@@ -578,36 +576,24 @@ func omitLeadZeroPrec(v float64, prec int) string {
 // ---------------------------------------------------------------------------
 
 func writeGHASummary(r Report, path string) {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
-	if err != nil {
-		log.Printf("WARNING: failed to open GHA summary file: %v", err)
-		return
-	}
-	// The buffered writes above are only flushed by Close, so dropping its error
-	// would report a summary this function never actually finished writing.
-	// There are early returns below, so this stays a defer.
-	defer func() {
-		if cerr := f.Close(); cerr != nil {
-			log.Printf("WARNING: GHA summary may be incomplete: %v", cerr)
+	notify.AppendGHASummary(path, func(f io.Writer) {
+		fmt.Fprintln(f, "## Waiver Picks")
+		fmt.Fprintln(f)
+		if len(r.Top) == 0 {
+			fmt.Fprintln(f, "No upgrade candidates surfaced today.")
+			return
 		}
-	}()
-
-	fmt.Fprintln(f, "## Waiver Picks")
-	fmt.Fprintln(f)
-	if len(r.Top) == 0 {
-		fmt.Fprintln(f, "No upgrade candidates surfaced today.")
-		return
-	}
-	fmt.Fprintln(f, "| Signal | Add | Team | Pos | FPG | Drop | DropFPG | +Gap | Detail |")
-	fmt.Fprintln(f, "|--------|-----|------|-----|-----|------|---------|------|--------|")
-	for _, c := range r.Top {
-		fmt.Fprintf(f, "| %s | %s | %s | %s | %.2f | %s | %.2f | +%.2f | %s |\n",
-			c.Signal.String(), c.Name, c.MLBTeam, c.Position, c.ProjectedFPG,
-			c.DropName, c.DropFPG, c.Gap, candidateDetail(c))
-	}
-	if r.Total > len(r.Top) {
-		fmt.Fprintf(f, "\n_%d more upgrades found — showing top %d._\n", r.Total-len(r.Top), len(r.Top))
-	}
+		fmt.Fprintln(f, "| Signal | Add | Team | Pos | FPG | Drop | DropFPG | +Gap | Detail |")
+		fmt.Fprintln(f, "|--------|-----|------|-----|-----|------|---------|------|--------|")
+		for _, c := range r.Top {
+			fmt.Fprintf(f, "| %s | %s | %s | %s | %.2f | %s | %.2f | +%.2f | %s |\n",
+				c.Signal.String(), c.Name, c.MLBTeam, c.Position, c.ProjectedFPG,
+				c.DropName, c.DropFPG, c.Gap, candidateDetail(c))
+		}
+		if r.Total > len(r.Top) {
+			fmt.Fprintf(f, "\n_%d more upgrades found — showing top %d._\n", r.Total-len(r.Top), len(r.Top))
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

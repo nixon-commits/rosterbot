@@ -99,33 +99,12 @@ func TestFanGraphsRankingSource_Returns403(t *testing.T) {
 	}
 }
 
-// --- ChainedRankingSource ---
-
-type failingSource struct{}
-
-func (f *failingSource) GetTopProspects(season int) ([]RankedProspect, error) {
-	return nil, ErrSourceUnavailable
-}
-
 type succeedingSource struct {
 	prospects []RankedProspect
 }
 
 func (s *succeedingSource) GetTopProspects(season int) ([]RankedProspect, error) {
 	return s.prospects, nil
-}
-
-func TestChainedRankingSource_FallsThrough(t *testing.T) {
-	expected := []RankedProspect{{Name: "test player", Rank: 1}}
-	chain := NewChainedRankingSource(&failingSource{}, &succeedingSource{prospects: expected})
-
-	result, err := chain.GetTopProspects(2026)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(result) != 1 || result[0].Name != "test player" {
-		t.Errorf("unexpected result: %v", result)
-	}
 }
 
 // --- LoadRankings cache tests ---

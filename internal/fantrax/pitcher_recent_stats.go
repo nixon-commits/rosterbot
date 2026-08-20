@@ -89,7 +89,7 @@ func isPitcherByName(posShortNames string) bool {
 // Cached under fantrax-recent-stats-pitcher-<teamID>-<season>-<period> with a
 // TTL determined by cachedForPeriod/periodCachePolicy (PastPeriodTTL once the
 // period is settled, todayTTL while it can still move).
-func (c *Client) GetRecentPitcherStats(currentPeriod DailyPeriod, _ int) (map[string]RecentStat, error) {
+func (c *Client) GetRecentPitcherStats(currentPeriod DailyPeriod) (map[string]RecentStat, error) {
 	period := currentPeriod - 1
 	if period < 1 {
 		return nil, fmt.Errorf("no completed periods (current=%d)", currentPeriod)

@@ -61,9 +61,5 @@ func standingsPoints(hist []WeekStandings, teamID string, padL, padT int) string
 // teamShort truncates a team name to fit the label column next to the chart.
 // Keeps up to 12 runes; if longer, returns first 11 runes + "…".
 func teamShort(name string) string {
-	runes := []rune(name)
-	if len(runes) <= 12 {
-		return name
-	}
-	return string(runes[:11]) + "…"
+	return truncateString(name, 12)
 }

@@ -30,30 +30,27 @@ type ProspectAlert struct {
 
 // RankedProspect is a prospect with ranking info.
 type RankedProspect struct {
-	Name        string
-	MLBTeam     string
-	MLBID       int    // MLB Stats API player ID
-	Position    string // "SS", "SP", etc.
-	Rank        int    // 1-100, 0 = unranked
-	FV          int    // future value grade (55, 60, etc.), 0 if unavailable
-	ETA         string // "2026", "2027"
-	Level       string // "AAA", "AA", "A+", "A"
-	IsPitcher   bool
-	PctRostered float64 // Fantrax %Rostered (0-100), 0 when unavailable
+	Name      string
+	MLBTeam   string
+	Position  string // "SS", "SP", etc.
+	Rank      int    // 1-100, 0 = unranked
+	FV        int    // future value grade (55, 60, etc.), 0 if unavailable
+	ETA       string // "2026", "2027"
+	Level     string // "AAA", "AA", "A+", "A"
+	IsPitcher bool
 }
 
 // UpgradeCandidate represents a recommended prospect swap.
 type UpgradeCandidate struct {
 	Drop     RankedProspect
 	Add      RankedProspect
-	RankGap  int     // positive = Add is higher ranked (rank-based sources)
-	PctGap   float64 // positive = Add is more rostered (Fantrax %Rostered)
-	NearTerm bool    // true if Add's ETA is current or next season
+	RankGap  int  // positive = Add is higher ranked (rank-based sources)
+	NearTerm bool // true if Add's ETA is current or next season
 }
 
 // UpgradeSet groups upgrade candidates from a single ranking source.
 type UpgradeSet struct {
-	Source     string // "FanGraphs" or "Fantrax"
+	Source     string // "FanGraphs" or "HKB"
 	Candidates []UpgradeCandidate
 }
 
@@ -61,12 +58,11 @@ type UpgradeSet struct {
 type Report struct {
 	Date     time.Time
 	Alerts   []ProspectAlert
-	Rankings []RankedProspect // your rostered prospects, sorted by rank
 	Upgrades []UpgradeSet
 }
 
 // RankingSource provides prospect ranking data.
-// Implementations: MLBPipelineSource, FanGraphsRankingSource.
+// Implementations: FanGraphsRankingSource.
 type RankingSource interface {
 	GetTopProspects(season int) ([]RankedProspect, error)
 }

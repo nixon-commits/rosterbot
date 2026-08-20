@@ -97,7 +97,8 @@ func Run(ft ClaimsClient, today time.Time, opts Options) error {
 		}
 	}
 
-	lineupapi.RecordOutput("claims", toWireResult(BuildLedger(today, moves)))
+	led := BuildLedger(today, moves)
+	lineupapi.RecordOutput("claims", toWireResult(led))
 
 	// Output: stdout (color) always; GHA summary (no color) when configured.
 	fmt.Println(FormatReport(moves, opts.DropsMin, true))
@@ -116,7 +117,7 @@ func Run(ft ClaimsClient, today time.Time, opts Options) error {
 
 	// Ledger (skipped in dry-run).
 	if !opts.DryRun {
-		if err := WriteLedger(opts.LedgerDir, BuildLedger(today, moves)); err != nil {
+		if err := WriteLedger(opts.LedgerDir, led); err != nil {
 			log.Printf("WARNING: failed to write ledger: %v", err)
 		}
 	}

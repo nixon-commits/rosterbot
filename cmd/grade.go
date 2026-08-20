@@ -107,10 +107,7 @@ func runGrade(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("get season start: %w", err)
 	}
 
-	snapTTL := fantrax.PastPeriodTTL
-	if noCache {
-		snapTTL = 0
-	}
+	snapTTL := cacheTTL(fantrax.PastPeriodTTL)
 	// DailyFantasyPoints resolves the MLB-statsapi backfill internally (soft-fail),
 	// so the returned rows never carry placeholder zeros.
 	days, err := ft.DailyFantasyPoints(cfg.TeamID, start, end, seasonStart, cacheDir, snapTTL)

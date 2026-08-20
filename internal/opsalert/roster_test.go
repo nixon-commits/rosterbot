@@ -5,10 +5,8 @@ import (
 	"time"
 )
 
-func at(ts string) string { return ts }
-
 func ranAt(cmd, uid, ts string) Record {
-	return Record{ID: cmd + "-" + uid, Command: cmd, UserID: uid, Status: "SUCCESS", StartedAt: at(ts)}
+	return Record{ID: cmd + "-" + uid, Command: cmd, UserID: uid, Status: "SUCCESS", StartedAt: ts}
 }
 
 func perTenant(cmd string, gapHours int) Schedule {

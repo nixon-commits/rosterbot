@@ -80,10 +80,9 @@ func (s *Syncer) Down(ctx context.Context, bucket, prefix, localDir string) erro
 	if err != nil {
 		return err
 	}
-	// Ranging the map's keys: list now reports sizes too, which Down has no use
-	// for. Iteration order is therefore random, which is fine here — each key
-	// writes an independent file — but it is why nothing below may depend on
-	// encounter order.
+	// Ranging the map's keys: iteration order is random, which is fine here —
+	// each key writes an independent file — but it is why nothing below may
+	// depend on encounter order.
 	for key := range keys {
 		rel := strings.TrimPrefix(key, prefix)
 		if rel == "" || strings.HasSuffix(rel, "/") {
@@ -200,13 +199,10 @@ func (s *Syncer) Invalidate(ctx context.Context, distID string) error {
 	return err
 }
 
-// list returns every object key under bucket/prefix mapped to its size,
-// paginating as needed. Size rides along because Up's skip decision needs it
-// and a second listing to fetch it would cost exactly what the skip saves; a
-// nil Size (which the API models as optional) is reported as -1 so it can never
-// compare equal to a real file length and accidentally suppress an upload.
-func (s *Syncer) list(ctx context.Context, bucket, prefix string) (map[string]int64, error) {
-	sizes := map[string]int64{}
+// list returns the set of every object key under bucket/prefix, paginating as
+// needed.
+func (s *Syncer) list(ctx context.Context, bucket, prefix string) (map[string]bool, error) {
+	keys := map[string]bool{}
 	var token *string
 	for {
 		out, err := s.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
@@ -219,18 +215,14 @@ func (s *Syncer) list(ctx context.Context, bucket, prefix string) (map[string]in
 			if o.Key == nil {
 				continue
 			}
-			if o.Size == nil {
-				sizes[*o.Key] = -1
-				continue
-			}
-			sizes[*o.Key] = *o.Size
+			keys[*o.Key] = true
 		}
 		if out.IsTruncated == nil || !*out.IsTruncated {
 			break
 		}
 		token = out.NextContinuationToken
 	}
-	return sizes, nil
+	return keys, nil
 }
 
 func (s *Syncer) download(ctx context.Context, bucket, key, dst string) error {

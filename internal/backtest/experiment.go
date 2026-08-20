@@ -119,7 +119,7 @@ func runHitterRecency(
 			Build: func(asOf time.Time) (projections.Source, error) {
 				return projections.NewBlendedSource(
 					baseSrc, weightedSeries(series, asOf, w),
-					opts.HitterScoring, nameToID, opts.BlendMinGP, baseline,
+					nameToID, opts.BlendMinGP, baseline,
 				), nil
 			},
 		})
@@ -169,7 +169,7 @@ func runPitcherRecency(
 			Build: func(asOf time.Time) (projections.PitcherSource, error) {
 				return projections.NewPitcherBlendedSource(
 					baseSrc, weightedSeries(series, asOf, w),
-					scoring, nameToID, playerPos, opts.BlendMinGP, baseline,
+					nameToID, playerPos, opts.BlendMinGP, baseline,
 				), nil
 			},
 		})

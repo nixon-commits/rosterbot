@@ -14,14 +14,7 @@
 // context — the same footgun views.js documents. DOM text nodes remove it
 // entirely rather than relying on every future edit getting escaping right.
 import { api } from "./api.js";
-import { help } from "./render.js";
-
-const el = (tag, cls, text) => {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
+import { el, help } from "./render.js";
 
 const num = (n) => (n ?? 0).toLocaleString();
 

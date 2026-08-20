@@ -23,7 +23,6 @@ type PtsPerGameSource interface {
 type BlendedSource struct {
 	inner       Source
 	recent      map[string]fantrax.RecentStat
-	scoring     fantrax.ScoringWeights
 	nameToID    map[string]string // NormalizeName(name) → player ID
 	minGP       int
 	baselineFPG float64 // league-average FP/G; shrinkage prior when no base projection exists
@@ -32,12 +31,11 @@ type BlendedSource struct {
 func NewBlendedSource(
 	inner Source,
 	recent map[string]fantrax.RecentStat,
-	scoring fantrax.ScoringWeights,
 	nameToID map[string]string,
 	minGP int,
 	baselineFPG float64,
 ) *BlendedSource {
-	return &BlendedSource{inner: inner, recent: recent, scoring: scoring, nameToID: nameToID, minGP: minGP, baselineFPG: baselineFPG}
+	return &BlendedSource{inner: inner, recent: recent, nameToID: nameToID, minGP: minGP, baselineFPG: baselineFPG}
 }
 
 // GetProjection delegates to the inner source.

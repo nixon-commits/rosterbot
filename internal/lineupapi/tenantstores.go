@@ -1,6 +1,9 @@
 package lineupapi
 
-import "context"
+import (
+	"context"
+	"net/http"
+)
 
 // TenantView is the per-tenant slice of Config: the stores whose contents
 // belong to one specific user rather than to the league or the deployment.
@@ -66,4 +69,16 @@ func (cfg Config) tenantView(ctx context.Context) (TenantView, bool) {
 		return TenantView{}, false
 	}
 	return v, true
+}
+
+// requireTenantView resolves the caller's TenantView or writes the standard
+// 503 and reports false, so handlers can bail out in one line instead of
+// repeating the failure branch.
+func (cfg Config) requireTenantView(w http.ResponseWriter, r *http.Request) (TenantView, bool) {
+	view, ok := cfg.tenantView(r.Context())
+	if !ok {
+		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+		return TenantView{}, false
+	}
+	return view, true
 }

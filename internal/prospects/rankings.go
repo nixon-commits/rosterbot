@@ -19,7 +19,7 @@ import (
 var fgProspectURL = "https://www.fangraphs.com/api/prospects/board/data?draft=%dprospect&season=%d"
 
 // ErrSourceUnavailable indicates a ranking source is temporarily unavailable
-// (e.g. 401/403). ChainedRankingSource uses this to fall through to the next source.
+// (e.g. 401/403). FanGraphsRankingSource wraps 401/403 responses with this.
 var ErrSourceUnavailable = errors.New("ranking source unavailable")
 
 // ---------------------------------------------------------------------------
@@ -98,36 +98,7 @@ func isPitcherPosition(pos string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// 3. ChainedRankingSource
-// ---------------------------------------------------------------------------
-
-// ChainedRankingSource tries multiple RankingSources in order, falling through
-// when a source returns ErrSourceUnavailable.
-type ChainedRankingSource struct {
-	sources []RankingSource
-}
-
-// NewChainedRankingSource creates a chained source that tries each delegate in order.
-func NewChainedRankingSource(sources ...RankingSource) *ChainedRankingSource {
-	return &ChainedRankingSource{sources: sources}
-}
-
-func (c *ChainedRankingSource) GetTopProspects(season int) ([]RankedProspect, error) {
-	for _, src := range c.sources {
-		prospects, err := src.GetTopProspects(season)
-		if err != nil {
-			if errors.Is(err, ErrSourceUnavailable) {
-				continue
-			}
-			return nil, err
-		}
-		return prospects, nil
-	}
-	return nil, fmt.Errorf("all ranking sources failed")
-}
-
-// ---------------------------------------------------------------------------
-// 4. LoadRankings
+// 2. LoadRankings
 // ---------------------------------------------------------------------------
 
 var loadRankingsCacheDir = ".cache"
@@ -192,17 +163,6 @@ func FindUpgrades(rostered, available []RankedProspect, currentYear string) []Up
 			}
 
 			if gap < threshold {
-				continue
-			}
-
-			// FV-based comparison: when both have FV > 0, a gap of ≥5 FV points is significant
-			if drop.FV > 0 && add.FV > 0 && add.FV-drop.FV >= 5 {
-				// FV upgrade — always prefer
-				if bestFA == nil || add.Rank < bestFA.Rank {
-					cp := *add
-					bestFA = &cp
-					bestGap = gap
-				}
 				continue
 			}
 

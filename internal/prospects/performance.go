@@ -14,6 +14,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/scoring"
 	"github.com/nixon-commits/rosterbot/internal/teams"
 	"golang.org/x/sync/errgroup"
 )
@@ -176,7 +177,7 @@ func fetchGameLogsUncached(playerID int, group string, season int) ([]gameLogEnt
 	var entries []gameLogEntry
 	for _, st := range result.Stats {
 		for _, split := range st.Splits {
-			level := sportAbbrevToLevel(split.Sport.Abbreviation)
+			level := split.Sport.Abbreviation
 			e := gameLogEntry{
 				Date:    split.Date,
 				Level:   level,
@@ -193,41 +194,11 @@ func fetchGameLogsUncached(playerID int, group string, season int) ([]gameLogEnt
 				BBA:     split.Stat.BaseOnBalls,
 				HA:      split.Stat.HitsAllowed,
 			}
-			e.IP = parseIP(split.Stat.InningsPitched)
+			e.IP = scoring.ParseIP(split.Stat.InningsPitched)
 			entries = append(entries, e)
 		}
 	}
 	return entries, nil
-}
-
-func sportAbbrevToLevel(abbrev string) string {
-	switch abbrev {
-	case "AAA":
-		return "AAA"
-	case "AA":
-		return "AA"
-	case "A+":
-		return "A+"
-	case "A":
-		return "A"
-	default:
-		return abbrev
-	}
-}
-
-func parseIP(s string) float64 {
-	if s == "" {
-		return 0
-	}
-	// MLB notation: "6.1" means 6 full innings + 1 out = 6.333 IP.
-	// The decimal part is outs (0-2), not a fractional value.
-	parts := strings.SplitN(s, ".", 2)
-	full, _ := strconv.Atoi(parts[0])
-	outs := 0
-	if len(parts) == 2 {
-		outs, _ = strconv.Atoi(parts[1])
-	}
-	return float64(full) + float64(outs)/3.0
 }
 
 // ---------------------------------------------------------------------------
@@ -376,14 +347,11 @@ func FetchPerformanceAlerts(prospects []fantrax.Player, rankings map[string]int,
 	if maxConcurrent < 16 {
 		maxConcurrent = 16
 	}
-	sem := make(chan struct{}, maxConcurrent)
+	g.SetLimit(maxConcurrent)
 
 	for _, p := range prospects {
 		p := p
 		g.Go(func() error {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
 			id, found := resolveMLBPlayerID(p.Name, p.MLBTeam)
 			if !found {
 				return nil

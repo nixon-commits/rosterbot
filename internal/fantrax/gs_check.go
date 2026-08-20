@@ -159,21 +159,16 @@ type PitcherStart struct {
 // and a pitcher called up mid-period will have their starts counted from the
 // day they entered an active slot.
 func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []PitcherStart, error) {
-	// Use yesterday as the last completed day. If the period hasn't started yet, return 0.
-	yesterday := today.Truncate(24*time.Hour).AddDate(0, 0, -1)
-	if yesterday.Before(sp.StartDate) {
-		return 0, nil, nil
-	}
-	// Cap at the period end date.
-	if yesterday.After(sp.EndDate) {
-		yesterday = sp.EndDate
-	}
-
 	// The per-day snapshot diff is keyed by the *daily* scoring period (one
 	// number per calendar day), resolved via the authoritative periodList map.
 	// See DailyPeriodFor / gsPeriodWalk for why this must not be the weekly
-	// matchup number.
+	// matchup number. gsPeriodWalk itself applies the "yesterday, clamped to
+	// the period end date" rule; if the period hasn't started yet it returns
+	// nil and there is nothing to walk.
 	walkPeriods := gsPeriodWalk(c, sp, seasonStart, today)
+	if len(walkPeriods) == 0 {
+		return 0, nil, nil
+	}
 
 	// Get baseline YTD GS and FPts per player as of the day before the period started.
 	// For the first period of the season, baseline is zero (no prior data).
@@ -210,8 +205,8 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStar
 	// phantom inflation from counting his pre-period or hitter-slot starts.
 	totalGS := 0
 	var overageStarts []PitcherStart
-	for i, d := 0, sp.StartDate; !d.After(yesterday); i, d = i+1, d.AddDate(0, 0, 1) {
-		period := walkPeriods[i]
+	for i, period := range walkPeriods {
+		d := sp.StartDate.AddDate(0, 0, i)
 		info, err := c.getPlayerGSSnapshotForPeriod(teamID, period)
 		if err != nil {
 			return 0, nil, fmt.Errorf("get GS for %s: %w", d.Format("2006-01-02"), err)
@@ -320,7 +315,7 @@ var getPlayerGSSnapshotFn = (*Client).getPlayerGSSnapshotForPeriod
 // Fantasy points come from the "fpts" column (col.Key); if absent, fpts defaults to 0.
 func playerGSFromTables(tables []models.RosterTable) (map[string]playerGSSnapshot, error) {
 	for _, table := range tables {
-		if !isPitchingGroup(table.SCGroup) {
+		if !isScGroup(table.SCGroup, 20) {
 			continue
 		}
 
@@ -377,21 +372,6 @@ func playerGSFromTables(tables []models.RosterTable) (map[string]playerGSSnapsho
 	return map[string]playerGSSnapshot{}, nil
 }
 
-// isPitchingGroup checks if scGroup represents the pitching group (20).
-// SCGroup is interface{} in the model — it may be string "20" or float64 20.
-func isPitchingGroup(scGroup interface{}) bool {
-	switch v := scGroup.(type) {
-	case string:
-		return v == "20"
-	case float64:
-		return v == 20
-	case int:
-		return v == 20
-	default:
-		return false
-	}
-}
-
 // FindJustEndedPeriod returns the period whose end date is yesterday, or nil.
 func FindJustEndedPeriod(periods []ScoringPeriod, today time.Time) *ScoringPeriod {
 	yesterday := today.AddDate(0, 0, -1)
@@ -419,18 +399,4 @@ func FindCurrentPeriod(periods []ScoringPeriod, date time.Time) *ScoringPeriod {
 		}
 	}
 	return nil
-}
-
-// FindMostRecentPastPeriod returns the most recent period whose end date is before today.
-func FindMostRecentPastPeriod(periods []ScoringPeriod, today time.Time) *ScoringPeriod {
-	todayYMD := today.Format("2006-01-02")
-	var best *ScoringPeriod
-	for i := range periods {
-		if periods[i].EndDate.Format("2006-01-02") < todayYMD {
-			if best == nil || periods[i].EndDate.After(best.EndDate) {
-				best = &periods[i]
-			}
-		}
-	}
-	return best
 }

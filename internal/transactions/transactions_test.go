@@ -10,26 +10,6 @@ import (
 	"github.com/pmurley/go-fantrax/models"
 )
 
-func TestNormalizeName(t *testing.T) {
-	tests := []struct {
-		input, want string
-	}{
-		{"Bobby Witt Jr.", "bobby witt"},
-		{"Vladimir Guerrero Jr.", "vladimir guerrero"},
-		{"Ken Griffey Sr.", "ken griffey"},
-		{"Ronald Acuña Jr.", "ronald acuna"},
-		{"Mike Trout", "mike trout"},
-		{"  Juan Soto  ", "juan soto"},
-		{"Cal Ripken III", "cal ripken"},
-		{"Ken Griffey II", "ken griffey"},
-	}
-	for _, tt := range tests {
-		if got := normalizeName(tt.input); got != tt.want {
-			t.Errorf("normalizeName(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
 func TestBuildHKBLookup(t *testing.T) {
 	players := []hkb.Player{
 		{Name: "Bobby Witt Jr.", Value: 10000},
@@ -199,41 +179,6 @@ func TestGroupTrades(t *testing.T) {
 	}
 	if beta.Total != 8782 {
 		t.Errorf("Team Beta total = %d, want 8782 (Soto=8782, Trout=unranked=0)", beta.Total)
-	}
-}
-
-func TestFormatValue(t *testing.T) {
-	tests := []struct {
-		input int
-		want  string
-	}{
-		{0, "0"},
-		{500, "500"},
-		{1000, "1,000"},
-		{10000, "10,000"},
-		{1234567, "1,234,567"},
-	}
-	for _, tt := range tests {
-		if got := formatValue(tt.input); got != tt.want {
-			t.Errorf("formatValue(%d) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
-func TestFormatOPS(t *testing.T) {
-	tests := []struct {
-		input float64
-		want  string
-	}{
-		{0.812, ".812"},
-		{0.900, ".900"},
-		{1.012, "1.012"},
-		{0.000, ".000"},
-	}
-	for _, tt := range tests {
-		if got := formatOPS(tt.input); got != tt.want {
-			t.Errorf("formatOPS(%f) = %q, want %q", tt.input, got, tt.want)
-		}
 	}
 }
 

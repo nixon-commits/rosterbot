@@ -70,11 +70,7 @@ func runFootballTrades(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("sleeper players: %w", err)
 	}
 
-	statsguyCacheDir := ""
-	if !noCache {
-		statsguyCacheDir = cacheDir
-	}
-	bundle, err := statsguy.LoadBundle(statsguyCacheDir, cacheTTL(statsguy.CacheTTL))
+	bundle, err := statsguy.LoadBundle(cacheDir, cacheTTL(statsguy.CacheTTL))
 	if err != nil {
 		return fmt.Errorf("statsguy bundle: %w", err)
 	}

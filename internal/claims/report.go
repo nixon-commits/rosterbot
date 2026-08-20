@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/statcast"
 )
 
@@ -66,12 +67,12 @@ func formatSidePlayer(p SidePlayer, added bool) string {
 	if !p.Ranked {
 		return fmt.Sprintf("%s (%s) — unranked", p.Name, p.Position)
 	}
-	s := fmt.Sprintf("%s (%s) · #%d · %s", p.Name, p.Position, p.Rank, formatValue(p.Value))
+	s := fmt.Sprintf("%s (%s) · #%d · %s", p.Name, p.Position, p.Rank, hkb.FormatValue(p.Value))
 	// 30-day trend (both added and dropped).
 	if p.Trend30D > 0 {
-		s += fmt.Sprintf(" ▲+%s", formatValue(p.Trend30D))
+		s += fmt.Sprintf(" ▲+%s", hkb.FormatValue(p.Trend30D))
 	} else if p.Trend30D < 0 {
-		s += fmt.Sprintf(" ▼-%s", formatValue(-p.Trend30D))
+		s += fmt.Sprintf(" ▼-%s", hkb.FormatValue(-p.Trend30D))
 	}
 	if added && p.Signal != statcast.SignalNone {
 		s += " · " + p.Signal.String()
@@ -84,20 +85,10 @@ func formatSidePlayer(p SidePlayer, added bool) string {
 		if p.IsPitcher {
 			s += fmt.Sprintf(" · %.2f ERA", p.ERA)
 		} else {
-			s += " · " + formatOPS(p.OPS) + " OPS"
+			s += " · " + hkb.FormatOPS(p.OPS) + " OPS"
 		}
 	}
 	return s
-}
-
-// formatOPS formats an OPS value like ".812" (no leading zero), matching the
-// convention used in internal/transactions.
-func formatOPS(ops float64) string {
-	str := fmt.Sprintf("%.3f", ops)
-	if strings.HasPrefix(str, "0") {
-		return str[1:] // ".812" instead of "0.812"
-	}
-	return str // "1.012" stays as-is
 }
 
 func writeLeaderboard(b *strings.Builder, moves []Move, color bool) {
@@ -145,7 +136,7 @@ func writeDropsWatch(b *strings.Builder, drops []SidePlayer) {
 	}
 	b.WriteString("\nNotable Drops (now available)\n")
 	for _, p := range drops {
-		fmt.Fprintf(b, "%s%s (%s) · %s\n", nbsp, p.Name, p.Position, formatValue(p.Value))
+		fmt.Fprintf(b, "%s%s (%s) · %s\n", nbsp, p.Name, p.Position, hkb.FormatValue(p.Value))
 	}
 }
 
@@ -291,7 +282,7 @@ func formatSignedValue(v int, color bool) string {
 	if v < 0 {
 		sign, mag = "-", -v
 	}
-	s := sign + formatValue(mag)
+	s := sign + hkb.FormatValue(mag)
 	if !color {
 		return s
 	}
@@ -303,19 +294,4 @@ func formatSignedValue(v int, color bool) string {
 	default:
 		return colorDim + s + colorReset
 	}
-}
-
-// formatValue formats an integer with comma separators (e.g. 12345 -> "12,345").
-func formatValue(v int) string {
-	s := fmt.Sprintf("%d", v)
-	if len(s) <= 3 {
-		return s
-	}
-	var parts []string
-	for len(s) > 3 {
-		parts = append([]string{s[len(s)-3:]}, parts...)
-		s = s[:len(s)-3]
-	}
-	parts = append([]string{s}, parts...)
-	return strings.Join(parts, ",")
 }

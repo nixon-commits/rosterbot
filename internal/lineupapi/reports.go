@@ -52,9 +52,8 @@ func (cfg Config) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	// serveBlob (trades.go) is the passthrough contract: stored bytes out
 	// untouched, never decoded, so the producer owns the schema.
-	view, ok := cfg.tenantView(r.Context())
+	view, ok := cfg.requireTenantView(w, r)
 	if !ok {
-		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
 		return
 	}
 	serveBlob(w, r, view.Reports, name, what)

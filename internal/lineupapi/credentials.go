@@ -77,9 +77,9 @@ const (
 	// MyTeamIDs to confirm.
 	//
 	// This is an ADMIN error surfaced as a connection failure: `invite` treats
-	// --team as optional, and neither migrate-identity nor the bootstrap profile
-	// in ensureUserForIdentity sets one, so a perfectly valid Fantrax login can
-	// arrive with no team attached. It is a distinct class from TeamNotOwned
+	// --team as optional, and neither migrate-identity nor the invite bootstrap
+	// sets one, so a perfectly valid Fantrax login can arrive with no team
+	// attached. It is a distinct class from TeamNotOwned
 	// because the remedy is different — the user's credentials are fine and
 	// re-entering them cannot help; someone has to assign the team.
 	//

@@ -154,7 +154,7 @@ type LineupClient interface {
 	GetPitcherRosterForPeriod(period fantrax.DailyPeriod) ([]fantrax.Player, error)
 	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
 	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
-	GetRecentPitcherStats(currentPeriod fantrax.DailyPeriod, n int) (map[string]fantrax.RecentStat, error)
+	GetRecentPitcherStats(currentPeriod fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error)
 	ApplyLineup(period fantrax.DailyPeriod, active []fantrax.PlayerSlot, reserve []string) error
 	InvalidatePeriodRosterCache(period fantrax.DailyPeriod)
 }
@@ -340,10 +340,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	hitterProjSrc, pitcherProjSrc := blend.Hitters, blend.Pitchers
 
 	// Collect MLBAM IDs for handedness lookup.
-	var hitterMLBAMIDs map[string]int
-	if fgSrc != nil {
-		hitterMLBAMIDs = fgSrc.MLBAMIDs()
-	}
+	hitterMLBAMIDs := fgSrc.MLBAMIDs()
 
 	prog.Done("Projections", "batting + pitching loaded")
 
@@ -355,14 +352,10 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	var pitcherFIP map[string]float64
 	var leagueAvgFIP float64
 	var pitcherMLBAMIDs map[string]int
-	if fgPitSrc != nil {
-		pitcherFIP, leagueAvgFIP = fgPitSrc.PitcherInfo()
-		pitcherMLBAMIDs = fgPitSrc.MLBAMIDs()
-		prog.Logf("pitcher info loaded: %d FIP, league avg FIP=%.2f", len(pitcherFIP), leagueAvgFIP)
-		prog.Done("Pitcher info", fmt.Sprintf("%d FIP entries · league avg %.2f", len(pitcherFIP), leagueAvgFIP))
-	} else {
-		prog.Done("Pitcher info", "skipped")
-	}
+	pitcherFIP, leagueAvgFIP = fgPitSrc.PitcherInfo()
+	pitcherMLBAMIDs = fgPitSrc.MLBAMIDs()
+	prog.Logf("pitcher info loaded: %d FIP, league avg FIP=%.2f", len(pitcherFIP), leagueAvgFIP)
+	prog.Done("Pitcher info", fmt.Sprintf("%d FIP entries · league avg %.2f", len(pitcherFIP), leagueAvgFIP))
 
 	// Fetch handedness from MLB Stats API using MLBAM IDs from FanGraphs.
 	var hitterBats map[string]string
@@ -393,8 +386,9 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	multiDate := len(dates) > 1
 
 	// Get season start date for period calculation.
-	// If we already fetched the season range for --dates all, reuse seasonStart from above.
-	if !opts.NeedsSeasonLookup {
+	// If ResolveDates already fetched the season range (--dates all or --matchup),
+	// reuse seasonStart from above instead of refetching it.
+	if seasonStart.IsZero() {
 		s, _, err := ft.GetSeasonDateRange()
 		if err != nil {
 			prog.Logf("WARNING: could not get season start (%v) — only today's lineup can be set", err)
@@ -465,7 +459,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 
 	// --- Optimize every date in parallel ---
 	prog.Start("Optimize")
-	results, err := OptimizeDates(ft, schedClient, OptimizeInputs{
+	results := OptimizeDates(ft, schedClient, OptimizeInputs{
 		Dates:             dates,
 		Today:             today,
 		SeasonStart:       seasonStart,
@@ -484,9 +478,6 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		GSBudget:          gsBudget,
 		ShowPipeline:      opts.ShowPipeline,
 	})
-	if err != nil {
-		return result, err
-	}
 	prog.Done("Optimize", "done")
 
 	// --- Dynasty enrichment for the published lineup JSON ---

@@ -12,6 +12,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/positions"
+	"github.com/nixon-commits/rosterbot/internal/scoring"
 	"github.com/nixon-commits/rosterbot/internal/statcast"
 	"github.com/pmurley/go-fantrax/models"
 )
@@ -297,7 +298,7 @@ func fetchPitchingChunk(url string, out map[int]pitchSeason) error {
 		for _, st := range person.Stats {
 			for _, sp := range st.Splits {
 				out[person.ID] = pitchSeason{
-					IP:  parseIP(sp.Stat.InningsPitched),
+					IP:  scoring.ParseIP(sp.Stat.InningsPitched),
 					HR:  float64(sp.Stat.HomeRuns),
 					BB:  float64(sp.Stat.BaseOnBalls),
 					HBP: float64(sp.Stat.HitBatsmen),
@@ -308,20 +309,4 @@ func fetchPitchingChunk(url string, out map[int]pitchSeason) error {
 		}
 	}
 	return nil
-}
-
-// parseIP converts MLB's "45.1"/"45.2" innings notation (where .1 = one out,
-// .2 = two outs) into decimal innings.
-func parseIP(s string) float64 {
-	if s == "" {
-		return 0
-	}
-	dot := strings.IndexByte(s, '.')
-	if dot < 0 {
-		v, _ := strconv.ParseFloat(s, 64)
-		return v
-	}
-	whole, _ := strconv.ParseFloat(s[:dot], 64)
-	outs, _ := strconv.ParseFloat(s[dot+1:], 64)
-	return whole + outs/3
 }

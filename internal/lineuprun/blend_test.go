@@ -106,7 +106,6 @@ type fakeBlendClient struct {
 	pitcherCall  struct {
 		called bool
 		period fantrax.DailyPeriod
-		n      int
 	}
 }
 
@@ -126,9 +125,9 @@ func (f *fakeBlendClient) MLBDailyFPts(_ []fantrax.MLBPlayerRef, _, _ time.Time)
 	return nil, nil
 }
 
-func (f *fakeBlendClient) GetRecentPitcherStats(period fantrax.DailyPeriod, n int) (map[string]fantrax.RecentStat, error) {
+func (f *fakeBlendClient) GetRecentPitcherStats(period fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error) {
 	f.pitcherCall.called = true
-	f.pitcherCall.period, f.pitcherCall.n = period, n
+	f.pitcherCall.period = period
 	return f.pitcherStats, f.pitcherErr
 }
 
@@ -240,11 +239,6 @@ func TestBlendSources_HittersAreWindowedAndPitchersAreYTD(t *testing.T) {
 	if ft.pitcherCall.period != in.CurrentPeriod {
 		t.Errorf("pitcher snapshot period = %d, want the current period %d",
 			ft.pitcherCall.period, in.CurrentPeriod)
-	}
-	// n == 0 is "the whole season to date". A windowed pitcher read would pass
-	// a positive count here.
-	if ft.pitcherCall.n != 0 {
-		t.Errorf("pitcher recency asked for %d periods — pitchers are season-to-date, not windowed", ft.pitcherCall.n)
 	}
 }
 

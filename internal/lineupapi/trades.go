@@ -22,9 +22,8 @@ const (
 // by anyone who knows the distribution domain. Only /v1/* is passkey-gated,
 // and open trade negotiations in a live league belong behind it.
 func (cfg Config) handleTrades(w http.ResponseWriter, r *http.Request) {
-	view, ok := cfg.tenantView(r.Context())
+	view, ok := cfg.requireTenantView(w, r)
 	if !ok {
-		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
 		return
 	}
 	serveBlob(w, r, view.Trades, TradesCurrentKey, "pending offers")
@@ -32,9 +31,8 @@ func (cfg Config) handleTrades(w http.ResponseWriter, r *http.Request) {
 
 // handleTradeValues serves the league values table.
 func (cfg Config) handleTradeValues(w http.ResponseWriter, r *http.Request) {
-	view, ok := cfg.tenantView(r.Context())
+	view, ok := cfg.requireTenantView(w, r)
 	if !ok {
-		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
 		return
 	}
 	serveBlob(w, r, view.TradeValues, TradeValuesKey, "trade values table")

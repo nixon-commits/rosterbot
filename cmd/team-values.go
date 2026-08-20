@@ -12,14 +12,10 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
+	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
 	"github.com/nixon-commits/rosterbot/internal/tradeboard"
 	"github.com/spf13/cobra"
-)
-
-const (
-	teamValueLocalDir = ".teamvalue"
-	teamValuePrefix   = "analysis/team-values/" // S3 prefix under STATE_BUCKET
 )
 
 var teamValuesDate string
@@ -205,9 +201,9 @@ func teamValueWriter() (teamvalue.Writer, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("init team-value writer: %w", err)
 	}
-	dest := teamValueLocalDir
+	dest := layout.TeamValues.LocalDir
 	if b := statestore.Bucket(); b != "" {
-		dest = "s3://" + b + "/" + teamValuePrefix
+		dest = "s3://" + b + "/" + layout.TeamValues.S3Prefix
 	}
 	return w, dest, nil
 }

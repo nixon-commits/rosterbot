@@ -75,11 +75,6 @@ func SetProjectionSystem(system string) error {
 	return nil
 }
 
-// CurrentAPIType returns the active FanGraphs API type parameter for cache key construction.
-func CurrentAPIType() string {
-	return currentAPIType
-}
-
 // Projection holds projected season counting stats for a hitter.
 // All values are season totals; per-game rates are derived by dividing by G.
 type Projection struct {

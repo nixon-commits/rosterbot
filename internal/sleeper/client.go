@@ -41,6 +41,17 @@ func NewClient() *Client {
 	return &Client{http: http.Client{Timeout: 10 * time.Second}}
 }
 
+// cached is the shared cache-or-fetch branch every public method below uses:
+// short-circuit straight to fetch when caching is disabled (CacheDir == ""),
+// otherwise read-through a FileCache at ttl keyed on key. Mirrors
+// internal/fantrax/cached.go's cached[T] helper.
+func cached[T any](c *Client, ttl time.Duration, key string, fetch func() (T, error)) (T, error) {
+	if c.CacheDir == "" {
+		return fetch()
+	}
+	return cache.New[T](c.CacheDir, ttl).Get(key, fetch)
+}
+
 func (c *Client) get(path string, out any) error {
 	resp, err := c.http.Get(baseURL + path)
 	if err != nil {
@@ -62,13 +73,9 @@ func (c *Client) get(path string, out any) error {
 
 // League fetches a league's static configuration.
 func (c *Client) League(leagueID string) (*League, error) {
-	if c.CacheDir != "" {
-		fc := cache.New[*League](c.CacheDir, RosterTTL)
-		return fc.Get(cache.Key("sleeper-league", leagueID), func() (*League, error) {
-			return c.fetchLeague(leagueID)
-		})
-	}
-	return c.fetchLeague(leagueID)
+	return cached(c, RosterTTL, cache.Key("sleeper-league", leagueID), func() (*League, error) {
+		return c.fetchLeague(leagueID)
+	})
 }
 
 func (c *Client) fetchLeague(leagueID string) (*League, error) {
@@ -81,13 +88,9 @@ func (c *Client) fetchLeague(leagueID string) (*League, error) {
 
 // Rosters fetches every team's roster in the league.
 func (c *Client) Rosters(leagueID string) ([]Roster, error) {
-	if c.CacheDir != "" {
-		fc := cache.New[[]Roster](c.CacheDir, RosterTTL)
-		return fc.Get(cache.Key("sleeper-rosters", leagueID), func() ([]Roster, error) {
-			return c.fetchRosters(leagueID)
-		})
-	}
-	return c.fetchRosters(leagueID)
+	return cached(c, RosterTTL, cache.Key("sleeper-rosters", leagueID), func() ([]Roster, error) {
+		return c.fetchRosters(leagueID)
+	})
 }
 
 func (c *Client) fetchRosters(leagueID string) ([]Roster, error) {
@@ -100,13 +103,9 @@ func (c *Client) fetchRosters(leagueID string) ([]Roster, error) {
 
 // Users fetches every league member.
 func (c *Client) Users(leagueID string) ([]User, error) {
-	if c.CacheDir != "" {
-		fc := cache.New[[]User](c.CacheDir, RosterTTL)
-		return fc.Get(cache.Key("sleeper-users", leagueID), func() ([]User, error) {
-			return c.fetchUsers(leagueID)
-		})
-	}
-	return c.fetchUsers(leagueID)
+	return cached(c, RosterTTL, cache.Key("sleeper-users", leagueID), func() ([]User, error) {
+		return c.fetchUsers(leagueID)
+	})
 }
 
 func (c *Client) fetchUsers(leagueID string) ([]User, error) {
@@ -120,13 +119,9 @@ func (c *Client) fetchUsers(leagueID string) ([]User, error) {
 // TradedPicks fetches every draft pick that has changed hands from its
 // original owner.
 func (c *Client) TradedPicks(leagueID string) ([]TradedPick, error) {
-	if c.CacheDir != "" {
-		fc := cache.New[[]TradedPick](c.CacheDir, RosterTTL)
-		return fc.Get(cache.Key("sleeper-traded-picks", leagueID), func() ([]TradedPick, error) {
-			return c.fetchTradedPicks(leagueID)
-		})
-	}
-	return c.fetchTradedPicks(leagueID)
+	return cached(c, RosterTTL, cache.Key("sleeper-traded-picks", leagueID), func() ([]TradedPick, error) {
+		return c.fetchTradedPicks(leagueID)
+	})
 }
 
 func (c *Client) fetchTradedPicks(leagueID string) ([]TradedPick, error) {
@@ -140,13 +135,9 @@ func (c *Client) fetchTradedPicks(leagueID string) ([]TradedPick, error) {
 // Transactions fetches every transaction filed under the given week
 // ("round" in Sleeper's API — regular-season week number).
 func (c *Client) Transactions(leagueID string, week int) ([]Transaction, error) {
-	if c.CacheDir != "" {
-		fc := cache.New[[]Transaction](c.CacheDir, RosterTTL)
-		return fc.Get(cache.Key("sleeper-transactions", leagueID, strconv.Itoa(week)), func() ([]Transaction, error) {
-			return c.fetchTransactions(leagueID, week)
-		})
-	}
-	return c.fetchTransactions(leagueID, week)
+	return cached(c, RosterTTL, cache.Key("sleeper-transactions", leagueID, strconv.Itoa(week)), func() ([]Transaction, error) {
+		return c.fetchTransactions(leagueID, week)
+	})
 }
 
 func (c *Client) fetchTransactions(leagueID string, week int) ([]Transaction, error) {
@@ -159,13 +150,9 @@ func (c *Client) fetchTransactions(leagueID string, week int) ([]Transaction, er
 
 // State fetches the current NFL week/season.
 func (c *Client) State() (*NFLState, error) {
-	if c.CacheDir != "" {
-		fc := cache.New[*NFLState](c.CacheDir, RosterTTL)
-		return fc.Get(cache.Key("sleeper-state"), func() (*NFLState, error) {
-			return c.fetchState()
-		})
-	}
-	return c.fetchState()
+	return cached(c, RosterTTL, cache.Key("sleeper-state"), func() (*NFLState, error) {
+		return c.fetchState()
+	})
 }
 
 func (c *Client) fetchState() (*NFLState, error) {
@@ -180,13 +167,9 @@ func (c *Client) fetchState() (*NFLState, error) {
 // cached at PlayersTTL when CacheDir is set — this must never be called in a
 // loop; callers should fetch it once per run and pass the map along.
 func (c *Client) PlayersNFL() (map[string]Player, error) {
-	if c.CacheDir != "" {
-		fc := cache.New[map[string]Player](c.CacheDir, PlayersTTL)
-		return fc.Get(cache.Key("sleeper-players-nfl"), func() (map[string]Player, error) {
-			return c.fetchPlayersNFL()
-		})
-	}
-	return c.fetchPlayersNFL()
+	return cached(c, PlayersTTL, cache.Key("sleeper-players-nfl"), func() (map[string]Player, error) {
+		return c.fetchPlayersNFL()
+	})
 }
 
 func (c *Client) fetchPlayersNFL() (map[string]Player, error) {

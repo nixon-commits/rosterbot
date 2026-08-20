@@ -105,7 +105,7 @@ func TestGetPitcherBreakdown_NoRecentData(t *testing.T) {
 	inner := &stubPitSrc{data: map[string]*PitcherProjection{"ace pitcher": proj}}
 	scoring := testPitScoring()
 
-	src := NewPitcherBlendedSource(inner, nil, scoring, map[string]string{"ace pitcher": "p1"}, map[string][]string{"p1": {auth_client.PosSP}}, 2, 0)
+	src := NewPitcherBlendedSource(inner, nil, map[string]string{"ace pitcher": "p1"}, map[string][]string{"p1": {auth_client.PosSP}}, 2, 0)
 	bd := src.GetPitcherBreakdown("Ace Pitcher", "NYY", scoring)
 
 	if bd == nil {
@@ -136,7 +136,7 @@ func TestGetPitcherBreakdown_WithRecentData(t *testing.T) {
 	nameToID := map[string]string{"ace pitcher": "p1"}
 	playerPos := map[string][]string{"p1": {auth_client.PosSP}}
 
-	src := NewPitcherBlendedSource(inner, recent, scoring, nameToID, playerPos, 2, 0)
+	src := NewPitcherBlendedSource(inner, recent, nameToID, playerPos, 2, 0)
 	bd := src.GetPitcherBreakdown("Ace Pitcher", "NYY", scoring)
 
 	if bd == nil {
@@ -172,7 +172,7 @@ func TestGetPitcherBreakdown_InsufficientGP(t *testing.T) {
 	nameToID := map[string]string{"reliever": "p1"}
 	playerPos := map[string][]string{"p1": {"016"}} // RP only
 
-	src := NewPitcherBlendedSource(inner, recent, scoring, nameToID, playerPos, 2, 0)
+	src := NewPitcherBlendedSource(inner, recent, nameToID, playerPos, 2, 0)
 	bd := src.GetPitcherBreakdown("Reliever", "NYY", scoring)
 
 	if bd == nil {
@@ -190,7 +190,7 @@ func TestGetPitcherBreakdown_NoProjection(t *testing.T) {
 	inner := &stubPitSrc{data: map[string]*PitcherProjection{}}
 	scoring := testPitScoring()
 
-	src := NewPitcherBlendedSource(inner, nil, scoring, nil, nil, 2, 0)
+	src := NewPitcherBlendedSource(inner, nil, nil, nil, 2, 0)
 	bd := src.GetPitcherBreakdown("Unknown Pitcher", "NYY", scoring)
 
 	if bd != nil {
@@ -211,7 +211,7 @@ func TestPitcherBlendedSource_NoBaseProjection_SmallSample_ShrinksTowardBaseline
 
 	src := NewPitcherBlendedSource(inner, map[string]fantrax.RecentStat{
 		"p1": {FPtsPerGame: 25.0, GamesPlayed: 2},
-	}, scoring, nameToID, playerPos, 2, baseline)
+	}, nameToID, playerPos, 2, baseline)
 
 	pts, ok := src.GetPitcherPtsPerGame("Call-Up", "NYY", scoring)
 	if !ok {

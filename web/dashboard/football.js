@@ -23,7 +23,7 @@
 // names and asset names from the NFL player dump, neither of them vetted. A
 // real league team is named "Zatch's mom Hawk Tua'd".
 import { api } from "./api.js";
-import { help } from "./render.js";
+import { el, help } from "./render.js";
 
 const FORMATS = [
   ["sf_dynasty", "SF Dynasty"],
@@ -39,13 +39,6 @@ const FORMAT_LABEL = Object.fromEntries(FORMATS);
 const fmt = (n) => (typeof n === "number" ? n.toLocaleString() : "—");
 
 const sentenceCase = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
-
-const el = (tag, cls, text) => {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
 
 function startersKey(format) {
   return "starters" + toPascal(format);
