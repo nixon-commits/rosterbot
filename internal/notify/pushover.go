@@ -1,12 +1,6 @@
 package notify
 
-import (
-	"fmt"
-	"io"
-	"net/http"
-	"net/url"
-	"strings"
-)
+import "github.com/nixon-commits/rosterbot/internal/pushover"
 
 // Recorder, when set, is called for every Pushover send with the same title +
 // message. NOTHING INSTALLS IT ANY MORE: fantasy events go through Dispatcher,
@@ -19,7 +13,10 @@ import (
 // only when delivery was attempted vanishes exactly when delivery breaks.
 var Recorder func(title, message string)
 
-// SendPushover sends a push notification via the Pushover API.
+// SendPushover sends a push notification via the Pushover API. The HTTP
+// client itself lives in the stdlib-only internal/pushover leaf so the
+// opsnotify Lambda can send without importing this package, which now pulls
+// lineupapi (and transitively chromedp) through the dispatcher's sinks.
 //
 // Still exported and still called directly, by design: the personal operator
 // channel (connect blocked, cache stale fallback, GS limit fetch failure,
@@ -32,29 +29,5 @@ func SendPushover(userKey, apiToken, title, message string) error {
 	if r := Recorder; r != nil {
 		r(title, message)
 	}
-	if len(message) > 1024 {
-		message = message[:1024]
-	}
-
-	data := url.Values{
-		"token":    {apiToken},
-		"user":     {userKey},
-		"message":  {message},
-		"priority": {"0"},
-		"title":    {title},
-		"html":     {"1"},
-	}
-
-	resp, err := http.PostForm("https://api.pushover.net/1/messages.json", data)
-	if err != nil {
-		return fmt.Errorf("send pushover request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("pushover API error (status %d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-
-	return nil
+	return pushover.Send(userKey, apiToken, title, message)
 }
