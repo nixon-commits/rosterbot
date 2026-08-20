@@ -158,15 +158,24 @@ type PitcherStart struct {
 // A pitcher moved to IL or bench mid-period won't have later starts counted,
 // and a pitcher called up mid-period will have their starts counted from the
 // day they entered an active slot.
+// The walk runs sp.StartDate..sp.EndDate, capped at today — the caller decides
+// how far to go, and a caller wanting only completed days passes an EndDate
+// before today. gs-check does exactly that (FindJustEndedPeriod returns a period
+// that ended yesterday), so the cap never binds there. The GS budget passes
+// today, because today's starts are already spent and the live roster cannot be
+// asked about them: once a pitcher's game ends, a later hourly run rotates him
+// to Reserve and any count derived from current Status silently loses his start
+// (rosterbot-cg8l). Reading it from that day's own snapshot is what makes the
+// number monotonic within the day.
 func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []PitcherStart, error) {
-	// Use yesterday as the last completed day. If the period hasn't started yet, return 0.
-	yesterday := today.Truncate(24*time.Hour).AddDate(0, 0, -1)
-	if yesterday.Before(sp.StartDate) {
+	// Last day to walk. If the period hasn't started yet, return 0.
+	lastDay := today.Truncate(24 * time.Hour)
+	if lastDay.Before(sp.StartDate) {
 		return 0, nil, nil
 	}
 	// Cap at the period end date.
-	if yesterday.After(sp.EndDate) {
-		yesterday = sp.EndDate
+	if lastDay.After(sp.EndDate) {
+		lastDay = sp.EndDate
 	}
 
 	// The per-day snapshot diff is keyed by the *daily* scoring period (one
@@ -210,7 +219,7 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStar
 	// phantom inflation from counting his pre-period or hitter-slot starts.
 	totalGS := 0
 	var overageStarts []PitcherStart
-	for i, d := 0, sp.StartDate; !d.After(yesterday); i, d = i+1, d.AddDate(0, 0, 1) {
+	for i, d := 0, sp.StartDate; !d.After(lastDay); i, d = i+1, d.AddDate(0, 0, 1) {
 		period := walkPeriods[i]
 		info, err := c.getPlayerGSSnapshotForPeriod(teamID, period)
 		if err != nil {

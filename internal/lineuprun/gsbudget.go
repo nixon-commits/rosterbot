@@ -3,12 +3,10 @@ package lineuprun
 import (
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
-	"github.com/nixon-commits/rosterbot/internal/projections"
 )
 
 // gsScheduleClient is the MLB-schedule surface the GS-budget phase needs.
@@ -17,7 +15,6 @@ import (
 type gsScheduleClient interface {
 	TeamsPlayingOn(date time.Time) (map[string]bool, error)
 	ProbableStarters(date time.Time) (map[string]string, error)
-	LockedTeams(date time.Time) (map[string]bool, error)
 }
 
 // gsFantraxClient is the Fantrax surface the GS-budget fetch cascade needs.
@@ -112,14 +109,26 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 		return d
 	}
 
-	// Past GS uses the gs_check active-slot delta walk. The probables list is
-	// unreliable as a GS proxy: it counts current-roster SPs who were probable
-	// while sitting on bench (overcount) and misses SPs dropped after starting
-	// in an active slot (undercount). The walk fetches per-day roster snapshots
+	// Used GS comes from the gs_check active-slot delta walk, for every elapsed
+	// day of the week INCLUDING today. The walk fetches per-day roster snapshots
 	// and counts only active-slot YTD GS deltas — the same source of truth
 	// gs-check uses for league-wide violation detection.
-	pastGS, _, gsErr := ft.GetTeamGS(in.TeamID, "",
-		fantrax.ScoringPeriod{StartDate: weekStart, EndDate: in.Today.AddDate(0, 0, -1)},
+	//
+	// The probables list is unreliable as a GS proxy: it counts current-roster
+	// SPs who were probable while sitting on bench (overcount) and misses SPs
+	// dropped after starting in an active slot (undercount).
+	//
+	// Today used to be counted separately, from the live roster — an SP who was
+	// active, on a locked team, and today's probable. That answers "is he active
+	// NOW" when the question is "did he start TODAY", and the two diverge every
+	// evening: once a pitcher's game is over a later hourly run rotates him back
+	// to Reserve for tomorrow, and his already-spent start drops out of the
+	// count. Production read 5/12 at 00:00Z on 2026-08-20 and 3/12 an hour
+	// later, against a true 5 (rosterbot-cg8l). A start cannot be un-made, so
+	// the number has to come from that day's frozen snapshot, not from a roster
+	// that keeps moving.
+	usedGS, _, gsErr := ft.GetTeamGS(in.TeamID, "",
+		fantrax.ScoringPeriod{StartDate: weekStart, EndDate: in.Today},
 		in.SeasonStart, in.Today, 0, false)
 	if gsErr != nil {
 		d.logf("WARNING: per-day GS walk failed (%v) — GS limit disabled", gsErr)
@@ -153,7 +162,6 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 		gsLimit, weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"))
 
 	spNames := rosterSPNames(in.PitcherRoster)
-	usedGS := pastGS
 	// The forecast is the last step of the cascade and obeys the same rule as
 	// every step before it: no gate beats a gate running on a number nobody can
 	// vouch for. Unlike the GS-limit fetch this raises no Pushover — a statsapi
@@ -163,14 +171,6 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 	if fcErr != nil {
 		d.logf("WARNING: %v — GS limit disabled", fcErr)
 		return d
-	}
-
-	// Today's already-locked starts count as used, not forecast demand.
-	// Both lookups must succeed — a partial view would undercount.
-	lockedTeams, lockErr := sched.LockedTeams(in.Today)
-	todayProbs, probsErr := sched.ProbableStarters(in.Today)
-	if lockErr == nil && probsErr == nil {
-		usedGS += countTodayStarts(in.PitcherRoster, lockedTeams, todayProbs)
 	}
 
 	d.Budget = &optimizer.GSBudget{
@@ -183,40 +183,6 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 	d.logf("GS budget: %d/%d used, %.1f projected future starts",
 		usedGS, gsLimit, d.Budget.FutureDemand())
 	return d
-}
-
-// countTodayStarts returns how many of today's game starts the roster has
-// already consumed. Pure — no I/O.
-//
-// A rostered SP counts only when it is active (not benched, injured, or in the
-// minors), its MLB team is locked, AND it is that team's published probable
-// starter today. Each condition rules out a specific miscount:
-//   - team-locked alone would count an active SP-eligible reliever, or an SP
-//     who simply isn't pitching, purely because the team's game started;
-//   - probable alone would count a start before the game locks, double-counting
-//     it against the forecast;
-//   - the team equality check rejects a stale probables entry for a player who
-//     has since changed clubs.
-//
-// Probables for completed games remain in the API for the rest of the day, so
-// this captures both in-progress and finished starts.
-func countTodayStarts(pitcherRoster []fantrax.Player, lockedTeams map[string]bool, todayProbs map[string]string) int {
-	used := 0
-	for _, p := range pitcherRoster {
-		if p.Status != "Active" || p.InMinors || p.IsInjured {
-			continue
-		}
-		if !lockedTeams[p.MLBTeam] {
-			continue
-		}
-		if !strings.Contains(p.PosShortNames, "SP") {
-			continue
-		}
-		if team, ok := todayProbs[projections.NormalizeName(p.Name)]; ok && team == p.MLBTeam {
-			used++
-		}
-	}
-	return used
 }
 
 // buildGSForecast projects how many game starts the roster will demand on each
