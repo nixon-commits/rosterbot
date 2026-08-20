@@ -65,6 +65,11 @@ type Config struct {
 	Users       UserStore
 	Enrollments EnrollmentStore
 
+	// PushDevices is the APNs device registry behind /v1/push/devices. Nil
+	// answers 501, matching the other optional stores; production wires the
+	// same DynamoDB store as Users, `serve` the same file store.
+	PushDevices PushDeviceStore
+
 	// Connections and Sealer back POST /v1/connect. Sealer is the ENCRYPT-ONLY
 	// half (see credentials.go): this config never holds an Opener, so no
 	// handler can read a tenant's Fantrax password back — which is exactly why
@@ -121,6 +126,12 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("POST /v1/me/preferences", cfg.handleSetPreferences)
 	mux.HandleFunc("POST /v1/connect", cfg.handleConnect)
 	mux.HandleFunc("GET /v1/connect", cfg.handleConnectStatus)
+	// APNs device registry. Session-gated like everything else here, and each
+	// handler additionally refuses the bearer token: a device registration
+	// must be attributable to a person (see pushCaller).
+	mux.HandleFunc("POST /v1/push/devices", cfg.handleRegisterPushDevice)
+	mux.HandleFunc("GET /v1/push/devices", cfg.handleListPushDevices)
+	mux.HandleFunc("DELETE /v1/push/devices/{id}", cfg.handleRevokePushDevice)
 
 	// Auth routes gate themselves (open login, session-or-token register,
 	// session-only passkey management in Task 5) instead of the blanket

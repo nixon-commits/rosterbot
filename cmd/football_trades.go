@@ -109,7 +109,7 @@ func runFootballTrades(cmd *cobra.Command, args []string) error {
 		names:   names,
 		format:  cfg.DynastyFormat,
 		dryRun:  dryRun,
-		send:    func(title, body string) error { return sendFootballTradeAlert(cfg, title, body) },
+		send:    func(title, body string) error { return sendFootballTradeAlert(ctx, title, body) },
 		out:     os.Stdout,
 	})
 
@@ -407,17 +407,14 @@ func formatTradeAlert(txn sleeper.Transaction, sides []dynasty.TradeSide, v dyna
 	return title, body
 }
 
-// sendFootballTradeAlert sends to FootballPushoverUserKey (a personal
-// notification, matching internal/transactions.go's baseball "Trade Alert" --
-// FootballPushoverGroupKey exists for a future league-wide broadcast use, the
-// same role PushoverGroupKey plays for gs-check's league-wide violation
-// alert, but is not this command's target). The API token itself is not
-// football-specific -- it is the one Pushover app token, read the same way
-// initShared reads it for the cache-notify alert.
-func sendFootballTradeAlert(cfg *FootballConfig, title, body string) error {
-	apiToken := os.Getenv("PUSHOVER_API_TOKEN")
-	if cfg.FootballPushoverUserKey == "" || apiToken == "" {
-		return nil // no creds configured: print-only, matching other commands' soft-skip
-	}
-	return notify.SendPushover(cfg.FootballPushoverUserKey, apiToken, title, body)
+// sendFootballTradeAlert routes a graded trade through the notify dispatcher
+// (feed record first, then APNs -- and Pushover while the dual-send cutover
+// flag is set), the same channel as baseball's "Trade Alert". The returned
+// error is a failed FEED write only, which is exactly what the caller's
+// do-not-mark-on-failure rule needs: the durable record is the half that must
+// exist before a trade may be marked handled. An unconfigured dispatcher is a
+// silent no-op, preserving the old print-only behaviour of a credential-less
+// run.
+func sendFootballTradeAlert(ctx context.Context, title, body string) error {
+	return notify.Send(ctx, notify.Event{Kind: "transactions", Title: title, Message: body})
 }

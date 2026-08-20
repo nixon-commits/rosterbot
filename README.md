@@ -487,7 +487,7 @@ The same Lambda exposes a run ledger and job triggering (these return `501` from
 Run **status** always comes from the run ledger; `/progress` only adds phase detail on top of it. Today only `optimize` emits phases — the other allowlisted jobs show an indeterminate bar.
 
 > [!WARNING]
-> Triggered jobs run **for real** — `POST /v1/jobs/optimize` applies your lineup and sends Pushover. Gate it behind a confirmation in any client.
+> Triggered jobs run **for real** — `POST /v1/jobs/optimize` applies your lineup and sends notifications. Gate it behind a confirmation in any client.
 
 </details>
 
@@ -533,11 +533,15 @@ Optional:
 | `PROSPECT_MIN_GAMES` | `8` | Minimum games for prospect breakout eligibility. |
 | `PROSPECT_RANK_CACHE_HOURS` | `168` | Hours to cache prospect rankings. |
 | `PROSPECT_UPGRADE_RANK_THRESHOLD` | `20` | Prospect rank threshold for upgrade alerts. |
-| `PUSHOVER_USER_KEY` | — | Personal channel (trades, lineup, ops alerts). |
-| `PUSHOVER_GROUP_KEY` | — | Group channel (GS violation alerts). |
+| `PUSHOVER_USER_KEY` | — | Personal **operator** channel (connect blocked, stale-cache fallback, GS limit fetch failure, projection status) — and the target of fantasy dual-send while `PUSHOVER_FANTASY_DUAL_SEND` is set. Retained permanently. |
+| `PUSHOVER_GROUP_KEY` | — | Group channel (league-wide GS violation broadcast). Retained permanently — league mates without the app are unreachable by APNs. |
 | `PUSHOVER_API_TOKEN` | — | Pushover application token — shared by every Pushover send, baseball or football. |
+| `PUSHOVER_FANTASY_DUAL_SEND` | unset | Cutover flag: while set, every fantasy event goes to Pushover **and** APNs. Remove the variable to complete the migration off Pushover for fantasy events — no code change, no deploy of new code. |
+| `APNS_AUTH_KEY` | unset | APNs provider auth key (the `.p8` body, PEM). With `APNS_KEY_ID`, `APNS_TEAM_ID`, `IDENTITY_TABLE` and a tenant set, fantasy events push to the tenant's registered iOS devices; unset, push is silently disabled and the activity feed still records everything. |
+| `APNS_KEY_ID` | unset | Key ID of the APNs auth key. |
+| `APNS_TEAM_ID` | unset | Apple developer team id the provider token signs as (set in infra; not a secret). |
 | `DYNASTY_FORMAT` | `sf_dynasty` | Which StatsGuy format (`sf_dynasty`/`non_sf_dynasty`/`sf_redraft`/`non_sf_redraft`) a football command's own printed summary reads. The Dynasty Value Store itself always records all four. |
-| `FOOTBALL_PUSHOVER_USER_KEY` | `PUSHOVER_USER_KEY` | Personal channel for `football-trades` alerts. |
+| `FOOTBALL_PUSHOVER_USER_KEY` | `PUSHOVER_USER_KEY` | Reserved. `football-trades` alerts now route through the notify dispatcher (activity feed + APNs + dual-send) rather than this key. |
 | `FOOTBALL_PUSHOVER_GROUP_KEY` | `PUSHOVER_GROUP_KEY` | Reserved for a future football group broadcast; not currently sent to. |
 
 ---
@@ -626,7 +630,9 @@ internal/
   lineupapi/            read-only lineup + control HTTP handlers (+ s3lineup)
   statesync/            S3 ⇄ local state sync helpers
   teams/                team metadata (names, logos)
-  notify/               Pushover push notifications
+  notify/               fantasy-event dispatcher (feed record first, then APNs/Pushover sinks)
+  apns/                 APNs HTTP/2 sender + stdlib ES256 provider-token JWT
+  pushover/             Pushover HTTP client (stdlib-only leaf; used by opsnotify too)
 ```
 
 ---

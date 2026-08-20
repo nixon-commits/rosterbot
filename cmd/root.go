@@ -143,9 +143,12 @@ func initShared() error {
 			}
 		}
 	}
-	// Mirror every Pushover send into the durable activity feed (dual-send), so
-	// the app can read what currently goes only to Pushover.
-	installNotificationRecorder()
+	// Fan every fantasy event out: durable activity-feed record first (its id
+	// is what a push payload carries), then APNs, then Pushover during the
+	// cutover window. The four operator sends — the cache.Notify block above
+	// among them — still call SendPushover directly and deliberately bypass
+	// this.
+	installNotifyDispatcher()
 	// Persist each job's typed result under RUN_ID so the app can render
 	// per-job result views (GET /v1/runs/{id}/output).
 	installOutputRecorder()

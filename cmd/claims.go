@@ -48,13 +48,11 @@ func runClaims(cmd *cobra.Command, args []string) error {
 		// cursor rides the single-writer claims/ S3 prefix instead of the shared
 		// cache/ prefix. Empty lets claims.Run apply its default
 		// (.cache/last-claims.json).
-		CursorPath:       os.Getenv("CLAIMS_CURSOR_PATH"),
-		DryRun:           cfg.DryRun,
-		NoSignals:        claimsNoSignals,
-		Since:            since,
-		DropsMin:         claimsDropsMin,
-		PushoverUserKey:  cfg.PushoverUserKey,
-		PushoverAPIToken: cfg.PushoverAPIToken,
+		CursorPath: os.Getenv("CLAIMS_CURSOR_PATH"),
+		DryRun:     cfg.DryRun,
+		NoSignals:  claimsNoSignals,
+		Since:      since,
+		DropsMin:   claimsDropsMin,
 	}
-	return claims.Run(ft, today, opts)
+	return claims.Run(cmd.Context(), ft, today, opts)
 }

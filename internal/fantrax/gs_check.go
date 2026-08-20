@@ -158,13 +158,22 @@ type PitcherStart struct {
 // A pitcher moved to IL or bench mid-period won't have later starts counted,
 // and a pitcher called up mid-period will have their starts counted from the
 // day they entered an active slot.
+// The walk runs sp.StartDate..sp.EndDate, capped at today — the caller decides
+// how far to go, and a caller wanting only completed days passes an EndDate
+// before today. gs-check does exactly that (FindJustEndedPeriod returns a period
+// that ended yesterday), so the cap never binds there. The GS budget passes
+// today, because today's starts are already spent and the live roster cannot be
+// asked about them: once a pitcher's game ends, a later hourly run rotates him
+// to Reserve and any count derived from current Status silently loses his start
+// (rosterbot-cg8l). Reading it from that day's own snapshot is what makes the
+// number monotonic within the day.
 func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []PitcherStart, error) {
 	// The per-day snapshot diff is keyed by the *daily* scoring period (one
 	// number per calendar day), resolved via the authoritative periodList map.
 	// See DailyPeriodFor / gsPeriodWalk for why this must not be the weekly
-	// matchup number. gsPeriodWalk itself applies the "yesterday, clamped to
-	// the period end date" rule; if the period hasn't started yet it returns
-	// nil and there is nothing to walk.
+	// matchup number. gsPeriodWalk itself applies the "today, clamped to the
+	// period end date" rule (rosterbot-cg8l); if the period hasn't started yet
+	// it returns nil and there is nothing to walk.
 	walkPeriods := gsPeriodWalk(c, sp, seasonStart, today)
 	if len(walkPeriods) == 0 {
 		return 0, nil, nil

@@ -33,5 +33,5 @@ func runGSCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("PUSHOVER_GROUP_KEY and PUSHOVER_API_TOKEN env vars required for gs-check command")
 	}
 
-	return gscheck.RunGSCheck(ft, *cfg)
+	return gscheck.RunGSCheck(cmd.Context(), ft, *cfg)
 }

@@ -1,6 +1,7 @@
 package prospects
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -171,7 +172,7 @@ func buildRankLookups(rosterNames []string, fgRankings []RankedProspect, hkbPlay
 // RunProspectReport orchestrates the full prospect report: fetches rankings
 // from multiple sources, minors roster, available prospects, transactions,
 // and performance data, then prints the report and optionally writes a GHA summary.
-func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) error {
+func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Config, today time.Time) error {
 	if err := os.MkdirAll(".cache", 0o755); err != nil {
 		return fmt.Errorf("creating cache dir: %w", err)
 	}
@@ -327,13 +328,9 @@ func RunProspectReport(ft *fantrax.Client, cfg config.Config, today time.Time) e
 		writeGHASummary(report, summaryPath)
 	}
 
-	if userKey := os.Getenv("PUSHOVER_USER_KEY"); userKey != "" {
-		if apiToken := os.Getenv("PUSHOVER_API_TOKEN"); apiToken != "" {
-			if msg := formatProspectPushover(report); msg != "" {
-				if err := notify.SendPushover(userKey, apiToken, "RosterBot: Prospect Alerts", msg); err != nil {
-					log.Printf("WARNING: Pushover notification failed: %v", err)
-				}
-			}
+	if msg := formatProspectPushover(report); msg != "" {
+		if err := notify.Send(ctx, notify.Event{Kind: "prospects", Title: "RosterBot: Prospect Alerts", Message: msg}); err != nil {
+			log.Printf("WARNING: prospect notification failed: %v", err)
 		}
 	}
 

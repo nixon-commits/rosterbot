@@ -49,8 +49,9 @@ func recordConnectFailure(ctx context.Context, feed feedWriter, push func(string
 	if feed == nil {
 		return
 	}
+	now := time.Now().UTC()
 	n := lineupapi.Notification{
-		ID:      fmt.Sprintf("%d", time.Now().UnixNano()),
+		ID:      lineupapi.NewNotificationID(now),
 		Kind:    "alert",
 		Status:  "failure",
 		Title:   "Fantrax connection failed",
@@ -59,7 +60,7 @@ func recordConnectFailure(ctx context.Context, feed feedWriter, push func(string
 		// under. A record that cannot say whose it is once read is the shape
 		// that made per-tenant notifications unverifiable.
 		UserID:    string(uid),
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		CreatedAt: now.Format(time.RFC3339),
 		RunID:     os.Getenv("RUN_ID"),
 	}
 	// Soft, like everything else on this path: the connect task already records

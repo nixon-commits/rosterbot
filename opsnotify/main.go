@@ -4,11 +4,19 @@
 //   - "CodeBuild Build State Change" — image build outcomes (rosterbot-00j)
 //   - "ECS Task State Change"        — scheduled job failures (rosterbot-naz)
 //   - "Rosterbot Heartbeat"          — jobs that never launched (rosterbot-ys8)
+//   - "Rosterbot Build Drift"        — merges that never deployed (rosterbot-7p1i)
 //
 // The first two are reactive: something has to happen for them to fire, so a job
 // whose schedule is disabled or whose cluster is unreachable produces no event
 // and no alert. The heartbeat is the scheduled counterweight that turns that
 // silence into a signal.
+//
+// The drift check is the counterweight to a different silence. Both of the above
+// are about RUNS, and a run executing a stale image satisfies them perfectly —
+// they answer "did the job run", never "is it the right image". A merge whose
+// build was rejected before a build record existed produces no outcome for
+// anything here to react to, so the drift check asks the outcome question
+// directly: is main's HEAD the commit that is actually deployed?
 //
 // Both are wired by the CDK in infra/ (Entry: ../opsnotify). The function
 // itself is created unconditionally; only the CodeBuild rule sits behind the
@@ -30,9 +38,10 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/codebuild"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
-	"github.com/nixon-commits/rosterbot/internal/notify"
+	"github.com/nixon-commits/rosterbot/internal/pushover"
 	"github.com/nixon-commits/rosterbot/internal/s3blob"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 )
@@ -68,7 +77,7 @@ func main() {
 	userKey := mustParam(ctx, ssmc, "/rosterbot/PUSHOVER_USER_KEY")
 	apiToken := mustParam(ctx, ssmc, "/rosterbot/PUSHOVER_API_TOKEN")
 	send = func(title, message string) error {
-		return notify.SendPushover(userKey, apiToken, title, message)
+		return pushover.Send(userKey, apiToken, title, message)
 	}
 
 	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
@@ -99,6 +108,11 @@ func main() {
 			rosterBlob = rb
 		}
 	}
+	// The drift check's CodeBuild reader. Optional in the same way the tenant
+	// roster is: a failure here disables one check, and must not take the
+	// failure and crash paths down with it.
+	builds = codebuild.NewFromConfig(cfg)
+
 	schedules = loadSchedules()
 
 	lambda.Start(dispatch)
@@ -128,6 +142,9 @@ func dispatch(ctx context.Context, raw json.RawMessage) error {
 
 	case heartbeatDetailType:
 		return handleHeartbeat(ctx)
+
+	case driftDetailType:
+		return handleDrift(ctx)
 
 	default:
 		log.Printf("ignoring unhandled detail-type %q", env.DetailType)

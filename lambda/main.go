@@ -105,6 +105,7 @@ func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
 	cfg.Users = userStore
 	cfg.Enrollments = userStore
 	cfg.Connections = userStore
+	cfg.PushDevices = userStore
 
 	// Sealer only — never an Opener. The IAM grants this function kms:Encrypt
 	// and not kms:Decrypt, and the type mirrors it so the same mistake is a

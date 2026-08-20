@@ -69,20 +69,32 @@ func (c *Client) DailyPeriodFor(seasonStart, date time.Time) DailyPeriod {
 }
 
 // gsPeriodWalk returns the daily scoring-period number for each calendar day
-// from sp.StartDate through the last completed day (today's yesterday, capped at
-// sp.EndDate). Returns nil if the period hasn't started yet (yesterday is before
-// sp.StartDate). See DailyPeriodFor for why this is the daily numbering, not the
-// weekly one, and for why c (may be nil, e.g. hermetic tests) is consulted first.
+// from sp.StartDate through sp.EndDate, capped at today. Returns nil if the
+// period hasn't started yet. See DailyPeriodFor for why this is the daily
+// numbering, not the weekly one, and for why c (may be nil, e.g. hermetic
+// tests) is consulted first.
+//
+// The cap used to be *yesterday*, on the reasoning that today's snapshot is
+// still in flight. That is a caller's policy, and every caller already states
+// its own last day in sp.EndDate: gs-check walks a period that closed before
+// today and is unaffected either way, while the GS budget needs today's
+// already-spent starts and has nowhere else to read them (rosterbot-cg8l).
+//
+// Today's snapshot is a sound input for the one thing this walk computes. A
+// pitcher whose game has begun is per-player locked, so his active-slot
+// membership for today's period can no longer change, and Fantrax credits his
+// YTD GS as the game starts. A pitcher who has not started yet contributes a
+// zero delta and simply isn't counted until he does.
 func gsPeriodWalk(c *Client, sp ScoringPeriod, seasonStart, today time.Time) []DailyPeriod {
-	yesterday := today.Truncate(24*time.Hour).AddDate(0, 0, -1)
-	if yesterday.Before(sp.StartDate) {
+	lastDay := today.Truncate(24 * time.Hour)
+	if lastDay.Before(sp.StartDate) {
 		return nil
 	}
-	if yesterday.After(sp.EndDate) {
-		yesterday = sp.EndDate
+	if lastDay.After(sp.EndDate) {
+		lastDay = sp.EndDate
 	}
 	var out []DailyPeriod
-	for d := sp.StartDate; !d.After(yesterday); d = d.AddDate(0, 0, 1) {
+	for d := sp.StartDate; !d.After(lastDay); d = d.AddDate(0, 0, 1) {
 		out = append(out, c.DailyPeriodFor(seasonStart, d))
 	}
 	return out

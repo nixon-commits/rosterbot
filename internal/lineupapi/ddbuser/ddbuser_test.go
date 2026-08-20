@@ -14,6 +14,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser/ddbusertest"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/enrollmenttest"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/pushdevicetest"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/usertest"
 )
 
@@ -197,5 +198,58 @@ func TestEnrollment_UnusedItemHasNoUsedAtAttribute(t *testing.T) {
 	if _, ok := out.Item["expires_at"]; !ok {
 		t.Error("no expires_at attribute; the table's TTL has nothing to reap, so " +
 			"spent links would accumulate forever")
+	}
+}
+
+func TestStore_PushDeviceConformance(t *testing.T) {
+	pushdevicetest.Run(t, func(t *testing.T) lineupapi.PushDeviceStore {
+		return ddbuser.NewWithAPI(ddbusertest.New(), "test-table")
+	})
+}
+
+// TestPutPushDeviceHealsDuplicateTokenRows mirrors the file store's heal test:
+// two concurrent registrations of one token can both read "no existing match"
+// and both write a row (the idempotency scan is read-then-write). The seeded
+// state below is that lost race; the next registration must collapse it, or
+// the tenant receives every notification twice forever — a duplicate of a
+// LIVE token never draws ErrDeviceGone, so nothing else ever prunes it.
+func TestPutPushDeviceHealsDuplicateTokenRows(t *testing.T) {
+	ctx := context.Background()
+	api := ddbusertest.New()
+	store := ddbuser.NewWithAPI(api, "test-table")
+
+	if _, err := store.PutPushDevice(ctx, "u1", lineupapi.PushDevice{
+		Token: "tok", Environment: "production", BundleID: "dev.rosterbot.app",
+	}); err != nil {
+		t.Fatalf("first put: %v", err)
+	}
+
+	if _, err := api.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String("test-table"),
+		Item: map[string]types.AttributeValue{
+			"pk":    &types.AttributeValueMemberS{Value: "USER#u1"},
+			"sk":    &types.AttributeValueMemberS{Value: "PUSHDEVICE#dup-id"},
+			"ID":    &types.AttributeValueMemberS{Value: "dup-id"},
+			"Token": &types.AttributeValueMemberS{Value: "tok"},
+		},
+	}); err != nil {
+		t.Fatalf("seed duplicate: %v", err)
+	}
+
+	healed, err := store.PutPushDevice(ctx, "u1", lineupapi.PushDevice{
+		Token: "tok", Environment: "production", BundleID: "dev.rosterbot.app",
+	})
+	if err != nil {
+		t.Fatalf("healing put: %v", err)
+	}
+	got, err := store.PushDevices(ctx, "u1")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("re-registration must collapse duplicate token rows to one, got %d", len(got))
+	}
+	if got[0].ID != healed.ID {
+		t.Fatalf("the surviving row (%s) must be the one the registration returned (%s)", got[0].ID, healed.ID)
 	}
 }

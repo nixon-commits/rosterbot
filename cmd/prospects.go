@@ -32,5 +32,5 @@ func runProspects(cmd *cobra.Command, args []string) error {
 		return prospects.ListAllProspects(ft, *cfg, today)
 	}
 
-	return prospects.RunProspectReport(ft, *cfg, today)
+	return prospects.RunProspectReport(cmd.Context(), ft, *cfg, today)
 }

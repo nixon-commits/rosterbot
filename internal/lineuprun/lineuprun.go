@@ -9,6 +9,7 @@
 package lineuprun
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -188,7 +189,7 @@ func cacheTTL(noCache bool, d time.Duration) time.Duration {
 // expansion straight back into cfg.Dates — an undocumented output parameter;
 // that now happens in the ResolveDates phase, which returns a value
 // (rosterbot-6rv).
-func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
+func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	if err := projections.SetProjectionSystem(opts.ProjectionSystem); err != nil {
 		return Result{}, err
 	}
@@ -224,7 +225,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	fgSrc, batLoadResult, err := projections.LoadBattingProjections(opts.ProjectionSystem, cacheDir, projTTL)
 	if err != nil {
 		msg := fmt.Sprintf("batting projections unavailable: %v", err)
-		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, msg)
+		sendOptimizeNotify(ctx, msg)
 		return Result{}, fmt.Errorf("batting projections unavailable: %w", err)
 	}
 	if batLoadResult.NoData {
@@ -233,7 +234,7 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 	fgPitSrc, pitLoadResult, err := projections.LoadPitcherProjections(opts.ProjectionSystem, cacheDir, projTTL)
 	if err != nil {
 		msg := fmt.Sprintf("pitching projections unavailable: %v", err)
-		sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, msg)
+		sendOptimizeNotify(ctx, msg)
 		return Result{}, fmt.Errorf("pitching projections unavailable: %w", err)
 	}
 	if pitLoadResult.NoData {
@@ -275,11 +276,19 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 			Sched:   schedClient,
 			Today:   today,
 			Markers: opts.ILStartMarkers,
+			// notify.Send returns an error only on a failed FEED write, which
+			// is the durable half of check→send→mark: a recorded alert may
+			// safely be marked sent even if its push half misfires, because
+			// the feed record is what the marker's dedup protects. The
+			// Configured guard keeps the third state honest — an unconfigured
+			// dispatcher no-ops Send with a nil error, and marking on that
+			// would mute the alert forever without anything having been
+			// recorded anywhere (the old creds guard's job, one layer up).
 			Notify: func(message string) error {
-				if cfg.PushoverUserKey == "" || cfg.PushoverAPIToken == "" {
-					return fmt.Errorf("pushover credentials not configured")
+				if !notify.Configured() {
+					return fmt.Errorf("notify dispatcher not configured")
 				}
-				return notify.SendPushover(cfg.PushoverUserKey, cfg.PushoverAPIToken, "IL Start Alert", message)
+				return notify.Send(ctx, notify.Event{Kind: "lineup", Title: "IL Start Alert", Message: message})
 			},
 			DryRun: cfg.DryRun,
 			Out:    out,
@@ -427,9 +436,9 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		for _, line := range dec.Logs {
 			prog.Logf("%s", line)
 		}
-		if dec.Alert != nil && cfg.PushoverUserKey != "" && cfg.PushoverAPIToken != "" {
-			if perr := notify.SendPushover(cfg.PushoverUserKey, cfg.PushoverAPIToken, dec.Alert.Title, dec.Alert.Message); perr != nil {
-				prog.Logf("WARNING: failed to send failure Pushover: %v", perr)
+		if dec.Alert != nil {
+			if perr := notify.Send(ctx, notify.Event{Kind: "alert", Title: dec.Alert.Title, Message: dec.Alert.Message}); perr != nil {
+				prog.Logf("WARNING: failed to record GS alert: %v", perr)
 			}
 		}
 		gsBudget = dec.Budget
@@ -518,19 +527,18 @@ func Run(ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
 		Cfg:            cfg,
 		Out:            out,
 		Notify: func(message string) {
-			sendOptimizeNotify(cfg.PushoverUserKey, cfg.PushoverAPIToken, message)
+			sendOptimizeNotify(ctx, message)
 		},
 	})
 
 	return result, nil
 }
 
-// sendOptimizeNotify sends a Pushover notification if credentials are configured.
-func sendOptimizeNotify(userKey, apiToken, message string) {
-	if userKey == "" || apiToken == "" {
-		return
-	}
-	if err := notify.SendPushover(userKey, apiToken, "Fantrax Lineup", message); err != nil {
-		log.Printf("WARNING: pushover notification failed: %v", err)
+// sendOptimizeNotify emits the lineup event through the dispatcher (feed
+// record first, then APNs — and Pushover during the cutover window). An
+// unconfigured dispatcher is a silent no-op, so no creds guard remains.
+func sendOptimizeNotify(ctx context.Context, message string) {
+	if err := notify.Send(ctx, notify.Event{Kind: "lineup", Title: "Fantrax Lineup", Message: message}); err != nil {
+		log.Printf("WARNING: lineup notification failed: %v", err)
 	}
 }

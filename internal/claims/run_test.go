@@ -30,7 +30,7 @@ func TestRun_NoClaimsIsNoop(t *testing.T) {
 		CursorPath: filepath.Join(dir, "last-claims.json"),
 		HKBPlayers: []hkb.Player{}, // non-nil → skip network
 	}
-	if err := Run(fakeClient{txs: nil}, today, opts); err != nil {
+	if err := Run(t.Context(), fakeClient{txs: nil}, today, opts); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if _, err := os.Stat(ledgerDir); !os.IsNotExist(err) {
@@ -58,7 +58,7 @@ func TestRun_WritesLedgerWhenClaimsExist(t *testing.T) {
 		CursorPath: filepath.Join(dir, "last-claims.json"),
 		HKBPlayers: []hkb.Player{{Name: "Some Guy"}},
 	}
-	if err := Run(fakeClient{txs: txs}, today, opts); err != nil {
+	if err := Run(t.Context(), fakeClient{txs: txs}, today, opts); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(ledgerDir, "2026-06-12.json")); err != nil {
