@@ -39,42 +39,10 @@ func (f *fakeSchedule) LockedTeams(d time.Time) (map[string]bool, error) {
 	return f.locked[d.Format("2006-01-02")], nil
 }
 
-// --- countTodayStarts: fully pure, no I/O ---
-
+// activeSP is a rostered starting pitcher in an active slot — the shape the
+// forecast reasons about.
 func activeSP(id, name, team string) fantrax.Player {
 	return fantrax.Player{ID: id, Name: name, MLBTeam: team, Status: "Active", PosShortNames: "SP"}
-}
-
-// Only a rostered SP who is BOTH on a locked team AND today's probable for that
-// team consumes a game start. Each of those conditions rules out a real
-// miscount that the inline version was written to avoid.
-func TestCountTodayStarts_OnlyLockedProbableActiveSPs(t *testing.T) {
-	roster := []fantrax.Player{
-		activeSP("starting", "Ace Pitcher", "LAD"),  // counts
-		activeSP("notprobable", "Bench Arm", "LAD"), // locked team, not probable
-		activeSP("unlocked", "Later Guy", "NYY"),    // probable but team not locked yet
-		activeSP("wrongteam", "Traded Guy", "SEA"),  // probable under a different team
-		{ID: "reliever", Name: "Rel Iever", MLBTeam: "LAD", Status: "Active", PosShortNames: "RP"},
-		{ID: "benched", Name: "Bench Ed", MLBTeam: "LAD", Status: "Reserve", PosShortNames: "SP"},
-		{ID: "injured", Name: "Hurt Guy", MLBTeam: "LAD", Status: "Active", PosShortNames: "SP", IsInjured: true},
-		{ID: "minors", Name: "Farm Hand", MLBTeam: "LAD", Status: "Active", PosShortNames: "SP", InMinors: true},
-	}
-	locked := map[string]bool{"LAD": true, "SEA": true}
-	probs := map[string]string{
-		"ace pitcher": "LAD",
-		"later guy":   "NYY",
-		"traded guy":  "TEX", // roster says SEA — must not count
-	}
-
-	if got := countTodayStarts(roster, locked, probs); got != 1 {
-		t.Errorf("got %d, want 1 (only the locked+probable active SP)", got)
-	}
-}
-
-func TestCountTodayStarts_EmptyInputsAreZero(t *testing.T) {
-	if got := countTodayStarts(nil, nil, nil); got != 0 {
-		t.Errorf("got %d, want 0", got)
-	}
 }
 
 // --- buildGSForecast: no network, only the schedule seam ---

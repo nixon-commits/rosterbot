@@ -68,16 +68,49 @@ func TestGSPeriodWalk_CapsAtPeriodEndDate(t *testing.T) {
 }
 
 // TestGSPeriodWalk_NilWhenPeriodNotStarted verifies the hasn't-started-yet
-// short-circuit is preserved.
+// short-circuit is preserved. "Not started" means today is before the period's
+// first day; a period that starts TODAY has started, and is covered below.
 func TestGSPeriodWalk_NilWhenPeriodNotStarted(t *testing.T) {
 	sp := ScoringPeriod{Number: 5, StartDate: date("2026-04-20"), EndDate: date("2026-04-20")}
 	seasonStart := date("2026-03-25")
-	today := date("2026-04-20") // yesterday (04-19) is before sp.StartDate
+	today := date("2026-04-19")
 
 	got := gsPeriodWalk(nil, sp, seasonStart, today)
 
 	if got != nil {
 		t.Fatalf("expected nil for not-yet-started period, got %v", got)
+	}
+}
+
+// The first day of a matchup week walks that day. Under the old yesterday-cap
+// this returned nil, so a start made on the week's opening day was invisible to
+// the GS budget until the following morning (rosterbot-cg8l).
+func TestGSPeriodWalk_FirstDayOfPeriodWalksToday(t *testing.T) {
+	sp := ScoringPeriod{Number: 5, StartDate: date("2026-04-20"), EndDate: date("2026-04-26")}
+	seasonStart := date("2026-03-25")
+	today := date("2026-04-20")
+
+	got := gsPeriodWalk(nil, sp, seasonStart, today)
+
+	want := []DailyPeriod{27} // 2026-04-20 is day 27 of a season starting 03-25
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("walk = %v, want %v (today only — the rest of the week hasn't happened)", got, want)
+	}
+}
+
+// Today is the far end of the walk even when the period runs on past it: the
+// walk reconstructs starts that have happened, and tomorrow's snapshot holds
+// none. Without this cap the GS budget would fetch future daily periods.
+func TestGSPeriodWalk_CapsAtTodayMidPeriod(t *testing.T) {
+	sp := ScoringPeriod{Number: 5, StartDate: date("2026-04-20"), EndDate: date("2026-04-26")}
+	seasonStart := date("2026-03-25")
+	today := date("2026-04-22")
+
+	got := gsPeriodWalk(nil, sp, seasonStart, today)
+
+	want := []DailyPeriod{27, 28, 29} // 04-20, 04-21, 04-22 — nothing beyond today
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("walk = %v, want %v (through today, not through the period end)", got, want)
 	}
 }
 

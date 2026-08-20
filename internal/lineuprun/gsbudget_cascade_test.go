@@ -20,6 +20,14 @@ type fakeGSFantrax struct {
 	pastGS int
 	gsErr  error
 
+	// gsThrough models the walk as what it is: a per-day snapshot diff whose
+	// answer depends on which days it was asked to cover, keyed by the walk's
+	// last day. A fake that returns one flat number regardless of the requested
+	// range cannot tell "walked through yesterday" from "walked through today",
+	// which is the whole of rosterbot-cg8l. nil falls back to pastGS.
+	gsThrough map[string]int
+	gsFor     fantrax.ScoringPeriod
+
 	limitMax *int
 	limitErr error
 
@@ -31,7 +39,11 @@ func (f *fakeGSFantrax) GetMatchupWeekBounds(_, _ time.Time) (time.Time, time.Ti
 	return f.weekStart, f.weekEnd, f.weekErr
 }
 
-func (f *fakeGSFantrax) GetTeamGS(_, _ string, _ fantrax.ScoringPeriod, _, _ time.Time, _ int, _ bool) (int, []fantrax.PitcherStart, error) {
+func (f *fakeGSFantrax) GetTeamGS(_, _ string, sp fantrax.ScoringPeriod, _, _ time.Time, _ int, _ bool) (int, []fantrax.PitcherStart, error) {
+	f.gsFor = sp
+	if f.gsThrough != nil {
+		return f.gsThrough[sp.EndDate.Format("2006-01-02")], nil, f.gsErr
+	}
 	return f.pastGS, nil, f.gsErr
 }
 
@@ -50,6 +62,9 @@ func healthyGS() *fakeGSFantrax {
 		weekStart: day(2026, 7, 20),
 		weekEnd:   day(2026, 7, 26),
 		pastGS:    4,
+		// Mon-Tue produced 4 starts; Ace Arm's start today makes 5. The two
+		// entries let a test assert which of them the phase actually read.
+		gsThrough: map[string]int{"2026-07-24": 4, "2026-07-25": 5},
 		limitMax:  intp(12),
 	}
 }
@@ -88,9 +103,10 @@ func TestComputeGSBudget_HealthyPathBuildsBudget(t *testing.T) {
 	if got.Budget.Limit != 12 {
 		t.Errorf("Limit = %d, want 12 (the live max, not a fallback)", got.Budget.Limit)
 	}
-	// 4 from the past-GS walk + 1 locked-and-probable SP today.
+	// The walk covers the whole week so far including today: 4 starts earlier
+	// in the week plus Ace Arm's today.
 	if got.Budget.Used != 5 {
-		t.Errorf("Used = %d, want 5 (4 past + 1 started today)", got.Budget.Used)
+		t.Errorf("Used = %d, want 5 (the walk through today)", got.Budget.Used)
 	}
 	if !got.Budget.WeekEnd.Equal(day(2026, 7, 26)) {
 		t.Errorf("WeekEnd = %v, want the matchup week end", got.Budget.WeekEnd)
@@ -256,30 +272,6 @@ func TestComputeGSBudget_EarlyFailureSkipsLaterFetches(t *testing.T) {
 	if ft.limitCalls != 0 {
 		t.Errorf("GetGSLimits called %d times after an earlier failure — the cascade should short-circuit", ft.limitCalls)
 	}
-}
-
-// The schedule lookups that convert today's starts into "used" are best-effort,
-// but only together: a partial view undercounts, which would let the gate
-// approve a start the roster cannot afford.
-func TestComputeGSBudget_PartialScheduleViewDoesNotCountTodayStarts(t *testing.T) {
-	sched := &failingLockedSchedule{fakeSchedule{
-		probables: map[string]map[string]string{"2026-07-25": {"ace arm": "LAD"}},
-	}}
-
-	got := ComputeGSBudget(healthyGS(), sched, gsInputs())
-
-	if got.Budget == nil {
-		t.Fatal("a schedule hiccup should degrade the count, not disable the gate")
-	}
-	if got.Budget.Used != 4 {
-		t.Errorf("Used = %d, want 4 (past GS only — today's starts are unknowable)", got.Budget.Used)
-	}
-}
-
-type failingLockedSchedule struct{ fakeSchedule }
-
-func (f *failingLockedSchedule) LockedTeams(time.Time) (map[string]bool, error) {
-	return nil, errors.New("locked teams unavailable")
 }
 
 // rosterbot-1jvj: the forecast is the last step of the cascade, and it obeys
