@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Change is one lineup move within a lineup-kind notification.
@@ -38,6 +40,15 @@ type Notification struct {
 	// where there is only one answer.
 	UserID  string   `json:"user_id,omitempty"`
 	Changes []Change `json:"changes,omitempty"`
+}
+
+// NewNotificationID mints a feed record's id from its creation instant. The
+// single minter for every Notification writer (the notify dispatcher's feed
+// sink, the connect-failure recorder), so the id scheme cannot drift between
+// them — RunKey's newest-first sorting depends on the id pairing with its
+// created_at.
+func NewNotificationID(t time.Time) string {
+	return strconv.FormatInt(t.UnixNano(), 10)
 }
 
 // ClassifyStatus derives a severity for an event from its kind and text:

@@ -46,9 +46,23 @@ func (st *Store) PutPushDevice(ctx context.Context, uid lineupapi.UserID, d line
 		return lineupapi.PushDevice{}, err
 	}
 	for _, e := range existing {
-		if e.Token == d.Token {
+		if e.Token != d.Token {
+			continue
+		}
+		if d.ID == "" {
 			d.ID, d.CreatedAt = e.ID, e.CreatedAt
-			break
+			continue
+		}
+		// A second row with the same token is a lost race between two
+		// concurrent registrations of one device (both reads preceded both
+		// writes, both minted an id). Left alone it delivers every
+		// notification twice forever — the duplicate is a live token, so
+		// ErrDeviceGone never prunes it. Healing here bounds the damage to
+		// one launch, since the client re-registers on every launch.
+		if _, err := st.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(st.table), Key: st.key(userPK(uid), pushDeviceSK(e.ID)),
+		}); err != nil {
+			return lineupapi.PushDevice{}, err
 		}
 	}
 

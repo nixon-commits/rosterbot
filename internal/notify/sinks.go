@@ -20,16 +20,11 @@ type FeedWriterSink struct {
 	Writer lineupapi.NotificationWriter
 	UserID string // the ambient tenant; empty on a single-tenant deployment
 	RunID  string
-	Now    func() time.Time // nil means time.Now
 }
 
 func (f *FeedWriterSink) Write(ctx context.Context, e Event) (string, error) {
-	now := time.Now
-	if f.Now != nil {
-		now = f.Now
-	}
-	t := now().UTC()
-	id := fmt.Sprintf("%d", t.UnixNano())
+	t := time.Now().UTC()
+	id := lineupapi.NewNotificationID(t)
 
 	return id, f.Writer.PutNotification(ctx, lineupapi.Notification{
 		ID:        id,

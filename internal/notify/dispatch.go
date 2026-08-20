@@ -75,3 +75,11 @@ var Default *Dispatcher
 
 // Send emits an event through the process-wide dispatcher.
 func Send(ctx context.Context, e Event) error { return Default.Send(ctx, e) }
+
+// Configured reports whether Send will actually record anything. Most call
+// sites do not care — an unconfigured dispatcher is a silent no-op by design —
+// but a caller whose own dedup marking depends on the event having been
+// durably recorded (the IL-start alert's check→send→mark) must not treat the
+// no-op as a successful send, or an unconfigured run would mute the alert
+// forever by marking what it never recorded.
+func Configured() bool { return Default != nil && Default.Feed != nil }

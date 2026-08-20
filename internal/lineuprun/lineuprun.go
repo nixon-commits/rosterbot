@@ -279,8 +279,15 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 			// notify.Send returns an error only on a failed FEED write, which
 			// is the durable half of check→send→mark: a recorded alert may
 			// safely be marked sent even if its push half misfires, because
-			// the feed record is what the marker's dedup protects.
+			// the feed record is what the marker's dedup protects. The
+			// Configured guard keeps the third state honest — an unconfigured
+			// dispatcher no-ops Send with a nil error, and marking on that
+			// would mute the alert forever without anything having been
+			// recorded anywhere (the old creds guard's job, one layer up).
 			Notify: func(message string) error {
+				if !notify.Configured() {
+					return fmt.Errorf("notify dispatcher not configured")
+				}
 				return notify.Send(ctx, notify.Event{Kind: "lineup", Title: "IL Start Alert", Message: message})
 			},
 			DryRun: cfg.DryRun,

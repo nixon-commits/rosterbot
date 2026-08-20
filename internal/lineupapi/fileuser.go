@@ -610,11 +610,23 @@ func (s *FileUserStore) PutPushDevice(_ context.Context, uid UserID, d PushDevic
 		return PushDevice{}, err
 	}
 	for _, e := range existing {
-		if e.Token == d.Token {
+		if e.Token != d.Token {
+			continue
+		}
+		if d.ID == "" {
 			// Update in place. CreatedAt is the device's first sighting and
 			// must survive; LastSeenAt is what the new registration advances.
 			d.ID, d.CreatedAt = e.ID, e.CreatedAt
-			break
+			continue
+		}
+		// A SECOND row with the same token is a lost race between two
+		// concurrent registrations (both read "no match", both minted an id).
+		// Left alone it delivers every notification twice, forever — the
+		// duplicate is a live token, so ErrDeviceGone never prunes it. Healing
+		// here makes the damage one launch long: the client re-registers on
+		// every launch, and this pass collapses the duplicates back to one.
+		if err := os.Remove(filepath.Join(s.pushDir(uid), pushDeviceFileName(e.ID))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return PushDevice{}, err
 		}
 	}
 	if d.ID == "" {
