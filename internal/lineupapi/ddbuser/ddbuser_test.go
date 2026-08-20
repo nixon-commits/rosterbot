@@ -14,6 +14,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser/ddbusertest"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/enrollmenttest"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/pushdevicetest"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/usertest"
 )
 
@@ -198,4 +199,10 @@ func TestEnrollment_UnusedItemHasNoUsedAtAttribute(t *testing.T) {
 		t.Error("no expires_at attribute; the table's TTL has nothing to reap, so " +
 			"spent links would accumulate forever")
 	}
+}
+
+func TestStore_PushDeviceConformance(t *testing.T) {
+	pushdevicetest.Run(t, func(t *testing.T) lineupapi.PushDeviceStore {
+		return ddbuser.NewWithAPI(ddbusertest.New(), "test-table")
+	})
 }
