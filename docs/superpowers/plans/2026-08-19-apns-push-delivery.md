@@ -1,5 +1,16 @@
 # APNs Push Delivery (backend) Implementation Plan
 
+> **Status (2026-08-20):** Tasks 1–8 implemented on `claude/push-notification-backend-4db619`
+> (bd rosterbot-u7o3), extended with the spec's later token-theft obligation: global token
+> uniqueness via `PUSHTOKEN#` pointer items / a file-store token index, conformance-tested in
+> `internal/lineupapi/pushdevicetest`. One addition the plan missed: `internal/pushover` was
+> extracted as a stdlib-only leaf because the dispatcher's sinks pull `lineupapi` (→ chromedp)
+> into `internal/notify`, which the opsnotify Lambda imported for one `SendPushover` call.
+> Task 8 Steps 1 and 7 remain open — the Apple-portal/SSM prerequisites and the deployed
+> end-to-end verification are human-gated: `/rosterbot/APNS_AUTH_KEY` and
+> `/rosterbot/APNS_KEY_ID` did not exist as of 2026-08-20, and the infra change MUST NOT
+> deploy before they do (an ECS Secret naming a missing SSM parameter fails every task launch).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver the bot's nine fantasy-event notifications to registered iOS devices via APNs, per user, so the RosterBot app replaces Pushover as the surface a manager actually reads.
