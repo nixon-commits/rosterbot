@@ -1,6 +1,7 @@
 package claims
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -24,7 +25,7 @@ type WeightsProvider interface {
 // Run fetches claims since the cursor, builds the recap, emits output, and
 // writes the audit ledger. It is a no-op (early return, cursor still advances)
 // when there are no new claims.
-func Run(ft ClaimsClient, today time.Time, opts Options) error {
+func Run(ctx context.Context, ft ClaimsClient, today time.Time, opts Options) error {
 	if opts.CacheDir == "" {
 		opts.CacheDir = ".cache"
 	}
@@ -121,9 +122,10 @@ func Run(ft ClaimsClient, today time.Time, opts Options) error {
 		}
 	}
 
-	// Pushover (skipped in dry-run / when creds absent).
-	if !opts.DryRun && opts.PushoverUserKey != "" && opts.PushoverAPIToken != "" {
-		if err := notify.SendPushover(opts.PushoverUserKey, opts.PushoverAPIToken, "Waiver Claims", FormatPushover(moves)); err != nil {
+	// Notification (skipped in dry-run: the dispatcher's feed write is durable,
+	// and a dry run must stay side-effect-free).
+	if !opts.DryRun {
+		if err := notify.Send(ctx, notify.Event{Kind: "claims", Title: "Waiver Claims", Message: FormatPushover(moves)}); err != nil {
 			log.Printf("notification failed: %v", err)
 		}
 	}

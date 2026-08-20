@@ -339,6 +339,16 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			// on this to publish only into the operator's partition.
 			"OPERATOR_USER_ID": awsssm.StringParameter_ValueForStringParameter(
 				stack, jsii.String("/rosterbot/OPERATOR_USER_ID"), nil),
+			// The Apple developer team the APNs provider token signs as (`iss`).
+			// Not a secret and stable, so it lives here rather than in Secrets —
+			// a name must appear in exactly one of the two maps, and cdk synth
+			// does not catch the mistake.
+			"APNS_TEAM_ID": jsii.String("8KBU54NP6U"),
+			// Cutover window: fantasy events go to BOTH Pushover and APNs.
+			// Delete this entry (and redeploy) to complete the migration.
+			// Deliberately NOT keyed off PUSHOVER_USER_KEY, which the operator
+			// channel reads permanently — see the spec's Cutover section.
+			"PUSHOVER_FANTASY_DUAL_SEND": jsii.String("1"),
 		},
 		Secrets: &map[string]awsecs.Secret{
 			"FANTRAX_USERNAME":     secret("FANTRAX_USERNAME"),
@@ -369,6 +379,15 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			// EventBridge schedules fail every run with "missing required env
 			// var: SLEEPER_LEAGUE_ID" once deployed.
 			"SLEEPER_LEAGUE_ID": secret("SLEEPER_LEAGUE_ID"),
+			// APNs provider-token credentials (the .p8 body and its Key ID).
+			// MERGE-ORDER LOAD-BEARING: an ECS Secret naming an SSM parameter
+			// that does not exist fails EVERY task launch at provisioning
+			// (ResourceInitializationError), taking down all scheduled jobs.
+			// Both parameters must exist in us-west-1 before this deploys —
+			// they are created by hand from the Apple developer portal key,
+			// which is served for download exactly once.
+			"APNS_AUTH_KEY": secret("APNS_AUTH_KEY"),
+			"APNS_KEY_ID":   secret("APNS_KEY_ID"),
 		},
 	})
 

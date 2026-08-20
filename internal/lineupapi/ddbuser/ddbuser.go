@@ -483,6 +483,12 @@ func (st *Store) DeleteUser(ctx context.Context, id lineupapi.UserID) error {
 					return err
 				}
 			}
+			// A push device's PUSHTOKEN# pointer lives outside this item
+			// collection for the same reason CRED# rows do (it answers a
+			// cross-user question), so the pk sweep cannot reach it.
+			if err := st.releasePushTokenFor(ctx, id, sk, item); err != nil {
+				return err
+			}
 			if _, err := st.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 				TableName: aws.String(st.table), Key: st.key(userPK(id), sk),
 			}); err != nil {

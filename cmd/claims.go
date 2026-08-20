@@ -43,14 +43,12 @@ func runClaims(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := claims.Options{
-		CacheDir:         ".cache",
-		CursorPath:       resolveCursorPath(os.Getenv("CLAIMS_CURSOR_PATH")),
-		DryRun:           cfg.DryRun,
-		NoSignals:        claimsNoSignals,
-		Since:            since,
-		DropsMin:         claimsDropsMin,
-		PushoverUserKey:  cfg.PushoverUserKey,
-		PushoverAPIToken: cfg.PushoverAPIToken,
+		CacheDir:   ".cache",
+		CursorPath: resolveCursorPath(os.Getenv("CLAIMS_CURSOR_PATH")),
+		DryRun:     cfg.DryRun,
+		NoSignals:  claimsNoSignals,
+		Since:      since,
+		DropsMin:   claimsDropsMin,
 	}
-	return claims.Run(ft, today, opts)
+	return claims.Run(cmd.Context(), ft, today, opts)
 }

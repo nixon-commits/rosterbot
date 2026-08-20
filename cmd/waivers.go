@@ -42,12 +42,10 @@ func runWaivers(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := waivers.Options{
-		TopN:             waiversTopN,
-		Positions:        positions,
-		NoCache:          noCache,
-		DryRun:           cfg.DryRun,
-		PushoverUserKey:  cfg.PushoverUserKey,
-		PushoverAPIToken: cfg.PushoverAPIToken,
+		TopN:      waiversTopN,
+		Positions: positions,
+		NoCache:   noCache,
+		DryRun:    cfg.DryRun,
 	}
-	return waivers.Run(ft, today, opts)
+	return waivers.Run(cmd.Context(), ft, today, opts)
 }

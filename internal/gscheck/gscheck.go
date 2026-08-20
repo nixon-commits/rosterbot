@@ -1,6 +1,7 @@
 package gscheck
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -89,7 +90,7 @@ type GSCheckClient interface {
 	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
 }
 
-func RunGSCheck(ft GSCheckClient, cfg config.Config) error {
+func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	fmt.Printf("Running GS check for date: %s\n", today.Format("2006-01-02"))
 
@@ -231,11 +232,27 @@ func RunGSCheck(ft GSCheckClient, cfg config.Config) error {
 		return nil
 	}
 
-	// Send Pushover notification.
+	// The league broadcast goes FIRST, and the ordering is load-bearing. It
+	// reaches managers who are not app users and therefore cannot be ported
+	// to APNs — only narrowed, kept, or duplicated (D3). It is duplicated,
+	// permanently: anyone on both the Pushover group and the app hears GS
+	// alerts twice, which is inherent to keeping the broadcast, not a defect
+	// to fix later. Were the dispatcher call first, a transient feed-write
+	// failure would abort this function before the broadcast — degrading to
+	// silence for the whole league over an S3 hiccup unrelated to Pushover's
+	// health. This way the worst case of either half failing is a duplicate
+	// on the rerun, never a missed alert (rosterbot-chs's direction).
 	if err := notify.SendPushover(cfg.PushoverGroupKey, cfg.PushoverAPIToken, "Fantrax GS Alert", shortSummary); err != nil {
 		return fmt.Errorf("send pushover: %w", err)
 	}
 	fmt.Println("Pushover notification sent.")
+
+	// Dispatcher half: the durable feed record plus APNs to app users. Errors
+	// only on a failed feed write — fatal so the run is marked failed and
+	// rerun, since the feed record is the durable obligation.
+	if err := notify.Send(ctx, notify.Event{Kind: "gs-check", Title: "Fantrax GS Alert", Message: shortSummary}); err != nil {
+		return fmt.Errorf("record gs alert: %w", err)
+	}
 
 	return nil
 }

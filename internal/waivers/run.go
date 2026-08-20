@@ -1,6 +1,7 @@
 package waivers
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
@@ -26,8 +27,8 @@ const (
 
 // Run executes the waivers report end-to-end. Mirrors prospects.RunProspectReport
 // in shape: errgroup-parallel fetches, build the report, emit stdout / GHA
-// markdown / Pushover (last one only when not in dry-run and creds are set).
-func Run(ft FantraxClient, today time.Time, opts Options) error {
+// markdown / the notify dispatcher (last one only when not in dry-run).
+func Run(ctx context.Context, ft FantraxClient, today time.Time, opts Options) error {
 	if opts.TopN <= 0 {
 		opts.TopN = defaultTopN
 	}
@@ -181,11 +182,10 @@ func Run(ft FantraxClient, today time.Time, opts Options) error {
 		writeGHASummary(report, path)
 	}
 
-	if !opts.DryRun && opts.PushoverUserKey != "" && opts.PushoverAPIToken != "" {
-		msg := formatPushover(report)
-		if msg != "" {
-			if err := notify.SendPushover(opts.PushoverUserKey, opts.PushoverAPIToken, pushoverTitle, msg); err != nil {
-				log.Printf("WARNING: pushover failed: %v", err)
+	if !opts.DryRun {
+		if msg := formatPushover(report); msg != "" {
+			if err := notify.Send(ctx, notify.Event{Kind: "waivers", Title: pushoverTitle, Message: msg}); err != nil {
+				log.Printf("WARNING: notification failed: %v", err)
 			}
 		}
 	}

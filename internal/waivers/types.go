@@ -49,11 +49,9 @@ type FantraxClient interface {
 
 // Options govern a single Run invocation.
 type Options struct {
-	TopN             int
-	Positions        []string // optional position filter (e.g. "OF", "SP"); empty = all
-	NoCache          bool
-	DryRun           bool
-	PushoverUserKey  string
-	PushoverAPIToken string
-	CacheDir         string // defaults to ".cache" if empty
+	TopN      int
+	Positions []string // optional position filter (e.g. "OF", "SP"); empty = all
+	NoCache   bool
+	DryRun    bool
+	CacheDir  string // defaults to ".cache" if empty
 }

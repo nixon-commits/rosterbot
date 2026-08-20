@@ -32,7 +32,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
-	"github.com/nixon-commits/rosterbot/internal/notify"
+	"github.com/nixon-commits/rosterbot/internal/pushover"
 	"github.com/nixon-commits/rosterbot/internal/s3blob"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 )
@@ -68,7 +68,7 @@ func main() {
 	userKey := mustParam(ctx, ssmc, "/rosterbot/PUSHOVER_USER_KEY")
 	apiToken := mustParam(ctx, ssmc, "/rosterbot/PUSHOVER_API_TOKEN")
 	send = func(title, message string) error {
-		return notify.SendPushover(userKey, apiToken, title, message)
+		return pushover.Send(userKey, apiToken, title, message)
 	}
 
 	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
