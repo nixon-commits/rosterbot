@@ -928,6 +928,16 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		},
 	})
 
+	// One declaration of the repository coordinates, consumed by the webhook
+	// source below and by the drift check's GITHUB_REPO in Phase 4. A checker
+	// that restated them could drift from the thing it is checking.
+	const ghOwner, ghRepo = "nixon-commits", "rosterbot"
+	// buildProject escapes the gate so Phase 4 can wire the scheduled drift
+	// check beside the heartbeat, where it belongs: both are scheduled
+	// assertions, not reactions. Nil when the stack is deployed without
+	// `-c enableBuild=true`, and Phase 4 skips the check accordingly.
+	var buildProject awscodebuild.IProject
+
 	// --- Phase 2: CodeBuild (build + push image to ECR on push to main) ---
 	// Gated: only instantiated with `-c enableBuild=true`, because the GitHub
 	// webhook source requires a one-time source credential (GitHub OAuth/PAT) to
@@ -935,8 +945,8 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	if v, ok := stack.Node().TryGetContext(jsii.String("enableBuild")).(string); ok && v == "true" {
 		project := awscodebuild.NewProject(stack, jsii.String("Build"), &awscodebuild.ProjectProps{
 			Source: awscodebuild.Source_GitHub(&awscodebuild.GitHubSourceProps{
-				Owner:   jsii.String("nixon-commits"),
-				Repo:    jsii.String("rosterbot"),
+				Owner:   jsii.String(ghOwner),
+				Repo:    jsii.String(ghRepo),
 				Webhook: jsii.Bool(true),
 				WebhookFilters: &[]awscodebuild.FilterGroup{
 					awscodebuild.FilterGroup_InEventOf(awscodebuild.EventAction_PUSH).
@@ -980,22 +990,41 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				"SUBNETS":         {Value: awscdk.Fn_Join(jsii.String(","), publicSubnets.SubnetIds)},
 				"SECURITY_GROUPS": {Value: taskSg.SecurityGroupId()},
 			},
+			// -1, not omitted: CloudFormation cannot clear a CodeBuild property by
+			// leaving it out (rosterbot-7p1i). The limit was set to 1 and reverted
+			// the same day (rosterbot-ill) by DELETING this line — and the revert
+			// never took effect. Measured 2026-08-20, six days and ~68 deploys
+			// later: the deployed template carried no ConcurrentBuildLimit while
+			// the live project still reported 1. AWS states the rule on CfnProject
+			// — "to unset or remove a project value via CFN, explicitly provide the
+			// attribute" — so an omitted property is not an assertion that it is
+			// unset, it is silence, and CodeBuild keeps whatever it already had.
+			// -1 is the API's remove-the-limit sentinel (verified live: the field
+			// reads back absent), and the CFN resource schema puts no minimum on
+			// it, so the value survives validation on the way through.
+			//
+			// The limit is wrong for this project because it THROTTLES the excess
+			// build rather than queueing it: "new builds are throttled and are not
+			// run." A push landing during an in-flight build never builds at all —
+			// main sits deployed-behind with no failed build, no Pushover and
+			// nothing red anywhere. queuedTimeoutInMinutes does not rescue it;
+			// that governs compute-capacity queuing, not the concurrency
+			// rejection, which happens BEFORE a build record exists. So anything
+			// watching build outcomes structurally cannot see this — there is no
+			// outcome. Two deploys were dropped in two days (6056658, bb1cc1e) and
+			// the only evidence in the entire system was an HTTP 400 in the GitHub
+			// webhook delivery log.
+			//
+			// A racing build fails LOUDLY and the next push retries it. A dropped
+			// build is silent and permanent. Given the choice, take the noisy
+			// failure — the same reasoning as every other guard in this repo.
+			// BuildDriftRule below is the counterweight for the dropped case,
+			// whatever its cause: it compares main's HEAD against the newest
+			// successfully built commit, so a trigger that fails for a reason
+			// nobody predicted still surfaces. This one failed for a reason
+			// everybody thought was already fixed.
+			ConcurrentBuildLimit: jsii.Number(-1),
 		})
-		// NO ConcurrentBuildLimit here, deliberately — it was set to 1 and reverted
-		// the same day (rosterbot-ill).
-		//
-		// The intent was to stop two close-together pushes racing the CloudFormation
-		// stack. But CodeBuild's limit does not QUEUE the excess build, it THROTTLES
-		// it: "new builds are throttled and are not run." A push landing during an
-		// in-flight build therefore never builds at all — main sits deployed-behind
-		// with no failed build, no Pushover, and nothing red anywhere. Observed
-		// immediately: the fix for the Analysis Store prefix was pushed, silently
-		// never built, and only noticed because someone went looking for the build.
-		//
-		// A racing build fails LOUDLY and the next push retries it. A dropped build
-		// is silent and permanent. Given the choice, take the noisy failure — which
-		// is the same reasoning as every other guard in this repo.
-		//
 		// The other half of rosterbot-ill (set -e in the buildspec's cdk block, so a
 		// failed deploy is reported at the deploy instead of blamed on the next
 		// step) is kept: it makes the loud failure legible, which is the part that
@@ -1040,6 +1069,8 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				awseventstargets.NewLambdaFunction(opsNotifyFn, &awseventstargets.LambdaFunctionProps{}),
 			},
 		})
+
+		buildProject = project
 	}
 
 	// --- Analysis Store: Glue table over analysis/grades + Athena workgroup ---
@@ -1458,6 +1489,56 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			}),
 		},
 	})
+
+	// --- Build drift: alert on a merge that never reached production ---
+	//
+	// BuildNotifyRule is reactive, and so is TaskFailRule: something has to STOP
+	// for either to fire. A merge whose build is rejected at the webhook never
+	// creates a build record, so it produces no state change, no event and no
+	// outcome — there is nothing to be quiet or loud about. That dropped two
+	// deploys in two days (rosterbot-7p1i), and the only evidence anywhere in
+	// the system was an HTTP 400 in a GitHub webhook delivery log nobody reads.
+	//
+	// The heartbeat above cannot cover it either, despite being the scheduled
+	// counterweight: it asks whether each job LAUNCHED, and a job launching on a
+	// stale image answers yes. The run ledger agrees, and opsalert reports the
+	// deployment healthy. So this asks the outcome question directly — is main's
+	// HEAD the commit that is actually deployed? — which catches a dropped build
+	// whatever its cause, including causes nobody predicted. The builds it was
+	// written for were dropped by a cause everybody believed was already fixed.
+	if buildProject != nil {
+		opsNotifyFn.AddEnvironment(jsii.String("GITHUB_REPO"), jsii.String(ghOwner+"/"+ghRepo), nil)
+		opsNotifyFn.AddEnvironment(jsii.String("BUILD_PROJECT"), buildProject.ProjectName(), nil)
+		// Read build metadata for this project only. The check never starts a
+		// build, and never needs to: it compares what already happened.
+		opsNotifyFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Actions:   jsii.Strings("codebuild:ListBuildsForProject", "codebuild:BatchGetBuilds"),
+			Resources: &[]*string{buildProject.ProjectArn()},
+		}))
+		// Every 2 hours at :35 — clear of :15 where the heartbeat sits and of the
+		// top of the hour the jobs themselves crowd. The cadence bounds only how
+		// long a dropped deploy can run stale before it is reported; the alert
+		// deduplicates on the last successfully built commit, so a tighter
+		// schedule would cost invocations, not noise.
+		//
+		// Gated with the other schedules for the same reason they are: a drift
+		// alert about a deployment someone deliberately paused is exactly the
+		// alert that teaches an operator to ignore the channel.
+		awsevents.NewRule(stack, jsii.String("BuildDriftRule"), &awsevents.RuleProps{
+			Schedule: awsevents.Schedule_Expression(jsii.String("cron(35 */2 * * ? *)")),
+			Enabled:  jsii.Bool(schedulesEnabled),
+			Targets: &[]awsevents.IRuleTarget{
+				awseventstargets.NewLambdaFunction(opsNotifyFn, &awseventstargets.LambdaFunctionProps{
+					// Must match driftDetailType in opsnotify/.
+					Event: awsevents.RuleTargetInput_FromObject(&map[string]interface{}{
+						"detail-type": "Rosterbot Build Drift",
+						"source":      "rosterbot.ops",
+						"detail":      map[string]interface{}{},
+					}),
+				}),
+			},
+		})
+	}
 
 	return stack
 }
