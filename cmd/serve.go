@@ -80,6 +80,7 @@ func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) h
 		// permissive dev shortcut.
 		Users:       lineupapi.NewFileUserStore(lineupDir),
 		Enrollments: lineupapi.NewFileUserStore(lineupDir),
+		PushDevices: lineupapi.NewFileUserStore(lineupDir),
 		Infra:       lineupapi.NewFileInfraStore("."),
 		// The Trades artifacts live in their own local dirs (matching their
 		// own S3 prefixes) rather than under lineupDir, so `serve` reads
