@@ -398,6 +398,26 @@ func (s *FileUserStore) DeleteUser(_ context.Context, id UserID) error {
 		return err
 	}
 
+	// Push token index entries, for the same reason as the credential index:
+	// they live outside the user tree (they answer a cross-user question), so
+	// the RemoveAll below cannot reach them. Guarded on the holder like the
+	// claims release — an index mid-steal must never lose another user's entry.
+	if devices, err := s.readPushDevices(id); err == nil {
+		for _, d := range devices {
+			owner, has, err := s.readPushTokenOwner(d.Token)
+			if err != nil {
+				return err
+			}
+			if has && owner.UserID == id {
+				if err := os.Remove(s.pushTokenIndexPath(d.Token)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return err
+				}
+			}
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+
 	if err := os.RemoveAll(filepath.Dir(s.profilePath(id))); err != nil {
 		return err
 	}
@@ -484,6 +504,183 @@ func (s *FileUserStore) listWhere(keep func(*User) bool) ([]*User, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+// --- PushDeviceStore ---------------------------------------------------------
+//
+// Devices live under the user's own directory so DeleteUser's RemoveAll sweeps
+// them with the account:
+//
+//	<dir>/users/<b64url(uid)>/push/<b64url(deviceID)>.json
+//
+// The token index lives OUTSIDE the user tree, beside credindex, because it
+// answers a cross-user question: "who currently holds this APNs token?" That
+// is what makes registration able to steal a token from its previous owner
+// (see PushDeviceStore), which a per-user layout cannot express.
+//
+//	<dir>/pushtokens/<b64url(token)>  ->  {user_id, device_id}
+
+func (s *FileUserStore) pushDir(id UserID) string {
+	return filepath.Join(s.userDir(id), "push")
+}
+
+// pushDeviceFileName encodes the id for the same reason userDir encodes the
+// user id: the id in DeletePushDevice arrives from a URL path value, and
+// encoding removes the path-injection question instead of answering it per
+// caller (see userDir).
+func pushDeviceFileName(id string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(id)) + ".json"
+}
+
+func (s *FileUserStore) pushTokenIndexPath(token string) string {
+	return filepath.Join(s.dir, "pushtokens", base64.RawURLEncoding.EncodeToString([]byte(token)))
+}
+
+// pushTokenOwner is the token index entry: which user's which device holds a
+// token. Unlike credindex (bare uid bytes) it needs both halves, because the
+// steal has to delete one specific device file.
+type pushTokenOwner struct {
+	UserID   UserID `json:"user_id"`
+	DeviceID string `json:"device_id"`
+}
+
+func (s *FileUserStore) readPushTokenOwner(token string) (pushTokenOwner, bool, error) {
+	b, err := os.ReadFile(s.pushTokenIndexPath(token))
+	if errors.Is(err, fs.ErrNotExist) {
+		return pushTokenOwner{}, false, nil
+	}
+	if err != nil {
+		return pushTokenOwner{}, false, err
+	}
+	var o pushTokenOwner
+	if err := json.Unmarshal(b, &o); err != nil {
+		return pushTokenOwner{}, false, err
+	}
+	return o, true, nil
+}
+
+// readPushDevices is the lock-free half of PushDevices, callable by methods
+// already holding s.mu.
+func (s *FileUserStore) readPushDevices(id UserID) ([]PushDevice, error) {
+	entries, err := os.ReadDir(s.pushDir(id))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := []PushDevice{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(s.pushDir(id), e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		var d PushDevice
+		if err := json.Unmarshal(b, &d); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (s *FileUserStore) PutPushDevice(_ context.Context, uid UserID, d PushDevice) (PushDevice, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// The steal (see PushDeviceStore): another user holding this token loses
+	// their record before ours is written. Deleting the file and not the index
+	// is deliberate — the index is about to be overwritten below, and an
+	// intermediate remove would only widen the crash window.
+	if owner, ok, err := s.readPushTokenOwner(d.Token); err != nil {
+		return PushDevice{}, err
+	} else if ok && owner.UserID != uid {
+		stale := filepath.Join(s.pushDir(owner.UserID), pushDeviceFileName(owner.DeviceID))
+		if err := os.Remove(stale); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return PushDevice{}, err
+		}
+	}
+
+	existing, err := s.readPushDevices(uid)
+	if err != nil {
+		return PushDevice{}, err
+	}
+	for _, e := range existing {
+		if e.Token == d.Token {
+			// Update in place. CreatedAt is the device's first sighting and
+			// must survive; LastSeenAt is what the new registration advances.
+			d.ID, d.CreatedAt = e.ID, e.CreatedAt
+			break
+		}
+	}
+	if d.ID == "" {
+		d.ID = NewPushDeviceID()
+	}
+
+	data, err := json.Marshal(d)
+	if err != nil {
+		return PushDevice{}, err
+	}
+	if err := writeAtomic(filepath.Join(s.pushDir(uid), pushDeviceFileName(d.ID)), data); err != nil {
+		return PushDevice{}, err
+	}
+	// Index last, so it never names a record that does not exist. A crash
+	// before this line leaves the token unindexed, which the next registration
+	// repairs; the reverse order could leave an index pointing at nothing.
+	idx, err := json.Marshal(pushTokenOwner{UserID: uid, DeviceID: d.ID})
+	if err != nil {
+		return PushDevice{}, err
+	}
+	if err := writeAtomic(s.pushTokenIndexPath(d.Token), idx); err != nil {
+		return PushDevice{}, err
+	}
+	return d, nil
+}
+
+func (s *FileUserStore) PushDevices(_ context.Context, id UserID) ([]PushDevice, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readPushDevices(id)
+}
+
+func (s *FileUserStore) DeletePushDevice(_ context.Context, uid UserID, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := filepath.Join(s.pushDir(uid), pushDeviceFileName(id))
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil // deleting an absent device is a success, not an error
+	}
+	if err != nil {
+		return err
+	}
+	var d PushDevice
+	if err := json.Unmarshal(b, &d); err != nil {
+		return err
+	}
+
+	// Device file FIRST, index second — the opposite of DeleteCredential's
+	// order, because the risk points the other way. A push device's file is
+	// what delivery reads; the index only routes the steal. A crash after the
+	// file remove leaves a stale index that the next registration repairs,
+	// while the reverse order would leave a device that keeps receiving
+	// notifications with no index left to steal it through.
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if owner, ok, err := s.readPushTokenOwner(d.Token); err != nil {
+		return err
+	} else if ok && owner.UserID == uid && owner.DeviceID == id {
+		if err := os.Remove(s.pushTokenIndexPath(d.Token)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // --- EnrollmentStore ---------------------------------------------------------
