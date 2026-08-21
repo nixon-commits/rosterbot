@@ -24,6 +24,11 @@ type Inputs struct {
 	BenchedToday map[string]bool // normalized name -> benched in real MLB lineup
 	DataWarnings []string        // pass-through data-availability warnings
 
+	// GeneratedAt is when this lineup was computed (RFC3339 UTC). Passed in
+	// rather than read from the clock here so Build stays pure and its tests
+	// stay deterministic. Empty is supported and simply omits the field.
+	GeneratedAt string
+
 	// HKB is the dynasty enrichment keyed by normalized player name. Nil is a
 	// supported input, not a defect: the HKB scrape soft-fails upstream, so
 	// every field it feeds is optional on the wire and Build simply emits the
@@ -49,11 +54,12 @@ type Dynasty struct {
 // SP starter or any RP), mirroring the CLI's "Combined Expected".
 func Build(in Inputs) LineupResponse {
 	resp := LineupResponse{
-		Date:     in.Date,
-		LeagueID: in.LeagueID,
-		TeamID:   in.TeamID,
-		Slots:    []Slot{},
-		Warnings: []string{},
+		Date:        in.Date,
+		LeagueID:    in.LeagueID,
+		TeamID:      in.TeamID,
+		Slots:       []Slot{},
+		Warnings:    []string{},
+		GeneratedAt: in.GeneratedAt,
 	}
 
 	// Active players queued by the slot pos ID they were assigned to; multiple

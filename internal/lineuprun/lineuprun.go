@@ -490,13 +490,18 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	prog.Done("Optimize", "done")
 
 	// --- Dynasty enrichment for the published lineup JSON ---
-	// Gated on the same condition publishToday applies, so a run that never
-	// publishes (shadow, an ordinary dry-run) does not pay for an HKB fetch it
-	// will throw away. Soft-fail: this is display enrichment on a lineup the
-	// optimizer has already decided, so an HKB outage costs the age/value
-	// columns and nothing else.
+	// Gated on the same condition publishToday applies: a Publisher at all.
+	// Dry runs used to publish nothing and so were excluded here; they now
+	// publish a preview, and the preview has to carry the same age/value
+	// columns as the applied lineup or the app would render two visibly
+	// different lineups for the same roster. The added cost is a cached
+	// hkb.GetPlayers read, not a fresh scrape per run.
+	//
+	// Soft-fail: this is display enrichment on a lineup the optimizer has
+	// already decided, so an HKB outage costs the age/value columns and
+	// nothing else.
 	var hkbMeta map[string]lineupapi.Dynasty
-	if opts.Publisher != nil && (!cfg.DryRun || opts.PublishLineupFlag) {
+	if opts.Publisher != nil {
 		var err error
 		if hkbMeta, err = LoadHKBMeta(cacheDir); err != nil {
 			prog.Logf("WARNING: HKB values unavailable — publishing lineup without age/value: %v", err)

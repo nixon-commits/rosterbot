@@ -13,9 +13,20 @@ import (
 )
 
 // TodayKey is the object key (storage-adapter relative) for the most recent
-// lineup. Producers also publish under the date string; the handler only ever
-// serves "today".
+// APPLIED lineup — what is actually set on Fantrax. Producers also publish
+// under the date string; the handler serves "today" and, separately, "preview".
 const TodayKey = "today"
+
+// PreviewKey is the object key for the most recent lineup a DRY RUN computed
+// but did not apply. It exists because a dry run must not overwrite TodayKey:
+// doing so would make GET /v1/lineup/today describe a roster that was never
+// set, and would let one member ticking "Dry run" in the app's Functions form
+// replace their real applied-lineup snapshot with a hypothetical one.
+//
+// Splitting the key rather than adding a flag to one key keeps GET
+// /v1/lineup/today's meaning exactly as it was, so the web dashboard needs no
+// change to stay truthful.
+const PreviewKey = "preview"
 
 // defaultRunsLimit caps how many runs GET /v1/runs returns by default.
 const defaultRunsLimit = 25
@@ -102,6 +113,7 @@ type Config struct {
 func Handler(cfg Config) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/lineup/today", cfg.handleLineup)
+	mux.HandleFunc("GET /v1/lineup/preview", cfg.handleLineupPreview)
 	mux.HandleFunc("GET /v1/runs", cfg.handleRuns)
 	mux.HandleFunc("GET /v1/runs/{id}", cfg.handleRunDetail)
 	mux.HandleFunc("GET /v1/runs/{id}/output", cfg.handleRunOutput)
@@ -164,6 +176,17 @@ func (cfg Config) handleLineup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serveBlob(w, r, view.Lineups, TodayKey, "lineup")
+}
+
+// handleLineupPreview serves the lineup a dry run computed without applying.
+// 404 is the ordinary answer — most accounts have never run one — so the client
+// treats absence as "no preview", not as an error.
+func (cfg Config) handleLineupPreview(w http.ResponseWriter, r *http.Request) {
+	view, ok := cfg.requireTenantView(w, r)
+	if !ok {
+		return
+	}
+	serveBlob(w, r, view.Lineups, PreviewKey, "lineup preview")
 }
 
 func (cfg Config) handleRuns(w http.ResponseWriter, r *http.Request) {

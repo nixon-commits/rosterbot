@@ -623,3 +623,87 @@ func TestJobTrigger_AllowsWhenPriorRunFinished(t *testing.T) {
 		t.Errorf("expected job runner invoked with 'claims', got %v", jobs.lastCommand)
 	}
 }
+
+// --- lineup preview (rbapp-c56) ---
+
+func TestHandlerServesPreview(t *testing.T) {
+	body, _ := Marshal(Build(fakeInputs()))
+	h := Handler(Config{Token: "t", Lineups: fakeStore{data: map[string][]byte{PreviewKey: body}}})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/lineup/preview", nil)
+	req.Header.Set("Authorization", "Bearer t")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if rec.Body.String() != wantJSON {
+		t.Fatalf("body mismatch:\n--- got ---\n%s\n--- want ---\n%s", rec.Body.String(), wantJSON)
+	}
+}
+
+// Most accounts have never run a dry run, so an absent preview is the ordinary
+// answer rather than a fault. The client reads 404 as "no preview".
+func TestHandlerPreviewNotFoundWhenAbsent(t *testing.T) {
+	h := Handler(Config{Token: "t", Lineups: fakeStore{data: map[string][]byte{TodayKey: []byte("{}")}}})
+	req := httptest.NewRequest(http.MethodGet, "/v1/lineup/preview", nil)
+	req.Header.Set("Authorization", "Bearer t")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// The two endpoints must never bleed into one another: /today describes what is
+// applied on Fantrax, /preview what a dry run merely proposed. Serving one from
+// the other's key is the failure the split exists to prevent, and it would be
+// invisible — both bodies are valid lineups.
+func TestHandlerPreviewAndTodayAreDistinct(t *testing.T) {
+	h := Handler(Config{Token: "t", Lineups: fakeStore{data: map[string][]byte{
+		TodayKey:   []byte(`{"date":"2026-07-24","projected_points":10}`),
+		PreviewKey: []byte(`{"date":"2026-07-24","projected_points":99}`),
+	}}})
+
+	for _, tc := range []struct {
+		path, want string
+	}{
+		{"/v1/lineup/today", `{"date":"2026-07-24","projected_points":10}`},
+		{"/v1/lineup/preview", `{"date":"2026-07-24","projected_points":99}`},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		req.Header.Set("Authorization", "Bearer t")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Body.String() != tc.want {
+			t.Errorf("GET %s = %s, want %s", tc.path, rec.Body.String(), tc.want)
+		}
+	}
+}
+
+// The preview endpoint is session-gated exactly like every other /v1 route; it
+// is not an unauthenticated read just because its content is hypothetical.
+func TestHandlerPreviewRequiresAuth(t *testing.T) {
+	h := Handler(Config{Token: "t", Lineups: fakeStore{data: map[string][]byte{PreviewKey: []byte("{}")}}})
+	req := httptest.NewRequest(http.MethodGet, "/v1/lineup/preview", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+// generated_at is how the client orders an applied lineup against a preview.
+func TestBuildEmitsGeneratedAt(t *testing.T) {
+	in := fakeInputs()
+	in.GeneratedAt = "2026-07-24T18:30:00Z"
+	if got := Build(in).GeneratedAt; got != "2026-07-24T18:30:00Z" {
+		t.Errorf("GeneratedAt = %q, want it threaded through from Inputs", got)
+	}
+	// Absent is supported: blobs published before the field carry no timestamp,
+	// and omitempty keeps the existing wire contract byte-identical.
+	if got := Build(fakeInputs()).GeneratedAt; got != "" {
+		t.Errorf("GeneratedAt = %q, want empty when Inputs omits it", got)
+	}
+}
