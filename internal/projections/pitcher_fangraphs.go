@@ -1,10 +1,8 @@
 package projections
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -80,20 +78,9 @@ type FanGraphsPitcherSource struct {
 
 // fetchPitchingRows fetches raw pitching projection rows from the FanGraphs API.
 func fetchPitchingRows() ([]fgPitchRow, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(fangraphsPitchingURL)
-	if err != nil {
-		return nil, fmt.Errorf("fangraphs pitching fetch: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fangraphs pitching: status %d", resp.StatusCode)
-	}
-
 	var rows []fgPitchRow
-	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
-		return nil, fmt.Errorf("fangraphs pitching json: %w", err)
+	if err := fetchJSON(fangraphsPitchingURL, "fangraphs pitching", &rows); err != nil {
+		return nil, err
 	}
 	return rows, nil
 }

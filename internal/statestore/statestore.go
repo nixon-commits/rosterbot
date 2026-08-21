@@ -81,6 +81,7 @@ var (
 	footballTradesArtifact   = of(layout.FootballTrades)
 	footballTradeLogArtifact = of(layout.FootballTradeLog)
 	ilStartsArtifact         = of(layout.ILStarts)
+	staleCacheArtifact       = of(layout.StaleCacheAlerts)
 	archiveArtifact          = of(layout.Archive)
 	backtestArtifact         = of(layout.Backtest)
 )
@@ -431,6 +432,13 @@ func (s *Selector) FootballTradeLogReader() (dynasty.TradeLogReader, error) {
 // where a player-only key would alert once and then go quiet for the season.
 func (s *Selector) ILStartMarkers() (lineupapi.BlobStore, error) {
 	return blobStore(s, ilStartsArtifact, "")
+}
+
+// StaleCacheMarkers is one dedup marker per cache key for the stale-cache
+// alert. It is deliberately NOT tenant-scoped: the cache it guards is shared,
+// so the outage it reports is shared too, and one marker is the correct number.
+func (s *Selector) StaleCacheMarkers() (lineupapi.BlobStore, error) {
+	return blobStore(s, staleCacheArtifact, "")
 }
 
 // TradeOfferWriter is the write side of the durable Trade Offer Log.

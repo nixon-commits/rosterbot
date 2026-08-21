@@ -1,10 +1,8 @@
 package projections
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -129,20 +127,9 @@ type FanGraphsSource struct {
 
 // fetchBattingRows fetches raw batting projection rows from the FanGraphs API.
 func fetchBattingRows() ([]fgRow, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(fangraphsBattingURL)
-	if err != nil {
-		return nil, fmt.Errorf("fangraphs fetch: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fangraphs: status %d", resp.StatusCode)
-	}
-
 	var rows []fgRow
-	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
-		return nil, fmt.Errorf("fangraphs json: %w", err)
+	if err := fetchJSON(fangraphsBattingURL, "fangraphs", &rows); err != nil {
+		return nil, err
 	}
 	return rows, nil
 }

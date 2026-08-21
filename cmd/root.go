@@ -135,12 +135,23 @@ func initShared() error {
 	// Surface stale-cache fallbacks (fresh fetch failed, serving cached copy)
 	// as a Pushover push when creds are present. Console logging happens
 	// unconditionally inside the cache package.
+	//
+	// The marker store is what makes this survivable during a multi-day
+	// upstream outage: every scheduled run is a fresh container, so without
+	// durable dedup the same standing failure re-announces itself once per
+	// cache key per run. A marker-store error is NOT fatal — the alert simply
+	// degrades to a duplicate, which is the safe direction.
 	userKey, apiToken := os.Getenv("PUSHOVER_USER_KEY"), os.Getenv("PUSHOVER_API_TOKEN")
 	if userKey != "" && apiToken != "" {
 		cache.Notify = func(title, message string) {
 			if err := notify.SendPushover(userKey, apiToken, title, message); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: cache notify push failed: %v\n", err)
 			}
+		}
+		if markers, err := statestore.FromEnv().StaleCacheMarkers(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: stale-cache marker store unavailable: %v (alerts will repeat)\n", err)
+		} else {
+			cache.StaleMarkers = markers
 		}
 	}
 	// Fan every fantasy event out: durable activity-feed record first (its id
