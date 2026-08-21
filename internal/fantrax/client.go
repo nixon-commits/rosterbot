@@ -308,12 +308,17 @@ func (c *Client) InvalidatePeriodRosterCache(period DailyPeriod) {
 		return
 	}
 	fc := cache.New[[]Player](c.cacheDir, 0)
+	// The Invalidate errors are discarded because this function is void and
+	// sits behind two interfaces (lineuprun.emitClient, lineuprun's Client) —
+	// surfacing them is a signature change, tracked separately. Note the
+	// discard is NOT free on S3: a failed Delete leaves the pre-apply snapshot
+	// readable, which is the rosterbot-sza symptom by a different cause.
 	for _, prefix := range []string{keyHitterRoster, keyPitcherRoster} {
 		// Period-specific, season-scoped (GetHitterRosterForPeriod et al).
 		key, _ := c.periodCacheKey(prefix, c.teamID, period)
-		fc.Invalidate(key)
+		_ = fc.Invalidate(key)
 		// Current-day (GetHitterRoster / GetPitcherRoster).
-		fc.Invalidate(cache.Key(prefix, c.teamID))
+		_ = fc.Invalidate(cache.Key(prefix, c.teamID))
 	}
 }
 

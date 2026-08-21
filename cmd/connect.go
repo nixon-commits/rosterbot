@@ -206,14 +206,14 @@ func runConnect(cmd *cobra.Command, args []string) error {
 // tenants sharing a process would share these variables and the package-level
 // cookie cache with them.
 func fantraxLogin(creds lineupapi.FantraxCreds) loginEvidence {
-	os.Setenv("FANTRAX_USERNAME", creds.Username)
-	os.Setenv("FANTRAX_PASSWORD", creds.Password)
+	_ = os.Setenv("FANTRAX_USERNAME", creds.Username)
+	_ = os.Setenv("FANTRAX_PASSWORD", creds.Password)
 	// Cleared as soon as the browser has them; the process still holds the
 	// values in memory, but they stop being visible to anything that reads the
 	// environment of this process later in the run.
 	defer func() {
-		os.Unsetenv("FANTRAX_USERNAME")
-		os.Unsetenv("FANTRAX_PASSWORD")
+		_ = os.Unsetenv("FANTRAX_USERNAME")
+		_ = os.Unsetenv("FANTRAX_PASSWORD")
 	}()
 
 	ev := runBrowserLogin()

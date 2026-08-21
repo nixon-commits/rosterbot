@@ -63,7 +63,7 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("send standings request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, nil, fmt.Errorf("standings API returned status %d", resp.StatusCode)

@@ -163,7 +163,7 @@ func TestRunKey_SortsReverseChronologically(t *testing.T) {
 	older := lineupapi.RunKey("2026-08-14T17:26:37Z", "old")
 	newer := lineupapi.RunKey("2026-08-17T17:02:20Z", "new")
 
-	if !(newer < older) {
+	if newer >= older {
 		t.Errorf("RunKey(newer)=%q should sort before RunKey(older)=%q", newer, older)
 	}
 	if len(strings.SplitN(newer, "-", 2)[0]) != len(strings.SplitN(older, "-", 2)[0]) {

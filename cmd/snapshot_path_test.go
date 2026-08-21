@@ -20,8 +20,7 @@ import (
 func TestLocalSnapshotPathIsUnchangedByTheStoreMigration(t *testing.T) {
 	t.Setenv("STATE_BUCKET", "") // local mode, the case this test is about
 
-	st, err := statestore.FromEnv().SnapshotStore()
-	if err != nil {
+	if _, err := statestore.FromEnv().SnapshotStore(); err != nil {
 		t.Fatalf("SnapshotStore: %v", err)
 	}
 
@@ -29,17 +28,10 @@ func TestLocalSnapshotPathIsUnchangedByTheStoreMigration(t *testing.T) {
 	// assertion is about the RELATIVE layout rather than the repo's own
 	// .backtest/ contents.
 	dir := t.TempDir()
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	t.Chdir(dir)
 
 	// Re-resolve after the chdir: the file store holds a relative root.
-	st, err = statestore.FromEnv().SnapshotStore()
+	st, err := statestore.FromEnv().SnapshotStore()
 	if err != nil {
 		t.Fatalf("SnapshotStore: %v", err)
 	}
@@ -65,14 +57,7 @@ func TestLocalShadowSnapshotPathIsUnchanged(t *testing.T) {
 	t.Setenv("STATE_BUCKET", "")
 
 	dir := t.TempDir()
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	t.Chdir(dir)
 
 	st, err := statestore.FromEnv().SnapshotStore()
 	if err != nil {

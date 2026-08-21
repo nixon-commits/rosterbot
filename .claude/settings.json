@@ -9,8 +9,8 @@
             "type": "command"
           },
           {
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && go vet ./... 2>&1",
-            "statusMessage": "Running go vet...",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && export PATH=\"$PATH:$(go env GOPATH)/bin\" && if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run ./... 2>&1; else echo \"note: golangci-lint not installed; falling back to go vet (fix: make lint-install)\"; go vet ./... 2>&1; fi",
+            "statusMessage": "Running golangci-lint...",
             "type": "command"
           }
         ],

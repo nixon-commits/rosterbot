@@ -28,7 +28,9 @@ func TestDiagNormalizedSearch(t *testing.T) {
 		}
 		var got []string
 		for i, p := range people {
-			if i >= 3 { break }
+			if i >= 3 {
+				break
+			}
 			got = append(got, p.FullName)
 		}
 		t.Logf("%-24q norm=%-24q -> %d %v", n, norm, len(people), got)

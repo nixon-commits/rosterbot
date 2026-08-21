@@ -30,7 +30,7 @@ func FetchTransactionAlerts(
 	if err != nil {
 		return nil, fmt.Errorf("mlb transactions fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("mlb transactions: status %d", resp.StatusCode)

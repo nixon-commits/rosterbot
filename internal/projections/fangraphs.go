@@ -199,7 +199,7 @@ func NewFanGraphsSourceFromCSV(path string) (*FanGraphsSource, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	src := &FanGraphsSource{
 		projections: make(map[string]*Projection),
@@ -368,7 +368,7 @@ func LoadBattingProjections(system, cacheDir string, ttl time.Duration) (*FanGra
 	}
 
 	// Restore the original system for display/cache key consistency.
-	SetProjectionSystem(system)
+	_ = SetProjectionSystem(system) // cannot fail: `system` already validated above
 
 	// CSV fallback.
 	src, err := NewFanGraphsSourceFromCSV("fangraphs-leaderboard-projections_batters.csv")

@@ -84,7 +84,7 @@ func captureStdout(t *testing.T, fn func()) string {
 		done <- sb.String()
 	}()
 	fn()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = orig
 	return <-done
 }

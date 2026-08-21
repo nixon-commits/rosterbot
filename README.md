@@ -569,6 +569,8 @@ Provider-specific TTLs sit outside the tiers: **FanGraphs projections 24 h**, **
 
 ```bash
 make test         # all unit tests — no credentials needed (everything is mocked)
+make lint         # golangci-lint across all four modules
+make lint-install # install the pinned golangci-lint version
 make dry-run      # quick local optimize --dry-run
 make clean-cache  # rm -rf .cache/ (cold-pass baseline)
 make run-all      # exercise every command in dry-run / read-only, with timings + cache size
@@ -583,6 +585,9 @@ make run-all 2>&1 | tee /tmp/warm.log
 
 > [!NOTE]
 > `lambda/`, `opsnotify/`, and `infra/` are **separate Go modules** — the root `go build ./...` doesn't descend into them. Run `make build-modules` after touching any of them (or after a dependency bump); `make build` runs it automatically. Each module also carries its own `replace` line for any forked dependency, so `make check-pins` (also run by CI and `make build`) asserts those pins agree across every `go.mod` — a mismatch that changes no API would otherwise compile clean. When you add a new top-level command, append a line to the `run-all` recipe so the smoke test stays complete.
+
+> [!NOTE]
+> Linting is `make lint` (golangci-lint, config in `.golangci.yml` at the repo root, shared by all four modules). CI runs that same target rather than `golangci-lint-action`, so the gate that blocks a PR and the one you run locally are one definition. Install the pinned version with `make lint-install`; a missing binary is a hard error, not a skip.
 
 ---
 

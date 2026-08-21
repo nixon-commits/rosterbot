@@ -127,12 +127,12 @@ func Get(ctx context.Context, url string) ([]byte, error) {
 			lastErr = err
 		} else if resp.StatusCode == http.StatusOK {
 			b, readErr := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return b, readErr
 		} else {
 			// Non-200: drain body so the connection can be reused, then decide.
 			io.Copy(io.Discard, resp.Body) //nolint:errcheck
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
 			if resp.StatusCode < 500 {
 				// 4xx: permanent failure — do not retry.

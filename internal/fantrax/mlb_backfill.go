@@ -315,7 +315,7 @@ func fetchMLBGameLogUncached(mlbamID int, group string, season int) ([]mlbGameLo
 	if err != nil {
 		return nil, fmt.Errorf("fetch game log: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("game log status %d", resp.StatusCode)
 	}

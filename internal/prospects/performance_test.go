@@ -213,7 +213,7 @@ func TestResolveMLBPlayerID_SearchAPI(t *testing.T) {
 		},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 
 	origURL := mlbPlayerSearchURL
@@ -292,16 +292,16 @@ func statsapiStub(t *testing.T, people map[string]int, opts ...stubOpt) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			json.NewEncoder(w).Encode(hotHitterLog())
+			_ = json.NewEncoder(w).Encode(hotHitterLog())
 			return
 		}
 		name := r.URL.Query().Get("names")
 		id, ok := people[name]
 		if !ok {
-			json.NewEncoder(w).Encode(map[string]any{"people": []map[string]any{}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"people": []map[string]any{}})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"people": []map[string]any{{
+		_ = json.NewEncoder(w).Encode(map[string]any{"people": []map[string]any{{
 			"id":          id,
 			"fullName":    name,
 			"currentTeam": map[string]any{"abbreviation": "ATH"},

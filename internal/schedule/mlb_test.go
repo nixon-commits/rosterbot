@@ -40,7 +40,7 @@ func TestTeamsPlayingOn_ParsesResponse(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -96,7 +96,7 @@ func TestGameVenues_ParsesResponse(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -182,7 +182,7 @@ func TestLockedTeams_LiveAndFinal(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -220,7 +220,7 @@ func TestTeamsPlayingOn_EmptySchedule(t *testing.T) {
 	fixture := map[string]interface{}{"dates": []interface{}{}}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -269,7 +269,7 @@ func TestBenchedPlayers_LineupsPosted(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -323,7 +323,7 @@ func TestBenchedPlayers_LineupsNotPosted(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -373,7 +373,7 @@ func TestBenchedPlayers_EmptyLineups(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 

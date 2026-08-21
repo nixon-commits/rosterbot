@@ -830,9 +830,10 @@ func summarizeProjections(proj []ProjectionDayResult) *ProjectionSummary {
 	for _, d := range proj {
 		all = append(all, d.Players...)
 		for _, p := range d.Players {
-			if p.Source == "snapshot" {
+			switch p.Source {
+			case "snapshot":
 				snapCount++
-			} else if p.Source == "reconstructed" {
+			case "reconstructed":
 				reconCount++
 			}
 		}

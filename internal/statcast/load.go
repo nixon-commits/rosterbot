@@ -103,7 +103,7 @@ func fetchCSV(url string) (map[string]int, [][]string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("savant fetch %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, fmt.Errorf("savant %s: status %d", url, resp.StatusCode)
 	}

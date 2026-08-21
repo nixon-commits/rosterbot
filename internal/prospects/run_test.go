@@ -41,7 +41,9 @@ func TestTxnCursor_InvalidJSON(t *testing.T) {
 	txnCursorFile = filepath.Join(tmpDir, "cursor.json")
 	defer func() { txnCursorFile = origFile }()
 
-	os.WriteFile(txnCursorFile, []byte("not json"), 0o644)
+	if err := os.WriteFile(txnCursorFile, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	got := loadTxnCursor()
 	if !got.IsZero() {
 		t.Errorf("expected zero time for invalid JSON, got %v", got)
@@ -161,7 +163,9 @@ func TestFormatReport_Markdown_Appends(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "summary.md")
 
 	// Write some pre-existing content
-	os.WriteFile(tmpFile, []byte("## Previous Section\n\n"), 0o644)
+	if err := os.WriteFile(tmpFile, []byte("## Previous Section\n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	report := Report{
 		Date: time.Date(2026, 3, 23, 0, 0, 0, 0, time.UTC),

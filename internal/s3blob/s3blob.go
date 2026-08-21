@@ -106,7 +106,7 @@ func (b *Blob) GetWithETag(ctx context.Context, key string) ([]byte, string, boo
 		}
 		return nil, "", false, err
 	}
-	defer out.Body.Close()
+	defer func() { _ = out.Body.Close() }()
 	data, err := io.ReadAll(out.Body)
 	if err != nil {
 		return nil, "", false, err

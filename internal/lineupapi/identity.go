@@ -199,10 +199,11 @@ func (s *FileIdentityStore) writeAtomic(data []byte) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp) // no-op once the rename succeeds
+	// no-op once the rename succeeds
+	defer func() { _ = os.Remove(tmp) }()
 
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {

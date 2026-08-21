@@ -221,10 +221,10 @@ func setFantraxEnv(user, pass, cookie string) {
 		{"FANTRAX_COOKIES", cookie},
 	} {
 		if kv.v == "" {
-			os.Unsetenv(kv.k)
+			_ = os.Unsetenv(kv.k)
 			continue
 		}
-		os.Setenv(kv.k, kv.v)
+		_ = os.Setenv(kv.k, kv.v)
 	}
 }
 

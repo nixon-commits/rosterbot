@@ -1,0 +1,66 @@
+# golangci-lint configuration, shared by all four Go modules in this repo
+# (root, lambda/, opsnotify/, infra/). Each nested module is linted from its
+# own directory; golangci-lint walks up to find this file, so there is exactly
+# one definition of "what lints" — the same reason `make check-pins` exists.
+#
+# Run it with `make lint` (which loops every module the way `make build-modules`
+# does). CI runs that same target rather than golangci-lint-action, so the gate
+# developers run locally and the gate that blocks a PR cannot drift apart.
+version: "2"
+
+# The diag/live harnesses are build-tagged, so a default lint run does not
+# compile them and silently skips ~a dozen real files — the same shape as the
+# `make test` lesson recorded in the Makefile (test the module, not a list of
+# directories). Including the tags cost 2 extra findings when it was added.
+run:
+  build-tags:
+    - diag
+    - live
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+
+  # Everything below reported ZERO issues against the codebase when the gate
+  # was introduced, except usetesting/copyloopvar (10 trivial modernizations,
+  # all fixed in the same commit). They are enabled because they cost nothing
+  # today and catch a real bug class later — not because they found something.
+  enable:
+    - bodyclose      # HTTP response bodies that are never closed
+    - copyloopvar    # loop-variable copies made redundant by Go 1.22
+    - durationcheck  # multiplying two time.Durations (nearly always a bug)
+    - errorlint      # == on errors instead of errors.Is/As; missing %w
+    - makezero       # make([]T, n) then append — silently prepends n zeros
+    - misspell       # common misspellings in comments and strings
+    - unconvert      # redundant type conversions
+    - usetesting     # os.Chdir/os.Setenv in tests where t.Chdir/t.Setenv exist
+
+  settings:
+    errcheck:
+      # These have no recoverable failure mode at the call site, and requiring
+      # `_ =` on 148 of them buys nothing while making the report-rendering
+      # code (which is golden-tested, so its shape matters) harder to read.
+      # Everything else errcheck finds stays a hard error, tests included.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (net/http.ResponseWriter).Write
+
+# Output caps
+#
+# golangci-lint defaults to max-same-issues: 3 and max-issues-per-linter: 50,
+# which SILENTLY truncates its own report — the first run of this gate showed
+# "41 errcheck issues" against a real count of 230. A linter that stops
+# counting reports clean for the same reason the GS forecast reported "0 starts
+# suppressed" all season. Both caps are disabled so the number is the number.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+# In v2 these live outside `linters` and are reported by `golangci-lint run`,
+# so CI fails on unformatted code. The PostToolUse gofmt hook only fires on
+# edits made through Claude Code; nothing checked a human's edits until now.
+formatters:
+  enable:
+    - gofmt

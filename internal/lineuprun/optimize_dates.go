@@ -84,7 +84,6 @@ func OptimizeDates(ft dateRosterClient, sched dateScheduleClient, in OptimizeInp
 
 	var wg sync.WaitGroup
 	for i, date := range in.Dates {
-		i, date := i, date
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

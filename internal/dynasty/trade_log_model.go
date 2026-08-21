@@ -125,7 +125,7 @@ func entryFor(r TradeLogRow) TradeLogEntry {
 	for _, s := range r.Sides {
 		assets := make([]TradeLogEntryAsset, 0, len(s.Assets))
 		for _, a := range s.Assets {
-			assets = append(assets, TradeLogEntryAsset{Name: a.Name, Values: a.Values, Priced: a.Priced})
+			assets = append(assets, TradeLogEntryAsset(a))
 		}
 		sides = append(sides, TradeLogEntrySide{
 			TeamID:   s.TeamID,

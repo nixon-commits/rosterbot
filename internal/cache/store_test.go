@@ -101,7 +101,7 @@ func TestFileCache_EmptyDirFetchesWithoutWarning(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stderr = w
 	got, err := c.Get("mlb-player-ids-0b581697", func() (string, error) { return "fresh", nil })
-	w.Close()
+	_ = w.Close()
 	os.Stderr = stderr
 
 	var buf [4096]byte

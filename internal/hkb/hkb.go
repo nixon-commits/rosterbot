@@ -105,7 +105,7 @@ func fetchPlayers() ([]Player, error) {
 	if err != nil {
 		return nil, fmt.Errorf("hkb fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("hkb: status %d", resp.StatusCode)

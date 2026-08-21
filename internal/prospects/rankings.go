@@ -37,7 +37,7 @@ func (s *FanGraphsRankingSource) GetTopProspects(season int) ([]RankedProspect, 
 	if err != nil {
 		return nil, fmt.Errorf("fangraphs prospects fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return nil, fmt.Errorf("fangraphs prospects: HTTP %d — authentication required: %w", resp.StatusCode, ErrSourceUnavailable)

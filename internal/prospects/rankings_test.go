@@ -36,7 +36,7 @@ func TestFanGraphsRankingSource_ParsesResponse(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -131,7 +131,9 @@ func TestLoadRankings_UsesCacheWhenFresh(t *testing.T) {
 		Data:      []RankedProspect{{Name: "cached player", Rank: 5}},
 	}
 	data, _ := json.Marshal(env)
-	os.WriteFile(filepath.Join(tmpDir, "rankings.json"), data, 0o644)
+	if err := os.WriteFile(filepath.Join(tmpDir, "rankings.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := LoadRankings(&panicSource{}, 2026, 24)
 	if err != nil {
@@ -158,7 +160,9 @@ func TestLoadRankings_FetchesWhenStale(t *testing.T) {
 		Data:      []RankedProspect{{Name: "old player", Rank: 99}},
 	}
 	data, _ := json.Marshal(env)
-	os.WriteFile(filepath.Join(tmpDir, "rankings.json"), data, 0o644)
+	if err := os.WriteFile(filepath.Join(tmpDir, "rankings.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	fresh := []RankedProspect{{Name: "fresh player", Rank: 1}}
 	src := &succeedingSource{prospects: fresh}

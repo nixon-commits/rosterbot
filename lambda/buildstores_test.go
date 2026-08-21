@@ -72,7 +72,7 @@ func TestBuildStores_WiresEveryStoreField(t *testing.T) {
 		}
 		f := v.Field(i)
 		switch f.Kind() {
-		case reflect.Interface, reflect.Ptr, reflect.Map, reflect.Slice, reflect.Func:
+		case reflect.Interface, reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func:
 			if f.IsNil() {
 				t.Errorf("lineupapi.Config.%s is nil after buildStores — every route "+
 					"backed by it will answer 501 %q in production. Wire it in "+

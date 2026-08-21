@@ -38,7 +38,7 @@ func Send(userKey, apiToken, title, message string) error {
 	if err != nil {
 		return fmt.Errorf("send pushover request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)

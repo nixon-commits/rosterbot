@@ -230,7 +230,7 @@ func (s *Syncer) download(ctx context.Context, bucket, key, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Body.Close()
+	defer func() { _ = out.Body.Close() }()
 	// 0700/0600: Down targets include the Fantrax session cookie (a credential);
 	// keep state owner-only.
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
@@ -261,7 +261,7 @@ func (s *Syncer) upload(ctx context.Context, bucket, key, src string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	in := &s3.PutObjectInput{Bucket: &bucket, Key: &key, Body: f}
 	// awscli set Content-Type from the file extension; without it S3 serves
 	// application/octet-stream and browsers download the recap/report HTML

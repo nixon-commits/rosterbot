@@ -124,7 +124,7 @@ func probeVersion(ctx context.Context, version string) (VersionStatus, string, e
 	if err != nil {
 		return VersionUnknown, "", fmt.Errorf("send version probe: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return VersionUnknown, "", fmt.Errorf("version probe returned status %d", resp.StatusCode)

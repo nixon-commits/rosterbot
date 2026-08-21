@@ -127,7 +127,7 @@ func (l sessionLadder) refresh(ctx context.Context, uid lineupapi.UserID, cfg *c
 	// post-login identity check read the very cookie we just proved dead, and
 	// the re-login would fail for a reason that has nothing to do with the
 	// credentials.
-	os.Unsetenv("FANTRAX_COOKIES")
+	_ = os.Unsetenv("FANTRAX_COOKIES")
 
 	ev := l.mint(lineupapi.FantraxCreds{Username: cfg.Username, Password: cfg.Password})
 	if v := classifyLogin(ev); v.class != "" {
