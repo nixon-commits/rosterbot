@@ -109,13 +109,27 @@ func runNotifyTest(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("send: %w", err)
 	}
 
-	// Says "recorded", not "delivered". Send returns an error only on a failed
-	// feed write; every sink failure is logged to stderr and swallowed, so a
-	// zero exit here proves the record exists, not that Apple accepted it. Any
-	// "warning: notify sink apns" line above means the push half did not land.
 	fmt.Printf("\nRecorded feed event (kind=%s) and dispatched to %d device(s).\n",
 		notifyTestKind, len(devices))
-	fmt.Println("Check stderr above for 'warning: notify sink apns' -- absent means APNs accepted it.")
+
+	// Re-read the device list rather than telling the operator to interpret the
+	// absence of a warning. APNsSink prunes on ErrDeviceGone and only prints
+	// anything if the DELETE itself fails, so "no output" covers both "Apple
+	// accepted it" and "Apple called the token dead and we removed it" -- two
+	// outcomes that demand opposite next steps. A disappeared device is the one
+	// signal that distinguishes them, and it costs one query to look.
+	after, err := notifyTestDevices(ctx, lineupapi.UserID(uid))
+	if err != nil {
+		fmt.Printf("could not re-read devices to confirm delivery: %v\n", err)
+		return nil
+	}
+	if pruned := len(devices) - len(after); pruned > 0 {
+		return fmt.Errorf("APNs rejected %d of %d device token(s) as permanently dead "+
+			"(410/Unregistered or 400/BadDeviceToken) and they were pruned: "+
+			"the push did NOT arrive -- re-register the device by signing in again", pruned, len(devices))
+	}
+	fmt.Println("All device tokens survived: APNs accepted the push for each.")
+	fmt.Println("A transient failure would have printed 'warning: apns push to ...' above.")
 	return nil
 }
 
