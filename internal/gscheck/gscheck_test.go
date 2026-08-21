@@ -20,7 +20,7 @@ func TestBuildReport_MaxViolations(t *testing.T) {
 	}
 	periodLabel := "Scoring Period 5 (2026-03-30 – 2026-04-05)"
 
-	title, body := BuildReport(violations, periodLabel, 12, 0)
+	title, body := BuildReport(violations, periodLabel, 12, 0, nil)
 
 	if !strings.Contains(title, periodLabel) {
 		t.Errorf("title missing period label: %s", title)
@@ -51,7 +51,7 @@ func TestBuildReport_MinViolation(t *testing.T) {
 		{TeamName: "Slackers", GSUsed: 5, Kind: ViolationMin},
 	}
 
-	_, body := BuildReport(violations, "Period 1", 12, 7)
+	_, body := BuildReport(violations, "Period 1", 12, 7, nil)
 	if !strings.Contains(body, "Slackers") || !strings.Contains(body, "5 GS") || !strings.Contains(body, "-2") {
 		t.Errorf("body missing min violation: %s", body)
 	}
@@ -65,7 +65,7 @@ func TestBuildReport_SingleViolation(t *testing.T) {
 		{TeamName: "Violators", GSUsed: 15, Kind: ViolationMax},
 	}
 
-	_, body := BuildReport(violations, "Period 1", 10, 0)
+	_, body := BuildReport(violations, "Period 1", 10, 0, nil)
 	if !strings.Contains(body, "1 violation") {
 		t.Errorf("body should show 1 violation: %s", body)
 	}
@@ -77,7 +77,7 @@ func TestBuildReport_MixedViolations(t *testing.T) {
 		{TeamName: "Under Team", GSUsed: 5, Kind: ViolationMin},
 	}
 
-	_, body := BuildReport(violations, "Period 1", 12, 10)
+	_, body := BuildReport(violations, "Period 1", 12, 10, nil)
 	if !strings.Contains(body, "Over Max (12)") {
 		t.Errorf("body missing over section: %s", body)
 	}

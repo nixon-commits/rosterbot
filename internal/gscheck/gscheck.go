@@ -31,7 +31,13 @@ type Violation struct {
 
 // BuildReport creates the notification content for GS violations.
 // Returns a title and an HTML-formatted body suitable for Pushover.
-func BuildReport(violations []Violation, periodLabel string, gsMax, gsMin int) (title, body string) {
+//
+// unchecked names the teams whose GS could not be fetched. It is rendered into
+// the summary line rather than a trailing section because that line is what
+// survives Pushover's 1024-char truncation, and a violation count that silently
+// covers 9 of 10 teams is exactly the thing this report must never imply
+// (rosterbot-xit).
+func BuildReport(violations []Violation, periodLabel string, gsMax, gsMin int, unchecked []string) (title, body string) {
 	title = fmt.Sprintf("GS Alert — %s", periodLabel)
 
 	var limParts []string
@@ -68,7 +74,12 @@ func BuildReport(violations []Violation, periodLabel string, gsMax, gsMin int) (
 		sections = append(sections, fmt.Sprintf("<b>Under Min (%d):</b>\n%s", gsMin, strings.Join(underLines, "\n")))
 	}
 
-	body = fmt.Sprintf("%d violation(s) · %s\n\n%s", len(violations), strings.Join(limParts, ", "), strings.Join(sections, "\n\n"))
+	coverage := ""
+	if len(unchecked) > 0 {
+		coverage = fmt.Sprintf(" · <b>%d team(s) NOT CHECKED</b>: %s", len(unchecked), strings.Join(unchecked, ", "))
+	}
+
+	body = fmt.Sprintf("%d violation(s) · %s%s\n\n%s", len(violations), strings.Join(limParts, ", "), coverage, strings.Join(sections, "\n\n"))
 
 	return
 }
@@ -88,6 +99,71 @@ type GSCheckClient interface {
 	GetScoringPeriodsAndTeams() ([]fantrax.ScoringPeriod, map[string]string, map[string]string, error)
 	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
 	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
+}
+
+// teamFetchAttempts bounds the per-team retry. The 2026-08-17 drop was
+// transient — the same command re-run minutes later returned the missing team —
+// so a couple of cheap retries absorb the common case rather than escalating it.
+const teamFetchAttempts = 3
+
+// teamFetchBackoff is the base delay between per-team retries; attempt N waits
+// N × this. A var so tests can zero it, matching how the schedule URLs are
+// overridden elsewhere in the tree.
+var teamFetchBackoff = 750 * time.Millisecond
+
+// skippedTeam records a team whose GS could not be fetched, so a partial tally
+// can be reported as partial instead of being silently dropped from results.
+type skippedTeam struct {
+	name string
+	err  error
+}
+
+// fetchTeamGS retries a per-team GS fetch a bounded number of times before
+// giving up. The tally loop already paces itself at 500ms per team, so over ten
+// teams the retries cost at most a second or two — cheap against the
+// alternative, which is a report that quietly omits a team.
+func fetchTeamGS(ctx context.Context, ft GSCheckClient, teamID, teamName string, period fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, dryRun bool) (int, []fantrax.PitcherStart, error) {
+	var err error
+	for attempt := 1; attempt <= teamFetchAttempts; attempt++ {
+		var (
+			gs     int
+			starts []fantrax.PitcherStart
+		)
+		gs, starts, err = ft.GetTeamGS(teamID, teamName, period, seasonStart, today, gsMax, dryRun)
+		if err == nil {
+			return gs, starts, nil
+		}
+		if attempt == teamFetchAttempts {
+			break
+		}
+		fmt.Printf("  WARNING: GS fetch for %s failed (attempt %d/%d): %v — retrying\n", teamName, attempt, teamFetchAttempts, err)
+		select {
+		case <-ctx.Done():
+			return 0, nil, fmt.Errorf("%w (retry abandoned: %v)", err, ctx.Err())
+		case <-time.After(time.Duration(attempt) * teamFetchBackoff):
+		}
+	}
+	return 0, nil, err
+}
+
+// coverageErr turns an incomplete tally into a run failure. It is returned at
+// every terminal exit *after* the report and the notifications have gone out:
+// the violations we did find are still worth delivering, and aborting early
+// would trade a visible gap for an invisible one — rosterbot-chs's direction,
+// degrade to noise rather than to silence.
+//
+// The error is what makes the gap visible to infrastructure. gs-check otherwise
+// exits 0, the S3 run ledger records SUCCESS, and neither opsalert's streak nor
+// its heartbeat can tell a 9-team report from a 10-team one (rosterbot-xit).
+func coverageErr(skipped []skippedTeam) error {
+	if len(skipped) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(skipped))
+	for _, sk := range skipped {
+		names = append(names, sk.name)
+	}
+	return fmt.Errorf("incomplete GS check: %d team(s) could not be fetched: %s", len(skipped), strings.Join(names, ", "))
 }
 
 func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error {
@@ -154,22 +230,39 @@ func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error 
 			seasonStart = p.StartDate
 		}
 	}
+	// The banner reports the PERIOD's span, not today's date. gsPeriodWalk caps
+	// the walk at sp.EndDate, so printing today here claimed an 8-day walk over a
+	// 7-day period and read as an off-by-one GS overcount to anyone auditing a
+	// completed period (rosterbot-6zn). today is still the right argument to pass
+	// to GetTeamGS — the walk needs it to bound an in-progress period.
 	fmt.Printf("Found %d teams. Tallying GS for Period %d (days %s to %s)...\n",
-		len(teamMap), period.Number, period.StartDate.Format("2006-01-02"), today.Format("2006-01-02"))
+		len(teamMap), period.Number, period.StartDate.Format("2006-01-02"), period.EndDate.Format("2006-01-02"))
 
-	var results []teamGS
+	var (
+		results []teamGS
+		skipped []skippedTeam
+	)
 	for teamID, teamName := range teamMap {
 		if cfg.DryRun {
 			fmt.Printf("  --- %s (per-day GS deltas) ---\n", teamName)
 		}
-		gs, starts, err := ft.GetTeamGS(teamID, teamName, *period, seasonStart, today, gsMax, cfg.DryRun)
+		gs, starts, err := fetchTeamGS(ctx, ft, teamID, teamName, *period, seasonStart, today, gsMax, cfg.DryRun)
 		if err != nil {
 			fmt.Printf("WARNING: failed to get GS for %s: %v\n", teamName, err)
+			skipped = append(skipped, skippedTeam{name: teamName, err: err})
 			continue
 		}
 		fmt.Printf("  %s: %d GS\n", teamName, gs)
 		results = append(results, teamGS{id: teamID, name: teamName, gs: gs, starts: starts})
 		time.Sleep(500 * time.Millisecond)
+	}
+
+	// teamMap iterates in random order, so sort the skips to keep the report and
+	// the returned error byte-identical across runs with the same failures.
+	sort.Slice(skipped, func(i, j int) bool { return skipped[i].name < skipped[j].name })
+	uncheckedNames := make([]string, 0, len(skipped))
+	for _, sk := range skipped {
+		uncheckedNames = append(uncheckedNames, sk.name)
 	}
 
 	// Min violations are only meaningful once the period is complete; suppress
@@ -217,19 +310,25 @@ func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error 
 		}
 		fmt.Printf("  %s: %d GS%s\n", r.name, r.gs, flag)
 	}
+	if len(skipped) > 0 {
+		fmt.Printf("\n*** INCOMPLETE: %d of %d team(s) could not be checked ***\n", len(skipped), len(teamMap))
+		for _, sk := range skipped {
+			fmt.Printf("  %s: %v\n", sk.name, sk.err)
+		}
+	}
 
 	if len(violations) == 0 {
 		fmt.Println("\nNo violations found.")
-		return nil
+		return coverageErr(skipped)
 	}
 
 	fmt.Printf("\n%d violation(s) found.\n", len(violations))
-	_, shortSummary := BuildReport(violations, periodLabel, gsMax, gsMin)
+	_, shortSummary := BuildReport(violations, periodLabel, gsMax, gsMin, uncheckedNames)
 
 	if cfg.DryRun {
 		fmt.Println("\n[DRY RUN] Would send Pushover notification:")
 		fmt.Printf("  %s\n", shortSummary)
-		return nil
+		return coverageErr(skipped)
 	}
 
 	// The league broadcast goes FIRST, and the ordering is load-bearing. It
@@ -254,5 +353,5 @@ func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error 
 		return fmt.Errorf("record gs alert: %w", err)
 	}
 
-	return nil
+	return coverageErr(skipped)
 }
