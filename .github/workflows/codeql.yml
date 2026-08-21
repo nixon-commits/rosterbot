@@ -114,14 +114,24 @@ jobs:
     # dynamically so a future 4th module is covered automatically) but builds
     # natively rather than cross-compiling.
     #
-    # `go vet ./...` runs alongside `go build ./...` in every module: the Go
-    # extractor only traces files the compiler actually touches, and `go build`
-    # never compiles _test.go files (that needs `go test`/`go vet`). Without it,
+    # `go test -c -o /dev/null ./...` runs alongside `go build ./...` in every
+    # module: the Go extractor only traces files the compiler actually touches,
+    # and `go build` never compiles _test.go files, so without something else
     # the ~260 test files in this repo are structurally invisible to CodeQL
     # forever, capping "scanned files" at the non-test fraction of the repo
-    # (277/537 ≈ 52%) no matter how many times this job runs. `go vet` type-checks
-    # test files too, which is enough to get them traced, and needs no credentials
-    # since the test suite mocks every network dependency (see CLAUDE.md).
+    # (277/537 ≈ 52%) no matter how many times this job runs.
+    #
+    # `go vet ./...` (tried first) does NOT fix this despite looking like the
+    # obvious tool: verified via `go vet -x`, it type-checks _test.go files
+    # in-process against export data from already-built dependencies — it never
+    # spawns `compile` on the test files themselves, so nothing new gets traced.
+    # `go test -c` genuinely needs a linkable test binary, so it invokes
+    # `compile` with the test files as arguments (verified via `go test -c -x`:
+    # the compile line for a package lists both its .go and _test.go files).
+    # `-o /dev/null` discards every package's binary to the same sink, so this
+    # compiles-only (no test execution, so no network/credentials needed) and
+    # leaves nothing behind to clean up, unlike `-o` with a real path which
+    # only accepts one package.
     - name: Build Go modules (root + nested) for CodeQL tracing
       if: matrix.build-mode == 'manual'
       shell: bash
@@ -129,11 +139,11 @@ jobs:
         set -euo pipefail
         echo "=== building root ==="
         go build ./...
-        go vet ./...
+        go test -c -o /dev/null ./...
         for d in $(find . -name go.mod -not -path './.git/*' -not -path './.claude/*' \
             | grep -v '^\./go\.mod$' | xargs -n1 dirname | sort); do
           echo "=== building $d ==="
-          ( cd "$d" && go build ./... && go vet ./... )
+          ( cd "$d" && go build ./... && go test -c -o /dev/null ./... )
         done
 
     - name: Perform CodeQL Analysis
