@@ -385,8 +385,15 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeErr must go through the encoder, not string concatenation. msg is not
+// always a literal: handleJobRun passes BuildJobArgs' error straight through,
+// and that error interpolates the caller's own param value (jobs.go's
+// "invalid period: %s"). A value containing a double quote used to escape the
+// string it was pasted into — at best a malformed body the dashboard cannot
+// parse, at worst arbitrary extra keys injected into the error object
+// (rosterbot-w200).
 func writeErr(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
+	writeJSON(w, code, struct {
+		Error string `json:"error"`
+	}{msg})
 }

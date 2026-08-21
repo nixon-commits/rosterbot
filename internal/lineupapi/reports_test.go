@@ -3,6 +3,7 @@ package lineupapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -32,7 +33,11 @@ func TestReports_RequireAuth(t *testing.T) {
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("anonymous GET /v1/reports/%s = %d, want 401", name, rec.Code)
 			}
-			if rec.Body.Len() > 0 && rec.Body.String() != `{"error":"unauthorized"}` {
+			// The point of this assertion is that the 401 carries no report
+			// content, so it compares the body's CONTENT, not its framing —
+			// writeErr goes through writeJSON, whose encoder terminates every
+			// response with a newline.
+			if body := strings.TrimSpace(rec.Body.String()); body != "" && body != `{"error":"unauthorized"}` {
 				t.Fatalf("anonymous GET leaked a body: %q", rec.Body.String())
 			}
 		})
