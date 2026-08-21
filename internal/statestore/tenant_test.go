@@ -27,12 +27,12 @@ func TestEmptyTenantIsByteIdenticalToTheLegacyLayout(t *testing.T) {
 		{"cache", cacheArtifact},
 		{"teamvalues", teamValueArtifact},
 	} {
-		if got, want := s.prefixFor(a.art), a.art.s3Prefix; got != want {
+		if got, want := s.prefixFor(a.art), a.art.lay.S3Prefix; got != want {
 			t.Errorf("%s: prefixFor with no tenant = %q, want %q — an un-migrated "+
 				"deployment would read an empty prefix and report itself as never having run",
 				a.name, got, want)
 		}
-		if got, want := s.dirFor(a.art), a.art.localDir; got != want {
+		if got, want := s.dirFor(a.art), a.art.lay.LocalDir; got != want {
 			t.Errorf("%s: dirFor with no tenant = %q, want %q", a.name, got, want)
 		}
 	}
@@ -80,7 +80,7 @@ func TestSharedArtifactsNeverGainTheSegment(t *testing.T) {
 		"footballtrades":   footballTradesArtifact,
 		"footballtradelog": footballTradeLogArtifact,
 	} {
-		if got := s.prefixFor(a); got != a.s3Prefix {
+		if got := s.prefixFor(a); got != a.lay.S3Prefix {
 			t.Errorf("%s: shared artifact gained a tenant segment (%q); the cache in "+
 				"particular would then multiply upstream load by the tenant count",
 				name, got)
@@ -145,7 +145,7 @@ func TestProducerAndReaderComposeIdenticalPrefixes(t *testing.T) {
 		sel := ForTenant("bucket", tenant)
 		for _, a := range append(layout.All(), layout.Progress) {
 			// The producer path, as statestore composes it.
-			producer := sel.prefixFor(artifact{name: a.Name, s3Prefix: a.S3Prefix, localDir: a.LocalDir, perTenant: a.PerTenant})
+			producer := sel.prefixFor(artifact{name: a.Name, lay: a})
 			// The reader path, as lambda/main.go composes it.
 			reader := a.PrefixFor(tenant)
 			if producer != reader {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sort"
@@ -74,30 +75,16 @@ func hkbRanks(players []hkb.Player) map[string]int {
 }
 
 // ---------------------------------------------------------------------------
-// RunProspectReport
+// Shared ranking-source fetch and lookup-map construction
 // ---------------------------------------------------------------------------
 
-// RunProspectReport orchestrates the full prospect report: fetches rankings
-// from multiple sources, minors roster, available prospects, transactions,
-// and performance data, then prints the report and optionally writes a GHA summary.
-func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Config, today time.Time) error {
-	if err := os.MkdirAll(".cache", 0o755); err != nil {
-		return fmt.Errorf("creating cache dir: %w", err)
-	}
-
-	// Get minors roster
-	minorsRoster, err := ft.GetMinorsRoster()
-	if err != nil {
-		return fmt.Errorf("fetching minors roster: %w", err)
-	}
-	myMinors := make(map[string]bool, len(minorsRoster))
-	for _, p := range minorsRoster {
-		myMinors[projections.NormalizeName(p.Name)] = true
-	}
-
+// fetchRankingSources fetches the FanGraphs and HKB ranking sources in
+// parallel, alongside any extra funcs the caller adds to the same errgroup
+// (e.g. available-prospects or the full player pool). The two ranking
+// fetches soft-fail with a WARNING; only an extra func's error is fatal.
+func fetchRankingSources(cfg config.Config, today time.Time, extra ...func() error) ([]RankedProspect, []hkb.Player, error) {
 	var fgRankings []RankedProspect
 	var hkbPlayers []hkb.Player
-	var availablePlayers []fantrax.Player
 
 	g := new(errgroup.Group)
 
@@ -121,33 +108,31 @@ func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Confi
 		return nil
 	})
 
-	g.Go(func() error {
-		ap, err := ft.GetAvailableProspects()
-		if err != nil {
-			log.Printf("WARNING: failed to fetch available prospects: %v", err)
-			return nil
-		}
-		availablePlayers = ap
-		return nil
-	})
-
-	if err := g.Wait(); err != nil {
-		return err
+	for _, fn := range extra {
+		g.Go(fn)
 	}
 
-	fgMap := make(map[string]int, len(fgRankings))
+	if err := g.Wait(); err != nil {
+		return nil, nil, err
+	}
+	return fgRankings, hkbPlayers, nil
+}
+
+// buildRankLookups builds name- and MLBAM-ID-keyed rank lookup maps for the
+// FanGraphs and HKB ranking sources, joined against rosterNames (the set of
+// names from whichever roster/pool the caller is scanning) via
+// playername.ResolveMLBAMIDs to bridge nickname/legal name mismatches.
+func buildRankLookups(rosterNames []string, fgRankings []RankedProspect, hkbPlayers []hkb.Player) (fgMap, hkbMap map[string]int, fgByMLBAM, hkbByMLBAM map[int]int, resolved *playername.ResolvedPlayers) {
+	fgMap = make(map[string]int, len(fgRankings))
 	for _, r := range fgRankings {
 		fgMap[projections.NormalizeName(r.Name)] = r.Rank
 	}
-	hkbMap := hkbRanks(hkbPlayers)
+	hkbMap = hkbRanks(hkbPlayers)
 
 	// Resolve MLBAM IDs to bridge nickname/legal name mismatches.
 	// Collect all names from all sources, resolve via MLB API (cached),
 	// then build MLBAM-keyed maps for cross-source matching.
-	var allNames []string
-	for _, p := range minorsRoster {
-		allNames = append(allNames, p.Name)
-	}
+	allNames := append([]string{}, rosterNames...)
 	for _, r := range fgRankings {
 		allNames = append(allNames, r.Name)
 	}
@@ -156,14 +141,15 @@ func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Confi
 			allNames = append(allNames, p.Name)
 		}
 	}
-	resolved, resolveErr := playername.ResolveMLBAMIDs(allNames, ".cache")
+	var resolveErr error
+	resolved, resolveErr = playername.ResolveMLBAMIDs(allNames, ".cache")
 	if resolveErr != nil {
 		log.Printf("WARNING: MLBAM ID resolution failed: %v — using name-only matching", resolveErr)
 	}
 
 	// Build MLBAM-keyed ranking maps for ID-based matching.
-	fgByMLBAM := make(map[int]int)
-	hkbByMLBAM := make(map[int]int)
+	fgByMLBAM = make(map[int]int)
+	hkbByMLBAM = make(map[int]int)
 	if resolved != nil {
 		for _, r := range fgRankings {
 			if id, ok := resolved.ByName[projections.NormalizeName(r.Name)]; ok {
@@ -176,6 +162,51 @@ func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Confi
 			}
 		}
 	}
+	return fgMap, hkbMap, fgByMLBAM, hkbByMLBAM, resolved
+}
+
+// ---------------------------------------------------------------------------
+// RunProspectReport
+// ---------------------------------------------------------------------------
+
+// RunProspectReport orchestrates the full prospect report: fetches rankings
+// from multiple sources, minors roster, available prospects, transactions,
+// and performance data, then prints the report and optionally writes a GHA summary.
+func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Config, today time.Time) error {
+	if err := os.MkdirAll(".cache", 0o755); err != nil {
+		return fmt.Errorf("creating cache dir: %w", err)
+	}
+
+	// Get minors roster
+	minorsRoster, err := ft.GetMinorsRoster()
+	if err != nil {
+		return fmt.Errorf("fetching minors roster: %w", err)
+	}
+	myMinors := make(map[string]bool, len(minorsRoster))
+	for _, p := range minorsRoster {
+		myMinors[projections.NormalizeName(p.Name)] = true
+	}
+
+	var availablePlayers []fantrax.Player
+
+	fgRankings, hkbPlayers, err := fetchRankingSources(cfg, today, func() error {
+		ap, err := ft.GetAvailableProspects()
+		if err != nil {
+			log.Printf("WARNING: failed to fetch available prospects: %v", err)
+			return nil
+		}
+		availablePlayers = ap
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	var rosterNames []string
+	for _, p := range minorsRoster {
+		rosterNames = append(rosterNames, p.Name)
+	}
+	fgMap, hkbMap, fgByMLBAM, hkbByMLBAM, resolved := buildRankLookups(rosterNames, fgRankings, hkbPlayers)
 
 	rankingsMap := fgMap
 
@@ -510,33 +541,9 @@ func ListAllProspects(ft *fantrax.Client, cfg config.Config, today time.Time) er
 		return fmt.Errorf("creating cache dir: %w", err)
 	}
 
-	var fgRankings []RankedProspect
-	var hkbPlayers []hkb.Player
 	var pool []models.PoolPlayer
 
-	g := new(errgroup.Group)
-
-	g.Go(func() error {
-		r, err := LoadRankings(&FanGraphsRankingSource{}, today.Year(), cfg.ProspectRankCacheHours)
-		if err != nil {
-			log.Printf("WARNING: FanGraphs rankings failed: %v", err)
-			return nil
-		}
-		fgRankings = r
-		return nil
-	})
-
-	g.Go(func() error {
-		p, err := hkb.GetPlayers(".cache")
-		if err != nil {
-			log.Printf("WARNING: HKB data failed: %v", err)
-			return nil
-		}
-		hkbPlayers = p
-		return nil
-	})
-
-	g.Go(func() error {
+	fgRankings, hkbPlayers, err := fetchRankingSources(cfg, today, func() error {
 		p, err := ft.GetFullPlayerPool()
 		if err != nil {
 			return fmt.Errorf("fetching player pool: %w", err)
@@ -544,60 +551,25 @@ func ListAllProspects(ft *fantrax.Client, cfg config.Config, today time.Time) er
 		pool = p
 		return nil
 	})
-
-	if err := g.Wait(); err != nil {
+	if err != nil {
 		return err
 	}
 
-	fgMap := make(map[string]int, len(fgRankings))
-	for _, r := range fgRankings {
-		fgMap[projections.NormalizeName(r.Name)] = r.Rank
-	}
-	hkbMap := hkbRanks(hkbPlayers)
-
-	// Resolve MLBAM IDs for cross-source matching (uses cached data).
-	var allNames []string
+	var rosterNames []string
 	for _, pp := range pool {
 		if pp.MinorsEligible {
-			allNames = append(allNames, pp.Name)
+			rosterNames = append(rosterNames, pp.Name)
 		}
 	}
-	for _, r := range fgRankings {
-		allNames = append(allNames, r.Name)
-	}
-	for _, p := range hkbPlayers {
-		if p.AssetType == "PLAYER" && p.Level != "MLB" {
-			allNames = append(allNames, p.Name)
-		}
-	}
-	resolved, resolveErr := playername.ResolveMLBAMIDs(allNames, ".cache")
-	if resolveErr != nil {
-		log.Printf("WARNING: MLBAM ID resolution failed: %v — using name-only matching", resolveErr)
-	}
-
-	fgByMLBAM := make(map[int]int)
-	hkbByMLBAM := make(map[int]int)
-	if resolved != nil {
-		for _, r := range fgRankings {
-			if id, ok := resolved.ByName[projections.NormalizeName(r.Name)]; ok {
-				fgByMLBAM[id] = r.Rank
-			}
-		}
-		for name, rank := range hkbMap {
-			if id, ok := resolved.ByName[name]; ok {
-				hkbByMLBAM[id] = rank
-			}
-		}
-	}
+	fgMap, hkbMap, fgByMLBAM, hkbByMLBAM, resolved := buildRankLookups(rosterNames, fgRankings, hkbPlayers)
 
 	sourceNames := []string{"FanGraphs", "HKB"}
 
 	type row struct {
-		name     string
-		team     string
-		owner    string
-		ranks    []int
-		bestRank int
+		name  string
+		team  string
+		owner string
+		ranks []int
 	}
 	var rows []row
 	for _, pp := range pool {
@@ -613,19 +585,11 @@ func ListAllProspects(ft *fantrax.Client, cfg config.Config, today time.Time) er
 		}
 		fgRank, _ := lookupRank(pp.Name, fgMap, fgByMLBAM, resolved)
 		hkbRank, _ := lookupRank(pp.Name, hkbMap, hkbByMLBAM, resolved)
-		best := 9999
-		if fgRank > 0 && fgRank < best {
-			best = fgRank
-		}
-		if hkbRank > 0 && hkbRank < best {
-			best = hkbRank
-		}
 		rows = append(rows, row{
-			name:     pp.Name,
-			team:     pp.MLBTeamShortName,
-			owner:    owner,
-			ranks:    []int{fgRank, hkbRank},
-			bestRank: best,
+			name:  pp.Name,
+			team:  pp.MLBTeamShortName,
+			owner: owner,
+			ranks: []int{fgRank, hkbRank},
 		})
 	}
 
@@ -754,56 +718,44 @@ func shortProspectName(name string) string {
 // ---------------------------------------------------------------------------
 
 func writeGHASummary(r Report, path string) {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
-	if err != nil {
-		log.Printf("WARNING: failed to open GHA summary file: %v", err)
-		return
-	}
-	// The buffered writes above are only flushed by Close, so dropping its error
-	// would report a summary this function never actually finished writing.
-	// There are early returns below, so this stays a defer.
-	defer func() {
-		if cerr := f.Close(); cerr != nil {
-			log.Printf("WARNING: GHA summary may be incomplete: %v", cerr)
-		}
-	}()
-
-	fmt.Fprintln(f, "## Prospect Report")
-	fmt.Fprintln(f)
-
-	if len(r.Alerts) == 0 && !hasUpgrades(r.Upgrades) {
-		fmt.Fprintln(f, "No prospect alerts today.")
-		return
-	}
-
-	if len(r.Alerts) > 0 {
-		fmt.Fprintln(f, "### Alerts")
-		fmt.Fprintln(f, "| Priority | Type | Player | Team | Detail |")
-		fmt.Fprintln(f, "|----------|------|--------|------|--------|")
-		for _, a := range r.Alerts {
-			prio := strings.ToUpper(a.Priority)
-			label := alertKindLabel(a.Kind)
-			team := a.MLBTeam
-			if team == "" {
-				team = "???"
-			}
-			fmt.Fprintf(f, "| %s | %s | %s | %s | %s |\n", prio, label, a.PlayerName, team, a.Detail)
-		}
+	notify.AppendGHASummary(path, func(f io.Writer) {
+		fmt.Fprintln(f, "## Prospect Report")
 		fmt.Fprintln(f)
-	}
 
-	for _, set := range r.Upgrades {
-		fmt.Fprintf(f, "### Upgrades (%s)\n", set.Source)
-		fmt.Fprintln(f, "| Drop | Add | Rank Gap | Near-Term |")
-		fmt.Fprintln(f, "|------|-----|----------|-----------|")
-		for _, u := range set.Candidates {
-			nearTerm := ""
-			if u.NearTerm {
-				nearTerm = "yes"
-			}
-			fmt.Fprintf(f, "| %s (#%d) | %s (#%d) | +%d | %s |\n",
-				u.Drop.Name, u.Drop.Rank, u.Add.Name, u.Add.Rank, u.RankGap, nearTerm)
+		if len(r.Alerts) == 0 && !hasUpgrades(r.Upgrades) {
+			fmt.Fprintln(f, "No prospect alerts today.")
+			return
 		}
-		fmt.Fprintln(f)
-	}
+
+		if len(r.Alerts) > 0 {
+			fmt.Fprintln(f, "### Alerts")
+			fmt.Fprintln(f, "| Priority | Type | Player | Team | Detail |")
+			fmt.Fprintln(f, "|----------|------|--------|------|--------|")
+			for _, a := range r.Alerts {
+				prio := strings.ToUpper(a.Priority)
+				label := alertKindLabel(a.Kind)
+				team := a.MLBTeam
+				if team == "" {
+					team = "???"
+				}
+				fmt.Fprintf(f, "| %s | %s | %s | %s | %s |\n", prio, label, a.PlayerName, team, a.Detail)
+			}
+			fmt.Fprintln(f)
+		}
+
+		for _, set := range r.Upgrades {
+			fmt.Fprintf(f, "### Upgrades (%s)\n", set.Source)
+			fmt.Fprintln(f, "| Drop | Add | Rank Gap | Near-Term |")
+			fmt.Fprintln(f, "|------|-----|----------|-----------|")
+			for _, u := range set.Candidates {
+				nearTerm := ""
+				if u.NearTerm {
+					nearTerm = "yes"
+				}
+				fmt.Fprintf(f, "| %s (#%d) | %s (#%d) | +%d | %s |\n",
+					u.Drop.Name, u.Drop.Rank, u.Add.Name, u.Add.Rank, u.RankGap, nearTerm)
+			}
+			fmt.Fprintln(f)
+		}
+	})
 }

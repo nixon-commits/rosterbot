@@ -231,12 +231,12 @@ func optimalAssignment(scored []ScoredPlayer, slots []fantrax.Slot, currentAssig
 		}
 
 		// Prune: even the best-case remaining can't beat current best.
-		if upperBound(slotIdx, total) < bestTotal-eps {
+		ub := upperBound(slotIdx, total)
+		if ub < bestTotal-eps {
 			return
 		}
 
 		// Prune: score is tied with best but we already have as many or more changes.
-		ub := upperBound(slotIdx, total)
 		if math.Abs(ub-bestTotal) <= eps && changes >= bestChanges {
 			return
 		}

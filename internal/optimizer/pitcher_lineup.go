@@ -84,7 +84,7 @@ func OptimizePitcherLineup(
 			continue
 		}
 		pts := sp.ExpectedPts
-		if !sp.IsStarter && (IsSPEligible(sp.Player.Positions) || strings.Contains(sp.Player.PosShortNames, "SP")) {
+		if !sp.IsStarter && SPEligiblePlayer(sp.Player) {
 			pts *= NonStarterSPDiscount
 		}
 		generic = append(generic, ScoredPlayer{
@@ -211,10 +211,7 @@ func scorePitcherRoster(
 		teamPlays := playingToday[p.MLBTeam]
 		normalizedName := projections.NormalizeName(p.Name)
 
-		// Determine SP eligibility from PosShortNames (e.g. "SP", "RP").
-		// Position IDs may only contain generic "P" ("017") in leagues
-		// that use a single P slot, so PosShortNames is the reliable source.
-		spEligible := IsSPEligible(p.Positions) || strings.Contains(p.PosShortNames, "SP")
+		spEligible := SPEligiblePlayer(p)
 
 		// Determine hasGame based on role.
 		var hasGame, isStarter bool
@@ -270,13 +267,21 @@ func scorePitcherRoster(
 	return scored
 }
 
+// SPEligiblePlayer is THE combined SP-eligibility predicate: position-ID SP
+// ("015") via IsSPEligible, OR PosShortNames containing "SP" — position IDs
+// may only carry generic "P" ("017") in single-P-slot leagues, so
+// PosShortNames is the reliable source there. The optimizer's discount test,
+// scorePitcherRoster, and internal/lineuprun's emit-phase delta calculation
+// all call this one definition; when they were three hand-copied expressions,
+// a divergence would have let the delta the zero-gain guard checks disagree
+// with what the optimizer actually valued, and fail silently.
+func SPEligiblePlayer(p fantrax.Player) bool {
+	return IsSPEligible(p.Positions) || strings.Contains(p.PosShortNames, "SP")
+}
+
 // IsSPEligible reports whether a player's position-ID list carries SP
-// eligibility ("015"). It is the shared definition of SP eligibility: the
-// optimizer's own discount test combines it with a PosShortNames("SP") check
-// (positions may only carry generic "P" in single-P-slot leagues), and
-// internal/lineuprun's emit-phase delta calculation depends on using this
-// exact combination too — a divergence here would let the delta the zero-gain
-// guard checks disagree with what the optimizer actually valued.
+// eligibility ("015"). Most callers want SPEligiblePlayer, which combines
+// this with the PosShortNames("SP") check.
 func IsSPEligible(positions []string) bool {
 	for _, pos := range positions {
 		if pos == auth_client.PosSP { // "015"

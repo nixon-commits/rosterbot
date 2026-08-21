@@ -10,6 +10,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/opsalert"
 	"github.com/nixon-commits/rosterbot/internal/s3blob"
+	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 )
 
 // ledgerWindow is how many of the newest ledger records to read when computing
@@ -40,7 +41,7 @@ const fetchConcurrency = 32
 type ledgerReader struct{ blob *s3blob.Blob }
 
 func newLedgerReader(ctx context.Context, bucket string) (*ledgerReader, error) {
-	b, err := s3blob.New(ctx, bucket, "runledger/")
+	b, err := s3blob.New(ctx, bucket, layout.RunLedger.S3Prefix)
 	if err != nil {
 		return nil, err
 	}

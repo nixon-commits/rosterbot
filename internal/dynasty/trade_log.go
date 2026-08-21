@@ -258,14 +258,6 @@ type TradeLogReader interface {
 	ReadAllTrades() ([]TradeLogRow, error)
 }
 
-// MarshalTradeLogNDJSON serializes rows as newline-delimited JSON.
-func MarshalTradeLogNDJSON(rows []TradeLogRow) ([]byte, error) { return ndjsonstore.Marshal(rows) }
-
-// UnmarshalTradeLogNDJSON parses newline-delimited JSON (one TradeLogRow per line).
-func UnmarshalTradeLogNDJSON(b []byte) ([]TradeLogRow, error) {
-	return ndjsonstore.Unmarshal[TradeLogRow](b)
-}
-
 func tradeLogObjectKey(date time.Time) string {
 	return fmt.Sprintf("dt=%s/%s", date.UTC().Format("2006-01-02"), tradeLogFilename)
 }

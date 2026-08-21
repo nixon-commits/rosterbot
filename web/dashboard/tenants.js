@@ -6,13 +6,7 @@
 // every column here is user- or Fantrax-supplied (display name, email, a
 // connection error string).
 import { api, ApiError } from "./api.js";
-
-function el(tag, cls, text) {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
-  return n;
-}
+import { el } from "./render.js";
 
 const CONN_TONE = {
   verified: ["Connected", "badge-ok"],

@@ -51,7 +51,7 @@ export async function renderRuns(root) {
 function schedulePoll(runsList, detailSection, runs) {
   stopPolling();
   const intervalMs = runs === null || hasRunningRun(runs) ? POLL_MS : IDLE_POLL_MS;
-  pollTimer = setInterval(async () => {
+  pollTimer = setTimeout(async () => {
     const nextRuns = await loadRuns(runsList, detailSection, /* silent */ true);
     schedulePoll(runsList, detailSection, nextRuns);
   }, intervalMs);
@@ -59,7 +59,7 @@ function schedulePoll(runsList, detailSection, runs) {
 
 function stopPolling() {
   if (pollTimer) {
-    clearInterval(pollTimer);
+    clearTimeout(pollTimer);
     pollTimer = null;
   }
 }

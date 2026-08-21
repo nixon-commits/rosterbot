@@ -172,22 +172,6 @@ func TestInvalidate_NonExistent(t *testing.T) {
 	}
 }
 
-func TestInvalidateAll(t *testing.T) {
-	dir := t.TempDir()
-	c := New[string](dir, time.Hour)
-
-	_, _ = c.Get("a", func() (string, error) { return "1", nil })
-	_, _ = c.Get("b", func() (string, error) { return "2", nil })
-
-	if err := InvalidateAll(dir); err != nil {
-		t.Fatalf("invalidate all error: %v", err)
-	}
-
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatal("expected cache directory to be removed")
-	}
-}
-
 func TestKey(t *testing.T) {
 	got := Key("fangraphs", "bat", "steamerr")
 	want := "fangraphs-bat-steamerr"

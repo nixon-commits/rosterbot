@@ -57,12 +57,6 @@ type Writer interface {
 	WriteGaps(date time.Time, rows []Row) error
 }
 
-// MarshalNDJSON serializes rows as newline-delimited JSON (one row per line).
-func MarshalNDJSON(rows []Row) ([]byte, error) { return ndjsonstore.Marshal(rows) }
-
-// UnmarshalNDJSON parses newline-delimited JSON (one Row per line).
-func UnmarshalNDJSON(b []byte) ([]Row, error) { return ndjsonstore.Unmarshal[Row](b) }
-
 func objectKey(date time.Time) string {
 	return fmt.Sprintf("dt=%s/%s", date.UTC().Format("2006-01-02"), gapsFilename)
 }

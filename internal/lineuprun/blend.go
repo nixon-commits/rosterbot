@@ -13,7 +13,7 @@ import (
 // YTD snapshot. Two roles, two different shapes of recency — see BlendSources.
 type blendClient interface {
 	recentStatsClient
-	GetRecentPitcherStats(currentPeriod fantrax.DailyPeriod, n int) (map[string]fantrax.RecentStat, error)
+	GetRecentPitcherStats(currentPeriod fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error)
 }
 
 // BlendInputs is everything BlendSources needs to wrap the base projection
@@ -121,7 +121,7 @@ func BlendSources(ft blendClient, in BlendInputs) BlendResult {
 			r.RecentHitterCount = len(recentStats)
 			r.logf("recent hitter stats loaded: %d players with data", len(recentStats))
 			r.Hitters = projections.NewBlendedSource(
-				in.HitterBase, recentStats, in.HitterScoring,
+				in.HitterBase, recentStats,
 				nameToID(in.HitterRoster), in.BlendMinGP, in.HitterAvgFPG)
 		}
 	}
@@ -130,7 +130,7 @@ func BlendSources(ft blendClient, in BlendInputs) BlendResult {
 	if !seasonUnderway {
 		r.Pitchers = in.PitcherBase
 	} else {
-		recentPitStats, err := ft.GetRecentPitcherStats(in.CurrentPeriod, 0)
+		recentPitStats, err := ft.GetRecentPitcherStats(in.CurrentPeriod)
 		if err != nil {
 			r.logf("WARNING: recent pitcher stats unavailable (%v) — using %s only", err, in.SystemName)
 			r.Pitchers = in.PitcherBase
@@ -138,7 +138,7 @@ func BlendSources(ft blendClient, in BlendInputs) BlendResult {
 			r.RecentPitcherCount = len(recentPitStats)
 			r.logf("recent pitcher stats loaded: %d players with data", len(recentPitStats))
 			r.Pitchers = projections.NewPitcherBlendedSource(
-				in.PitcherBase, recentPitStats, in.PitcherScoring,
+				in.PitcherBase, recentPitStats,
 				nameToID(in.PitcherRoster), playerPositions(in.PitcherRoster),
 				in.BlendMinGP, in.PitcherAvgFPG)
 		}

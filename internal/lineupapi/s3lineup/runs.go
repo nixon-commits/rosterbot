@@ -89,27 +89,33 @@ func flatKeys(ctx context.Context, blob *s3blob.Blob, prefix string, limit int) 
 	return keys, nil
 }
 
-// recent lists the newest `limit` ledger records and reads each. Records whose
-// object cannot be read or decoded are skipped rather than failing the listing —
-// one malformed record must not blank the dashboard's run list.
-func (s *RunsStore) recent(ctx context.Context, limit int) ([]lineupapi.RunDetail, error) {
-	keys, err := flatKeys(ctx, s.blob, "", limit)
+// readNewest reads the newest `limit` JSON records directly under blob's
+// prefix (via flatKeys) and decodes each into T. Records whose object cannot
+// be read or decoded are skipped rather than failing the listing — one
+// malformed record must not blank the dashboard's run list or activity feed.
+func readNewest[T any](ctx context.Context, blob *s3blob.Blob, limit int) ([]T, error) {
+	keys, err := flatKeys(ctx, blob, "", limit)
 	if err != nil {
 		return nil, err
 	}
 
-	var recs []lineupapi.RunDetail
+	var out []T
 	for _, k := range keys {
-		data, found, err := s.blob.Get(ctx, k)
+		data, found, err := blob.Get(ctx, k)
 		if err != nil || !found {
 			continue
 		}
-		var rec lineupapi.RunDetail
-		if json.Unmarshal(data, &rec) == nil {
-			recs = append(recs, rec)
+		var v T
+		if json.Unmarshal(data, &v) == nil {
+			out = append(out, v)
 		}
 	}
-	return recs, nil
+	return out, nil
+}
+
+// recent lists the newest `limit` ledger records and reads each.
+func (s *RunsStore) recent(ctx context.Context, limit int) ([]lineupapi.RunDetail, error) {
+	return readNewest[lineupapi.RunDetail](ctx, s.blob, limit)
 }
 
 var _ lineupapi.RunStore = (*RunsStore)(nil)

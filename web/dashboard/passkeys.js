@@ -5,13 +5,7 @@
 // names are user-supplied and reach the DOM.
 import { api } from "./api.js";
 import { registerPasskey, ceremonyErrorMessage } from "./webauthn.js";
-
-function el(tag, cls, text) {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
-  return n;
-}
+import { el } from "./render.js";
 
 // renderPasskeysSection appends the Passkeys card to container and manages its
 // own refreshes, so settings.js only has to place it.

@@ -41,10 +41,7 @@ func runRecapSite(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	snapTTL := fantrax.PastPeriodTTL
-	if noCache {
-		snapTTL = 0
-	}
+	snapTTL := cacheTTL(fantrax.PastPeriodTTL)
 
 	fmt.Fprintf(os.Stderr, "Building recap site to %s (today=%s)...\n",
 		recapSiteOut, today.Format("2006-01-02"))

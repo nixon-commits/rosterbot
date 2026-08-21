@@ -37,6 +37,9 @@ infra/infra
 infra/cdk.out/
 infra/cdk.context.json.bak
 
+# opsnotify build output (go build produces this binary name in-place)
+opsnotify/opsnotify
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db

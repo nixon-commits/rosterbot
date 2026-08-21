@@ -24,5 +24,5 @@ func runTransactions(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	return transactions.CheckTrades(cmd.Context(), ft, ".cache", cfg.DryRun)
+	return transactions.CheckTrades(cmd.Context(), ft, cacheDir, cfg.DryRun)
 }

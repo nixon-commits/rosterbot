@@ -154,10 +154,7 @@ func TestOptimizeDates_ProducesOneResultPerDateInInputOrder(t *testing.T) {
 	sched.playing["2026-07-26"] = map[string]bool{"NYY": true}
 	sched.playing["2026-07-27"] = map[string]bool{"NYY": true}
 
-	got, err := OptimizeDates(healthyDateRoster(), sched, in)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	got := OptimizeDates(healthyDateRoster(), sched, in)
 	if len(got) != 3 {
 		t.Fatalf("got %d results, want 3", len(got))
 	}
@@ -187,9 +184,7 @@ func TestOptimizeDates_OnlyFutureDatesFetchPeriodRosters(t *testing.T) {
 	ft := healthyDateRoster()
 	ft.periodRoster = in.HitterRoster
 
-	if _, err := OptimizeDates(ft, sched, in); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	OptimizeDates(ft, sched, in)
 
 	if ft.periodFetches != 1 {
 		t.Errorf("hitter period fetches = %d, want 1 (tomorrow only)", ft.periodFetches)
@@ -252,10 +247,7 @@ func TestOptimizeDates_UpstreamFailuresBecomeWarningsNotErrors(t *testing.T) {
 			}
 			tc.break_(sched, ft)
 
-			got, err := OptimizeDates(ft, sched, in)
-			if err != nil {
-				t.Fatalf("a per-date failure must not fail the run: %v", err)
-			}
+			got := OptimizeDates(ft, sched, in)
 			if len(got) != 1 {
 				t.Fatalf("got %d results, want 1", len(got))
 			}
@@ -284,10 +276,7 @@ func TestOptimizeDates_LocksOnlyHealthyPlayersOnLockedTeams(t *testing.T) {
 	sched := healthyDateSchedule()
 	sched.locked["2026-07-25"] = map[string]bool{"NYY": true}
 
-	got, err := OptimizeDates(healthyDateRoster(), sched, in)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	got := OptimizeDates(healthyDateRoster(), sched, in)
 
 	locked := map[string]bool{}
 	for _, sp := range got[0].hitterResult.Scored {
@@ -313,10 +302,7 @@ func TestOptimizeDates_FutureDatesSkipLockAndBenchLookups(t *testing.T) {
 	sched.lockedErr = errors.New("should not be called")
 	sched.benchedErr = errors.New("should not be called")
 
-	got, err := OptimizeDates(healthyDateRoster(), sched, in)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	got := OptimizeDates(healthyDateRoster(), sched, in)
 	if len(got[0].warnings) != 0 {
 		t.Errorf("future date consulted today-only lookups: %v", got[0].warnings)
 	}
@@ -335,10 +321,7 @@ func TestOptimizeDates_GSBudgetAppliesToTodayOnly(t *testing.T) {
 	ft := healthyDateRoster()
 	ft.periodRoster = in.PitcherRoster
 
-	got, err := OptimizeDates(ft, sched, in)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	got := OptimizeDates(ft, sched, in)
 
 	starterOn := func(dr dateResult) bool {
 		for _, sp := range dr.pitcherResult.Scored {
@@ -361,19 +344,13 @@ func TestOptimizeDates_GSBudgetAppliesToTodayOnly(t *testing.T) {
 func TestOptimizeDates_PipelineDetailIsOptIn(t *testing.T) {
 	in := optimizeInputs()
 
-	off, err := OptimizeDates(healthyDateRoster(), healthyDateSchedule(), in)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	off := OptimizeDates(healthyDateRoster(), healthyDateSchedule(), in)
 	if off[0].hitterPipelines != nil || off[0].pitcherPipelines != nil {
 		t.Error("pipeline detail should be absent without ShowPipeline")
 	}
 
 	in.ShowPipeline = true
-	on, err := OptimizeDates(healthyDateRoster(), healthyDateSchedule(), in)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	on := OptimizeDates(healthyDateRoster(), healthyDateSchedule(), in)
 	if len(on[0].hitterPipelines) == 0 {
 		t.Error("expected hitter pipeline rows with ShowPipeline")
 	}
@@ -455,17 +432,14 @@ func TestOptimizeDates_RunsDatesConcurrently(t *testing.T) {
 
 	ft := healthyDateRoster()
 	ft.periodFor["2026-07-28"] = 116
-	done := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
-		_, err := OptimizeDates(ft, sched, in)
-		done <- err
+		OptimizeDates(ft, sched, in)
+		close(done)
 	}()
 
 	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("OptimizeDates did not finish — the dates are running sequentially")
 	}

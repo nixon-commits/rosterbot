@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -10,9 +9,6 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 )
-
-// errNotWritable is a sentinel used by the tests for a feed that rejects writes.
-var errNotWritable = errors.New("feed not writable")
 
 // feedWriter is the slice of the notification store this needs.
 type feedWriter interface {

@@ -29,7 +29,7 @@ func TestBlendedSource_WithRecentStats(t *testing.T) {
 
 	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{
 		"player1": {FPtsPerGame: 2.0, GamesPlayed: 5},
-	}, scoring, map[string]string{"test player": "player1"}, 2, 0)
+	}, map[string]string{"test player": "player1"}, 2, 0)
 
 	pts, ok := src.GetPtsPerGame("Test Player", "NYY", scoring)
 	if !ok {
@@ -47,7 +47,7 @@ func TestBlendedSource_NoRecentStats_FallsBackToBase(t *testing.T) {
 	scoring := fantrax.ScoringWeights{"HR": 4.0}
 	// Base only: (20/100)*4 = 0.8
 
-	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{}, scoring,
+	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{},
 		map[string]string{"test player": "player1"}, 2, 0)
 
 	pts, ok := src.GetPtsPerGame("Test Player", "NYY", scoring)
@@ -61,7 +61,7 @@ func TestBlendedSource_NoRecentStats_FallsBackToBase(t *testing.T) {
 
 func TestBlendedSource_NoBaseProjection_ReturnsFalse(t *testing.T) {
 	inner := &stubSource{proj: map[string]*Projection{}}
-	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{}, nil, map[string]string{}, 2, 0)
+	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{}, map[string]string{}, 2, 0)
 	_, ok := src.GetPtsPerGame("Unknown Player", "NYY", fantrax.ScoringWeights{"HR": 4.0})
 	if ok {
 		t.Error("expected false for unknown player")
@@ -79,7 +79,7 @@ func TestBlendedSource_NoBaseProjection_SmallSample_ShrinksTowardBaseline(t *tes
 
 	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{
 		"player1": {FPtsPerGame: 13.0, GamesPlayed: 2},
-	}, scoring, map[string]string{NormalizeName("Call-Up"): "player1"}, 2, baseline)
+	}, map[string]string{NormalizeName("Call-Up"): "player1"}, 2, baseline)
 
 	pts, ok := src.GetPtsPerGame("Call-Up", "NYY", scoring)
 	if !ok {
@@ -106,7 +106,7 @@ func TestBlendedSource_NoBaseProjection_LargeSample_LargelyUnaffected(t *testing
 
 	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{
 		"player1": {FPtsPerGame: establishedRate, GamesPlayed: 150},
-	}, scoring, map[string]string{"veteran": "player1"}, 2, baseline)
+	}, map[string]string{"veteran": "player1"}, 2, baseline)
 
 	pts, ok := src.GetPtsPerGame("Veteran", "NYY", scoring)
 	if !ok {
@@ -123,7 +123,7 @@ func TestBlendedSource_NoBaseProjection_LargeSample_LargelyUnaffected(t *testing
 func TestBlendedSource_GetProjection_Delegates(t *testing.T) {
 	proj := &Projection{G: 100, HR: 20}
 	inner := &stubSource{proj: map[string]*Projection{"test player": proj}}
-	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{}, nil, nil, 2, 0)
+	src := NewBlendedSource(inner, map[string]fantrax.RecentStat{}, nil, 2, 0)
 	p, ok := src.GetProjection("Test Player", "NYY")
 	if !ok {
 		t.Fatal("expected projection found")

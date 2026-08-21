@@ -166,12 +166,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("init job runner: %v", err)
 	}
+	ssmc := ssm.NewFromConfig(cfg)
 
-	token, err := loadSSMParam(ctx, "API_TOKEN_PARAM", "/rosterbot/ROSTERBOT_API_TOKEN")
+	token, err := loadSSMParam(ctx, ssmc, "API_TOKEN_PARAM", "/rosterbot/ROSTERBOT_API_TOKEN")
 	if err != nil {
 		log.Fatalf("load API token: %v", err)
 	}
-	sessionSecret, err := loadSSMParam(ctx, "SESSION_SECRET_PARAM", "/rosterbot/DASHBOARD_SESSION_SECRET")
+	sessionSecret, err := loadSSMParam(ctx, ssmc, "SESSION_SECRET_PARAM", "/rosterbot/DASHBOARD_SESSION_SECRET")
 	if err != nil {
 		log.Fatalf("load session secret: %v", err)
 	}
@@ -182,11 +183,11 @@ func main() {
 	// dependency (Lambda -> Distribution -> FunctionUrl -> Lambda). Instead
 	// infra.go publishes the domain into SSM params after the distribution is
 	// created, and hands this function only the (static) param names.
-	rpID, err := loadSSMParam(ctx, "RP_ID_PARAM", "/rosterbot/DASHBOARD_RP_ID")
+	rpID, err := loadSSMParam(ctx, ssmc, "RP_ID_PARAM", "/rosterbot/DASHBOARD_RP_ID")
 	if err != nil {
 		log.Fatalf("load RP_ID: %v", err)
 	}
-	rpOriginRaw, err := loadSSMParam(ctx, "RP_ORIGIN_PARAM", "/rosterbot/DASHBOARD_RP_ORIGIN")
+	rpOriginRaw, err := loadSSMParam(ctx, ssmc, "RP_ORIGIN_PARAM", "/rosterbot/DASHBOARD_RP_ORIGIN")
 	if err != nil {
 		log.Fatalf("load RP_ORIGIN: %v", err)
 	}
@@ -201,7 +202,7 @@ func main() {
 	// DELIBERATELY NOT FATAL, and this is the one place in this function where
 	// that is true of a failure this severe.
 	//
-	// Bearer-token auth is RP-INDEPENDENT: isAuthed accepts a valid session OR
+	// Bearer-token auth is RP-INDEPENDENT: authorize accepts a valid session OR
 	// the token from /rosterbot/ROSTERBOT_API_TOKEN, and the token path reads
 	// no WebAuthn config at all. That makes POST /v1/tenants/{id}/recovery —
 	// the break-glass primitive that re-enrolls an operator whose passkey a RP
@@ -247,43 +248,17 @@ func main() {
 	lambda.Start(adapt(lineupapi.Handler(apiCfg)))
 }
 
-// loadSSMParam reads a value from SSM Parameter Store. The parameter's name
-// is taken from the env var envVar, falling back to fallbackName when unset
-// (matching a bare `rosterbot serve` run against a manually-populated
-// parameter). Fetched fresh on every call; callers that want cold-start-only
-// caching call this once during init.
-func loadSSMParam(ctx context.Context, envVar, fallbackName string) (string, error) {
+// loadSSMParam reads a value from SSM Parameter Store using the given client.
+// The parameter's name is taken from the env var envVar, falling back to
+// fallbackName when unset (matching a bare `rosterbot serve` run against a
+// manually-populated parameter). Fetched fresh on every call; callers that
+// want cold-start-only caching call this once during init.
+func loadSSMParam(ctx context.Context, ssmc *ssm.Client, envVar, fallbackName string) (string, error) {
 	name := os.Getenv(envVar)
 	if name == "" {
 		name = fallbackName
 	}
-	cfg, err := awsconfig.LoadDefaultConfig(ctx)
-	if err != nil {
-		return "", err
-	}
-	out, err := ssm.NewFromConfig(cfg).GetParameter(ctx, &ssm.GetParameterInput{
-		Name:           &name,
-		WithDecryption: boolPtr(true),
-	})
-	if err != nil {
-		return "", err
-	}
-	return *out.Parameter.Value, nil
-}
-
-// loadSessionSecret reads the session-cookie HMAC secret from SSM Parameter
-// Store (SecureString) named by SESSION_SECRET_PARAM. Fetched once at cold
-// start, mirroring loadToken.
-func loadSessionSecret(ctx context.Context) (string, error) {
-	name := os.Getenv("SESSION_SECRET_PARAM")
-	if name == "" {
-		name = "/rosterbot/DASHBOARD_SESSION_SECRET"
-	}
-	cfg, err := awsconfig.LoadDefaultConfig(ctx)
-	if err != nil {
-		return "", err
-	}
-	out, err := ssm.NewFromConfig(cfg).GetParameter(ctx, &ssm.GetParameterInput{
+	out, err := ssmc.GetParameter(ctx, &ssm.GetParameterInput{
 		Name:           &name,
 		WithDecryption: boolPtr(true),
 	})

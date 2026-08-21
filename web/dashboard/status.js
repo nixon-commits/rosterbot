@@ -10,18 +10,11 @@
 // Rows are built with createElement/textContent: a command string comes from
 // the run ledger, which records whatever argv the task ran with.
 import { api } from "./api.js";
-import { relativeTime } from "./render.js";
+import { el, relativeTime } from "./render.js";
 
 const OFFERS_TTL_MS = 5 * 60 * 1000;
 
 let offers = { count: null, fetchedAt: 0, inFlight: false };
-
-const el = (tag, cls, text) => {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
 
 // The ledger records full argv ("optimize --dates 2026-08-11"), but health is a
 // property of the job, so everything here keys on the first token.
@@ -111,7 +104,7 @@ function buildStatus(runs) {
     // record green. This is the dashboard's small echo of opsalert.Overdue.
     const age = lastOptimize ? Date.now() - Date.parse(lastOptimize.started_at) : Infinity;
     if (!(age < 3 * 60 * 60 * 1000)) tone = "warn";
-    if (byJob.size) rest.push(failing.length ? "" : "All jobs green");
+    if (byJob.size) rest.push("All jobs green");
   } else {
     rest.push(lineupText);
   }

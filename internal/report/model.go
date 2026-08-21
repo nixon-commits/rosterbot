@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -80,15 +81,6 @@ func detailKey(system string, window int, role string) string {
 	return system + "|" + viewKey(window, role)
 }
 
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
 // Aggregate builds the full embedded Model from graded rows. generatedAt stamps
 // the render time; seasonStart is a display floor. Pure: no I/O.
 func Aggregate(rows []analysis.GradeRow, generatedAt, seasonStart time.Time) *Model {
@@ -122,7 +114,7 @@ func Aggregate(rows []analysis.GradeRow, generatedAt, seasonStart time.Time) *Mo
 	// picker can switch views client-side. detailSystem is always included even
 	// with zero rows so the default selection never comes up empty.
 	detailSystems := append([]string{}, m.Systems...)
-	if !containsString(detailSystems, detailSystem) {
+	if !slices.Contains(detailSystems, detailSystem) {
 		detailSystems = append(detailSystems, detailSystem)
 		sort.Strings(detailSystems)
 	}

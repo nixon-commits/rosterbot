@@ -362,11 +362,9 @@ func annotateOpponents(starts []PitcherStartLine, cacheDir string) {
 		key := s.Date.Format("2006-01-02")
 		opp, fetched := cache[key]
 		if !fetched {
-			fetched := false
 			if got, err := sched.OpponentsOn(s.Date); err == nil {
 				opp = got
 			}
-			_ = fetched
 			cache[key] = opp
 		}
 		if opp == nil {

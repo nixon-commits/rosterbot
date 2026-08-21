@@ -17,13 +17,7 @@
 // you came for meant scrolling past the rest.
 import { api, ApiError } from "./api.js";
 import { watchRun } from "./live.js";
-
-const el = (tag, cls, text) => {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
+import { el } from "./render.js";
 
 export async function renderJobs(root) {
   root.replaceChildren(el("p", "muted", "Loading jobs…"));

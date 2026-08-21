@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -336,7 +337,7 @@ func proveTeam(connTeamID string, owned []string) (teamProof, string) {
 	if connTeamID == "" {
 		return teamProof{}, lineupapi.ConnErrNoTeam
 	}
-	if !contains(owned, connTeamID) {
+	if !slices.Contains(owned, connTeamID) {
 		return teamProof{}, lineupapi.ConnErrTeamNotOwned
 	}
 	return teamProof{teamID: connTeamID}, ""
@@ -365,13 +366,4 @@ func markVerified(conn *lineupapi.FantraxConnection, p teamProof, fxrmSealed []b
 	conn.LastError = ""
 	conn.LastVerifiedAt = now.UTC()
 	return nil
-}
-
-func contains(hay []string, needle string) bool {
-	for _, h := range hay {
-		if h == needle {
-			return true
-		}
-	}
-	return false
 }

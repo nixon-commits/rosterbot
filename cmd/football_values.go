@@ -7,12 +7,10 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/dynasty"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
+	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/nixon-commits/rosterbot/internal/statsguy"
 	"github.com/spf13/cobra"
 )
-
-const footballValueLocalDir = ".footballvalue"
-const footballValuePrefix = "analysis/football-values/" // S3 prefix under STATE_BUCKET
 
 var footballValuesDate string
 
@@ -72,11 +70,7 @@ func runFootballValues(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("sleeper players: %w", err)
 	}
 
-	statsguyCacheDir := ""
-	if !noCache {
-		statsguyCacheDir = cacheDir
-	}
-	bundle, err := statsguy.LoadBundle(statsguyCacheDir, cacheTTL(statsguy.CacheTTL))
+	bundle, err := statsguy.LoadBundle(cacheDir, cacheTTL(statsguy.CacheTTL))
 	if err != nil {
 		return fmt.Errorf("statsguy bundle: %w", err)
 	}
@@ -117,9 +111,9 @@ func footballValueWriter() (dynasty.Writer, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("init football-value writer: %w", err)
 	}
-	dest := footballValueLocalDir
+	dest := layout.FootballValues.LocalDir
 	if b := statestore.Bucket(); b != "" {
-		dest = "s3://" + b + "/" + footballValuePrefix
+		dest = "s3://" + b + "/" + layout.FootballValues.S3Prefix
 	}
 	return w, dest, nil
 }

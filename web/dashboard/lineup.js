@@ -9,14 +9,7 @@
 // Fantrax, and render.js's escapeHtml does not escape quotes, so it is unsafe
 // in an attribute context (the footgun views.js and trades.js both document).
 import { api, ApiError } from "./api.js";
-import { help } from "./render.js";
-
-const el = (tag, cls, text) => {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
+import { el, help } from "./render.js";
 
 // slotState names what is true about a slot: empty, a player status that isn't
 // plain active, or a filled slot projected to score nothing — the last one

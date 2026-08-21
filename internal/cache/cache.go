@@ -110,15 +110,6 @@ func (c *FileCache[T]) Invalidate(key string) error {
 	return c.store.Remove(key)
 }
 
-// InvalidateAll removes the entire cache directory.
-func InvalidateAll(dir string) error {
-	err := os.RemoveAll(dir)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
-}
-
 // Key builds a cache key from parts joined by hyphens.
 func Key(parts ...string) string {
 	return strings.Join(parts, "-")

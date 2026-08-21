@@ -103,8 +103,8 @@ func hitterIsDeployable(p SnapshotPlayer) bool {
 // matching how the gate itself treats them.
 //
 // buildSnapshot derives Role from PosShortNames alone, but the optimizer's own
-// SP test is broader: IsSPEligible(sp.Player.Positions) ||
-// strings.Contains(PosShortNames, "SP") (internal/optimizer/pitcher_lineup.go).
+// SP test is broader: optimizer.SPEligiblePlayer — IsSPEligible(Positions) OR
+// PosShortNames containing "SP" (internal/optimizer/pitcher_lineup.go).
 // The two agree today only because every pitcher's Eligibility in real
 // snapshots is ["017"], so IsSPEligible is always false. If Fantrax ever
 // emits the "015" SP position ID, such a pitcher would get Role == "RP" here,

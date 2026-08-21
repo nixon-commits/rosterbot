@@ -122,13 +122,7 @@ func (c *Client) GetRecentTrades(since time.Time) ([]models.Transaction, error) 
 	if err != nil {
 		return nil, fmt.Errorf("fetch trades: %w", err)
 	}
-	var recent []models.Transaction
-	for _, tx := range all {
-		if tx.ProcessedDate.After(since) {
-			recent = append(recent, tx)
-		}
-	}
-	return recent, nil
+	return filterTransactionsSince(all, since), nil
 }
 
 func (c *Client) allTrades() ([]models.Transaction, error) {
@@ -344,6 +338,14 @@ func (c *Client) GetHitterRosterForPeriod(period DailyPeriod) ([]Player, error) 
 }
 
 func (c *Client) fetchHitterRosterForPeriod(period DailyPeriod) ([]Player, error) {
+	return c.fetchRosterForPeriod(period, isHitter)
+}
+
+// fetchRosterForPeriod fetches the Active+Reserve roster for a scoring period
+// (0 for current) and keeps only the players keep returns true for. Shared by
+// fetchHitterRosterForPeriod (keep=isHitter) and fetchPitcherRosterForPeriod
+// (pitcher_roster.go; keep=isPitcher), which differ only in that predicate.
+func (c *Client) fetchRosterForPeriod(period DailyPeriod, keep func(models.RosterPlayer) bool) ([]Player, error) {
 	var roster *models.TeamRoster
 	var err error
 	if period == 0 {
@@ -357,7 +359,7 @@ func (c *Client) fetchHitterRosterForPeriod(period DailyPeriod) ([]Player, error
 
 	var players []Player
 	for _, rp := range append(roster.ActiveRoster, roster.ReserveRoster...) {
-		if !isHitter(rp) {
+		if !keep(rp) {
 			continue
 		}
 		players = append(players, toPlayer(rp))
@@ -462,16 +464,23 @@ func (c *Client) fetchAvailableProspects() ([]Player, error) {
 		if !pp.MinorsEligible {
 			continue
 		}
-		players = append(players, Player{
-			ID:            pp.PlayerID,
-			Name:          pp.Name,
-			MLBTeam:       teams.Normalize(pp.MLBTeamShortName),
-			Positions:     pp.Positions,
-			PosShortNames: pp.PosShortNames,
-			InMinors:      true,
-		})
+		players = append(players, poolPlayerToPlayer(pp))
 	}
 	return players, nil
+}
+
+// poolPlayerToPlayer maps a Fantrax player-pool row to the simplified Player
+// shape shared by the minors-eligible prospect readers (fetchAvailableProspects
+// and GetMinorsEligiblePool).
+func poolPlayerToPlayer(pp models.PoolPlayer) Player {
+	return Player{
+		ID:            pp.PlayerID,
+		Name:          pp.Name,
+		MLBTeam:       teams.Normalize(pp.MLBTeamShortName),
+		Positions:     pp.Positions,
+		PosShortNames: pp.PosShortNames,
+		InMinors:      true,
+	}
 }
 
 // GetPlayerPoolRaw returns a single raw page of the player pool API response.
@@ -570,14 +579,7 @@ func (c *Client) GetMinorsEligiblePool() ([]ProspectPoolPlayer, error) {
 			continue
 		}
 		players = append(players, ProspectPoolPlayer{
-			Player: Player{
-				ID:            pp.PlayerID,
-				Name:          pp.Name,
-				MLBTeam:       teams.Normalize(pp.MLBTeamShortName),
-				Positions:     pp.Positions,
-				PosShortNames: pp.PosShortNames,
-				InMinors:      true,
-			},
+			Player:          poolPlayerToPlayer(pp),
 			FantraxRank:     pp.Rank,
 			PercentRostered: pp.PercentRostered,
 			FantasyPtsPerG:  pp.FantasyPointsPerG,
@@ -595,17 +597,25 @@ func (c *Client) GetActiveSlots() ([]Slot, error) {
 }
 
 func (c *Client) fetchActiveSlots() ([]Slot, error) {
+	// Ordered: positional slots first, utility last.
+	order := []string{"C", "1B", "2B", "3B", "SS", "INF", "OF", "UT"}
+	return c.fetchSlots(order, posNameToID)
+}
+
+// fetchSlots fetches league info and expands its position constraints into
+// the ordered active-slot list for a given position order + name→ID map.
+// Shared by fetchActiveSlots (hitter order + posNameToID) and
+// fetchPitcherSlots (pitcher_roster.go; {"SP","RP","P"} + pitcherPosNameToID),
+// which differ only in those two inputs.
+func (c *Client) fetchSlots(order []string, nameToID map[string]string) ([]Slot, error) {
 	info, err := c.getLeagueInfo()
 	if err != nil {
 		return nil, fmt.Errorf("get league info: %w", err)
 	}
 
-	// Ordered: positional slots first, utility last.
-	order := []string{"C", "1B", "2B", "3B", "SS", "INF", "OF", "UT"}
-
 	var slots []Slot
 	for _, name := range order {
-		posID, ok := posNameToID[name]
+		posID, ok := nameToID[name]
 		if !ok {
 			continue
 		}
@@ -627,6 +637,15 @@ func (c *Client) GetScoringWeights() (ScoringWeights, error) {
 }
 
 func (c *Client) fetchScoringWeights() (ScoringWeights, error) {
+	return c.fetchWeightsForGroup("BASEBALL_HITTING")
+}
+
+// fetchWeightsForGroup fetches league info and reduces it to the stat
+// short-name → point-value weights for a single scoring group code
+// (e.g. "BASEBALL_HITTING" or "BASEBALL_PITCHING"). Shared by
+// fetchScoringWeights and fetchPitcherScoringWeights (pitcher_roster.go),
+// which differ only in the group code.
+func (c *Client) fetchWeightsForGroup(code string) (ScoringWeights, error) {
 	info, err := c.getLeagueInfo()
 	if err != nil {
 		return nil, fmt.Errorf("get league info: %w", err)
@@ -634,7 +653,7 @@ func (c *Client) fetchScoringWeights() (ScoringWeights, error) {
 
 	weights := make(ScoringWeights)
 	for _, setting := range info.ScoringSystem.ScoringCategorySettings {
-		if setting.Group.Code != "BASEBALL_HITTING" {
+		if setting.Group.Code != code {
 			continue
 		}
 		for _, cfg := range setting.Configs {

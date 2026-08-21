@@ -87,12 +87,6 @@ type Writer interface {
 	WriteCoverage(date time.Time, coverage []Coverage) error
 }
 
-// MarshalNDJSON serializes rows as newline-delimited JSON (one row per line).
-func MarshalNDJSON(rows []Row) ([]byte, error) { return ndjsonstore.Marshal(rows) }
-
-// UnmarshalNDJSON parses newline-delimited JSON (one Row per line).
-func UnmarshalNDJSON(b []byte) ([]Row, error) { return ndjsonstore.Unmarshal[Row](b) }
-
 // coverageFilename is the leaf object name for the per-team coverage
 // diagnostic, written alongside valuesFilename in the same date partition.
 const coverageFilename = "coverage.ndjson"

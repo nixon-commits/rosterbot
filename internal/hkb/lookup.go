@@ -178,19 +178,6 @@ func nameCouldMatch(fantrax, hkb string) bool {
 	return ok && want == hkb
 }
 
-// Collisions reports every normalized key carrying more than one row, for
-// diagnostics and for the operator-facing log line at the call sites that can
-// name the players involved.
-func (l Lookup) Collisions() map[string][]Player {
-	out := map[string][]Player{}
-	for k, rows := range l.byKey {
-		if len(rows) > 1 {
-			out[k] = rows
-		}
-	}
-	return out
-}
-
 // resolveCollision picks which of several same-named HKB rows a Fantrax player
 // refers to, or declines. rows always has len >= 2 — FindFor short-circuits 0
 // and 1.

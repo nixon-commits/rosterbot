@@ -3,6 +3,8 @@ package statestore
 import (
 	"context"
 	"testing"
+
+	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 )
 
 func TestArtifactLayout(t *testing.T) {
@@ -26,17 +28,17 @@ func TestArtifactLayout(t *testing.T) {
 		{"lineup", lineupArtifact, "lineup/", ".lineup"},
 	}
 	for _, tc := range cases {
-		if tc.a.s3Prefix != tc.wantPrefix {
-			t.Errorf("%s: s3Prefix = %q, want %q", tc.name, tc.a.s3Prefix, tc.wantPrefix)
+		if tc.a.lay.S3Prefix != tc.wantPrefix {
+			t.Errorf("%s: s3Prefix = %q, want %q", tc.name, tc.a.lay.S3Prefix, tc.wantPrefix)
 		}
-		if tc.a.localDir != tc.wantLocalDir {
-			t.Errorf("%s: localDir = %q, want %q", tc.name, tc.a.localDir, tc.wantLocalDir)
+		if tc.a.lay.LocalDir != tc.wantLocalDir {
+			t.Errorf("%s: localDir = %q, want %q", tc.name, tc.a.lay.LocalDir, tc.wantLocalDir)
 		}
 	}
 }
 
 func TestPickRoutesToLocalWhenBucketEmpty(t *testing.T) {
-	got, err := pick(New(""), artifact{name: "T", s3Prefix: "p/", localDir: "dir"},
+	got, err := pick(New(""), artifact{name: "T", lay: layout.Artifact{S3Prefix: "p/", LocalDir: "dir"}},
 		func(_ context.Context, b, p string) (string, error) { return "s3:" + b + "/" + p, nil },
 		func(dir string) string { return "file:" + dir })
 	if err != nil {
@@ -48,7 +50,7 @@ func TestPickRoutesToLocalWhenBucketEmpty(t *testing.T) {
 }
 
 func TestPickRoutesToS3WhenBucketSet(t *testing.T) {
-	got, err := pick(New("mybucket"), artifact{name: "T", s3Prefix: "p/", localDir: "dir"},
+	got, err := pick(New("mybucket"), artifact{name: "T", lay: layout.Artifact{S3Prefix: "p/", LocalDir: "dir"}},
 		func(_ context.Context, b, p string) (string, error) { return "s3:" + b + "/" + p, nil },
 		func(dir string) string { return "file:" + dir })
 	if err != nil {

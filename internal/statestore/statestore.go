@@ -26,6 +26,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
 	"github.com/nixon-commits/rosterbot/internal/lineupgap"
+	"github.com/nixon-commits/rosterbot/internal/ndjsonstore"
 	"github.com/nixon-commits/rosterbot/internal/ndjsonstore/s3ndjson"
 	"github.com/nixon-commits/rosterbot/internal/recaplog"
 	"github.com/nixon-commits/rosterbot/internal/recaplog/s3recaplog"
@@ -48,20 +49,22 @@ import (
 // grades/dt=.../ itself, whereas the status page lists the leaf where the
 // objects actually land.
 type artifact struct {
-	name               string
-	s3Prefix, localDir string
-	perTenant          bool
+	name string
+	lay  layout.Artifact
 }
 
-// of builds an artifact view from the layout table, so PerTenant is read from
-// the single declaration rather than restated here — a second copy is exactly
-// what layout exists to prevent.
+// of builds an artifact view from the layout table, carrying the whole
+// layout.Artifact rather than a field-selective copy — so PrefixFor/LocalDirFor
+// are called on the exact declaration the layout table owns, and a field this
+// package doesn't yet read (Name in an error message, a future flag) can never
+// silently diverge between the producer path here and the reader path in
+// lambda/main.go.
 func of(a layout.Artifact) artifact {
-	return artifact{a.Name, a.S3Prefix, a.LocalDir, a.PerTenant}
+	return artifact{name: a.Name, lay: a}
 }
 
 var (
-	cacheArtifact            = artifact{name: layout.Cache.Name, s3Prefix: layout.Cache.S3Prefix} // local: default fsStore, dir unused
+	cacheArtifact            = of(layout.Artifact{Name: layout.Cache.Name, S3Prefix: layout.Cache.S3Prefix}) // local: default fsStore, dir unused
 	analysisArtifact         = of(layout.Analysis)
 	teamValueArtifact        = of(layout.TeamValues)
 	footballValueArtifact    = of(layout.FootballValues)
@@ -145,6 +148,22 @@ func pick[T any](s *Selector, a artifact,
 	return fileNew(dir), nil
 }
 
+// ndjsonStore is pick specialized for the twelve stores backed by an
+// ndjsonstore.Store: it builds the S3 adapter (s3ndjson.New) and wraps it with
+// wrap, or hands the local directory to fileNew. Every NDJSON-backed
+// constructor below is this call plus its own wrap/fileNew pair, replacing the
+// identical 8-line s3ndjson.New-then-wrap closure each used to repeat.
+func ndjsonStore[T any](s *Selector, a artifact, wrap func(ndjsonstore.Store) T, fileNew func(string) T) (T, error) {
+	return pick(s, a, func(ctx context.Context, b, p string) (T, error) {
+		st, err := s3ndjson.New(ctx, b, p)
+		if err != nil {
+			var zero T
+			return zero, err
+		}
+		return wrap(st), nil
+	}, fileNew)
+}
+
 // strandedTenants reports the user= segments sitting beside the un-segmented
 // path a tenant-less read would resolve. Empty means there is no ambiguity to
 // refuse.
@@ -169,7 +188,7 @@ func pick[T any](s *Selector, a artifact,
 // A missing or unreadable directory yields no segments for the same reason: it
 // is the fresh-machine case, not a concealed second copy.
 func strandedTenants(a artifact, tenant, dir string) []string {
-	if !a.perTenant || tenant != "" || dir == "" {
+	if !a.lay.PerTenant || tenant != "" || dir == "" {
 		return nil
 	}
 	ents, err := os.ReadDir(dir)
@@ -200,13 +219,13 @@ func strandedTenants(a artifact, tenant, dir string) []string {
 // deliberately common ground, and partitioning them would multiply upstream
 // load by the tenant count while splitting data that describes the whole league.
 func (s *Selector) prefixFor(a artifact) string {
-	return layout.Artifact{S3Prefix: a.s3Prefix, PerTenant: a.perTenant}.PrefixFor(s.tenant)
+	return a.lay.PrefixFor(s.tenant)
 }
 
 // dirFor is the local-filesystem equivalent, kept in step so `serve` and a
 // deployed task disagree about nothing but the backend.
 func (s *Selector) dirFor(a artifact) string {
-	return layout.Artifact{LocalDir: a.localDir, PerTenant: a.perTenant}.LocalDirFor(s.tenant)
+	return a.lay.LocalDirFor(s.tenant)
 }
 
 // RunWriter is the write side of the run ledger, satisfied by both the S3 and
@@ -225,39 +244,15 @@ func (s *Selector) CacheStore() (cache.Store, error) {
 }
 
 func (s *Selector) AnalysisWriter() (analysis.Writer, error) {
-	return pick(s, analysisArtifact,
-		func(ctx context.Context, b, p string) (analysis.Writer, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return analysis.NewWriter(st), nil
-		},
-		func(dir string) analysis.Writer { return analysis.NewFileWriter(dir) })
+	return ndjsonStore(s, analysisArtifact, analysis.NewWriter, analysis.NewFileWriter)
 }
 
 func (s *Selector) AnalysisReader() (analysis.Reader, error) {
-	return pick(s, analysisArtifact,
-		func(ctx context.Context, b, p string) (analysis.Reader, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return analysis.NewReader(st), nil
-		},
-		func(dir string) analysis.Reader { return analysis.NewFileReader(dir) })
+	return ndjsonStore(s, analysisArtifact, analysis.NewReader, analysis.NewFileReader)
 }
 
 func (s *Selector) TeamValueWriter() (teamvalue.Writer, error) {
-	return pick(s, teamValueArtifact,
-		func(ctx context.Context, b, p string) (teamvalue.Writer, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return teamvalue.NewWriter(st), nil
-		},
-		func(dir string) teamvalue.Writer { return teamvalue.NewFileWriter(dir) })
+	return ndjsonStore(s, teamValueArtifact, teamvalue.NewWriter, teamvalue.NewFileWriter)
 }
 
 // SnapshotStore returns the Projection Snapshot store. Like the Daily Archive
@@ -291,66 +286,26 @@ func (s *Selector) ArchiveWriter() (archive.Writer, error) {
 }
 
 func (s *Selector) TeamValueReader() (teamvalue.Reader, error) {
-	return pick(s, teamValueArtifact,
-		func(ctx context.Context, b, p string) (teamvalue.Reader, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return teamvalue.NewReader(st), nil
-		},
-		func(dir string) teamvalue.Reader { return teamvalue.NewFileReader(dir) })
+	return ndjsonStore(s, teamValueArtifact, teamvalue.NewReader, teamvalue.NewFileReader)
 }
 
 func (s *Selector) FootballValueWriter() (dynasty.Writer, error) {
-	return pick(s, footballValueArtifact,
-		func(ctx context.Context, b, p string) (dynasty.Writer, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return dynasty.NewWriter(st), nil
-		},
-		func(dir string) dynasty.Writer { return dynasty.NewFileWriter(dir) })
+	return ndjsonStore(s, footballValueArtifact, dynasty.NewWriter, dynasty.NewFileWriter)
 }
 
 func (s *Selector) FootballValueReader() (dynasty.Reader, error) {
-	return pick(s, footballValueArtifact,
-		func(ctx context.Context, b, p string) (dynasty.Reader, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return dynasty.NewReader(st), nil
-		},
-		func(dir string) dynasty.Reader { return dynasty.NewFileReader(dir) })
+	return ndjsonStore(s, footballValueArtifact, dynasty.NewReader, dynasty.NewFileReader)
 }
 
 // LineupGapWriter returns the write side of the Lineup Gap Store — S3 when
 // STATE_BUCKET is set, else the local .lineupgap directory.
 func (s *Selector) LineupGapWriter() (lineupgap.Writer, error) {
-	return pick(s, lineupGapArtifact,
-		func(ctx context.Context, b, p string) (lineupgap.Writer, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return lineupgap.NewWriter(st), nil
-		},
-		func(dir string) lineupgap.Writer { return lineupgap.NewFileWriter(dir) })
+	return ndjsonStore(s, lineupGapArtifact, lineupgap.NewWriter, lineupgap.NewFileWriter)
 }
 
 // LineupGapReader returns the read side of the Lineup Gap Store.
 func (s *Selector) LineupGapReader() (lineupgap.Reader, error) {
-	return pick(s, lineupGapArtifact,
-		func(ctx context.Context, b, p string) (lineupgap.Reader, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return lineupgap.NewReader(st), nil
-		},
-		func(dir string) lineupgap.Reader { return lineupgap.NewFileReader(dir) })
+	return ndjsonStore(s, lineupGapArtifact, lineupgap.NewReader, lineupgap.NewFileReader)
 }
 
 func (s *Selector) RunLedger() (RunWriter, error) {
@@ -462,28 +417,12 @@ func (s *Selector) FootballTradeMarkers() (lineupapi.BlobStore, error) {
 // football/trades/log/, so one interface would mean two instances on which half
 // the methods must never be called.
 func (s *Selector) FootballTradeLogWriter() (dynasty.TradeLogWriter, error) {
-	return pick(s, footballTradeLogArtifact,
-		func(ctx context.Context, b, p string) (dynasty.TradeLogWriter, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return dynasty.NewTradeLogWriter(st), nil
-		},
-		func(dir string) dynasty.TradeLogWriter { return dynasty.NewFileTradeLogWriter(dir) })
+	return ndjsonStore(s, footballTradeLogArtifact, dynasty.NewTradeLogWriter, dynasty.NewFileTradeLogWriter)
 }
 
 // FootballTradeLogReader returns the read side of the Football Trade Log.
 func (s *Selector) FootballTradeLogReader() (dynasty.TradeLogReader, error) {
-	return pick(s, footballTradeLogArtifact,
-		func(ctx context.Context, b, p string) (dynasty.TradeLogReader, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return dynasty.NewTradeLogReader(st), nil
-		},
-		func(dir string) dynasty.TradeLogReader { return dynasty.NewFileTradeLogReader(dir) })
+	return ndjsonStore(s, footballTradeLogArtifact, dynasty.NewTradeLogReader, dynasty.NewFileTradeLogReader)
 }
 
 // ILStartMarkers is one dedup marker per (player, start date) for the IL-start
@@ -496,26 +435,10 @@ func (s *Selector) ILStartMarkers() (lineupapi.BlobStore, error) {
 
 // TradeOfferWriter is the write side of the durable Trade Offer Log.
 func (s *Selector) TradeOfferWriter() (tradeboard.Writer, error) {
-	return pick(s, tradeOfferArtifact,
-		func(ctx context.Context, b, p string) (tradeboard.Writer, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return tradeboard.NewWriter(st), nil
-		},
-		func(dir string) tradeboard.Writer { return tradeboard.NewFileWriter(dir) })
+	return ndjsonStore(s, tradeOfferArtifact, tradeboard.NewWriter, tradeboard.NewFileWriter)
 }
 
 // TradeOfferReader is the read side of the durable Trade Offer Log.
 func (s *Selector) TradeOfferReader() (tradeboard.Reader, error) {
-	return pick(s, tradeOfferArtifact,
-		func(ctx context.Context, b, p string) (tradeboard.Reader, error) {
-			st, err := s3ndjson.New(ctx, b, p)
-			if err != nil {
-				return nil, err
-			}
-			return tradeboard.NewReader(st), nil
-		},
-		func(dir string) tradeboard.Reader { return tradeboard.NewFileReader(dir) })
+	return ndjsonStore(s, tradeOfferArtifact, tradeboard.NewReader, tradeboard.NewFileReader)
 }

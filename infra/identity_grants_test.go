@@ -4,44 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/aws/aws-cdk-go/awscdk/v2"
-	"github.com/aws/aws-cdk-go/awscdk/v2/assertions"
-	"github.com/aws/aws-cdk-go/awscdk/v2/awscertificatemanager"
-	"github.com/aws/jsii-runtime-go"
 )
-
-// synthTemplate builds the stack and returns its CloudFormation template as a
-// decoded map. Vpc_FromLookup needs a concrete account/region or it cannot run
-// at synth time, so the env is pinned to the real deployment target; with no
-// cached context CDK substitutes a dummy VPC, which is fine — nothing asserted
-// here depends on the VPC.
-func synthTemplate(t *testing.T) map[string]any {
-	t.Helper()
-	app := awscdk.NewApp(nil)
-	certScope := awscdk.NewStack(app, jsii.String("TestCertScope"), &awscdk.StackProps{Env: certEnv()})
-	stack := NewInfraStack(app, "TestStack", &InfraStackProps{
-		StackProps: awscdk.StackProps{
-			Env: &awscdk.Environment{
-				Account: jsii.String("476646938644"),
-				Region:  jsii.String("us-west-1"),
-			},
-		},
-		// A literal ARN, so this import adds no cross-region reference; nothing
-		// asserted in this file depends on which certificate is attached.
-		Certificate: awscertificatemanager.Certificate_FromCertificateArn(certScope, jsii.String("Cert"),
-			jsii.String("arn:aws:acm:us-east-1:476646938644:certificate/00000000-0000-0000-0000-000000000000")),
-	})
-	raw, err := json.Marshal(assertions.Template_FromStack(stack, nil).ToJSON())
-	if err != nil {
-		t.Fatalf("marshal template: %v", err)
-	}
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("unmarshal template: %v", err)
-	}
-	return out
-}
 
 // kmsActionsByRole returns, for every IAM policy in the template, the kms:*
 // actions it grants keyed by a crude label for the role it is attached to.
@@ -105,7 +68,8 @@ func kmsActionsByRole(t *testing.T, tmpl map[string]any) map[string][]string {
 // the position kms:Decrypt would have. Anyone "tidying" this back into
 // GrantEncrypt fails here.
 func TestFantraxCredKey_ApiFunctionCannotDecrypt(t *testing.T) {
-	byRole := kmsActionsByRole(t, synthTemplate(t))
+	_, raw := infraTemplate(t)
+	byRole := kmsActionsByRole(t, raw)
 
 	got := byRole["apiFn"]
 	if len(got) == 0 {
@@ -125,7 +89,8 @@ func TestFantraxCredKey_ApiFunctionCannotDecrypt(t *testing.T) {
 // meaningful if the principal that actually needs a credential still has it.
 // A test asserting apiFn cannot decrypt passes trivially if nothing can.
 func TestFantraxCredKey_TaskRoleCanDecrypt(t *testing.T) {
-	byRole := kmsActionsByRole(t, synthTemplate(t))
+	_, raw := infraTemplate(t)
+	byRole := kmsActionsByRole(t, raw)
 
 	var canDecrypt bool
 	for _, a := range byRole["taskRole"] {
@@ -145,7 +110,7 @@ func TestFantraxCredKey_TaskRoleCanDecrypt(t *testing.T) {
 // contents cannot be regenerated from an upstream: losing it locks every user
 // out of the dashboard and orphans their Fantrax connection.
 func TestIdentityTable_SurvivesStackReplacement(t *testing.T) {
-	tmpl := synthTemplate(t)
+	_, tmpl := infraTemplate(t)
 	resources, _ := tmpl["Resources"].(map[string]any)
 
 	var found bool

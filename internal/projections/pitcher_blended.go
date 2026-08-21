@@ -25,7 +25,6 @@ type PitcherPtsPerGameSource interface {
 type PitcherBlendedSource struct {
 	inner       PitcherSource
 	recent      map[string]fantrax.RecentStat
-	scoring     fantrax.ScoringWeights
 	nameToID    map[string]string   // NormalizeName(name) → player ID
 	playerPos   map[string][]string // player ID → position IDs
 	minGP       int
@@ -35,14 +34,13 @@ type PitcherBlendedSource struct {
 func NewPitcherBlendedSource(
 	inner PitcherSource,
 	recent map[string]fantrax.RecentStat,
-	scoring fantrax.ScoringWeights,
 	nameToID map[string]string,
 	playerPos map[string][]string,
 	minGP int,
 	baselineFPG float64,
 ) *PitcherBlendedSource {
 	return &PitcherBlendedSource{
-		inner: inner, recent: recent, scoring: scoring,
+		inner: inner, recent: recent,
 		nameToID: nameToID, playerPos: playerPos, minGP: minGP, baselineFPG: baselineFPG,
 	}
 }

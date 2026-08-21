@@ -2,10 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 )
+
+// errNotWritable is a sentinel used by the tests for a feed that rejects writes.
+var errNotWritable = errors.New("feed not writable")
 
 type memFeed struct {
 	written []lineupapi.Notification

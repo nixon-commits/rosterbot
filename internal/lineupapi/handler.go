@@ -135,7 +135,7 @@ func Handler(cfg Config) http.Handler {
 
 	// Auth routes gate themselves (open login, session-or-token register,
 	// session-only passkey management in Task 5) instead of the blanket
-	// isAuthed check below.
+	// cfg.authorize check below.
 	mux.HandleFunc("POST /v1/auth/register/begin", cfg.handleAuthRegisterBegin)
 	mux.HandleFunc("POST /v1/auth/register/finish", cfg.handleAuthRegisterFinish)
 	mux.HandleFunc("POST /v1/auth/login/begin", cfg.handleAuthLoginBegin)
@@ -158,41 +158,17 @@ func Handler(cfg Config) http.Handler {
 	})
 }
 
-// isAuthed reports whether the request is authenticated by either a valid
-// session cookie (the everyday passkey-login path) or the legacy bearer
-// token (break-glass / CLI use).
-func isAuthed(r *http.Request, cfg Config) bool {
-	return hasValidSession(r, cfg.SessionSecret) || authorized(r, cfg.Token)
-}
-
 func (cfg Config) handleLineup(w http.ResponseWriter, r *http.Request) {
-	view, viewOK := cfg.tenantView(r.Context())
-	if !viewOK {
-		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
-		return
-	}
-	if view.Lineups == nil {
-		writeErr(w, http.StatusNotImplemented, "lineup store not configured")
-		return
-	}
-	data, ok, err := view.Lineups.Get(r.Context(), TodayKey)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "lineup store unavailable")
-		return
-	}
+	view, ok := cfg.requireTenantView(w, r)
 	if !ok {
-		writeErr(w, http.StatusNotFound, "no lineup available yet")
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	serveBlob(w, r, view.Lineups, TodayKey, "lineup")
 }
 
 func (cfg Config) handleRuns(w http.ResponseWriter, r *http.Request) {
-	view, viewOK := cfg.tenantView(r.Context())
-	if !viewOK {
-		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+	view, ok := cfg.requireTenantView(w, r)
+	if !ok {
 		return
 	}
 	if view.Runs == nil {
@@ -217,9 +193,8 @@ func (cfg Config) handleRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg Config) handleRunDetail(w http.ResponseWriter, r *http.Request) {
-	view, viewOK := cfg.tenantView(r.Context())
-	if !viewOK {
-		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+	view, ok := cfg.requireTenantView(w, r)
+	if !ok {
 		return
 	}
 	if view.Runs == nil {
@@ -240,9 +215,8 @@ func (cfg Config) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg Config) handleRunOutput(w http.ResponseWriter, r *http.Request) {
-	view, viewOK := cfg.tenantView(r.Context())
-	if !viewOK {
-		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+	view, ok := cfg.requireTenantView(w, r)
+	if !ok {
 		return
 	}
 	if view.Output == nil {
@@ -269,9 +243,8 @@ func (cfg Config) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 // recorder. The bytes are passed through untouched (never decoded here), so
 // progress.Snapshot is the single source of truth for the wire shape.
 func (cfg Config) handleRunProgress(w http.ResponseWriter, r *http.Request) {
-	view, viewOK := cfg.tenantView(r.Context())
-	if !viewOK {
-		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+	view, ok := cfg.requireTenantView(w, r)
+	if !ok {
 		return
 	}
 	if view.Progress == nil {
@@ -294,9 +267,8 @@ func (cfg Config) handleRunProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg Config) handleNotifications(w http.ResponseWriter, r *http.Request) {
-	view, viewOK := cfg.tenantView(r.Context())
-	if !viewOK {
-		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+	view, ok := cfg.requireTenantView(w, r)
+	if !ok {
 		return
 	}
 	if view.Notifications == nil {
@@ -371,9 +343,8 @@ func (cfg Config) handleJob(w http.ResponseWriter, r *http.Request) {
 	// launch was operator-scoped — with per-tenant launches it would let one
 	// tenant's run block another's, and hide a member's run from the guard
 	// entirely.
-	view, viewOK := cfg.tenantView(r.Context())
-	if !viewOK {
-		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+	view, ok := cfg.requireTenantView(w, r)
+	if !ok {
 		return
 	}
 	if run := inFlightRun(r.Context(), view.Runs, name, time.Now()); run != nil {

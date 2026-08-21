@@ -337,18 +337,7 @@ func Comeback(curves []MatchupWPCurve, matchups []MatchupResult) *MatchupTeamSid
 		if !ok || minWP >= comebackThreshold {
 			continue
 		}
-		var side MatchupTeamSide
-		if homeWon {
-			side = MatchupTeamSide{
-				TeamID: m.HomeTeamID, TeamName: m.HomeTeamName, Pts: m.HomePts,
-				OppName: m.AwayTeamName, OppPts: m.AwayPts,
-			}
-		} else {
-			side = MatchupTeamSide{
-				TeamID: m.AwayTeamID, TeamName: m.AwayTeamName, Pts: m.AwayPts,
-				OppName: m.HomeTeamName, OppPts: m.HomePts,
-			}
-		}
+		side := winnerSide(m)
 		switch {
 		case best == nil:
 		case minWP < bestMin:

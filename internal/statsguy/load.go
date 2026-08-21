@@ -25,29 +25,12 @@ const CacheTTL = 8 * time.Hour
 const httpTimeout = 15 * time.Second
 
 type playersResponse struct {
-	Total   int         `json:"total"`
-	Players []rawPlayer `json:"players"`
-}
-
-type rawPlayer struct {
-	ID       string       `json:"id"`
-	Name     string       `json:"name"`
-	Team     string       `json:"team"`
-	Position string       `json:"position"`
-	Value    FormatValues `json:"value"`
+	Total   int      `json:"total"`
+	Players []Player `json:"players"`
 }
 
 type picksResponse struct {
-	Picks []rawPick `json:"picks"`
-}
-
-type rawPick struct {
-	ID      string       `json:"id"`
-	Year    int          `json:"year"`
-	Round   int          `json:"round"`
-	Variant string       `json:"variant"`
-	Slot    int          `json:"slot"`
-	Value   FormatValues `json:"value"`
+	Picks []Pick `json:"picks"`
 }
 
 // LoadBundle fetches both StatsGuy slices (cached at ttl) and returns the
@@ -67,24 +50,9 @@ func LoadBundle(cacheDir string, ttl time.Duration) (*Bundle, error) {
 
 	bundle := &Bundle{Players: make(map[string]Player, len(players.Players))}
 	for _, p := range players.Players {
-		bundle.Players[p.ID] = Player{
-			ID:       p.ID,
-			Name:     p.Name,
-			Team:     p.Team,
-			Position: p.Position,
-			Value:    p.Value,
-		}
+		bundle.Players[p.ID] = p
 	}
-	for _, pk := range picks.Picks {
-		bundle.Picks = append(bundle.Picks, Pick{
-			ID:      pk.ID,
-			Year:    pk.Year,
-			Round:   pk.Round,
-			Variant: pk.Variant,
-			Slot:    pk.Slot,
-			Value:   pk.Value,
-		})
-	}
+	bundle.Picks = picks.Picks
 	return bundle, nil
 }
 

@@ -1,6 +1,17 @@
 // render.js — shared DOM helpers: HTML-escaping and a generic JSON->DOM
 // renderer used for the run-output viewer (arrays of objects -> table, plain
 // objects -> key/value rows, everything else -> a simple list/text node).
+
+// el builds a DOM element with an optional class and text content — the
+// shared createElement helper every tab module used to carry its own
+// byte-identical copy of.
+export const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+};
+
 // escapeHtml escapes a value for interpolation into HTML.
 //
 // IT ESCAPES QUOTES, and that is the whole reason it is not the two-line

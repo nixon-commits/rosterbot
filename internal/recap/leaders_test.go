@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/playername"
+	"github.com/nixon-commits/rosterbot/internal/scoring"
 	"github.com/nixon-commits/rosterbot/internal/statcast"
 	"github.com/pmurley/go-fantrax/models"
 )
@@ -26,8 +27,8 @@ func TestParseIP(t *testing.T) {
 		"100.1": 100 + 1.0/3,
 	}
 	for in, want := range cases {
-		if got := parseIP(in); !approx(got, want) {
-			t.Errorf("parseIP(%q) = %v, want %v", in, got, want)
+		if got := scoring.ParseIP(in); !approx(got, want) {
+			t.Errorf("scoring.ParseIP(%q) = %v, want %v", in, got, want)
 		}
 	}
 }
