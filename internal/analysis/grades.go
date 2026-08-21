@@ -81,11 +81,18 @@ type Writer interface {
 	WriteSkip(date time.Time, m SkipMarker) error
 }
 
-// skipMarkerFilename is the leaf object name of a deliberate-skip marker. It is
+// SkipMarkerFilename is the leaf object name of a deliberate-skip marker. It is
 // NOT gradesFilename, so Reader's suffix filter skips it and it never decodes as
 // a GradeRow, and it carries no system= segment, so it falls outside every
 // projected Athena partition and cannot appear as a row there either.
-const skipMarkerFilename = "no-actuals.json"
+//
+// Exported because the Infra listers match on it (rosterbot-36r). They hold
+// only ListBucket — infra.go grants the status Lambda s3:ListBucket and no
+// s3:GetObject — so a key is the ONLY thing they can see, and the basename is
+// the sole available signal that a day was skipped on purpose rather than
+// graded. That the name is load-bearing across packages is the reason it is a
+// constant here rather than a literal in three places.
+const SkipMarkerFilename = "no-actuals.json"
 
 // SkipMarker records that a date produced no graded rows on purpose — there was
 // no fantasy-relevant baseball that day, so there is nothing to grade and the
@@ -113,7 +120,7 @@ type SkipMarker struct {
 
 // SkipMarkerKey is the store-relative key for a date's skip marker.
 func SkipMarkerKey(date time.Time) string {
-	return fmt.Sprintf("%sdt=%s/%s", gradesPrefix, date.UTC().Format("2006-01-02"), skipMarkerFilename)
+	return fmt.Sprintf("%sdt=%s/%s", gradesPrefix, date.UTC().Format("2006-01-02"), SkipMarkerFilename)
 }
 
 // MarshalNDJSON serializes rows as newline-delimited JSON (one row per line).

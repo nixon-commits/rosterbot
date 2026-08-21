@@ -5,11 +5,13 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/analysis"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 )
 
@@ -44,6 +46,22 @@ type PrefixListing struct {
 	// flat prefix adds a fact without changing any verdict.
 	Partitions []string `json:"partitions,omitempty"`
 
+	// SkippedDays holds the days under this prefix whose ONLY object is a
+	// deliberate-skip marker (internal/analysis.SkipMarkerFilename) — a day the
+	// producer ran and judged ungradeable, as opposed to one it never reached.
+	// Always a subset of Partitions: the marker registers its dt= day, which is
+	// what closed the false All-Star-break gaps in rosterbot-u9u, and is
+	// precisely why the day then became indistinguishable from a graded one.
+	//
+	// "Only object" is the whole predicate, and the second half is not
+	// belt-and-braces. cmd/grade.go writes the marker unconditionally on this
+	// run's judgement, analysis.Writer has no delete counterpart anywhere in
+	// the tree, and the default grade window re-grades the trailing 3 days — so
+	// a day marked skipped on Monday can receive real graded rows on Tuesday
+	// with the marker still sitting beside them. Keying on the marker's
+	// presence alone would report such a day as deliberately skipped forever.
+	SkippedDays []string `json:"skipped_days,omitempty"`
+
 	// Subkeys names the second-level dimension where one exists — the four
 	// projection systems under analysis/grades/, the archive's per-source
 	// directories. A missing entry here is the "one shadow system quietly
@@ -70,6 +88,10 @@ type TenantListing struct {
 	Objects      int       `json:"objects"`
 	LastModified time.Time `json:"last_modified"`
 	Partitions   []string  `json:"partitions,omitempty"`
+	// SkippedDays is this tenant's marker-only days, computed per tenant for
+	// the same reason Partitions is: a day skipped for one tenant and graded
+	// for another is exactly the difference the union would hide.
+	SkippedDays []string `json:"skipped_days,omitempty"`
 }
 
 // InfraLister enumerates one prefix of the state bucket. Implemented by
@@ -98,6 +120,19 @@ type ArtifactStatus struct {
 	LatestPartition string   `json:"latest_partition,omitempty"`
 	Partitions      int      `json:"partitions,omitempty"`
 	Gaps            []string `json:"gaps,omitempty"`
+
+	// Skipped is the subset of the partitions that exist only as a
+	// deliberate-skip marker. It is reported beside Gaps rather than folded
+	// into them because it is the opposite finding: a gap is a day nobody
+	// covered, a skipped day is one the producer covered and correctly found
+	// nothing to record.
+	//
+	// Like LostGaps it deliberately does NOT move Health. A skipped day is
+	// correct by construction — there was no fantasy-relevant baseball — so
+	// colouring the row for it would train the reader to ignore the page,
+	// which is the standing argument findGaps makes for not scanning past
+	// yesterday.
+	Skipped []string `json:"skipped,omitempty"`
 
 	// LostGaps is the subset of Gaps that cannot be re-run, because the
 	// artifact's declared RecoveryInput has nothing for that day. It is a
@@ -436,8 +471,11 @@ func buildStatusFor(ctx context.Context, lister InfraLister, artifacts []layout.
 			// present for one tenant and missing for another.
 			rec := recoveryFor(ctx, list, a)
 
+			row.Skipped = l.SkippedDays
+
 			if a.PerTenant && len(tenants) > 0 {
 				row.Gaps = nil
+				row.Skipped = nil
 				// Qualifying a gap with the tenant id is only worth its cost
 				// where it separates one tenant's missing day from another's.
 				// With a single tenant it separates nothing, and the id is an
@@ -459,6 +497,15 @@ func buildStatusFor(ctx context.Context, lister InfraLister, artifacts []layout.
 						if !rec.holds(uid, g) {
 							row.LostGaps = append(row.LostGaps, label)
 						}
+					}
+					// Qualified on the same rule as gaps, for the same reason:
+					// with one tenant the id separates nothing and buries the
+					// date under an 87-character handle.
+					for _, d := range t.SkippedDays {
+						if qualify {
+							d = uid + "/" + d
+						}
+						row.Skipped = append(row.Skipped, d)
 					}
 				}
 			} else {
@@ -523,6 +570,11 @@ func (f *FileInfraStore) ListPrefix(ctx context.Context, prefix string) (PrefixL
 	var out PrefixListing
 	parts := map[string]bool{}
 	subs := map[string]bool{}
+	// Two sets, differenced at the end: a day is "skipped" only if it holds a
+	// marker AND nothing else. See PrefixListing.SkippedDays for why presence
+	// of the marker alone is not enough.
+	markerDays := map[string]bool{}
+	dataDays := map[string]bool{}
 
 	err := filepath.WalkDir(full, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -545,6 +597,13 @@ func (f *FileInfraStore) ListPrefix(ctx context.Context, prefix string) (PrefixL
 		if m := dayFileRe.FindStringSubmatch(rel); m != nil {
 			parts[m[1]] = true
 		}
+		if m := dtDirRe.FindStringSubmatch(rel); m != nil {
+			if pathpkg.Base(rel) == analysis.SkipMarkerFilename {
+				markerDays[m[1]] = true
+			} else {
+				dataDays[m[1]] = true
+			}
+		}
 		info, statErr := d.Info()
 		if statErr != nil {
 			return nil
@@ -562,7 +621,22 @@ func (f *FileInfraStore) ListPrefix(ctx context.Context, prefix string) (PrefixL
 
 	out.Partitions = sortedStrings(parts)
 	out.Subkeys = sortedStrings(subs)
+	out.SkippedDays = MarkerOnlyDays(markerDays, dataDays)
 	return out, nil
+}
+
+// MarkerOnlyDays is the set difference marker \ data: the days a skip marker
+// covers and no real record does. Shared by both listers so the deployed S3
+// path and local `serve` cannot answer the question differently.
+func MarkerOnlyDays(marker, data map[string]bool) []string {
+	var out []string
+	for d := range marker {
+		if !data[d] {
+			out = append(out, d)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 var (

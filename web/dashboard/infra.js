@@ -33,6 +33,13 @@ const HELP = {
     "so they carry no freshness signal and are excluded from this row's " +
     "verdict. Judging them would leave the row permanently red with no action " +
     "that could clear it.",
+  skipped:
+    "The producer ran on these days and correctly found nothing to record — no " +
+    "rostered player appeared in a game, so there was nothing to grade. Each " +
+    "one carries a marker object naming the reason and the counts behind it.\n\n" +
+    "They are listed because the marker is what stops them being counted as " +
+    "missing, which also made them indistinguishable from a graded day. A day " +
+    "here needs no action; a day under 'missing' does.",
   lostgap:
     "A day is graded by joining its actual results against the projection " +
     "snapshot captured on that day. These days have no snapshot — the job that " +
@@ -128,6 +135,10 @@ function artifactCard(a) {
 
   if (a.partitioned && a.partitions) {
     detail += `<div class="infra-detail">${a.partitions} days`;
+    // Qualify the headline count where some of it is skips, so the number is
+    // not read as "N days of data" (rosterbot-36r).
+    const nSkipped = (a.skipped || []).length;
+    if (nSkipped) detail += ` <span class="muted">(${nSkipped} skipped)</span>`;
     if (a.latest_partition) detail += ` · latest <span class="mono">${escapeHtml(a.latest_partition)}</span>`;
     detail += `</div>`;
   }
@@ -163,6 +174,19 @@ function artifactCard(a) {
         );
       }
     }
+  }
+
+  // Deliberately skipped days. Reported separately from gaps because it is the
+  // opposite finding — the producer covered the day and found nothing, rather
+  // than never reaching it — and separately from the plain partition count,
+  // which cannot tell the two apart. Muted, not warned: nothing is wrong.
+  if (a.skipped && a.skipped.length) {
+    const days = a.skipped;
+    const shown = days.slice(0, 8).map(fmtGap).join(", ");
+    const more = days.length > 8 ? ` +${days.length - 8} more` : "";
+    detail += `<div class="infra-detail muted">${days.length} skipped day${
+      days.length === 1 ? "" : "s"
+    }: ${shown}${more} <span data-help="skipped"></span></div>`;
   }
 
   // Excluded from the verdict, but not from the page: a segment that is
