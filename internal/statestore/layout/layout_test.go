@@ -103,6 +103,29 @@ func TestTeamValues_IsFlaggedUnbackfillable(t *testing.T) {
 	t.Fatal("team-values artifact missing from All()")
 }
 
+// The Daily Archive is the second artifact whose gaps are permanent, and the
+// flag is the only thing that says so. Its sources — HKB's rankings, the four
+// FanGraphs rest-of-season feeds, the Savant leaderboards, the prospect board —
+// are point-in-time reads with no historical replay endpoint, so a day nobody
+// archived is gone. Clearing this flag would put those days back under the
+// Infra page's "Re-runnable" footer, telling an operator to re-run a job that
+// structurally cannot recover them (rosterbot-0l31).
+func TestArchive_IsFlaggedUnbackfillable(t *testing.T) {
+	for _, a := range All() {
+		if a.S3Prefix == "archive/" {
+			if !a.NoBackfill {
+				t.Error("archive/ must be flagged NoBackfill — its upstreams publish no history, " +
+					"so a missing day cannot be re-fetched, only faked with today's data")
+			}
+			if !a.Partitioned {
+				t.Error("archive/ is dt-partitioned; gap detection needs that flag")
+			}
+			return
+		}
+	}
+	t.Fatal("archive artifact missing from All()")
+}
+
 // The Lineup Gap Store IS backfillable, unlike Team Values — past-period roster
 // snapshots are immutable and cached, so a missed day is recoverable with
 // `grade --dates`. Flagging it NoBackfill would make the Infra page rank a

@@ -151,6 +151,45 @@ func TestBuildStatus_GapInUnbackfillableArtifactIsSurfaced(t *testing.T) {
 	}
 }
 
+// The Daily Archive joins the Team Value Store above: a missing day is not a
+// job waiting to be re-run, it is a day of upstream state that no longer exists
+// anywhere (rosterbot-0l31). Before the flag this row read as a plain gap and
+// infra.js footed it "Re-runnable", which is the same lie the RecoveryInput work
+// removed from the Analysis Store — worse here, because the suggested remedy
+// (`archive --date <past>`) would have appeared to succeed while writing today's
+// data under a historical partition.
+//
+// LostGaps stays empty on purpose and its absence is not a weaker signal: it
+// splits a MIXED series into recoverable and lost days, whereas NoBackfill says
+// every day in this artifact is lost, and infra.js branches on no_backfill
+// first to render them all as "Gone for good".
+func TestBuildStatus_GapInTheDailyArchiveIsPermanentNotRerunnable(t *testing.T) {
+	now := ymd(2026, 7, 25)
+	lister := &fakeInfraLister{byPrefix: map[string]PrefixListing{
+		"archive/": {
+			Objects:      45,
+			LastModified: now.Add(-3 * time.Hour), // today's capture landed fine
+			Bytes:        4096,
+			Partitions:   []string{"2026-07-21", "2026-07-22", "2026-07-24"},
+		},
+	}}
+
+	st := buildStatus(context.Background(), lister, []layout.Artifact{layout.Archive}, now)
+
+	a := st.Artifacts[0]
+	if a.Health != HealthGap {
+		t.Errorf("health = %q, want %q — the 07-23 capture is gone for good, which outranks a fresh newest partition",
+			a.Health, HealthGap)
+	}
+	if len(a.Gaps) != 1 || a.Gaps[0] != "2026-07-23" {
+		t.Errorf("gaps = %v, want [2026-07-23]", a.Gaps)
+	}
+	if !a.NoBackfill {
+		t.Error("NoBackfill must reach the client, or infra.js foots the day \"Re-runnable\" and " +
+			"sends the operator after a backfill that cannot exist")
+	}
+}
+
 // Gaps are only computed for partitioned artifacts, and only flagged as a
 // health problem where they cannot be re-run.
 func TestBuildStatus_GapInBackfillableArtifactIsNotAHealthFailure(t *testing.T) {
