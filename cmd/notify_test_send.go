@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
@@ -63,7 +64,7 @@ func runNotifyTest(cmd *cobra.Command, _ []string) error {
 	if err := initShared(); err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	// The feed record is the durable half and the id the push payload carries,
 	// so an unconfigured dispatcher cannot deliver a tappable notification at
@@ -118,19 +119,49 @@ func runNotifyTest(cmd *cobra.Command, _ []string) error {
 	// accepted it" and "Apple called the token dead and we removed it" -- two
 	// outcomes that demand opposite next steps. A disappeared device is the one
 	// signal that distinguishes them, and it costs one query to look.
+	// Nothing was addressed, so there is nothing to conclude about delivery.
+	// Saying "APNs accepted the push" here would be vacuously true and read as
+	// evidence -- the same success-shaped silence this block exists to remove.
+	if len(devices) == 0 {
+		fmt.Println("No devices registered: the feed record was written, but no push was sent.")
+		return nil
+	}
+
 	after, err := notifyTestDevices(ctx, lineupapi.UserID(uid))
 	if err != nil {
 		fmt.Printf("could not re-read devices to confirm delivery: %v\n", err)
 		return nil
 	}
-	if pruned := len(devices) - len(after); pruned > 0 {
+
+	if gone := prunedDeviceIDs(devices, after); len(gone) > 0 {
 		return fmt.Errorf("APNs rejected %d of %d device token(s) as permanently dead "+
-			"(410/Unregistered or 400/BadDeviceToken) and they were pruned: "+
-			"the push did NOT arrive -- re-register the device by signing in again", pruned, len(devices))
+			"(410/Unregistered or 400/BadDeviceToken) and they were pruned: %s -- "+
+			"the push did NOT arrive there; re-register by signing in again on that device",
+			len(gone), len(devices), strings.Join(gone, ", "))
 	}
-	fmt.Println("All device tokens survived: APNs accepted the push for each.")
+	fmt.Printf("All %d device token(s) survived: APNs accepted the push for each.\n", len(devices))
 	fmt.Println("A transient failure would have printed 'warning: apns push to ...' above.")
 	return nil
+}
+
+// prunedDeviceIDs reports which of before is absent from after.
+//
+// Compared by ID rather than by count: a device pruned in the same window that
+// another registers leaves len(before) == len(after), and a count check would
+// then report a delivery that did not happen -- precisely the failure this is
+// here to catch. Pure, so that failure path is testable without APNs.
+func prunedDeviceIDs(before, after []lineupapi.PushDevice) []string {
+	survived := make(map[string]bool, len(after))
+	for _, d := range after {
+		survived[d.ID] = true
+	}
+	var gone []string
+	for _, d := range before {
+		if !survived[d.ID] {
+			gone = append(gone, d.ID)
+		}
+	}
+	return gone
 }
 
 // notifyTestDevices lists the tenant's registered devices, reporting the same
