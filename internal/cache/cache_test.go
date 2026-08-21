@@ -111,8 +111,10 @@ func TestGet_CorruptFile(t *testing.T) {
 	c := New[string](dir, time.Hour)
 
 	// Write corrupt data.
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "test.json"), []byte("not json"), 0o644)
+	_ = os.MkdirAll(dir, 0o755)
+	if err := os.WriteFile(filepath.Join(dir, "test.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	called := false
 	val, err := c.Get("test", func() (string, error) {

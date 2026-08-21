@@ -23,7 +23,7 @@ func TestFetchTransactionAlerts_CalledUpOnMyTeam(t *testing.T) {
 		},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -70,7 +70,7 @@ func TestFetchTransactionAlerts_FreeAgentBuzz(t *testing.T) {
 		},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -120,7 +120,7 @@ func TestFetchTransactionAlerts_FreeAgentBuzz_Owned(t *testing.T) {
 		},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -166,7 +166,7 @@ func TestFetchTransactionAlerts_OptionedLowPriority(t *testing.T) {
 		},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -195,7 +195,7 @@ func TestFetchTransactionAlerts_OptionedLowPriority(t *testing.T) {
 func TestFetchTransactionAlerts_EmptyResponse(t *testing.T) {
 	fixture := map[string]interface{}{"transactions": []interface{}{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 

@@ -125,7 +125,7 @@ func BuildTradeLogRow(gradedAt time.Time, txn sleeper.Transaction, players map[s
 	for _, s := range all {
 		assets := make([]TradeLogAsset, 0, len(s.Assets))
 		for _, a := range s.Assets {
-			assets = append(assets, TradeLogAsset{Name: a.Name, Values: a.Values, Priced: a.Priced})
+			assets = append(assets, TradeLogAsset(a))
 		}
 		sides = append(sides, TradeLogSide{
 			TeamID:   s.TeamID,

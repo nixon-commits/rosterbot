@@ -99,7 +99,9 @@ func TestSummarizeGSGate_IgnoresHitters(t *testing.T) {
 		Pitchers:    []SnapshotPlayer{{PlayerID: "p1", IsPitcher: true, ProjPtsPerGame: 8, GSSuppressed: true}},
 	}
 	b, _ := json.Marshal(snap)
-	os.WriteFile(filepath.Join(dir, "2026-04-10.json"), b, 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "2026-04-10.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	got := SummarizeGSGate(NewFileSnapshotStore(dir), "", []time.Time{day("2026-04-10")})
 

@@ -64,7 +64,7 @@ func (c *Client) fetchProbableStarters(date time.Time) (map[string]string, error
 	if err != nil {
 		return nil, fmt.Errorf("mlb probable pitchers fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("mlb probable pitchers: status %d", resp.StatusCode)

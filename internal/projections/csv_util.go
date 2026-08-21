@@ -21,12 +21,12 @@ func openCSV(path string, required []string) (*os.File, *csv.Reader, map[string]
 	// Strip BOM if present.
 	bom := make([]byte, 3)
 	if _, err := io.ReadFull(f, bom); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, nil, nil, fmt.Errorf("read csv: %w", err)
 	}
 	if bom[0] != 0xEF || bom[1] != 0xBB || bom[2] != 0xBF {
 		if _, err := f.Seek(0, 0); err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, nil, nil, fmt.Errorf("seek csv: %w", err)
 		}
 	}
@@ -34,7 +34,7 @@ func openCSV(path string, required []string) (*os.File, *csv.Reader, map[string]
 	r := csv.NewReader(f)
 	header, err := r.Read()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, nil, nil, fmt.Errorf("csv header: %w", err)
 	}
 	col := make(map[string]int, len(header))
@@ -44,7 +44,7 @@ func openCSV(path string, required []string) (*os.File, *csv.Reader, map[string]
 
 	for _, c := range required {
 		if _, ok := col[c]; !ok {
-			f.Close()
+			_ = f.Close()
 			return nil, nil, nil, fmt.Errorf("csv missing required column: %s", c)
 		}
 	}

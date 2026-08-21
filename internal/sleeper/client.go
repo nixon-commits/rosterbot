@@ -57,7 +57,7 @@ func (c *Client) get(path string, out any) error {
 	if err != nil {
 		return fmt.Errorf("sleeper GET %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("sleeper GET %s: status %d", path, resp.StatusCode)
 	}

@@ -1,4 +1,4 @@
-.PHONY: build build-modules check-pins install test test-modules run dry-run run-all clean-cache
+.PHONY: build build-modules check-pins install lint lint-install test test-modules run dry-run run-all clean-cache
 
 build: check-pins build-modules
 	go build -o rosterbot .
@@ -53,6 +53,36 @@ check-pins:
 	n=$$(sort -u "$$tmp" | wc -l | tr -d ' '); \
 	rm -f "$$tmp"; \
 	printf '  pins agree (%s version-pinned replace site(s))\n' "$$n"
+
+# Pinned so an upstream golangci-lint release cannot turn CI red with no code
+# change. CI installs exactly this version via `make lint-install`, so the
+# version developers run and the version that gates a PR are one string.
+GOLANGCI_LINT_VERSION ?= v2.13.1
+
+# One .golangci.yml at the repo root serves all four modules — golangci-lint
+# walks up from each module dir to find it, so there is a single definition of
+# "what lints" (same reasoning as check-pins: two copies would silently drift).
+#
+# The loop mirrors build-modules/test-modules rather than linting `./...` from
+# the root, because the root run never descends into lambda/, opsnotify/ or
+# infra/ — the mistake test-modules exists to document.
+#
+# A missing golangci-lint is a HARD ERROR, not a skip, exactly like the jq
+# check in check-pins: a gate that silently no-ops reports clean while checking
+# nothing, which is worse than no gate at all.
+lint:
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+	  echo "lint: golangci-lint not found (required)" >&2; \
+	  echo "  fix: make lint-install" >&2; exit 1; }
+	@printf '  lint .\n'
+	@golangci-lint run ./...
+	@for d in $$(find . -name go.mod -not -path './.git/*' -not -path './.claude/*' | grep -v '^\./go\.mod$$' | xargs -n1 dirname | sort); do \
+	  printf '  lint %s\n' "$$d"; \
+	  ( cd "$$d" && golangci-lint run ./... ) || exit 1; \
+	done
+
+lint-install:
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 install:
 	go install .

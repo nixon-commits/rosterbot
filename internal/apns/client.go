@@ -98,7 +98,7 @@ func (c *Client) Push(ctx context.Context, d lineupapi.PushDevice, p Payload) er
 	if err != nil {
 		return fmt.Errorf("apns: request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusOK {
 		return nil

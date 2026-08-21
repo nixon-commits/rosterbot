@@ -16,7 +16,7 @@ func TestComputeMetrics(t *testing.T) {
 		{Diff: 2}, {Diff: -2}, {Diff: 4},
 	}
 	m := computeMetrics(rows)
-	if m.N != 3 || !approx(m.MAE, (2+2+4)/3.0) || !approx(m.Bias, (2-2+4)/3.0) {
+	if m.N != 3 || !approx(m.MAE, (2+2+4)/3.0) || !approx(m.Bias, (2+-2+4)/3.0) {
 		t.Fatalf("metrics: %+v", m)
 	}
 	if !approx(m.RMSE, math.Sqrt((4+4+16)/3.0)) {

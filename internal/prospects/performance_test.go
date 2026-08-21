@@ -213,7 +213,7 @@ func TestResolveMLBPlayerID_SearchAPI(t *testing.T) {
 		},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 
 	origURL := mlbPlayerSearchURL

@@ -10,7 +10,7 @@ import (
 
 func TestFanGraphsPitcherSource_PitcherInfo(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 			{"PlayerName": "Gerrit Cole", "Team": "NYY", "G": 30.0, "GS": 30.0, "IP": 190.0,
 				"SO": 220.0, "BB": 45.0, "H": 150.0, "ER": 60.0, "HR": 20.0,
 				"W": 14.0, "L": 7.0, "QS": 18.0, "SV": 0.0, "HLD": 0.0, "BS": 0.0,

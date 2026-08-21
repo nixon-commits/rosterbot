@@ -105,7 +105,6 @@ func Run(ft RecapClient, opts Options) (*Recap, error) {
 	g.SetLimit(opts.Concurrency)
 
 	for teamID, teamName := range teamMap {
-		teamID, teamName := teamID, teamName
 		g.Go(func() error {
 			td, err := collectTeam(ft, teamID, teamName, opts.WeekStart, opts.WeekEnd,
 				seasonStart, hitterSlots, pitcherSlots, opts.CacheDir, opts.CacheTTL)
@@ -597,7 +596,6 @@ func fetchSeasonMeans(ft seasonMeanClient, teamMap map[string]string, seasonStar
 	g := new(errgroup.Group)
 	g.SetLimit(concurrency)
 	for teamID, teamName := range teamMap {
-		teamID, teamName := teamID, teamName
 		g.Go(func() error {
 			m, _, err := seasonToDateTeamMean(ft, teamID, seasonStart, asOf, cacheDir, cacheTTL)
 			if err != nil {

@@ -141,7 +141,7 @@ func NewFanGraphsPitcherSourceFromCSV(path string) (*FanGraphsPitcherSource, err
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	src := &FanGraphsPitcherSource{
 		projections: make(map[string]*PitcherProjection),
@@ -308,7 +308,7 @@ func LoadPitcherProjections(system, cacheDir string, ttl time.Duration) (*FanGra
 	}
 
 	// Restore the original system for display/cache key consistency.
-	SetProjectionSystem(system)
+	_ = SetProjectionSystem(system) // cannot fail: `system` already validated above
 
 	// CSV fallback.
 	src, err := NewFanGraphsPitcherSourceFromCSV("fangraphs-leaderboard-projections_pitchers.csv")

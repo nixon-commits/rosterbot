@@ -80,7 +80,7 @@ func Parse(gz []byte) ([]Hit, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gunzip: %w", err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 
 	var hits []Hit
 	sc := bufio.NewScanner(zr)

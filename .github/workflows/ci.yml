@@ -28,6 +28,20 @@ jobs:
           go build ./...
           go vet ./...
 
+      # golangci-lint across all four modules. This calls `make lint` rather
+      # than golangci-lint-action, for the same reason the Test step calls
+      # `make test`: the gate that blocks a PR and the gate a developer runs
+      # locally must be one definition, or they drift and only one of them is
+      # actually enforcing anything. `make lint-install` pins the version from
+      # the Makefile, so that string lives in exactly one place too.
+      #
+      # Placed before the slower test run so a lint failure reports fast.
+      - name: Install golangci-lint
+        run: make lint-install
+
+      - name: Lint (all modules)
+        run: make lint
+
       # Every module importing a forked dep carries its own `replace` line for
       # it; nothing makes them agree. build-modules only catches that drift when
       # the bump changes an API — a pure constant-value bump (e.g. the Fantrax

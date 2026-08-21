@@ -20,7 +20,7 @@ func TestFanGraphsSource_ParsesJSON(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -76,7 +76,7 @@ func TestFanGraphsSource_NameFallback(t *testing.T) {
 
 func TestFanGraphsSource_MLBAMIDs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 			{"PlayerName": "Aaron Judge", "Team": "NYY", "G": 150.0, "PA": 600.0, "H": 160.0,
 				"1B": 80.0, "2B": 30.0, "3B": 2.0, "HR": 48.0, "RBI": 120.0, "R": 100.0,
 				"BB": 90.0, "SB": 5.0, "CS": 2.0, "HBP": 10.0, "SO": 170.0, "GDP": nil,
@@ -165,7 +165,7 @@ func TestSetProjectionSystem_AffectsFetch(t *testing.T) {
 	var receivedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedPath = r.URL.RawQuery
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 			{"PlayerName": "Test Player", "Team": "NYY", "G": 100.0, "PA": 400.0, "H": 100.0,
 				"1B": 60.0, "2B": 20.0, "3B": 5.0, "HR": 15.0, "RBI": 50.0, "R": 60.0,
 				"BB": 40.0, "SB": 5.0, "CS": 2.0, "HBP": 3.0, "SO": 80.0, "GDP": 5.0},
@@ -209,7 +209,7 @@ func TestLoadBattingProjections_RoSAvailable(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -241,10 +241,10 @@ func TestLoadBattingProjections_RoSEmpty_FallsBack(t *testing.T) {
 		q := r.URL.RawQuery
 		if strings.Contains(q, "rfangraphsdc") {
 			// RoS returns empty
-			json.NewEncoder(w).Encode([]map[string]interface{}{})
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{})
 		} else {
 			// Preseason returns data
-			json.NewEncoder(w).Encode([]map[string]interface{}{
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 				{"PlayerName": "Aaron Judge", "Team": "NYY", "G": 141.0, "PA": 633.0, "H": 143.0,
 					"1B": 77.0, "2B": 23.0, "3B": 1.0, "HR": 42.0, "RBI": 102.0, "R": 109.0,
 					"BB": 112.0, "SB": 9.0, "CS": 2.0, "HBP": 6.0, "SO": 156.0, "GDP": 8.0},
@@ -275,7 +275,7 @@ func TestLoadBattingProjections_ExplicitRoS_NoPreseasonFallback(t *testing.T) {
 
 	// Server always returns empty — simulating RoS unavailable.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]map[string]interface{}{})
+		_ = json.NewEncoder(w).Encode([]map[string]interface{}{})
 	}))
 	defer srv.Close()
 

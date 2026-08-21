@@ -70,7 +70,7 @@ func fetchMLBPlayerID(name, team, normName, normTeam string) (int, bool) {
 		log.Printf("WARNING: MLB search API error for %q: %v", name, err)
 		return 0, false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		People []struct {
@@ -145,7 +145,7 @@ func fetchGameLogsUncached(playerID int, group string, season int) ([]gameLogEnt
 	if err != nil {
 		return nil, fmt.Errorf("fetching game logs: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Stats []struct {
@@ -425,7 +425,6 @@ func FetchPerformanceAlerts(prospects []fantrax.Player, rankings map[string]int,
 	g.SetLimit(maxConcurrent)
 
 	for _, p := range prospects {
-		p := p
 		g.Go(func() error {
 			id, found := resolveMLBPlayerID(p.Name, p.MLBTeam)
 			if !found {

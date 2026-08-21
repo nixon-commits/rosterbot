@@ -84,7 +84,7 @@ func (c *Client) fetchScheduleUncached(date time.Time) (*schedulePayload, error)
 	if err != nil {
 		return nil, fmt.Errorf("mlb schedule fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("mlb schedule: status %d", resp.StatusCode)
@@ -230,7 +230,7 @@ func (c *Client) BenchedPlayers(date time.Time, rosterPlayers map[string]string)
 	if err != nil {
 		return nil, fmt.Errorf("mlb lineups fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("mlb lineups: status %d", resp.StatusCode)

@@ -44,7 +44,7 @@ func TestProbableStarters_ParsesResponse(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -88,7 +88,7 @@ func TestProbableStarters_EmptySchedule(t *testing.T) {
 	fixture := map[string]interface{}{"dates": []interface{}{}}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -118,7 +118,7 @@ func TestProbableStarters_CacheStickiness_PreservesDroppedTeam(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		dates := []map[string]interface{}{{"games": buildGamesFromMap(apiProbables)}}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"dates": dates})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"dates": dates})
 	}))
 	defer srv.Close()
 
@@ -159,7 +159,7 @@ func TestProbableStarters_CacheStickiness_ScratchOverridesCache(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		dates := []map[string]interface{}{{"games": buildGamesFromMap(apiProbables)}}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"dates": dates})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"dates": dates})
 	}))
 	defer srv.Close()
 
@@ -203,7 +203,7 @@ func TestProbableStarters_CacheStickiness_FallbackOnAPIFailure(t *testing.T) {
 		callCount++
 		if callCount == 1 {
 			dates := []map[string]interface{}{{"games": buildGamesFromMap(apiProbables)}}
-			json.NewEncoder(w).Encode(map[string]interface{}{"dates": dates})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"dates": dates})
 			return
 		}
 		w.WriteHeader(http.StatusInternalServerError)

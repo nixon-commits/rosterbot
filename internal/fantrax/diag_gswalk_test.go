@@ -40,9 +40,7 @@ func TestDiagGSWalkIncludesToday(t *testing.T) {
 
 	// go test runs in the package dir; the session cookie cache (.fantrax-cache)
 	// and the data cache (.cache) both live at the repo root.
-	if err := os.Chdir("../.."); err != nil {
-		t.Fatalf("chdir to repo root: %v", err)
-	}
+	t.Chdir("../..")
 
 	c, err := NewClient(os.Getenv("FANTRAX_LEAGUE_ID"), os.Getenv("FANTRAX_TEAM_ID"))
 	if err != nil {
