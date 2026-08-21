@@ -56,27 +56,28 @@ func main() {
 		log.Fatalf("init task runner: %v", err)
 	}
 
-	// The same ddbuser store serves as both the tenant directory and the
-	// connection checker — GetConnection reads the FANTRAX row of the same
-	// table ListActive scans.
-	d := dispatcher{tenants: users, conns: users, launcher: runner}
-
 	// The roster is OPTIONAL wiring: without STATE_BUCKET the dispatcher still
 	// launches everything, it just stops improving the heartbeat's tenant
 	// discovery. The prefix comes from layout rather than a literal because the
 	// reader lives in another Go module (opsnotify) with no compiler link to
 	// here — the arrangement that let the run ledger's reader and writer drift
 	// apart and blind alerting for three days.
+	var roster rosterPublisher
 	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
 		blob, err := s3blob.New(ctx, bucket, layout.TenantRoster.S3Prefix)
 		if err != nil {
 			log.Printf("dispatch: tenant roster disabled: %v", err)
 		} else {
-			d.roster = blob
+			roster = blob
 		}
 	} else {
 		log.Printf("dispatch: STATE_BUCKET unset; tenant roster not published")
 	}
+
+	// The same ddbuser store serves as both the tenant directory and the
+	// connection checker — GetConnection reads the FANTRAX row of the same
+	// table ListActive scans.
+	d := dispatcher{tenants: users, conns: users, launcher: runner, roster: roster}
 
 	lambda.Start(d.handle)
 }
