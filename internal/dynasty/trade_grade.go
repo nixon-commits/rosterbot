@@ -94,7 +94,13 @@ type TradeVerdict struct {
 // to measure it properly), and StatsGuy's own /trades/evaluate applies none
 // (measured: 9361+1757=11118 exactly, a plain sum). With only one pricing
 // method, there is no second method to disagree with, so there is no
-// too-close state -- a trade either grades cleanly or it is incomplete.
+// too-close state.
+//
+// It is NOT two-branch, though, and was never quite: TradeDeadEven is a third
+// outcome (rosterbot-h688). That is not a disagreement between methods — the
+// one method here simply comes out level — so it does not reintroduce
+// too-close by another name. A trade grades cleanly, prices level, or is
+// incomplete.
 //
 // Any unpriced asset on any side makes the whole verdict Incomplete, the
 // same verdict-suppression discipline as tradevalue.Evaluate: a side total

@@ -137,7 +137,14 @@ function artifactCard(a) {
     detail += `<div class="infra-detail">${a.partitions} days`;
     // Qualify the headline count where some of it is skips, so the number is
     // not read as "N days of data" (rosterbot-36r).
-    const nSkipped = (a.skipped || []).length;
+    //
+    // Counted as DISTINCT DAYS, not entries. `partitions` is a union of dt=
+    // days across tenants, while `skipped` is computed per tenant and carries a
+    // "uid/" prefix once there is more than one — so a day skipped for two
+    // tenants is two entries against one partition, and the raw lengths could
+    // read "5 days (7 skipped)". Stripping the qualifier restores the subset
+    // relationship the parenthetical asserts.
+    const nSkipped = new Set((a.skipped || []).map((d) => d.slice(d.lastIndexOf("/") + 1))).size;
     if (nSkipped) detail += ` <span class="muted">(${nSkipped} skipped)</span>`;
     if (a.latest_partition) detail += ` · latest <span class="mono">${escapeHtml(a.latest_partition)}</span>`;
     detail += `</div>`;

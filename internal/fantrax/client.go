@@ -304,7 +304,7 @@ func (c *Client) allMatchups() (*auth_client.AllMatchupsResult, error) {
 // key is not an error it failed silently (rosterbot-sza). The current-day keys
 // carry no season by design — they sit at todayTTL, where a period number
 // never appears and a stale entry expires in 15 minutes on its own.
-// It returns the first Invalidate error rather than discarding it (rosterbot-6ds9).
+// It returns the Invalidate errors rather than discarding them (rosterbot-6ds9).
 // On the local fsStore a missing key is not an error, so this is nil in
 // development whatever happens; on S3 blob.Delete can genuinely fail, and a
 // failed Delete leaves the pre-apply snapshot readable — the rosterbot-sza
