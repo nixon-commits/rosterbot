@@ -390,6 +390,11 @@ func formatTradeAlert(txn sleeper.Transaction, sides []dynasty.TradeSide, v dyna
 	switch {
 	case v.Status == dynasty.TradeFavors:
 		title = fmt.Sprintf("Trade: favors %s (+%.0f%%)", v.FavoredTeamName, v.Pct)
+	case v.Status == dynasty.TradeDeadEven:
+		// Everything priced and both sides carrying real, equal value. The
+		// "nothing to compare" wording below would be false here, and would
+		// send the operator hunting for missing data that is not missing.
+		title = "Trade: dead even, so no verdict"
 	case v.UnpricedAssets > 0:
 		title = "Trade: too many unpriced assets to grade"
 	default:

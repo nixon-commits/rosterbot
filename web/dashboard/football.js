@@ -277,6 +277,11 @@ function verdictBadge(v) {
   // something had no value at all (FAAB, an unlisted pick tier); 0 means
   // everything priced and all of it is worth nothing IN THIS FORMAT — the
   // ordinary case for a pick-for-pick trade under either redraft toggle.
+  // A tie is its own status precisely because it does not fit either branch
+  // below: everything priced, and the value is real rather than absent
+  // (rosterbot-h688). "No value in this format" would send the reader to the
+  // format toggles to fix something no toggle can change.
+  if (v.status === "dead-even") return el("span", "badge badge-info", "Dead even");
   const n = v.unpricedAssets || 0;
   return el(
     "span",
@@ -322,6 +327,18 @@ function verdictNote(trade, format, v) {
     return (
       "Nothing this system models changed hands on at least one side, so there is nothing to " +
       "compare. Switching format will not change that."
+    );
+  }
+  // Reached only when the sides are exactly level at a real, non-zero value.
+  // The zero-value copy below would be actively misleading here: it blames the
+  // format and prescribes switching, when no format can separate equal sides.
+  if (v.status === "dead-even") {
+    return (
+      "Every asset priced, and the leading sides come out exactly level in this format. There " +
+      "is nothing to separate them, so no verdict is stated — naming a winner would only " +
+      "report the order the teams happen to sort in. In a trade with more than two rosters " +
+      "this means no side leads, not that every side is equal. Another format may still " +
+      "separate them."
     );
   }
   return (

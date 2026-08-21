@@ -221,9 +221,11 @@ func verdictLine(v tradevalue.Verdict) string {
 	switch v.Status {
 	case tradevalue.StatusFavors:
 		return fmt.Sprintf("favors %s (raw %.1f%%, adjusted %.1f%%)", v.FavoredTeam, v.RawPct, v.AdjPct)
+	case tradevalue.StatusDeadEven:
+		return "no verdict — the leading sides price exactly level"
 	case tradevalue.StatusTooClose:
-		return fmt.Sprintf("too close to call — raw favors %s by %.1f%%, adjusted favors %s by %.1f%%",
-			v.RawLeader, v.RawPct, v.AdjLeader, v.AdjPct)
+		return fmt.Sprintf("too close to call — raw %s, adjusted %s",
+			tradevalue.MethodReading(v.RawLeader, v.RawPct), tradevalue.MethodReading(v.AdjLeader, v.AdjPct))
 	default:
 		return fmt.Sprintf("incomplete — %d asset(s) could not be priced", v.UnpricedAssets)
 	}

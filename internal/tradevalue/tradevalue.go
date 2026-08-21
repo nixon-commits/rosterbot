@@ -137,6 +137,21 @@ const (
 	// StatusIncomplete means at least one asset could not be priced, so no
 	// comparison is meaningful at all.
 	StatusIncomplete Status = "incomplete"
+	// StatusDeadEven means every asset priced and BOTH methods came out
+	// exactly level, so the pricing produced no discriminating input.
+	//
+	// It is deliberately NOT StatusTooClose, which means something specific and
+	// different — the two methods named OPPOSITE winners, so the answer is
+	// inside the model's uncertainty. Here the methods do not disagree; they
+	// agree on a number that cannot separate the sides. Folding the two
+	// together would also break the documented invariant that RawLeader and
+	// AdjLeader differ whenever Status is StatusTooClose, and would force every
+	// consumer to re-derive the tie from the pcts to pick its wording.
+	//
+	// It is not StatusIncomplete either: nothing failed to price, so blaming an
+	// asset would be false. Same distinction internal/dynasty's zero guard
+	// draws by leaving UnpricedAssets at 0.
+	StatusDeadEven Status = "dead-even"
 )
 
 // Verdict is the answer, plus enough of the working to argue with it.
@@ -146,9 +161,11 @@ type Verdict struct {
 	// FavoredTeam is set only when Status is StatusFavors.
 	FavoredTeam string `json:"favored_team,omitempty"`
 
-	// RawLeader and AdjLeader name each method's winner. They are equal
-	// when Status is StatusFavors and differ when it is StatusTooClose.
-	// Both are empty when Status is StatusIncomplete.
+	// RawLeader and AdjLeader name each method's winner, and are EMPTY for a
+	// method that came out exactly level and so named nobody. They are equal
+	// when Status is StatusFavors; under StatusTooClose they either differ or
+	// exactly one is empty. Both are empty when Status is StatusIncomplete or
+	// StatusDeadEven.
 	RawLeader string `json:"raw_leader,omitempty"`
 	AdjLeader string `json:"adj_leader,omitempty"`
 
@@ -175,10 +192,16 @@ type Verdict struct {
 //     question, and reporting a winner from it would be confidently wrong
 //     rather than merely imprecise. Measured against this league's executed
 //     trade history, this branch takes 7 of 16 trades.
-//  2. Raw and adjusted disagree on the leader -> StatusTooClose. The gap is
-//     inside the uncertainty of a constant fitted to one data point, so
-//     neither number earns the call.
-//  3. Otherwise -> StatusFavors.
+//  2. Both methods exactly level -> StatusDeadEven. Everything priced, and
+//     nothing separates the sides; naming one would report the order the
+//     teams happen to sort in. This is also where the all-sides-worth-zero
+//     case lands, by the same route rather than by a guard of its own.
+//  3. The methods disagree on the leader, OR exactly one came out level ->
+//     StatusTooClose. For the first, the gap is inside the uncertainty of a
+//     constant fitted to one data point, so neither number earns the call;
+//     for the second, the two readings disagree about whether there is a
+//     winner at all, which is the same kind of not-knowing.
+//  4. Otherwise -> StatusFavors.
 //
 // Fewer than two sides is StatusIncomplete: there is nothing to compare.
 func Evaluate(sides []Side) Verdict {
@@ -204,7 +227,30 @@ func Evaluate(sides []Side) Verdict {
 		RawPct:    pctDiff(rawTop, rawNext),
 		AdjPct:    pctDiff(adjTop, adjNext),
 	}
-	if rawLeader != adjLeader {
+
+	// leader returns an empty team for a method that came out exactly level, so
+	// an abstention is visible here rather than hidden behind a tiebreak.
+	//
+	// Both level is StatusDeadEven: no verdict, and nothing failed to price.
+	// This also subsumes the all-sides-worth-zero case, which reaches the same
+	// place by the same route — every side priced, every side equal — and needs
+	// no separate guard the way internal/dynasty's does.
+	if rawLeader == "" && adjLeader == "" {
+		v.Status = StatusDeadEven
+		return v
+	}
+
+	// One method level and the other not is a disagreement about whether there
+	// is a winner at all, which is the same kind of not-knowing as the two
+	// methods naming opposite winners.
+	//
+	// This case used to be decided by LUCK. When raw was level, rawLeader was
+	// whichever team sorted first, and the verdict then depended on whether the
+	// lexical tiebreak happened to coincide with the adjusted winner: coincide
+	// and it read "favors X (raw 0.0%, adj 16.2%)", differ and it correctly read
+	// too-close. The bead's measured asymmetric row landed on the safe side of
+	// that coin toss, which is why the case looked handled.
+	if rawLeader == "" || adjLeader == "" || rawLeader != adjLeader {
 		v.Status = StatusTooClose
 		return v
 	}
@@ -214,9 +260,14 @@ func Evaluate(sides []Side) Verdict {
 }
 
 // leader returns the highest-scoring side's team along with the top and
-// runner-up scores. Ties break on team name so the result is stable across
-// runs -- the same idempotency requirement the optimizer's player-ID
-// tiebreaker exists for.
+// runner-up scores, or an EMPTY team when the top two scores are exactly
+// equal -- a method that came out level has not named a winner, and saying so
+// is what stops Evaluate mistaking a sort order for a result (rosterbot-h688).
+//
+// The sort's tiebreak on team name is still here and still load-bearing: it
+// keeps the top/next scores deterministic across runs, the same idempotency
+// requirement the optimizer's player-ID tiebreaker exists for. What changed is
+// that the tiebreak no longer escapes as an answer.
 func leader(sides []Side, score func(Side) float64) (team string, top, next float64) {
 	type scored struct {
 		team string
@@ -232,6 +283,9 @@ func leader(sides []Side, score func(Side) float64) (team string, top, next floa
 		}
 		return all[i].team < all[j].team
 	})
+	if all[0].val == all[1].val {
+		return "", all[0].val, all[1].val
+	}
 	return all[0].team, all[0].val, all[1].val
 }
 
@@ -301,4 +355,25 @@ func pickDisplayName(year, round, pickNumber int, originalTeam string) string {
 	default:
 		return label
 	}
+}
+
+// MethodReading renders one pricing method's finding as a phrase.
+//
+// An empty leader means that method came out exactly level and named nobody,
+// which reaches a caller under StatusTooClose when the OTHER method did
+// separate the sides. Rendering it naively prints "favors  by 0.0%" with a
+// blank where a team should be.
+//
+// It lives here, beside the Verdict it describes, for the reason
+// dynasty.TradeVerdictSummary states about its own two consumers: three
+// surfaces render this same judgement — the Pushover trade alert
+// (internal/transactions), the `trades` console output (cmd/trades.go) and the
+// dashboard (web/dashboard/trades.js, which necessarily carries its own copy) —
+// and a second Go copy is how two of them drift apart while describing the
+// same trade.
+func MethodReading(leaderTeam string, pct float64) string {
+	if leaderTeam == "" {
+		return "dead even"
+	}
+	return fmt.Sprintf("favors %s by %.1f%%", leaderTeam, pct)
 }
