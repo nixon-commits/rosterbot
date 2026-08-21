@@ -1271,11 +1271,32 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// dedup marker, so overlapping polls never double-alert.
 		{"FootballTrades", "cron(45 */6 * * ? *)", jsii.Strings("football-trades"), sixHourlyGap},
 		// Shadow captures every projection system's lineup projection for the
-		// model-comparison report. It runs at 23:40 UTC (~late ET evening, same
-		// UTC/ET calendar day so the snapshot's generated_at passes the backtest
-		// stale-guard) after the 23:00 Lineup run, so the next day's Grade
-		// (13:30 UTC) finds and scores its per-system snapshots.
-		{"Shadow", "cron(40 23 * * ? *)", jsii.Strings("shadow"), dailyGap},
+		// model-comparison report. It runs in the MORNING UTC window, and that
+		// is a correctness requirement, not a preference.
+		//
+		// It used to run at 23:40 UTC. On 2026-08-19 FanGraphs put
+		// /api/projections behind a Cloudflare interactive challenge that holds
+		// from roughly 17:00 to 03:00 UTC and clears outside it, so 23:40 sat
+		// squarely inside the blocked window. Shadow is the ONLY fetcher of the
+		// atc-ros and thebatx-ros projections, so it kept capturing whatever
+		// the stale fallback held: measured 2026-08-21, both had last refreshed
+		// on 2026-08-18, and three nights of "model comparison" had silently
+		// graded three systems against one system's three-day-old numbers.
+		//
+		// Two constraints bound the new slot, and 11:30 UTC satisfies both.
+		// The snapshot's generated_at must fall on the same ET calendar day as
+		// the date it projects or backtest's sameETDate guard excludes it — ET
+		// rolls at 04:00 UTC, so any morning-UTC time works and any late-night
+		// one does not. And it must precede the next day's Grade (13:30 UTC),
+		// which scores the per-system snapshots.
+		//
+		// The cost is real and worth stating: the capture moves from ~19:40 ET,
+		// after first pitch, to ~07:30 ET, before it. That is a better forecast
+		// — it is what the systems would actually have told you in time to act
+		// — but it is NOT the same measurement, so the shadow series has a
+		// discontinuity at this change and pre/post windows should not be
+		// pooled.
+		{"Shadow", "cron(30 11 * * ? *)", jsii.Strings("shadow"), dailyGap},
 	}
 	// --- Per-tenant fan-out (rosterbot-crq.13) ---
 	//

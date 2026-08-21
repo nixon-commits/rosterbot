@@ -210,6 +210,21 @@ var (
 	// marker exists only when the condition fires. A healthy roster writes
 	// nothing all season, so an age check would read the normal case as stale.
 	ILStarts = Artifact{Name: "IL Start Markers", S3Prefix: "alerts/il-starts/", LocalDir: ".alerts/il-starts", Durable: true, Producer: "Lineup", PerTenant: true}
+
+	// StaleCacheAlerts holds one dedup marker per cache key for the "serving a
+	// stale copy" alert, so a standing upstream outage reports itself once
+	// rather than once per key per run. Same no-MaxAge, absent-from-All()
+	// shape as ILStarts: a marker exists only when the condition fires, so an
+	// age check would read the healthy case as stale.
+	//
+	// NOT PerTenant, for exactly the reason layout.Cache is not: the cache it
+	// guards is a league-wide singleton fetched once per day, so a per-tenant
+	// marker would let N tenants each re-announce the one shared outage — the
+	// per-(command, tenant) split that opsalert NEEDS is precisely wrong here.
+	//
+	// Producer is empty because there genuinely is not one: any job that loads
+	// projections can be the run that first serves a stale copy.
+	StaleCacheAlerts = Artifact{Name: "Stale Cache Markers", S3Prefix: "alerts/stale-cache/", LocalDir: ".alerts/stale-cache", Durable: true}
 )
 
 // All returns every artifact worth listing, in the order the status page shows

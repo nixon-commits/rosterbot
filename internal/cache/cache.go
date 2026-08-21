@@ -18,11 +18,16 @@ type envelope[T any] struct {
 // Off by default; set to true via --verbose.
 var Verbose bool
 
-// Notify, if set, is called when GetWithStaleFallback serves a stale cached
-// value because the fresh fetch failed — i.e. the "fail through to cache"
-// degraded path. It lets callers surface the event (e.g. a Pushover push)
-// without coupling this leaf package to internal/notify or config. Nil by
-// default; cmd wires it up at startup when Pushover creds are present.
+// Notify, if set, surfaces the "fail through to cache" degraded path — a
+// Pushover push in production. It lets callers report the event without
+// coupling this leaf package to internal/notify or config. Nil by default; cmd
+// wires it up at startup when Pushover creds are present.
+//
+// It is NOT called on every stale serve. Whether a degraded read is worth
+// reporting is decided in stale.go, on the copy's AGE and on a durable dedup
+// marker, because a level-triggered alert restates a standing outage once per
+// key per run — 30 pushes a day during the 2026-08-19 FanGraphs Cloudflare
+// block, of which the 30th said nothing the 1st had not.
 var Notify func(title, message string)
 
 // FileCache provides TTL-based file caching for any JSON-serializable type.
@@ -73,6 +78,7 @@ func (c *FileCache[T]) Get(key string, fetch func() (T, error)) (T, error) {
 func (c *FileCache[T]) GetWithStaleFallback(key string, fetch func() (T, error)) (T, error) {
 	data, err := fetch()
 	if err == nil {
+		reportRecovery(key)
 		if saveErr := c.save(key, data); saveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to save cache %s: %v\n", key, saveErr)
 		}
@@ -80,29 +86,31 @@ func (c *FileCache[T]) GetWithStaleFallback(key string, fetch func() (T, error))
 	}
 
 	// Fresh fetch failed — serve any stale cached value.
-	if stale, ok := c.loadAny(key); ok {
-		fmt.Fprintf(os.Stderr, "⚠️ stale cache: %s (%v)\n", key, err)
-		if Notify != nil {
-			Notify("⚠️ Stale cache", fmt.Sprintf("Serving stale %s", key))
-		}
+	if stale, fetchedAt, ok := c.loadAnyAt(key); ok {
+		age := time.Since(fetchedAt)
+		fmt.Fprintf(os.Stderr, "⚠️ stale cache: %s (%s old) (%v)\n", key, roundAge(age), err)
+		reportStale(key, fetchedAt, age, err)
 		return stale, nil
 	}
 
 	return data, err
 }
 
-// loadAny reads a cached entry ignoring TTL expiry.
-func (c *FileCache[T]) loadAny(key string) (T, bool) {
+// loadAnyAt reads a cached entry ignoring TTL expiry, returning the timestamp
+// it was fetched at alongside the data. The stale path needs the age, not just
+// the bytes: whether a degraded read is worth reporting is a question about how
+// old the copy is, and loadAny threw that away.
+func (c *FileCache[T]) loadAnyAt(key string) (T, time.Time, bool) {
 	var zero T
 	raw, found, err := c.store.Get(key)
 	if err != nil || !found {
-		return zero, false
+		return zero, time.Time{}, false
 	}
 	var env envelope[T]
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return zero, false
+		return zero, time.Time{}, false
 	}
-	return env.Data, true
+	return env.Data, env.FetchedAt, true
 }
 
 // Invalidate removes a single cached entry.

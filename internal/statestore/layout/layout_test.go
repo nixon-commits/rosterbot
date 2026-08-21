@@ -194,3 +194,41 @@ func TestFootballTradeLog_LayoutChoicesArePinned(t *testing.T) {
 		t.Error("PerTenant = true; the football league is shared, so a tenant segment would fragment one league's log")
 	}
 }
+
+// The stale-cache marker's layout choices, pinned for the same reason the
+// Football Trade Log's are: it is absent from All(), so none of the table walks
+// above see it, and every one of these choices is an exclusion that fails
+// silently if it stops holding.
+func TestStaleCacheAlerts_LayoutChoicesArePinned(t *testing.T) {
+	a := StaleCacheAlerts
+
+	if a.S3Prefix != "alerts/stale-cache/" {
+		t.Errorf("S3Prefix = %q, want alerts/stale-cache/", a.S3Prefix)
+	}
+	if a.S3Prefix == ILStarts.S3Prefix {
+		t.Errorf("shares a prefix with the IL-start markers; one would overwrite the other")
+	}
+	if a.LocalDir != ".alerts/stale-cache" {
+		t.Errorf("LocalDir = %q, want .alerts/stale-cache", a.LocalDir)
+	}
+
+	// NOT PerTenant. The cache it guards is a league-wide singleton fetched
+	// once per day, so the outage it reports is shared. Tenant-scoping it would
+	// let N tenants each re-announce the one upstream failure — which is the
+	// flood this marker exists to stop, reintroduced one level down.
+	if a.PerTenant {
+		t.Error("PerTenant: a shared cache's outage must not alert once per tenant")
+	}
+
+	// No MaxAge, and absent from All(). A marker exists only while something is
+	// wrong, so a healthy deployment writes nothing for months and an age check
+	// would read that silence as staleness.
+	if a.MaxAge != 0 {
+		t.Errorf("MaxAge = %v, want 0 — no markers is the healthy case, not a stale one", a.MaxAge)
+	}
+	for _, listed := range All() {
+		if listed.S3Prefix == a.S3Prefix {
+			t.Error("in All(): the status page would show a healthy deployment as missing")
+		}
+	}
+}
