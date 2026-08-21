@@ -112,8 +112,16 @@ jobs:
     # same blind spot CLAUDE.md documents for `go vet ./...` / `go mod tidy`. The
     # nested-module loop mirrors `make build-modules` (discovers go.mod dirs
     # dynamically so a future 4th module is covered automatically) but builds
-    # natively rather than cross-compiling. Tests are excluded (go build ./...),
-    # matching what autobuild scanned before.
+    # natively rather than cross-compiling.
+    #
+    # `go vet ./...` runs alongside `go build ./...` in every module: the Go
+    # extractor only traces files the compiler actually touches, and `go build`
+    # never compiles _test.go files (that needs `go test`/`go vet`). Without it,
+    # the ~260 test files in this repo are structurally invisible to CodeQL
+    # forever, capping "scanned files" at the non-test fraction of the repo
+    # (277/537 ≈ 52%) no matter how many times this job runs. `go vet` type-checks
+    # test files too, which is enough to get them traced, and needs no credentials
+    # since the test suite mocks every network dependency (see CLAUDE.md).
     - name: Build Go modules (root + nested) for CodeQL tracing
       if: matrix.build-mode == 'manual'
       shell: bash
@@ -121,10 +129,11 @@ jobs:
         set -euo pipefail
         echo "=== building root ==="
         go build ./...
+        go vet ./...
         for d in $(find . -name go.mod -not -path './.git/*' -not -path './.claude/*' \
             | grep -v '^\./go\.mod$' | xargs -n1 dirname | sort); do
           echo "=== building $d ==="
-          ( cd "$d" && go build ./... )
+          ( cd "$d" && go build ./... && go vet ./... )
         done
 
     - name: Perform CodeQL Analysis
