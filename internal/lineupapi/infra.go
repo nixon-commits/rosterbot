@@ -114,6 +114,17 @@ type ArtifactStatus struct {
 	WorstTenant string   `json:"worst_tenant,omitempty"`
 	Subkeys     []string `json:"subkeys,omitempty"`
 
+	// OrphanTenants counts user= segments belonging to tenants that no longer
+	// exist. Their objects are still in the aggregate above — they occupy the
+	// bucket either way — but they carry no health signal, because no producer
+	// will ever write to them again.
+	//
+	// Reported rather than silently dropped: a segment excluded from the
+	// verdict and named nowhere is indistinguishable from one that was never
+	// there, and "these bytes belong to nobody" is worth an operator's glance
+	// even though it is not a fault.
+	OrphanTenants int `json:"orphan_tenants,omitempty"`
+
 	Error string `json:"error,omitempty"`
 }
 
@@ -259,10 +270,87 @@ func recoveryFor(ctx context.Context, list *prefixCache, a layout.Artifact) reco
 	return r
 }
 
+// tenantFilter decides which user= segments a per-tenant artifact is judged on.
+//
+// It exists because DeleteUser deliberately leaves a tenant's durable S3
+// artifacts behind and calls them inert (see UserStore.DeleteUser). They are not
+// inert here: this page derives its tenant set from the segments present in the
+// listing, so a deleted tenant's frozen slice went on being judged against
+// MaxAge by a producer that will never run again — a red row no action could
+// ever clear, which is precisely what the LostGaps rule below refuses to create.
+//
+// The zero value judges everyone, and that asymmetry is the whole safety
+// property. The live tenant list arrives over the network; a nil store, a failed
+// read or an empty answer must fall back to judging every segment, because a
+// filter that narrowed on a blind read would drop a REAL tenant whose producer
+// had died — the rosterbot-ys8 blindness this page exists to catch. A false
+// alarm costs attention; a missing one costs the outage. Same direction, and the
+// same reasoning, as the recovery zero value above.
+type tenantFilter struct{ known map[string]bool }
+
+// live reports whether this tenant's slice should carry a health signal. An
+// unknown live set answers yes to everything.
+func (f tenantFilter) live(uid string) bool {
+	if len(f.known) == 0 {
+		return true
+	}
+	return f.known[uid]
+}
+
+// split partitions a listing's tenants into the ones worth judging and a count
+// of the orphans left over.
+func (f tenantFilter) split(all map[string]TenantListing) (live map[string]TenantListing, orphans int) {
+	if len(f.known) == 0 {
+		return all, 0
+	}
+	live = make(map[string]TenantListing, len(all))
+	for uid, t := range all {
+		if f.live(uid) {
+			live[uid] = t
+			continue
+		}
+		orphans++
+	}
+	return live, orphans
+}
+
+// liveTenants reads the tenant directory the Infra page judges against.
+//
+// ListUsers, not ListActive or the fan-out's tenants/active.json: those carry
+// only tenants a job should RUN for, so a real member who is parked or
+// needs_reconnect would vanish from the page entirely — hiding somebody who
+// exists and is broken. The admin directory answers the question actually being
+// asked here ("does this tenant still exist?"), which is the same reason
+// GET /v1/tenants lists through it.
+//
+// Every failure returns the zero filter, which judges everyone.
+func (cfg Config) liveTenants(ctx context.Context) tenantFilter {
+	if cfg.Users == nil {
+		return tenantFilter{}
+	}
+	users, err := cfg.Users.ListUsers(ctx)
+	if err != nil || len(users) == 0 {
+		return tenantFilter{}
+	}
+	known := make(map[string]bool, len(users))
+	for _, u := range users {
+		known[string(u.ID)] = true
+	}
+	return tenantFilter{known: known}
+}
+
 // buildStatus lists every artifact and judges it. A listing failure is confined
 // to its own row (HealthUnknown + the message) so one broken prefix cannot
 // blank the page — the same soft-fail posture the rest of the API takes.
 func buildStatus(ctx context.Context, lister InfraLister, artifacts []layout.Artifact, now time.Time) InfraStatus {
+	return buildStatusFor(ctx, lister, artifacts, now, tenantFilter{})
+}
+
+// buildStatusFor is buildStatus with an explicit tenant filter. Split out rather
+// than threaded through every caller because the zero filter IS the old
+// behaviour, so the plain entry point stays honest for the single-tenant cases
+// (`serve`, and every test that has one tenant by construction).
+func buildStatusFor(ctx context.Context, lister InfraLister, artifacts []layout.Artifact, now time.Time, filter tenantFilter) InfraStatus {
 	st := InfraStatus{GeneratedAt: now, Artifacts: make([]ArtifactStatus, 0, len(artifacts))}
 	// A prefix can be needed twice — once as its own row, once as another
 	// artifact's RecoveryInput — and listing it twice would double the S3 calls
@@ -297,14 +385,31 @@ func buildStatus(ctx context.Context, lister InfraLister, artifacts []layout.Art
 		}
 		row.Health = artifactHealth(a, l, now)
 
+		// Orphans are split off BEFORE any judgement so both the health loop
+		// and the gap scan below see the same tenant set. Filtering one and not
+		// the other would leave a deleted tenant able to redden the row through
+		// whichever path was missed.
+		tenants, orphans := filter.split(l.Tenants)
+		row.OrphanTenants = orphans
+
 		// For a per-tenant artifact the aggregate above answers the wrong
 		// question. Re-judge each tenant on its own slice and let the worst one
 		// set the row, naming it — otherwise the busiest tenant's freshness
 		// speaks for everybody.
+		//
+		// The verdict is rebuilt from the live segments rather than only
+		// worsened from the aggregate, because the aggregate mixes live and
+		// orphan objects and can speak for neither. It never loses a real
+		// finding: LastModified is the max over every object, so it can only be
+		// FRESHER than the best tenant, never staler — any staleness it would
+		// have reported is reported by the loop below. What it does fix is a
+		// prefix whose only writer has since been deleted, where the aggregate
+		// is entirely orphan data and would otherwise pin the row red forever.
 		if a.PerTenant && len(l.Tenants) > 0 {
-			row.Tenants = len(l.Tenants)
-			for _, uid := range sortedTenantIDs(l.Tenants) {
-				t := l.Tenants[uid]
+			row.Health = artifactHealth(a, PrefixListing{Objects: l.Objects}, now)
+			row.Tenants = len(tenants)
+			for _, uid := range sortedTenantIDs(tenants) {
+				t := tenants[uid]
 				th := artifactHealth(a, PrefixListing{
 					Objects: t.Objects, LastModified: t.LastModified,
 				}, now)
@@ -331,15 +436,15 @@ func buildStatus(ctx context.Context, lister InfraLister, artifacts []layout.Art
 			// present for one tenant and missing for another.
 			rec := recoveryFor(ctx, list, a)
 
-			if a.PerTenant && len(l.Tenants) > 0 {
+			if a.PerTenant && len(tenants) > 0 {
 				row.Gaps = nil
 				// Qualifying a gap with the tenant id is only worth its cost
 				// where it separates one tenant's missing day from another's.
 				// With a single tenant it separates nothing, and the id is an
 				// 87-character opaque WebAuthn handle that buries the date.
-				qualify := len(l.Tenants) > 1
-				for _, uid := range sortedTenantIDs(l.Tenants) {
-					t := l.Tenants[uid]
+				qualify := len(tenants) > 1
+				for _, uid := range sortedTenantIDs(tenants) {
+					t := tenants[uid]
 					if len(t.Partitions) == 0 {
 						continue
 					}
@@ -386,7 +491,8 @@ func (cfg Config) handleInfra(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "infra status not configured")
 		return
 	}
-	st := buildStatus(r.Context(), cfg.Infra, layout.All(), time.Now().UTC())
+	st := buildStatusFor(r.Context(), cfg.Infra, layout.All(), time.Now().UTC(),
+		cfg.liveTenants(r.Context()))
 	writeJSON(w, http.StatusOK, st)
 }
 

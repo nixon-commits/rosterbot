@@ -25,6 +25,14 @@ const HELP = {
   ephemeral:
     "A cache, not a record. Anything here is re-fetchable from upstream, so age " +
     "is not a health signal and losing it costs only the time to fetch again.",
+  orphan:
+    "These objects belong to tenants that no longer exist. Deleting a tenant " +
+    "releases their account but deliberately leaves their durable artifacts " +
+    "behind, so the data outlives the user.\n\n" +
+    "They still occupy the bucket, but no job will ever write to them again — " +
+    "so they carry no freshness signal and are excluded from this row's " +
+    "verdict. Judging them would leave the row permanently red with no action " +
+    "that could clear it.",
   lostgap:
     "A day is graded by joining its actual results against the projection " +
     "snapshot captured on that day. These days have no snapshot — the job that " +
@@ -155,6 +163,16 @@ function artifactCard(a) {
         );
       }
     }
+  }
+
+  // Excluded from the verdict, but not from the page: a segment that is
+  // filtered out and reported nowhere is indistinguishable from one that was
+  // never there.
+  if (a.orphan_tenants) {
+    const n = a.orphan_tenants;
+    detail += `<div class="infra-detail muted">${n} orphaned tenant${
+      n === 1 ? "" : "s"
+    } <span data-help="orphan"></span></div>`;
   }
 
   if (a.error) {
