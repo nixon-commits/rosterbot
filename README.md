@@ -308,7 +308,7 @@ rosterbot recap-site --out dist
 ```bash
 # Durable daily snapshot of ephemeral upstream data (HKB, projections, Savant, prospects)
 rosterbot archive --dry-run                         # fetch + print sizes, write nothing
-rosterbot archive --date 2026-06-30
+rosterbot archive                                   # capture today (the only date it can capture)
 
 # Append today's per-team aggregate HKB dynasty value to the Team Value Store
 # (broken out hitter/pitcher × MLB/minors; the series accumulates forward, one point per day)
