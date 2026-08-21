@@ -21,7 +21,8 @@ type fakeEmitClient struct {
 	applies  []appliedLineup
 	applyErr error
 
-	invalidated []fantrax.DailyPeriod
+	invalidated   []fantrax.DailyPeriod
+	invalidateErr error
 }
 
 type appliedLineup struct {
@@ -35,8 +36,9 @@ func (f *fakeEmitClient) ApplyLineup(period fantrax.DailyPeriod, active []fantra
 	return f.applyErr
 }
 
-func (f *fakeEmitClient) InvalidatePeriodRosterCache(period fantrax.DailyPeriod) {
+func (f *fakeEmitClient) InvalidatePeriodRosterCache(period fantrax.DailyPeriod) error {
 	f.invalidated = append(f.invalidated, period)
+	return f.invalidateErr
 }
 
 // emitHarness bundles the client, the captured output and the captured
@@ -409,6 +411,41 @@ func TestEmit_AppliesAndNotifiesOnARealGain(t *testing.T) {
 	}
 	if len(h.notify) != 1 || !strings.Contains(h.notify[0], "↑ Star Hitter → OF") {
 		t.Errorf("notification = %v", h.notify)
+	}
+}
+
+// A failed cache invalidation is not recoverable and not fatal, but it must not
+// be silent (rosterbot-6ds9). The apply has landed; what the failure costs is
+// the next run inside the 15-minute todayTTL reading the pre-apply roster and
+// re-proposing moves already in place. Unexplained, that is indistinguishable
+// from the churn rosterbot-sza presented as — so the contract is that the line
+// appears, the apply still counts as successful, and no Pushover is raised for
+// a short self-healing window the operator cannot act on.
+func TestEmit_InvalidateFailureIsPrintedButDoesNotFailTheApply(t *testing.T) {
+	h := newEmitHarness()
+	h.ft.invalidateErr = errors.New("s3: AccessDenied")
+	dr := movingResult()
+
+	Emit(h.ft, h.inputs([]dateResult{dr}, false))
+
+	if len(h.ft.applies) != 1 {
+		t.Fatalf("the apply must still happen, got %+v", h.ft.applies)
+	}
+	out := h.out.String()
+	if !strings.Contains(out, "roster cache not invalidated") {
+		t.Errorf("invalidation failure was silent; output:\n%s", out)
+	}
+	if !strings.Contains(out, "s3: AccessDenied") {
+		t.Errorf("the underlying cause must be named, not just the fact; output:\n%s", out)
+	}
+	if !strings.Contains(out, "Lineup applied successfully.") {
+		t.Errorf("the apply succeeded and must still say so; output:\n%s", out)
+	}
+	// The success notification is still the right one to send: the lineup did
+	// change. A second alert about the cache would page for a 15-minute window
+	// with no operator action behind it.
+	if len(h.notify) != 1 || !strings.Contains(h.notify[0], "Star Hitter") {
+		t.Errorf("notification = %v, want the ordinary apply summary", h.notify)
 	}
 }
 
