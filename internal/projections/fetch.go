@@ -46,8 +46,8 @@ func fetchJSON(url, label string, out any) error {
 		if resp.StatusCode != http.StatusOK {
 			// Drain before closing so the connection can be reused by the
 			// retry rather than being torn down and redialed.
-			io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-			resp.Body.Close()
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("%s: status %d", label, resp.StatusCode)
 			if !retryableStatus(resp.StatusCode) {
 				return lastErr
@@ -56,7 +56,7 @@ func fetchJSON(url, label string, out any) error {
 		}
 
 		err = json.NewDecoder(resp.Body).Decode(out)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil {
 			// A truncated body is retryable; a genuinely malformed one will
 			// simply fail again and surface on the last attempt.

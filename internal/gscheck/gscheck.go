@@ -139,6 +139,7 @@ func fetchTeamGS(ctx context.Context, ft GSCheckClient, teamID, teamName string,
 		fmt.Printf("  WARNING: GS fetch for %s failed (attempt %d/%d): %v — retrying\n", teamName, attempt, teamFetchAttempts, err)
 		select {
 		case <-ctx.Done():
+			//nolint:errorlint // ctx.Err() annotates why retries stopped; it is not the cause
 			return 0, nil, fmt.Errorf("%w (retry abandoned: %v)", err, ctx.Err())
 		case <-time.After(time.Duration(attempt) * teamFetchBackoff):
 		}
