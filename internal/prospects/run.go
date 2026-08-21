@@ -235,12 +235,22 @@ func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Confi
 	}
 
 	var perfAlerts []ProspectAlert
-	pa, err := FetchPerformanceAlerts(minorsRoster, rankingsMap, today.Year(), cfg.ProspectRollingDays, cfg.ProspectMinGames)
+	pa, perfCoverage, err := FetchPerformanceAlerts(minorsRoster, rankingsMap, today.Year(), cfg.ProspectRollingDays, cfg.ProspectMinGames)
 	if err != nil {
 		log.Printf("WARNING: performance alerts failed: %v", err)
 	} else {
 		perfAlerts = pa
 	}
+	// Printed unconditionally, including the all-zero case, and outside the
+	// error branch so a partially-completed scan still reports what it covered
+	// (rosterbot-2onc). A prospect whose MLB ID never resolves is dropped
+	// before any game log is read, which is not an error and must not become
+	// one — the job still exits 0. But it means this report can go quiet
+	// because there was nothing to say OR because the resolver stopped
+	// working, and until this line those were indistinguishable outside a
+	// CloudWatch grep. Same reasoning as "mlb recency coverage:" and
+	// "il-start check:".
+	log.Print(perfCoverage)
 
 	// Combine alerts
 	allAlerts := append(txnAlerts, perfAlerts...)

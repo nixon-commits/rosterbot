@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
 )
 
 // ---------------------------------------------------------------------------
@@ -235,5 +238,226 @@ func TestResolveMLBPlayerID_SearchAPI(t *testing.T) {
 	id2, found2 := resolveMLBPlayerID("Jackson Holliday", "BAL")
 	if !found2 || id2 != 808080 {
 		t.Errorf("expected cached id=808080, got id=%d found=%v", id2, found2)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Unresolved-ID coverage tests (rosterbot-2onc)
+// ---------------------------------------------------------------------------
+
+// statsapiStub serves the two MLB statsapi endpoints FetchPerformanceAlerts
+// hits. A name absent from people is the unresolvable case: the real API
+// answers a search it cannot match with an empty list, not an error.
+// gameLogsFail makes the stub's game-log endpoint 500 while people-search keeps
+// working. The two statsapi endpoints fail independently in production, and
+// that asymmetry is the whole reason PerformanceCoverage counts the two drops
+// separately.
+func gameLogsFail(c *stubConfig) { c.gameLogsFail = true }
+
+type stubConfig struct{ gameLogsFail bool }
+
+type stubOpt func(*stubConfig)
+
+func statsapiStub(t *testing.T, people map[string]int, opts ...stubOpt) {
+	t.Helper()
+	var sc stubConfig
+	for _, o := range opts {
+		o(&sc)
+	}
+
+	hotHitterLog := func() any {
+		var splits []map[string]any
+		for i := 0; i < 15; i++ {
+			splits = append(splits, map[string]any{
+				"date":  "2026-05-01",
+				"sport": map[string]any{"abbreviation": "AAA"},
+				"stat":  map[string]any{"atBats": 4, "hits": 1},
+			})
+		}
+		for i := 0; i < 5; i++ {
+			splits = append(splits, map[string]any{
+				"date":  "2026-06-01",
+				"sport": map[string]any{"abbreviation": "AAA"},
+				"stat": map[string]any{
+					"atBats": 5, "hits": 3, "doubles": 1, "homeRuns": 1, "baseOnBalls": 1,
+				},
+			})
+		}
+		return map[string]any{"stats": []map[string]any{{"splits": splits}}}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/log" {
+			if sc.gameLogsFail {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(hotHitterLog())
+			return
+		}
+		name := r.URL.Query().Get("names")
+		id, ok := people[name]
+		if !ok {
+			json.NewEncoder(w).Encode(map[string]any{"people": []map[string]any{}})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"people": []map[string]any{{
+			"id":          id,
+			"fullName":    name,
+			"currentTeam": map[string]any{"abbreviation": "ATH"},
+		}}})
+	}))
+
+	origSearch, origLog, origDir := mlbPlayerSearchURL, mlbGameLogURL, performanceCacheDir
+	mlbPlayerSearchURL = srv.URL + "/search?names=%s"
+	mlbGameLogURL = srv.URL + "/log?id=%d&group=%s&season=%d"
+	performanceCacheDir = t.TempDir()
+	t.Cleanup(func() {
+		srv.Close()
+		mlbPlayerSearchURL, mlbGameLogURL, performanceCacheDir = origSearch, origLog, origDir
+	})
+}
+
+func minorsProspect(name string) fantrax.Player {
+	return fantrax.Player{Name: name, MLBTeam: "ATH", PosShortNames: "OF"}
+}
+
+func TestFetchPerformanceAlerts_ReportsAnUnresolvedProspectAndStillSkipsHim(t *testing.T) {
+	// The live case from rosterbot-2onc: "Jamie Arnold" (ATH) resolves to
+	// nothing, is dropped before any game log is read, and used to leave no
+	// trace but a log line nothing counted.
+	statsapiStub(t, map[string]int{"Jackson Holliday": 808080})
+
+	prospects := []fantrax.Player{
+		minorsProspect("Jackson Holliday"),
+		minorsProspect("Jamie Arnold"),
+	}
+	alerts, cov, err := FetchPerformanceAlerts(prospects, nil, 2026, 14, 5)
+	if err != nil {
+		t.Fatalf("unresolved names must not fail the scan: %v", err)
+	}
+
+	if cov.Scanned != 2 || cov.Resolved() != 1 {
+		t.Errorf("expected 2 scanned / 1 resolved, got %d / %d", cov.Scanned, cov.Resolved())
+	}
+	if len(cov.Unresolved) != 1 || cov.Unresolved[0] != "Jamie Arnold (ATH)" {
+		t.Errorf("expected the unresolved prospect named, got %v", cov.Unresolved)
+	}
+	if !strings.Contains(cov.String(), "Jamie Arnold (ATH)") {
+		t.Errorf("coverage line must name him: %q", cov.String())
+	}
+
+	// Skipped from alerts, and the resolvable prospect beside him still scanned.
+	for _, a := range alerts {
+		if a.PlayerName == "Jamie Arnold" {
+			t.Errorf("unresolved prospect must not produce an alert: %+v", a)
+		}
+	}
+	var sawResolved bool
+	for _, a := range alerts {
+		if a.PlayerName == "Jackson Holliday" {
+			sawResolved = true
+		}
+	}
+	if !sawResolved {
+		t.Errorf("one unresolved name must not suppress the rest of the roster; got %d alerts", len(alerts))
+	}
+}
+
+func TestFetchPerformanceAlerts_ReportsCoverageWhenEveryProspectResolves(t *testing.T) {
+	// The zero case is the whole point: a clean run must still say so, or a
+	// clean roster and a dead resolver are indistinguishable.
+	statsapiStub(t, map[string]int{"Jackson Holliday": 808080})
+
+	_, cov, err := FetchPerformanceAlerts([]fantrax.Player{minorsProspect("Jackson Holliday")}, nil, 2026, 14, 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cov.Unresolved) != 0 {
+		t.Fatalf("expected nothing unresolved, got %v", cov.Unresolved)
+	}
+	if cov.Read() != 1 {
+		t.Errorf("expected 1 game log read, got %d", cov.Read())
+	}
+	want := "prospect scan coverage: 1 scanned, 1 game logs read (0 unresolved, 0 no game log)"
+	if cov.String() != want {
+		t.Errorf("zero case must still report coverage:\n got %q\nwant %q", cov.String(), want)
+	}
+}
+
+func TestFetchPerformanceAlerts_SortsUnresolvedNames(t *testing.T) {
+	// The errgroup completes in upstream-response order, so without the sort
+	// the same roster prints a different line every run.
+	statsapiStub(t, nil)
+
+	prospects := []fantrax.Player{
+		minorsProspect("Zed Zeller"),
+		minorsProspect("Jamie Arnold"),
+		minorsProspect("Mick Middleton"),
+	}
+	_, cov, err := FetchPerformanceAlerts(prospects, nil, 2026, 14, 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := strings.Join(cov.Unresolved, ", ")
+	want := "Jamie Arnold (ATH), Mick Middleton (ATH), Zed Zeller (ATH)"
+	if got != want {
+		t.Errorf("unresolved names must be sorted:\n got %q\nwant %q", got, want)
+	}
+}
+
+// The second silent drop, and the one that makes an ID-only coverage line
+// dangerous: the prospect resolves perfectly and is then dropped anyway
+// because his game log could not be fetched. Counting only unresolved names
+// would report a fully-covered scan that in fact read nothing — the same
+// blindness this coverage line exists to end, one step later.
+func TestFetchPerformanceAlerts_ReportsAProspectWhoseGameLogFailed(t *testing.T) {
+	statsapiStub(t, map[string]int{"Jackson Holliday": 808080}, gameLogsFail)
+
+	alerts, cov, err := FetchPerformanceAlerts(
+		[]fantrax.Player{minorsProspect("Jackson Holliday")}, nil, 2026, 14, 5)
+	if err != nil {
+		t.Fatalf("a failed game log must not fail the scan: %v", err)
+	}
+	if len(alerts) != 0 {
+		t.Errorf("a prospect with no game log cannot produce an alert, got %d", len(alerts))
+	}
+
+	// The distinction that matters: he DID resolve. A coverage line counting
+	// only Unresolved would call this a clean 1-of-1 scan.
+	if len(cov.Unresolved) != 0 {
+		t.Errorf("he resolved; Unresolved must stay empty, got %v", cov.Unresolved)
+	}
+	if cov.Resolved() != 1 {
+		t.Errorf("Resolved() should still count him, got %d", cov.Resolved())
+	}
+	if cov.Read() != 0 {
+		t.Errorf("no game log was read, so Read() must be 0, got %d", cov.Read())
+	}
+	if len(cov.NoGameLog) != 1 || cov.NoGameLog[0] != "Jackson Holliday (ATH)" {
+		t.Errorf("expected him named under NoGameLog, got %v", cov.NoGameLog)
+	}
+	line := cov.String()
+	if !strings.Contains(line, "0 game logs read") || !strings.Contains(line, "Jackson Holliday (ATH)") {
+		t.Errorf("coverage line must show the scan read nothing and name him: %q", line)
+	}
+}
+
+// Both drops at once, so the line cannot conflate them.
+func TestFetchPerformanceAlerts_CountsTheTwoDropsSeparately(t *testing.T) {
+	statsapiStub(t, map[string]int{"Jackson Holliday": 808080}, gameLogsFail)
+
+	_, cov, err := FetchPerformanceAlerts([]fantrax.Player{
+		minorsProspect("Jackson Holliday"), // resolves, game log 500s
+		minorsProspect("Jamie Arnold"),     // never resolves
+	}, nil, 2026, 14, 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cov.Scanned != 2 || cov.Resolved() != 1 || cov.Read() != 0 {
+		t.Errorf("scanned/resolved/read = %d/%d/%d, want 2/1/0", cov.Scanned, cov.Resolved(), cov.Read())
+	}
+	if len(cov.Unresolved) != 1 || len(cov.NoGameLog) != 1 {
+		t.Errorf("the two drops must not be merged: unresolved=%v noGameLog=%v", cov.Unresolved, cov.NoGameLog)
 	}
 }

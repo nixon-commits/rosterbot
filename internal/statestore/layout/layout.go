@@ -88,11 +88,12 @@ type Artifact struct {
 	RecoveryInput string
 
 	// NoBackfill marks an artifact whose missing days can never be recovered,
-	// so a gap is permanent data loss rather than a re-runnable job. Two
+	// so a gap is permanent data loss rather than a re-runnable job. Three
 	// artifacts carry it: the Team Value Store (docs/adr/0002 — HKB has no
-	// history and rosters are not archived) and the Trade Offer Log (Fantrax
+	// history and rosters are not archived), the Trade Offer Log (Fantrax
 	// keeps no record of a trade that did not happen, so an offer not
-	// captured while pending is gone).
+	// captured while pending is gone), and the Daily Archive (its sources
+	// serve only what is current — see the Archive entry below).
 	NoBackfill bool
 }
 
@@ -114,13 +115,27 @@ var (
 	// so a missed day is re-runnable rather than permanently lost.
 	FootballValues = Artifact{Name: "Dynasty Value Store", S3Prefix: "analysis/football-values/", LocalDir: ".footballvalue", Durable: true, MaxAge: 2 * Day, Producer: "FootballValues", Partitioned: true}
 	LineupGaps     = Artifact{Name: "Lineup Gap Store", S3Prefix: "analysis/lineup-gaps/", LocalDir: ".lineupgap", Durable: true, MaxAge: 2 * Day, Producer: "Grade", Partitioned: true, PerTenant: true}
-	Archive        = Artifact{Name: "Daily Archive", S3Prefix: "archive/", LocalDir: ".archive", Durable: true, MaxAge: 2 * Day, Producer: "Archive", Partitioned: true}
-	Backtest       = Artifact{Name: "Projection Snapshots", S3Prefix: "backtest/", LocalDir: ".backtest", Durable: true, MaxAge: 2 * Day, Producer: "Lineup", PerTenant: true}
-	RunLedger      = Artifact{Name: "Run Ledger", S3Prefix: "runledger/", LocalDir: ".lineup/runs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup", PerTenant: true}
-	RunOutput      = Artifact{Name: "Run Output", S3Prefix: "runs/", LocalDir: ".lineup/outputs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup", PerTenant: true}
-	Notification   = Artifact{Name: "Notifications", S3Prefix: "notifications/", LocalDir: ".lineup/notifications", Durable: true, MaxAge: 7 * Day, Producer: "", PerTenant: true}
-	Lineup         = Artifact{Name: "Published Lineup", S3Prefix: "lineup/", LocalDir: ".lineup", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup", PerTenant: true}
-	Claims         = Artifact{Name: "Claims Ledger", S3Prefix: "claims/", LocalDir: ".waivers", Durable: true, MaxAge: 3 * Day, Producer: "Claims"}
+	// The Daily Archive is NoBackfill for the same reason the Team Value Store
+	// is, one level upstream: it captures point-in-time reads of feeds that
+	// publish no history. HKB serves current rankings, FanGraphs serves the
+	// current rest-of-season projection and the current prospect board, and
+	// three of the five Savant CSVs are season-to-date as of the moment of the
+	// fetch. None of those has a historical replay endpoint, so a day nobody
+	// archived is a day that no longer exists anywhere — which is precisely why
+	// this artifact exists at all (rosterbot-0l31).
+	//
+	// The corollary is enforced in cmd/archive.go: `archive --date <past>` is
+	// refused rather than treated as a backfill, because the sources would fetch
+	// TODAY'S data and write it under a historical partition. That fills the gap
+	// on this page while making the archive silently wrong, which is strictly
+	// worse than the gap.
+	Archive      = Artifact{Name: "Daily Archive", S3Prefix: "archive/", LocalDir: ".archive", Durable: true, MaxAge: 2 * Day, Producer: "Archive", Partitioned: true, NoBackfill: true}
+	Backtest     = Artifact{Name: "Projection Snapshots", S3Prefix: "backtest/", LocalDir: ".backtest", Durable: true, MaxAge: 2 * Day, Producer: "Lineup", PerTenant: true}
+	RunLedger    = Artifact{Name: "Run Ledger", S3Prefix: "runledger/", LocalDir: ".lineup/runs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup", PerTenant: true}
+	RunOutput    = Artifact{Name: "Run Output", S3Prefix: "runs/", LocalDir: ".lineup/outputs", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup", PerTenant: true}
+	Notification = Artifact{Name: "Notifications", S3Prefix: "notifications/", LocalDir: ".lineup/notifications", Durable: true, MaxAge: 7 * Day, Producer: "", PerTenant: true}
+	Lineup       = Artifact{Name: "Published Lineup", S3Prefix: "lineup/", LocalDir: ".lineup", Durable: true, MaxAge: 6 * time.Hour, Producer: "Lineup", PerTenant: true}
+	Claims       = Artifact{Name: "Claims Ledger", S3Prefix: "claims/", LocalDir: ".waivers", Durable: true, MaxAge: 3 * Day, Producer: "Claims"}
 
 	// The three Trades-tab artifacts. They are separate prefixes rather than
 	// one, because they have different producers and different cadences and a
