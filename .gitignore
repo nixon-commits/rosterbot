@@ -49,3 +49,9 @@ opsnotify/opsnotify
 # not these files; tracking them just churns every commit (see CLAUDE.md).
 .beads/issues.jsonl
 .beads/interactions.jsonl
+
+# Agent scratch: throwaway repro/probe/demo tests written while investigating.
+# One (internal/lineupapi/zz_repro_test.go) reached main in #163 via a
+# `git add -A`, so the naming convention is enforced here rather than relied on.
+# A test worth keeping gets a real name.
+zz_*_test.go
