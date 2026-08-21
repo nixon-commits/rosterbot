@@ -354,9 +354,13 @@ func formatVerdict(v tradevalue.Verdict) string {
 	switch v.Status {
 	case tradevalue.StatusFavors:
 		return fmt.Sprintf("favors %s (raw %.1f%%, adj %.1f%%)", v.FavoredTeam, v.RawPct, v.AdjPct)
+	case tradevalue.StatusDeadEven:
+		// Everything priced and both methods exactly level. Naming the sides
+		// would be the rosterbot-h688 bug restated in prose.
+		return "no verdict — the leading sides price exactly level"
 	case tradevalue.StatusTooClose:
-		return fmt.Sprintf("too close to call — raw favors %s by %.1f%%, adjusted favors %s by %.1f%%",
-			v.RawLeader, v.RawPct, v.AdjLeader, v.AdjPct)
+		return fmt.Sprintf("too close to call — raw %s, adjusted %s",
+			tradevalue.MethodReading(v.RawLeader, v.RawPct), tradevalue.MethodReading(v.AdjLeader, v.AdjPct))
 	default:
 		return fmt.Sprintf("no verdict — %d asset(s) could not be priced", v.UnpricedAssets)
 	}

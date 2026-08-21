@@ -69,7 +69,9 @@ func TestInvalidatePeriodRosterCache_DropsTheEntryTheReaderWrote(t *testing.T) {
 		t.Fatalf("re-reading: got %d fetches, want 2 — the entries were never cached", fetches)
 	}
 
-	c.InvalidatePeriodRosterCache(period)
+	if err := c.InvalidatePeriodRosterCache(period); err != nil {
+		t.Fatalf("invalidate: %v", err)
+	}
 
 	for i, p := range prefixes {
 		if _, err := cachedForPeriod(c, p, c.teamID, period, read); err != nil {
@@ -108,7 +110,9 @@ func TestInvalidatePeriodRosterCache_AlsoDropsTheUnscopedTodayKeys(t *testing.T)
 		t.Fatalf("populating: got %d fetches, want 2", fetches)
 	}
 
-	c.InvalidatePeriodRosterCache(DailyPeriod(50))
+	if err := c.InvalidatePeriodRosterCache(DailyPeriod(50)); err != nil {
+		t.Fatalf("invalidate: %v", err)
+	}
 
 	for i, k := range keys {
 		if _, err := cached(c, k, tierToday, read); err != nil {

@@ -157,7 +157,7 @@ type LineupClient interface {
 	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
 	GetRecentPitcherStats(currentPeriod fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error)
 	ApplyLineup(period fantrax.DailyPeriod, active []fantrax.PlayerSlot, reserve []string) error
-	InvalidatePeriodRosterCache(period fantrax.DailyPeriod)
+	InvalidatePeriodRosterCache(period fantrax.DailyPeriod) error
 }
 
 // projDisplayName maps projection system flag values to display-friendly names.

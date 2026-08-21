@@ -82,7 +82,17 @@ func TestGradeTrade_FewerThanTwoSides_Incomplete(t *testing.T) {
 	}
 }
 
-func TestGradeTrade_TiedSides_StableTiebreak(t *testing.T) {
+// An exact tie between the two leading sides is not a verdict, and the sort's
+// lexical tiebreak must never be mistaken for one.
+//
+// This test previously asserted the opposite — that a 500-vs-500 trade "broke
+// to team 1 (lexical on team id)" — which pinned the rosterbot-h688 bug as
+// intended behaviour. The tiebreak itself is still load-bearing and still
+// checked below: it keeps GradeTrade deterministic, which is the same
+// idempotency requirement the optimizer's player-ID tiebreak exists for. What
+// changed is that determinism is no longer allowed to leak out as a favoured
+// team, because the ordering carries no information about the trade.
+func TestGradeTrade_TiedSides_AreNotAVerdict(t *testing.T) {
 	sides := []TradeSide{
 		{TeamID: "2", Assets: []TradeAsset{{Value: 500, Priced: true}}},
 		{TeamID: "1", Assets: []TradeAsset{{Value: 500, Priced: true}}},
@@ -93,8 +103,49 @@ func TestGradeTrade_TiedSides_StableTiebreak(t *testing.T) {
 			t.Fatalf("verdict not stable: %+v then %+v", first, got)
 		}
 	}
-	if first.FavoredTeamID != "1" {
-		t.Errorf("tie broke to %q, want 1 (lexical on team id)", first.FavoredTeamID)
+	if first.Status != TradeDeadEven {
+		t.Fatalf("Status = %q, want %q — an exact tie has no discriminating input",
+			first.Status, TradeDeadEven)
+	}
+	if first.FavoredTeamID != "" {
+		t.Errorf("FavoredTeamID = %q, want empty — the sort order is not a winner",
+			first.FavoredTeamID)
+	}
+	// Both assets priced fine, so the view must say "no verdict", not blame an
+	// asset — the same distinction the all-sides-zero guard preserves.
+	if first.UnpricedAssets != 0 {
+		t.Errorf("UnpricedAssets = %d, want 0", first.UnpricedAssets)
+	}
+}
+
+// Sleeper trades routinely involve three rosters, so the top-two-level case is
+// ordinary here rather than theoretical. No side leads, so no verdict — and the
+// alert copy stays count-neutral rather than claiming the trade had two sides.
+func TestGradeTrade_ThreeSides_TopTwoLevel_IsDeadEven(t *testing.T) {
+	v := GradeTrade([]TradeSide{
+		{TeamID: "1", TeamName: "A", Assets: []TradeAsset{{Value: 1000, Priced: true}}},
+		{TeamID: "2", TeamName: "B", Assets: []TradeAsset{{Value: 1000, Priced: true}}},
+		{TeamID: "3", TeamName: "C", Assets: []TradeAsset{{Value: 10, Priced: true}}},
+	})
+	if v.Status != TradeDeadEven {
+		t.Fatalf("Status = %q, want %q", v.Status, TradeDeadEven)
+	}
+	if v.FavoredTeamID != "" {
+		t.Errorf("FavoredTeamID = %q, want empty", v.FavoredTeamID)
+	}
+}
+
+// The tie guard must not swallow a real, merely-narrow verdict: one point of
+// separation is still separation, and the gate is exact equality, not a
+// tolerance band.
+func TestGradeTrade_NearTie_StillFavorsTheLeader(t *testing.T) {
+	sides := []TradeSide{
+		{TeamID: "2", TeamName: "B", Assets: []TradeAsset{{Value: 501, Priced: true}}},
+		{TeamID: "1", TeamName: "A", Assets: []TradeAsset{{Value: 500, Priced: true}}},
+	}
+	v := GradeTrade(sides)
+	if v.Status != TradeFavors || v.FavoredTeamID != "2" {
+		t.Fatalf("verdict = %+v, want favors team 2", v)
 	}
 }
 
