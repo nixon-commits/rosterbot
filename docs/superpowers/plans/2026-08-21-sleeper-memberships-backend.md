@@ -39,8 +39,8 @@
 | `internal/sleeperdir/sleeperdir.go` *(new)* | Adapter implementing `lineupapi.SleeperDirectory` over `internal/sleeper`. Imports both; nothing imports it but wiring. |
 | `internal/sleeperdir/sleeperdir_test.go` *(new)* | Adapter maps client types onto wire types correctly. |
 | `cmd/serve.go` *(modify)* | Wire the adapter for local `serve`. |
-| `lambda/main.go` *(modify)* | Wire the adapter for the deployed API. |
-| `API.md` *(modify)* | Document the four routes. |
+| `lambda/buildstores.go` *(modify)* | Wire the adapter for the deployed API. Must satisfy TestBuildStores_WiresEveryStoreField. |
+| ~~`API.md`~~ | WITHDRAWN — lives in the RosterbotApp repo. Doc step moved to the iOS plan. |
 
 ---
 
@@ -479,7 +479,7 @@ leagues', which is a different thing to show someone."
 - Create: `internal/lineupapi/sleeper.go`
 - Create: `internal/lineupapi/sleeper_test.go`
 - Modify: `internal/lineupapi/handler.go` (Config field + one route + doc comment)
-- Modify: `API.md`
+- ~~Modify: `API.md`~~ (withdrawn — different repo; see Follow-on work)
 
 **Interfaces:**
 - Consumes: `CallerFrom(ctx) Caller` (`authz.go:159`), `writeJSON(w, code, v)` and `writeErr(w, code, msg)` (`handler.go:405`, `:418`).
@@ -789,7 +789,13 @@ And add to the route doc-comment block that starts around `handler.go:101`:
 Run: `go test ./internal/lineupapi/ -run 'TestSleeperLeagues|TestDefaultSeason' -v`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 6: Document the route in `API.md`**
+- [x] **Step 6: WITHDRAWN by controller ruling — `API.md` lives in the RosterbotApp repo, not this one**
+
+This branch must not reach across repositories. The HTTP-contract docs for all four routes move to the iOS plan, which owns that file. See *Follow-on work*. The original step's content is retained below for whoever writes it there.
+
+<details><summary>Deferred doc content</summary>
+
+- [ ] ~~Document the route in `API.md`~~
 
 Add a section matching the file's existing per-route format:
 
@@ -822,12 +828,14 @@ no leagues for that sport and season. `501` if the deployment has no Sleeper
 directory configured.
 ````
 
+</details>
+
 - [ ] **Step 7: Run the full suite, lint, and commit**
 
 Run: `make test && make lint`
 
 ```bash
-git add internal/lineupapi/sleeper.go internal/lineupapi/sleeper_test.go internal/lineupapi/handler.go API.md
+git add internal/lineupapi/sleeper.go internal/lineupapi/sleeper_test.go internal/lineupapi/handler.go
 git commit -m "feat(api): add GET /v1/sleeper/leagues username discovery
 
 Proxied server-side so no client learns Sleeper's API shape and the lookup
@@ -853,7 +861,7 @@ makes this member-reachable."
 - Create: `internal/lineupapi/memberships.go`
 - Create: `internal/lineupapi/memberships_test.go`
 - Modify: `internal/lineupapi/handler.go` (three routes + doc comment)
-- Modify: `API.md`
+- ~~Modify: `API.md`~~ (withdrawn — different repo; see Follow-on work)
 
 **Interfaces:**
 - Consumes: `Membership`, `Platform`, `PlatformSleeper`, `PlatformFantrax`, `(*User).AllMemberships()` from Task 1; `cfg.mutateUser(ctx, id, fn)` and `errNoSuchUser` (`tenants_admin.go:26`, `:21`); `UserStore.GetUser`.
@@ -1279,16 +1287,22 @@ And in the doc-comment block:
 Run: `go test ./internal/lineupapi/ -run 'TestListMemberships|TestAddMembership|TestDeleteMembership|TestMembershipRoutes' -v`
 Expected: PASS, 10 tests.
 
-- [ ] **Step 6: Document the routes in `API.md`**
+- [x] **Step 6: WITHDRAWN by controller ruling — see Task 3 Step 6; `API.md` is in the RosterbotApp repo**
+
+<details><summary>Deferred doc content</summary>
+
+- [ ] ~~Document the routes in `API.md`~~
 
 Add sections matching the file's existing format: `GET /v1/memberships` returning `{"memberships": [...]}`; `POST /v1/memberships` taking `{"platform":"sleeper","league_id":"…","team_id":"…","display_name":"…"}` and returning the updated list, `400` for a non-sleeper platform or a missing `league_id`, `409` for a duplicate; `DELETE /v1/memberships/{platform}/{leagueID}` returning the updated list, `400` for a non-sleeper platform, `200` for an absent membership. State explicitly that `writable` is always `false` for Sleeper and that the Fantrax entry is projected from the tenant's proven team rather than stored.
+
+</details>
 
 - [ ] **Step 7: Run the full suite, lint, and commit**
 
 Run: `make test && make lint`
 
 ```bash
-git add internal/lineupapi/memberships.go internal/lineupapi/memberships_test.go internal/lineupapi/handler.go API.md
+git add internal/lineupapi/memberships.go internal/lineupapi/memberships_test.go internal/lineupapi/handler.go
 git commit -m "feat(api): add membership CRUD for Sleeper leagues
 
 Sleeper only, both ways. A Fantrax membership is established by invite and
@@ -1315,7 +1329,7 @@ quiet failure direction."
 - Create: `internal/sleeperdir/sleeperdir.go`
 - Create: `internal/sleeperdir/sleeperdir_test.go`
 - Modify: `cmd/serve.go`
-- Modify: `lambda/main.go`
+- Modify: `lambda/buildstores.go` (and `lambda/main.go` only if that is where Config is composed)
 
 **Interfaces:**
 - Consumes: `lineupapi.SleeperDirectory`, `lineupapi.SleeperLeague`, `lineupapi.ErrSleeperUserUnknown` (Task 3); `sleeper.NewClient`, `(*sleeper.Client).UserByName`, `(*sleeper.Client).LeaguesForUser`, `sleeper.ErrUserNotFound` (Task 2).
@@ -1474,12 +1488,16 @@ In `cmd/serve.go`, where the other `lineupapi.Config` fields are populated, add:
 
 using whatever local cache directory that file already uses for other clients — find it with `grep -n "CacheDir" cmd/serve.go`. If none exists, pass `""` to disable caching locally.
 
-Do the same in `lambda/main.go`. The Lambda's writable filesystem is `/tmp`, so pass `"/tmp/sleeper-cache"` there, matching how other clients are given a cache path in that file — check with `grep -n "CacheDir\|/tmp" lambda/main.go` and follow the existing convention.
+For the Lambda, wire it in **`buildStores`** (`lambda/buildstores.go`) — NOT in `main`. `TestBuildStores_WiresEveryStoreField` reflects over every `Config` field and fails any field that is neither assigned in `buildStores` nor listed in that test's `nonStoreFields` map with a written reason. It is the regression guard for rosterbot-gi2, where `Trades`/`TradeValues` were declared, routed and IAM'd but never assigned in the Lambda's Config literal, so those routes answered 501 in production from the day they shipped while local `serve` looked healthy.
+
+**That test is currently RED on this branch** — Task 3 added the `SleeperDir` field, and this task is what makes it green again. Do not silence it by adding `SleeperDir` to `nonStoreFields`: it is a real dependency that must be wired, and excusing it would recreate exactly the bug the guard exists to catch.
+
+The Lambda's writable filesystem is `/tmp`, so pass `"/tmp/sleeper-cache"` as the cache dir, matching how other clients are given a cache path — check with `grep -n "CacheDir\|/tmp" lambda/buildstores.go lambda/main.go` and follow the existing convention.
 
 - [ ] **Step 6: Verify every module still builds**
 
 Run: `make build-modules && make check-pins && make test && make lint`
-Expected: all pass. `build-modules` is what catches a stale `lambda/go.mod` after touching that module — a failure there is fixed with `cd lambda && go mod tidy`.
+Expected: all pass — including `lambda`'s `TestBuildStores_WiresEveryStoreField`, which is RED until this task wires the field. `build-modules` is what catches a stale `lambda/go.mod` after touching that module — a failure there is fixed with `cd lambda && go mod tidy`.
 
 - [ ] **Step 7: Commit**
 
@@ -1512,5 +1530,6 @@ Two spec items are **deliberately not in this plan**: the iOS surface (§Surface
 ## Follow-on work
 
 - **iOS plan** — `Membership` model, `LeaguesView`, the username picker, and the read-only detail view. Blocked on this plan being deployed, since the app cannot be verified against routes that do not exist.
+- **HTTP contract docs for all four routes** — `API.md` lives in the RosterbotApp repo, so documenting `GET /v1/sleeper/leagues` and the three `/v1/memberships` routes belongs to the iOS plan. Withdrawn from Tasks 3 and 4 by controller ruling rather than done cross-repo.
 - **Contract drift check** — re-read `jobs.go`, `API.md` and `Models/*.swift` together once the Swift models land.
 - **Dashboard parity** — the same list and picker in `web/dashboard/settings.js`. Optional; the spec marks it as not required for the first cut.
