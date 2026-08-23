@@ -1,0 +1,218 @@
+package lineupapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// membershipFixture builds a real store over a temp dir, per me_test.go's
+// convention. Emails are defaulted per user because CreateUser claims the
+// address, so two users sharing an empty one collide with ErrEmailTaken.
+func membershipFixture(t *testing.T, users ...*User) *FileUserStore {
+	t.Helper()
+	store := NewFileUserStore(t.TempDir())
+	for _, u := range users {
+		if u.Email == "" {
+			u.Email = string(u.ID) + "@example.test"
+		}
+		if err := store.CreateUser(context.Background(), u); err != nil {
+			t.Fatalf("CreateUser %s: %v", u.ID, err)
+		}
+	}
+	return store
+}
+
+func TestListMembershipsIncludesProjectedFantrax(t *testing.T) {
+	store := membershipFixture(t, &User{ID: "u1", TeamID: "7"})
+	cfg := Config{Users: store}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/v1/memberships", nil)
+	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
+	cfg.handleListMemberships(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
+	}
+	var body struct {
+		Memberships []Membership `json:"memberships"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Memberships) != 1 || body.Memberships[0].Platform != PlatformFantrax {
+		t.Errorf("memberships = %+v, want one fantrax entry", body.Memberships)
+	}
+}
+
+func TestAddMembershipStoresSleeperLeague(t *testing.T) {
+	store := membershipFixture(t, &User{ID: "u1", TeamID: "7"})
+	cfg := Config{Users: store}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/memberships",
+		strings.NewReader(`{"platform":"sleeper","league_id":"123","team_id":"456","display_name":"Dynasty"}`))
+	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
+	cfg.handleAddMembership(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
+	}
+	u, _, err := store.GetUser(req.Context(), "u1")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if len(u.Memberships) != 1 {
+		t.Fatalf("stored = %d memberships, want 1", len(u.Memberships))
+	}
+	if u.Memberships[0].LeagueID != "123" {
+		t.Errorf("LeagueID = %q, want 123", u.Memberships[0].LeagueID)
+	}
+	if u.Memberships[0].Writable {
+		t.Error("Writable = true; Sleeper has no write API and this must never be set")
+	}
+	if u.Memberships[0].AddedAt.IsZero() {
+		t.Error("AddedAt is zero, want a stamp")
+	}
+}
+
+// The whole reason this route refuses fantrax: TeamID is proven against
+// Fantrax's own MyTeamIDs by the connect task, and a caller naming their own
+// team would be asserting exactly the thing that proof exists to establish.
+func TestAddMembershipRefusesFantrax(t *testing.T) {
+	store := membershipFixture(t, &User{ID: "u1"})
+	cfg := Config{Users: store}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/memberships",
+		strings.NewReader(`{"platform":"fantrax","league_id":"L","team_id":"9"}`))
+	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
+	cfg.handleAddMembership(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	u, _, _ := store.GetUser(req.Context(), "u1")
+	if len(u.Memberships) != 0 {
+		t.Error("a fantrax membership was stored")
+	}
+}
+
+func TestAddMembershipRequiresLeagueID(t *testing.T) {
+	cfg := Config{Users: membershipFixture(t, &User{ID: "u1"})}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/memberships", strings.NewReader(`{"platform":"sleeper"}`))
+	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
+	cfg.handleAddMembership(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestAddMembershipDuplicateIsConflict(t *testing.T) {
+	store := membershipFixture(t, &User{ID: "u1", Memberships: []Membership{
+		{Platform: PlatformSleeper, LeagueID: "123"},
+	}})
+	cfg := Config{Users: store}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/memberships",
+		strings.NewReader(`{"platform":"sleeper","league_id":"123"}`))
+	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
+	cfg.handleAddMembership(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", rec.Code)
+	}
+}
+
+// Two tenants in the same Sleeper league must both be able to add it. The
+// league data is world-readable, so exclusivity would protect nothing and
+// break the common case.
+func TestAddMembershipAllowsTheSameLeagueForTwoUsers(t *testing.T) {
+	store := membershipFixture(t, &User{ID: "u1"}, &User{ID: "u2"})
+	cfg := Config{Users: store}
+
+	for _, uid := range []UserID{"u1", "u2"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/memberships",
+			strings.NewReader(`{"platform":"sleeper","league_id":"123"}`))
+		req = req.WithContext(withCaller(req.Context(), Caller{UserID: uid}))
+		cfg.handleAddMembership(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200", uid, rec.Code)
+		}
+	}
+}
+
+func TestDeleteMembershipRemovesIt(t *testing.T) {
+	store := membershipFixture(t, &User{ID: "u1", Memberships: []Membership{
+		{Platform: PlatformSleeper, LeagueID: "123"},
+		{Platform: PlatformSleeper, LeagueID: "999"},
+	}})
+	cfg := Config{Users: store}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("DELETE", "/v1/memberships/sleeper/123", nil)
+	req.SetPathValue("platform", "sleeper")
+	req.SetPathValue("leagueID", "123")
+	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
+	cfg.handleDeleteMembership(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
+	}
+	u, _, _ := store.GetUser(req.Context(), "u1")
+	if len(u.Memberships) != 1 || u.Memberships[0].LeagueID != "999" {
+		t.Errorf("remaining = %+v, want only 999", u.Memberships)
+	}
+}
+
+// Same rule as UserStore.DeleteCredential: the caller's intent is satisfied
+// either way, and erroring invites a check-then-act race.
+func TestDeleteMembershipAbsentIsNotAnError(t *testing.T) {
+	cfg := Config{Users: membershipFixture(t, &User{ID: "u1"})}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("DELETE", "/v1/memberships/sleeper/nope", nil)
+	req.SetPathValue("platform", "sleeper")
+	req.SetPathValue("leagueID", "nope")
+	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
+	cfg.handleDeleteMembership(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestDeleteMembershipRefusesFantrax(t *testing.T) {
+	cfg := Config{Users: membershipFixture(t, &User{ID: "u1", TeamID: "7"})}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("DELETE", "/v1/memberships/fantrax/L", nil)
+	req.SetPathValue("platform", "fantrax")
+	req.SetPathValue("leagueID", "L")
+	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
+	cfg.handleDeleteMembership(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+// adminOnlyRoutes is an allowlist, so a route's absence is what makes it
+// tenant-reachable. That is the quiet direction, so pin it.
+func TestMembershipRoutesAreNotAdminOnly(t *testing.T) {
+	for _, p := range []string{
+		"/v1/memberships",
+		"/v1/memberships/sleeper/123",
+		"/v1/sleeper/leagues",
+	} {
+		if isAdminOnlyPath(p) {
+			t.Errorf("isAdminOnlyPath(%q) = true; members must reach their own leagues", p)
+		}
+	}
+}

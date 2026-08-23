@@ -102,6 +102,8 @@ type Config struct {
 //	GET  /v1/tenants        -> all tenants (admin only)
 //	GET  /v1/me             -> the caller's own profile + Fantrax status
 //	GET  /v1/sleeper/leagues -> discover a Sleeper account's leagues by username
+//	GET/POST /v1/memberships          -> the caller's own leagues; add a Sleeper one
+//	DELETE   /v1/memberships/{p}/{id} -> remove a Sleeper league
 //	POST /v1/me/preferences -> update the caller's own auto_apply
 //	POST /v1/jobs/{name}    -> launch a job (async), 202
 //	POST /v1/auth/*         -> passkey login/register/logout, session mgmt
@@ -121,6 +123,9 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
 	mux.HandleFunc("GET /v1/me", cfg.handleMe)
 	mux.HandleFunc("GET /v1/sleeper/leagues", cfg.handleSleeperLeagues)
+	mux.HandleFunc("GET /v1/memberships", cfg.handleListMemberships)
+	mux.HandleFunc("POST /v1/memberships", cfg.handleAddMembership)
+	mux.HandleFunc("DELETE /v1/memberships/{platform}/{leagueID}", cfg.handleDeleteMembership)
 	mux.HandleFunc("GET /v1/tenants", cfg.handleTenants)
 	// Tenant management (rosterbot-2twx). All under /v1/tenants/, which the
 	// adminOnlyRoutes prefix gates as a unit; TestTenantStatus_MemberForbidden
