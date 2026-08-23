@@ -109,6 +109,15 @@ type User struct {
 	// never typed by the user, and the store enforces one claimant per team.
 	TeamID string `json:"team_id,omitempty"`
 
+	// Memberships holds SLEEPER leagues only. The Fantrax membership is
+	// projected from TeamID by AllMemberships rather than stored here, so the
+	// proven-at-connect team and its ErrTeamTaken uniqueness claim keep exactly
+	// one home. Two copies of the same fact is how they come to disagree.
+	//
+	// Absent on every record written before this field existed, which decodes
+	// to nil and renders as "Fantrax only" — the correct answer for all of them.
+	Memberships []Membership `json:"memberships,omitempty"`
+
 	// TokenVersion invalidates sessions. Session cookies carry the value they
 	// were minted at; incrementing this logs out every device for this user
 	// without touching anyone else, which is what makes revocation possible at
