@@ -7,9 +7,11 @@ package sleeper
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -178,4 +180,52 @@ func (c *Client) fetchPlayersNFL() (map[string]Player, error) {
 		return nil, err
 	}
 	return players, nil
+}
+
+// ErrUserNotFound is returned when a username resolves to no Sleeper account.
+//
+// It exists because Sleeper spells that outcome as a 200 with a `null` body
+// rather than a 404, which get() cannot distinguish from success. Returning a
+// zero User instead would send the caller on to request leagues for the empty
+// string and get an empty list — "this username has no leagues" rather than
+// "there is no such username", which are different answers to show a user.
+var ErrUserNotFound = errors.New("sleeper: no such user")
+
+// UserByName resolves a Sleeper username to its account.
+func (c *Client) UserByName(username string) (*User, error) {
+	return cached(c, RosterTTL, cache.Key("sleeper-user", username), func() (*User, error) {
+		return c.fetchUserByName(username)
+	})
+}
+
+func (c *Client) fetchUserByName(username string) (*User, error) {
+	var u User
+	if err := c.get("/user/"+url.PathEscape(username), &u); err != nil {
+		return nil, err
+	}
+	if u.UserID == "" {
+		return nil, ErrUserNotFound
+	}
+	return &u, nil
+}
+
+// LeaguesForUser lists every league an account belongs to for one sport and
+// season. Sleeper scopes leagues by both, so a user id alone does not identify
+// a league set.
+func (c *Client) LeaguesForUser(userID, sport, season string) ([]League, error) {
+	return cached(c, RosterTTL, cache.Key("sleeper-user-leagues", userID, sport, season),
+		func() ([]League, error) {
+			return c.fetchLeaguesForUser(userID, sport, season)
+		})
+}
+
+func (c *Client) fetchLeaguesForUser(userID, sport, season string) ([]League, error) {
+	path := "/user/" + url.PathEscape(userID) +
+		"/leagues/" + url.PathEscape(sport) +
+		"/" + url.PathEscape(season)
+	var ls []League
+	if err := c.get(path, &ls); err != nil {
+		return nil, err
+	}
+	return ls, nil
 }

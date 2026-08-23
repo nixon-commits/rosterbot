@@ -1,6 +1,7 @@
 package sleeper
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -223,5 +224,114 @@ func TestPlayersNFLParsesResponseAndCaches(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("server calls = %d, want 1 (second call should be cached)", calls)
+	}
+}
+
+func TestUserByNameParsesResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user/jnixon" {
+			t.Errorf("path = %q, want /user/jnixon", r.URL.Path)
+		}
+		w.Write([]byte(`{"user_id":"456","username":"jnixon","display_name":"Jon"}`))
+	}))
+	defer srv.Close()
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	u, err := NewClient().UserByName("jnixon")
+	if err != nil {
+		t.Fatalf("UserByName: %v", err)
+	}
+	if u.UserID != "456" {
+		t.Errorf("UserID = %q, want 456", u.UserID)
+	}
+	if u.DisplayName != "Jon" {
+		t.Errorf("DisplayName = %q, want Jon", u.DisplayName)
+	}
+}
+
+// Sleeper answers an unknown username with a 200 and a literal `null` body
+// rather than a 404, so the status check in get() lets it through and the
+// decode succeeds into a zero User. An empty UserID is therefore the only
+// reliable signal, and it must not be reported as success — a caller would
+// go on to request leagues for the empty string.
+func TestUserByNameUnknownUsernameIsNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`null`))
+	}))
+	defer srv.Close()
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	if _, err := NewClient().UserByName("nobody"); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("err = %v, want ErrUserNotFound", err)
+	}
+}
+
+// The 404 spelling of the same outcome, in case Sleeper changes its mind.
+func TestUserByNameNotFoundStatusIsAlsoNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	if _, err := NewClient().UserByName("nobody"); err == nil {
+		t.Error("err = nil, want an error for a 404")
+	}
+}
+
+func TestLeaguesForUserParsesResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user/456/leagues/nfl/2026" {
+			t.Errorf("path = %q, want /user/456/leagues/nfl/2026", r.URL.Path)
+		}
+		w.Write([]byte(`[
+			{"league_id":"1","name":"Dynasty","season":"2026","total_rosters":12},
+			{"league_id":"2","name":"Redraft","season":"2026","total_rosters":10}
+		]`))
+	}))
+	defer srv.Close()
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	ls, err := NewClient().LeaguesForUser("456", "nfl", "2026")
+	if err != nil {
+		t.Fatalf("LeaguesForUser: %v", err)
+	}
+	if len(ls) != 2 {
+		t.Fatalf("len = %d, want 2", len(ls))
+	}
+	if ls[0].Name != "Dynasty" {
+		t.Errorf("Name = %q, want Dynasty", ls[0].Name)
+	}
+	if ls[1].TotalRosters != 10 {
+		t.Errorf("TotalRosters = %d, want 10", ls[1].TotalRosters)
+	}
+}
+
+// A username with a slash or space must not escape the path and address a
+// different endpoint.
+func TestUserByNameEscapesUsername(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		w.Write([]byte(`{"user_id":"1"}`))
+	}))
+	defer srv.Close()
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	if _, err := NewClient().UserByName("a/b"); err != nil {
+		t.Fatalf("UserByName: %v", err)
+	}
+	if gotPath != "/user/a%2Fb" {
+		t.Errorf("path = %q, want /user/a%%2Fb", gotPath)
 	}
 }
