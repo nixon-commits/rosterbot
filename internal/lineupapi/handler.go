@@ -70,6 +70,11 @@ type Config struct {
 	// same DynamoDB store as Users, `serve` the same file store.
 	PushDevices PushDeviceStore
 
+	// SleeperDir backs GET /v1/sleeper/leagues. Nil answers 501, matching the
+	// other optional dependencies; production and `serve` both wire the
+	// internal/sleeperdir adapter.
+	SleeperDir SleeperDirectory
+
 	// Connections and Sealer back POST /v1/connect. Sealer is the ENCRYPT-ONLY
 	// half (see credentials.go): this config never holds an Opener, so no
 	// handler can read a tenant's Fantrax password back — which is exactly why
@@ -96,6 +101,7 @@ type Config struct {
 //	GET  /v1/reports/{name} -> private dashboard report (model|gap|views)
 //	GET  /v1/tenants        -> all tenants (admin only)
 //	GET  /v1/me             -> the caller's own profile + Fantrax status
+//	GET  /v1/sleeper/leagues -> discover a Sleeper account's leagues by username
 //	POST /v1/me/preferences -> update the caller's own auto_apply
 //	POST /v1/jobs/{name}    -> launch a job (async), 202
 //	POST /v1/auth/*         -> passkey login/register/logout, session mgmt
@@ -114,6 +120,7 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/reports/{name}", cfg.handleReport)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
 	mux.HandleFunc("GET /v1/me", cfg.handleMe)
+	mux.HandleFunc("GET /v1/sleeper/leagues", cfg.handleSleeperLeagues)
 	mux.HandleFunc("GET /v1/tenants", cfg.handleTenants)
 	// Tenant management (rosterbot-2twx). All under /v1/tenants/, which the
 	// adminOnlyRoutes prefix gates as a unit; TestTenantStatus_MemberForbidden
