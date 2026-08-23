@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/sleeperdir"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/spf13/cobra"
 )
@@ -91,7 +92,12 @@ func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) h
 		// .reports/{model,gap,views}.json, and `serve` reads exactly those
 		// bytes, so the Projections and Views tabs work locally against the
 		// authenticated path rather than a static file the SPA no longer fetches.
-		Reports:       lineupapi.NewFileBlobStore(layout.Reports.LocalDir, ""),
+		Reports: lineupapi.NewFileBlobStore(layout.Reports.LocalDir, ""),
+		// No local cache-dir convention exists in this file (grep -n CacheDir
+		// cmd/serve.go turns up nothing), so caching is disabled: every lookup
+		// hits Sleeper directly, matching how the other local stores here read
+		// straight off disk rather than through a cache.
+		SleeperDir:    sleeperdir.New(""),
 		WebAuthn:      wa,
 		SessionSecret: sessionSecret,
 		// Jobs is nil locally: triggering real ECS tasks only makes sense on AWS.
