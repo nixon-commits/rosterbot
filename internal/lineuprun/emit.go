@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/config"
@@ -114,17 +115,25 @@ func writeSnapshots(in EmitInputs) {
 
 // publishToday writes the read-only API's lineup JSON for today only. The iOS
 // thin client reads this precomputed JSON; the hourly non-dry-run run keeps it
-// fresh. Dry-run publishes only when explicitly asked (--publish-lineup), so
-// local testing can exercise the endpoint without mutating the real roster.
+// fresh.
+//
+// A dry run applied nothing, so it publishes to the PREVIEW key instead of
+// overwriting the applied-lineup snapshot. Before that split a dry run
+// published nothing at all, which made the app's Optimize button a silent
+// no-op in every Debug build — APIClient.guardedParams forces dry_run there,
+// so the one path a developer can actually exercise produced no observable
+// result (rbapp-c56).
+//
+// --publish-lineup keeps its original narrower meaning: an explicit opt-in for
+// a dry run to write the REAL key, so `rosterbot serve` has something to serve
+// locally without a live Fantrax mutation.
 func publishToday(in EmitInputs) {
-	if in.Cfg.DryRun && !in.PublishLineup {
-		return
-	}
+	preview := in.Cfg.DryRun && !in.PublishLineup
 	for _, dr := range in.Results {
 		if !dr.isToday {
 			continue
 		}
-		if err := publishLineup(dr, in.Cfg, in.HitterSlots, in.PitcherSlots, in.HKB, in.Publisher); err != nil {
+		if err := publishLineup(dr, in.Cfg, in.HitterSlots, in.PitcherSlots, in.HKB, in.Publisher, time.Now(), preview); err != nil {
 			fmt.Fprintf(in.Out, "  ⚠ lineup publish failed: %v\n", err)
 		}
 		return

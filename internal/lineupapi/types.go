@@ -61,7 +61,7 @@ type Slot struct {
 	Player *Player `json:"player"`
 }
 
-// LineupResponse is the full GET /v1/lineup/today body.
+// LineupResponse is the full GET /v1/lineup/today (and /v1/lineup/preview) body.
 type LineupResponse struct {
 	Date            string   `json:"date"`
 	LeagueID        string   `json:"league_id"`
@@ -69,6 +69,18 @@ type LineupResponse struct {
 	Slots           []Slot   `json:"slots"`
 	ProjectedPoints float64  `json:"projected_points"`
 	Warnings        []string `json:"warnings"`
+
+	// GeneratedAt is when the optimizer computed this lineup (RFC3339 UTC).
+	//
+	// It exists so a client holding both the applied lineup and a preview can
+	// tell which one is newer — the only way to decide whether a preview
+	// supersedes what is on Fantrax or merely predates it. Without it the two
+	// blobs are unorderable and the client would have to guess.
+	//
+	// omitempty, and empty on every blob published before this field: a client
+	// must read absence as "older than anything timestamped", which is what it
+	// is.
+	GeneratedAt string `json:"generated_at,omitempty"`
 }
 
 // Marshal is the one place the response is serialized, so the producer (what we
