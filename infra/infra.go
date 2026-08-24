@@ -731,9 +731,25 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		Code: awscloudfront.FunctionCode_FromInline(jsii.String(`function handler(event) {
     var request = event.request;
     var canonical = [` + strings.Join(canonicalJS, ", ") + `];
-    var host = request.headers.host ? request.headers.host.value.toLowerCase() : '';
+    var host = (request.headers.host ? request.headers.host.value.toLowerCase() : '').split(':')[0];
 
     if (canonical.indexOf(host) === -1) {
+        // The reconstruction concatenates raw values rather than running them
+        // through encodeURIComponent, and that is deliberate: CloudFront hands
+        // querystring values to a function STILL PERCENT-ENCODED, so encoding
+        // again would double-encode every %XX in the redirect target.
+        //
+        // AWS does not state the encoding outright, but its own documented
+        // normalize-query-string sample performs this exact concatenation and
+        // assigns the result back to request.querystring. Were values decoded,
+        // that published sample would corrupt any encoded query on every
+        // distribution using it. The Host header is documented as raw for the
+        // same reason (functions-event-structure.html).
+        //
+        // So a value carrying an encoded '&' or '#' round-trips intact. If a
+        // future reader is tempted to add encodeURIComponent here, the test
+        // that pins this is TestDashboardFunction_BehavesCorrectly's
+        // encoded-value case in domain_test.go.
         var pairs = [];
         for (var key in request.querystring) {
             var q = request.querystring[key];
