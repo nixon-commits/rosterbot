@@ -78,9 +78,11 @@ var (
 // handleSleeperLeagues proxies a username lookup to Sleeper.
 //
 // Server-side rather than from the browser or the app for two reasons: no
-// client needs to learn Sleeper's API shape or base URL, and the lookup lands
-// behind the client's read-through cache instead of being issued once per
-// keystroke by a picker.
+// client needs to learn Sleeper's API shape or base URL, and every lookup goes
+// through one place that can be cached or rate-limited rather than N app
+// installs hitting Sleeper directly. The caching is weaker than it sounds —
+// serve disables it (New("")) and Lambda's lives in per-execution-environment
+// /tmp — so a picker still reaches Sleeper across cold containers.
 func (cfg Config) handleSleeperLeagues(w http.ResponseWriter, r *http.Request) {
 	caller := CallerFrom(r.Context())
 	if caller.UserID == "" {
