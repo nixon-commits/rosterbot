@@ -28,6 +28,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/ddbuser"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/kmscreds"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi/s3lineup"
+	"github.com/nixon-commits/rosterbot/internal/sleeperdir"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/nixon-commits/rosterbot/lambda/internal/ecsrun"
 )
@@ -136,6 +137,12 @@ func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
 	if cfg.Reports, err = store(layout.Reports.PrefixFor(tenant)); err != nil {
 		return cfg, fmt.Errorf("init s3 reports store: %w", err)
 	}
+
+	// /tmp is the only writable filesystem a Lambda gets, and it persists only
+	// for the life of the execution environment — good enough for Sleeper's
+	// own read-through cache, which exists to avoid re-fetching within a warm
+	// container rather than to survive a cold start.
+	cfg.SleeperDir = sleeperdir.New("/tmp/sleeper-cache")
 
 	return cfg, nil
 }
