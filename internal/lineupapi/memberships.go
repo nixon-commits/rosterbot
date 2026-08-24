@@ -4,7 +4,26 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
+)
+
+// These bound what one tenant can push into their own profile. The cost is
+// not theirs alone: resolveCaller does a GetUser on EVERY authenticated
+// request, so a bloated membership list is re-read and re-decoded on every
+// single API call the deployment serves.
+const (
+	// maxMemberships caps the list. Fifty leagues is far past any real
+	// tenant — the point is that the record cannot grow without bound.
+	maxMemberships = 50
+
+	// maxLeagueIDLen and maxTeamIDLen bound Sleeper's identifiers, which are
+	// ~19-digit numeric strings, so this is deliberately generous.
+	maxLeagueIDLen = 64
+	maxTeamIDLen   = 64
+
+	// maxDisplayNameLen bounds a league name.
+	maxDisplayNameLen = 128
 )
 
 // handleListMemberships returns the caller's own leagues across platforms.
@@ -70,13 +89,34 @@ func (cfg Config) handleAddMembership(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "league_id is required")
 		return
 	}
+	// 400 for the length violations, matching the validation above: these are
+	// malformed input, not a conflict with anything already stored.
+	if len(body.LeagueID) > maxLeagueIDLen {
+		writeErr(w, http.StatusBadRequest, "league_id is too long")
+		return
+	}
+	if len(body.TeamID) > maxTeamIDLen {
+		writeErr(w, http.StatusBadRequest, "team_id is too long")
+		return
+	}
+	if len(body.DisplayName) > maxDisplayNameLen {
+		writeErr(w, http.StatusBadRequest, "display_name is too long")
+		return
+	}
 
 	errDuplicate := errors.New("duplicate membership")
+	errTooMany := errors.New("membership limit reached")
 	u, err := cfg.mutateUser(r.Context(), caller.UserID, func(u *User) error {
 		for _, m := range u.Memberships {
 			if m.Platform == body.Platform && m.LeagueID == body.LeagueID {
 				return errDuplicate
 			}
+		}
+		// Checked after the duplicate scan so that re-adding a league already
+		// on a full account still reports the duplicate, which is the answer
+		// that tells the caller what to do about it.
+		if len(u.Memberships) >= maxMemberships {
+			return errTooMany
 		}
 		u.Memberships = append(u.Memberships, Membership{
 			Platform:    PlatformSleeper,
@@ -93,6 +133,13 @@ func (cfg Config) handleAddMembership(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, errDuplicate):
 		writeErr(w, http.StatusConflict, "that league is already on your account")
+		return
+	// 409 like the duplicate above, not 400: the request is well formed and it
+	// is the caller's own current state that refuses it. Keeping the whole
+	// family on one status is what lets a client handle it in one place.
+	case errors.Is(err, errTooMany):
+		writeErr(w, http.StatusConflict, "you have reached the limit of "+
+			strconv.Itoa(maxMemberships)+" leagues; remove one first")
 		return
 	case errors.Is(err, errNoSuchUser):
 		writeErr(w, http.StatusNotFound, "no such user")

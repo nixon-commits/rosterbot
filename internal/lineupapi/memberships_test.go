@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -214,5 +215,92 @@ func TestMembershipRoutesAreNotAdminOnly(t *testing.T) {
 		if isAdminOnlyPath(p) {
 			t.Errorf("isAdminOnlyPath(%q) = true; members must reach their own leagues", p)
 		}
+	}
+}
+
+// addMembershipReq builds a POST /v1/memberships request for the given caller.
+func addMembershipReq(uid UserID, body string) *http.Request {
+	req := httptest.NewRequest("POST", "/v1/memberships", strings.NewReader(body))
+	return req.WithContext(withCaller(req.Context(), Caller{UserID: uid}))
+}
+
+// The stored list is re-read by resolveCaller on EVERY authenticated request,
+// so an unbounded field is a per-request cost for the whole deployment, not
+// just for the tenant who grew it.
+func TestAddMembershipRejectsOversizedFields(t *testing.T) {
+	for name, body := range map[string]string{
+		"league_id": `{"platform":"sleeper","league_id":"` + strings.Repeat("1", maxLeagueIDLen+1) + `"}`,
+		"team_id": `{"platform":"sleeper","league_id":"123","team_id":"` +
+			strings.Repeat("4", maxTeamIDLen+1) + `"}`,
+		"display_name": `{"platform":"sleeper","league_id":"123","display_name":"` +
+			strings.Repeat("n", maxDisplayNameLen+1) + `"}`,
+	} {
+		store := membershipFixture(t, &User{ID: "u1"})
+		cfg := Config{Users: store}
+		rec := httptest.NewRecorder()
+		req := addMembershipReq("u1", body)
+		cfg.handleAddMembership(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("oversized %s: status = %d, want 400 (body %s)", name, rec.Code, rec.Body)
+		}
+		if u, _, _ := store.GetUser(req.Context(), "u1"); len(u.Memberships) != 0 {
+			t.Errorf("oversized %s was stored anyway: %+v", name, u.Memberships)
+		}
+	}
+}
+
+// A field exactly at the bound is legal; the check must be > and not >=, or
+// the documented limit is off by one from the enforced one.
+func TestAddMembershipAcceptsFieldsAtTheBound(t *testing.T) {
+	cfg := Config{Users: membershipFixture(t, &User{ID: "u1"})}
+	rec := httptest.NewRecorder()
+	cfg.handleAddMembership(rec, addMembershipReq("u1",
+		`{"platform":"sleeper","league_id":"`+strings.Repeat("1", maxLeagueIDLen)+
+			`","team_id":"`+strings.Repeat("4", maxTeamIDLen)+
+			`","display_name":"`+strings.Repeat("n", maxDisplayNameLen)+`"}`))
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
+	}
+}
+
+// 409 rather than 400, matching the duplicate case above it: both are a
+// conflict with the caller's current state, not a malformed request, so a
+// client handles the whole family one way.
+func TestAddMembershipCapsTheStoredList(t *testing.T) {
+	full := make([]Membership, maxMemberships)
+	for i := range full {
+		full[i] = Membership{Platform: PlatformSleeper, LeagueID: strconv.Itoa(i)}
+	}
+	store := membershipFixture(t, &User{ID: "u1", Memberships: full})
+	cfg := Config{Users: store}
+
+	rec := httptest.NewRecorder()
+	req := addMembershipReq("u1", `{"platform":"sleeper","league_id":"one-too-many"}`)
+	cfg.handleAddMembership(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (body %s)", rec.Code, rec.Body)
+	}
+	if u, _, _ := store.GetUser(req.Context(), "u1"); len(u.Memberships) != maxMemberships {
+		t.Errorf("stored = %d memberships, want the cap of %d", len(u.Memberships), maxMemberships)
+	}
+}
+
+// One below the cap must still succeed, so the limit admits exactly
+// maxMemberships entries rather than one fewer.
+func TestAddMembershipAllowsTheLastSlotUnderTheCap(t *testing.T) {
+	full := make([]Membership, maxMemberships-1)
+	for i := range full {
+		full[i] = Membership{Platform: PlatformSleeper, LeagueID: strconv.Itoa(i)}
+	}
+	cfg := Config{Users: membershipFixture(t, &User{ID: "u1", Memberships: full})}
+
+	rec := httptest.NewRecorder()
+	cfg.handleAddMembership(rec, addMembershipReq("u1",
+		`{"platform":"sleeper","league_id":"last"}`))
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
 	}
 }
