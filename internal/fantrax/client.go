@@ -275,13 +275,17 @@ func (c *Client) getLeagueInfo() (*gofantrax.LeagueInfo, error) {
 // memoization a single recap-site build issued five identical POSTs to
 // Fantrax. Only in-memory — the in-progress week mutates during the day,
 // and a fresh process boundary is the right TTL.
+//
+// That deliberate absence of a disk cache is also what leaves this call with
+// no fallback when Fantrax blips, so it retries (see retry.go). It is a pure
+// read, which is what makes retrying it safe.
 func (c *Client) allMatchups() (*auth_client.AllMatchupsResult, error) {
 	c.matchupsMu.Lock()
 	defer c.matchupsMu.Unlock()
 	if c.matchupsMemo != nil {
 		return c.matchupsMemo, nil
 	}
-	result, err := c.auth.GetAllMatchups()
+	result, err := withRetry("getAllMatchups", fantraxBackoff, c.auth.GetAllMatchups)
 	if err != nil {
 		return nil, err
 	}
