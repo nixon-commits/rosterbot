@@ -324,6 +324,50 @@ func firstN(s string, n int) string {
 	return s[:n]
 }
 
+// TestMissingHKBFieldsAreAbsentNotEmpty pins that "HKB has no value here" is
+// expressed the same way for every optional field.
+//
+// A nil Pos without omitempty marshals as `"pos": null`, which a strict
+// decoder rejects. An unset Level without omitempty arrives as "", which is
+// worse: it is a VALID string, so a `level != "MLB"` check passes it through
+// silently and it reaches the UI as a real answer. Wander Franco carries
+// exactly that shape in HKB's live feed.
+func TestMissingHKBFieldsAreAbsentNotEmpty(t *testing.T) {
+	hkbPlayers := []hkb.Player{
+		// No Positions, no Level — the Wander Franco / draft-pick shape.
+		{Name: "No Data", Value: 10, Rank: 900, Prospect: false, Team: "TB"},
+	}
+	pool := []PoolPlayer{{ID: "1", Name: "No Data", MLBTeam: "TB", FantasyStatus: "FA"}}
+
+	got := Build(now(), "2026-08-24", pool, hkbPlayers)
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(b)
+
+	for _, bad := range []string{`"pos":null`, `"level":""`, `"fantrax_pos":null`, `"rank_history_30d":null`} {
+		if strings.Contains(s, bad) {
+			t.Errorf("payload contains %s; missing data must be ABSENT, not empty-valued", bad)
+		}
+	}
+	// Round-trips as a genuinely absent key rather than a present empty one.
+	var back map[string]any
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	row := back["mlb"].([]any)[0].(map[string]any)
+	for _, k := range []string{"pos", "level", "fantrax_pos"} {
+		if _, present := row[k]; present {
+			t.Errorf("key %q is present; want absent when HKB has no value", k)
+		}
+	}
+	// A field that IS known must still be emitted.
+	if row["name"] != "No Data" {
+		t.Errorf("name=%v, want the row to still carry its known fields", row["name"])
+	}
+}
+
 func hasPlayer(ps []Player, name string) bool {
 	for _, p := range ps {
 		if p.Name == name {
