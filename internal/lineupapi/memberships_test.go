@@ -304,3 +304,112 @@ func TestAddMembershipAllowsTheLastSlotUnderTheCap(t *testing.T) {
 		t.Errorf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
 	}
 }
+
+// Everything above drives cfg.handleX directly and hands the DELETE its path
+// values by hand. That can never see the one failure this feature is most
+// exposed to: a route that was never registered, a pattern scoped to the wrong
+// method, or a {leagueID} in handler.go that disagrees with the
+// r.PathValue("leagueID") read out of it. Each of those compiles, passes every
+// direct-call test in this file, and in production either 404s or silently
+// deletes nothing. TestMembershipRoutesAreNotAdminOnly does not cover it
+// either — it tests the isAdminOnlyPath predicate, and would pass with all
+// four routes unregistered.
+//
+// So the four tests below go through Handler, exactly as pushroutes_test.go
+// does for the analogous push trio.
+func membershipRouter(t *testing.T, seed ...*User) (http.Handler, []byte, *FileUserStore, *fakeSleeperDir) {
+	t.Helper()
+	for _, u := range seed {
+		u.Role, u.Status = RoleMember, UserActive
+	}
+	store := membershipFixture(t, seed...)
+	dir := &fakeSleeperDir{leagues: []SleeperLeague{
+		{LeagueID: "1", Name: "Dynasty", Season: "2026", TotalRosters: 12, TeamID: "456"},
+	}}
+	secret := []byte("s")
+	h := Handler(Config{
+		Token: "op-token", Users: store, Enrollments: store, SleeperDir: dir,
+		SessionSecret: secret, WebAuthn: testWebAuthn(t),
+	})
+	return h, secret, store, dir
+}
+
+func TestSleeperLeaguesRouteIsRegistered(t *testing.T) {
+	h, secret, _, dir := membershipRouter(t, &User{ID: "u1"})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, signedReq(t, secret, http.MethodGet,
+		"/v1/sleeper/leagues?username=jnixon", "u1", 0))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
+	}
+	if dir.gotUser != "jnixon" {
+		t.Errorf("directory saw username %q, want jnixon", dir.gotUser)
+	}
+	if !strings.Contains(rec.Body.String(), "Dynasty") {
+		t.Errorf("body = %s, want the discovered league", rec.Body)
+	}
+}
+
+func TestListMembershipsRouteIsRegistered(t *testing.T) {
+	h, secret, _, _ := membershipRouter(t, &User{ID: "u1", TeamID: "7"})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, signedReq(t, secret, http.MethodGet, "/v1/memberships", "u1", 0))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `"platform":"fantrax"`) {
+		t.Errorf("body = %s, want the projected fantrax membership", rec.Body)
+	}
+}
+
+func TestAddMembershipRouteIsRegistered(t *testing.T) {
+	h, secret, store, _ := membershipRouter(t, &User{ID: "u1"})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, pushJSON(t, secret, http.MethodPost, "/v1/memberships", "u1",
+		`{"platform":"sleeper","league_id":"123","display_name":"Dynasty"}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
+	}
+	u, _, _ := store.GetUser(t.Context(), "u1")
+	if len(u.Memberships) != 1 || u.Memberships[0].LeagueID != "123" {
+		t.Errorf("stored = %+v, want the posted league", u.Memberships)
+	}
+}
+
+// The one that matters most: {platform} and {leagueID} in the pattern have to
+// arrive as the values handleDeleteMembership reads by those exact names, and
+// only the named league may go.
+func TestDeleteMembershipRouteCarriesItsPathValues(t *testing.T) {
+	h, secret, store, _ := membershipRouter(t, &User{ID: "u1", Memberships: []Membership{
+		{Platform: PlatformSleeper, LeagueID: "123"},
+		{Platform: PlatformSleeper, LeagueID: "999"},
+	}})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, signedReq(t, secret, http.MethodDelete, "/v1/memberships/sleeper/123", "u1", 0))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
+	}
+	u, _, _ := store.GetUser(t.Context(), "u1")
+	if len(u.Memberships) != 1 || u.Memberships[0].LeagueID != "999" {
+		t.Fatalf("remaining = %+v, want only 999 — the path values did not arrive intact",
+			u.Memberships)
+	}
+
+	// And the patterns are method-scoped: the two-segment path exists only
+	// under DELETE, so a GET must not fall through to the list handler and
+	// answer 200 with somebody's memberships.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, signedReq(t, secret, http.MethodGet, "/v1/memberships/sleeper/123", "u1", 0))
+	if rec.Code == http.StatusOK {
+		t.Errorf("GET on the delete path answered 200 (%s); the patterns are not method-scoped",
+			rec.Body)
+	}
+}
