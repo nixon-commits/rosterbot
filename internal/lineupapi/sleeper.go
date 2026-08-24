@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +55,26 @@ func defaultSeason(now time.Time) string {
 	return strconv.Itoa(y)
 }
 
+// The three parameters this endpoint forwards, each pinned to the shape it
+// really has. Compiled once here rather than per request.
+//
+// This is not cosmetic validation. All three are joined into a cache key by
+// internal/sleeper, and internal/cache resolves a key to <root>/<key>.json —
+// so a value carrying a separator addresses a file OUTSIDE the cache root. The
+// Lambda roots that cache at /tmp/sleeper-cache, and these values arrive from
+// a tenant's query string, which is the whole exposure. internal/sleeper
+// refuses such arguments itself; validating here as well is what turns a typo
+// into a 400 the caller can act on rather than the 502 an internal error gets,
+// and keeps the guarantee from depending on one layer alone.
+var (
+	// Sleeper's own username charset.
+	sleeperUsernameRe = regexp.MustCompile(`^[A-Za-z0-9_]{1,64}$`)
+	// A sport code: "nfl", "nba", "lcs".
+	sleeperSportRe = regexp.MustCompile(`^[a-z]{2,8}$`)
+	// A season is the four-digit year the season STARTS in.
+	sleeperSeasonRe = regexp.MustCompile(`^[0-9]{4}$`)
+)
+
 // handleSleeperLeagues proxies a username lookup to Sleeper.
 //
 // Server-side rather than from the browser or the app for two reasons: no
@@ -77,13 +98,28 @@ func (cfg Config) handleSleeperLeagues(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "username is required")
 		return
 	}
-	sport := q.Get("sport")
+	// Trimmed BEFORE the empty check, exactly as username is: a whitespace-only
+	// parameter is an absent value, not a chosen one. Without this, `?sport=%20`
+	// skipped the "nfl" default and forwarded a single space to Sleeper.
+	sport := strings.TrimSpace(q.Get("sport"))
 	if sport == "" {
 		sport = "nfl"
 	}
-	season := q.Get("season")
+	season := strings.TrimSpace(q.Get("season"))
 	if season == "" {
 		season = defaultSeason(time.Now().UTC())
+	}
+	if !sleeperUsernameRe.MatchString(username) {
+		writeErr(w, http.StatusBadRequest, "username is not a valid Sleeper username")
+		return
+	}
+	if !sleeperSportRe.MatchString(sport) {
+		writeErr(w, http.StatusBadRequest, "sport is not a valid sport code")
+		return
+	}
+	if !sleeperSeasonRe.MatchString(season) {
+		writeErr(w, http.StatusBadRequest, "season must be a four-digit year")
+		return
 	}
 
 	leagues, err := cfg.SleeperDir.LeaguesForUsername(r.Context(), username, sport, season)

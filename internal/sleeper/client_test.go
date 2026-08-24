@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -315,8 +317,10 @@ func TestLeaguesForUserParsesResponse(t *testing.T) {
 	}
 }
 
-// A username with a slash or space must not escape the path and address a
-// different endpoint.
+// A username with a space must not escape the path and address a different
+// endpoint. It is a space rather than a slash because a slash is now refused
+// outright before the URL is ever built — see the traversal test below — but
+// every other character still has to survive the trip verbatim.
 func TestUserByNameEscapesUsername(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -328,10 +332,82 @@ func TestUserByNameEscapesUsername(t *testing.T) {
 	baseURL = srv.URL
 	defer func() { baseURL = orig }()
 
-	if _, err := NewClient().UserByName("a/b"); err != nil {
+	if _, err := NewClient().UserByName("a b"); err != nil {
 		t.Fatalf("UserByName: %v", err)
 	}
-	if gotPath != "/user/a%2Fb" {
-		t.Errorf("path = %q, want /user/a%%2Fb", gotPath)
+	if gotPath != "/user/a%20b" {
+		t.Errorf("path = %q, want /user/a%%20b", gotPath)
+	}
+}
+
+// A cache key becomes a FILE PATH: internal/cache resolves it as
+// <root>/<key>.json, so an argument carrying a path separator reads and writes
+// outside the cache root. In Lambda that root is /tmp/sleeper-cache and the
+// username arrives from a tenant's query string, which made
+// "/../../../../../../tmp/pwned" resolve to /tmp/pwned.json. The read half runs
+// unconditionally, before any fetch, so merely calling this was enough.
+//
+// The handler validates too, but this package must refuse on its own — it is a
+// public leaf and the next caller will not know the rule.
+func TestUserByNameRejectsPathTraversal(t *testing.T) {
+	srv, hits := countingServer(t, `{"user_id":"1","username":"x"}`)
+	defer srv.Close()
+
+	outside := t.TempDir()
+	c := NewClient()
+	c.CacheDir = filepath.Join(outside, "cache")
+
+	for _, username := range []string{"../pwned", "a/b", `a\b`, "/../../pwned"} {
+		if _, err := c.UserByName(username); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("UserByName(%q) = %v, want ErrInvalidArgument", username, err)
+		}
+	}
+	assertNoEscape(t, outside, *hits)
+}
+
+func TestLeaguesForUserRejectsPathTraversal(t *testing.T) {
+	srv, hits := countingServer(t, `[]`)
+	defer srv.Close()
+
+	outside := t.TempDir()
+	c := NewClient()
+	c.CacheDir = filepath.Join(outside, "cache")
+
+	// Every argument is joined into the key, so every one of them is a way out.
+	for _, args := range [][3]string{
+		{"../pwned", "nfl", "2026"},
+		{"456", "../pwned", "2026"},
+		{"456", "nfl", "../pwned"},
+	} {
+		if _, err := c.LeaguesForUser(args[0], args[1], args[2]); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("LeaguesForUser%v = %v, want ErrInvalidArgument", args, err)
+		}
+	}
+	assertNoEscape(t, outside, *hits)
+}
+
+// countingServer stands in for Sleeper and counts requests, so a rejected
+// argument can be shown to cost no upstream call at all.
+func countingServer(t *testing.T, body string) (*httptest.Server, *int) {
+	t.Helper()
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Write([]byte(body))
+	}))
+	orig := baseURL
+	baseURL = srv.URL
+	t.Cleanup(func() { baseURL = orig })
+	return srv, &hits
+}
+
+func assertNoEscape(t *testing.T, outside string, hits int) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(outside, "pwned.json")); err == nil {
+		t.Error("a cache entry was written OUTSIDE the cache root: the key is a file path, " +
+			"so a separator in an argument escapes it")
+	}
+	if hits != 0 {
+		t.Errorf("upstream was called %d times for a rejected argument, want 0", hits)
 	}
 }
