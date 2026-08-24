@@ -653,10 +653,58 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// Authorization header) except the Host header — the Function URL origin
 	// doesn't need CloudFront's own Host and forwarding it risks the origin
 	// rejecting the request.
-	// /invite is the universal-link path the iOS app claims in its AASA
-	// applinks block, so it has to render the SPA for anyone who taps the link
-	// WITHOUT the app installed. It does not today: the origin is S3 behind
-	// OAC, which does no directory-index for subpaths, so /invite is a 403.
+
+	// dashboardHosts are the names this distribution answers to under its own
+	// identity. ONE slice, because it feeds two places that must not disagree:
+	// the distribution's DomainNames (the aliases CloudFront serves) and the
+	// viewer-request function's allowlist (the aliases it does NOT redirect
+	// away). TestDashboardRedirect_AllowlistMatchesTheDistributionAliases pins
+	// them together against the synthesized template rather than against this
+	// variable, so a future edit that reaches past it still fails.
+	dashboardHosts := []string{dashHost, apexHost}
+
+	canonicalJS := make([]string, len(dashboardHosts))
+	for i, h := range dashboardHosts {
+		canonicalJS[i] = "'" + h + "'"
+	}
+
+	// Two jobs, one viewer-request function — and the ORDER of them is the
+	// contract. The host redirect runs first, so an /invite link opened on a
+	// deprecated hostname is redirected with its path and token intact and the
+	// apex's own pass rewrites it; rewriting first would serve index.html from
+	// the very hostname we are retiring.
+	//
+	// (1) DEPRECATE THE DEFAULT *.cloudfront.net NAME. It was the dashboard's
+	// original URL and, until rosterbot-jloe.4, the WebAuthn RP ID. It is now
+	// neither, and it had become a trap rather than a fallback: the SPA renders
+	// perfectly there while every ceremony is refused for RP mismatch, because
+	// DASHBOARD_RP_ORIGIN below lists only the apex and dash. A login page that
+	// looks healthy and fails at the biometric prompt is worse than one that is
+	// gone. CloudFront does not let a distribution disown its default name, so
+	// a redirect is the only spelling of "retired" available.
+	//
+	// AN ALLOWLIST, NOT A MATCH ON THE OLD NAME — and that is forced, not
+	// stylistic. This function is an INPUT to dashboardDist, so reading
+	// dashboardDist.DistributionDomainName() here would close a
+	// Function -> Distribution -> Function cycle, the same one documented at
+	// the DASHBOARD_CF_DIST_ID and RP_ID/RP_ORIGIN blocks below. The allowlist
+	// needs no reference at all. It is also inert to a distribution
+	// REPLACEMENT, which mints a new cloudfront.net name that an exact-match
+	// denylist would silently stop catching — the reasoning that keeps the RP
+	// ID a literal, one level down.
+	//
+	// 301 WITH A BOUNDED cache-control. The status says "this hostname is not
+	// coming back", which is true and is what makes link-rewriting clients do
+	// the right thing; the max-age keeps a browser from pinning it forever, so
+	// a mistake here expires in an hour instead of needing every operator to
+	// clear their cache. The two are not in tension — one is the semantics of
+	// the move, the other the revalidation policy for it.
+	//
+	// (2) SERVE THE SPA AT /invite (universal-link fallback). /invite is the
+	// path the iOS app claims in its AASA applinks block, so it has to render
+	// the SPA for anyone who taps the link WITHOUT the app installed. It does
+	// not by default: the origin is S3 behind OAC, which does no directory
+	// index for subpaths, so /invite is a 403.
 	//
 	// A viewer-request function rather than the obvious ErrorResponses
 	// 403/404 -> /index.html. CloudFront custom error responses apply to the
@@ -665,13 +713,51 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// the iOS client reads those 401s to drive its sign-in gate, so it would
 	// sign users out into a page that looks fine. A function association is
 	// per behavior, so attaching this to DefaultBehavior alone leaves /v1/*
-	// semantics untouched. The rewrite is also exact rather than a catch-all:
-	// a genuine 404 stays a 404.
-	inviteRewrite := awscloudfront.NewFunction(stack, jsii.String("InviteRewrite"), &awscloudfront.FunctionProps{
+	// semantics untouched. That scoping now carries the redirect too, and
+	// deliberately: a 301 on /v1/* would break every POST that followed it
+	// (method and body are not preserved), and leaving the API reachable on
+	// the old name keeps the bearer-token break-glass working if the apex
+	// alias or certificate ever fails — see the DashboardCdnDefaultUrl output.
+	// The rewrite is also exact rather than a catch-all: a genuine 404 stays
+	// a 404.
+	//
+	// The construct id is still "InviteRewrite" although the function now does
+	// two things. Renaming it would change the logical id, replacing the
+	// function and rewriting dashboardDist's association for no behavioural
+	// gain — deploy churn on the slowest resource in the stack, to fix a name.
+	dashboardViewerRequest := awscloudfront.NewFunction(stack, jsii.String("InviteRewrite"), &awscloudfront.FunctionProps{
 		Runtime: awscloudfront.FunctionRuntime_JS_2_0(),
-		Comment: jsii.String("serve the dashboard SPA at /invite (universal-link fallback)"),
+		Comment: jsii.String("redirect deprecated hostnames to the apex; serve the SPA at /invite"),
 		Code: awscloudfront.FunctionCode_FromInline(jsii.String(`function handler(event) {
     var request = event.request;
+    var canonical = [` + strings.Join(canonicalJS, ", ") + `];
+    var host = request.headers.host ? request.headers.host.value.toLowerCase() : '';
+
+    if (canonical.indexOf(host) === -1) {
+        var pairs = [];
+        for (var key in request.querystring) {
+            var q = request.querystring[key];
+            if (q.multiValue) {
+                for (var i = 0; i < q.multiValue.length; i++) {
+                    pairs.push(key + '=' + q.multiValue[i].value);
+                }
+            } else if (q.value === '') {
+                pairs.push(key);
+            } else {
+                pairs.push(key + '=' + q.value);
+            }
+        }
+        var query = pairs.length ? '?' + pairs.join('&') : '';
+        return {
+            statusCode: 301,
+            statusDescription: 'Moved Permanently',
+            headers: {
+                'location': { value: 'https://` + apexHost + `' + request.uri + query },
+                'cache-control': { value: 'max-age=3600' }
+            }
+        };
+    }
+
     if (request.uri === '/invite' || request.uri === '/invite/') {
         request.uri = '/index.html';
     }
@@ -681,18 +767,20 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 
 	dashboardDist := awscloudfront.NewDistribution(stack, jsii.String("DashboardCdn"), &awscloudfront.DistributionProps{
 		DefaultRootObject: jsii.String("index.html"),
-		// The SPA and the /v1 API answer on this hostname from here on. The
-		// default cloudfront.net name keeps serving alongside it, which is what
-		// makes this step non-breaking: the WebAuthn RP ID below still names
-		// that old domain, so every registered passkey keeps working exactly
-		// where it was registered. A ceremony attempted from dash. will be
-		// refused for RP mismatch until rosterbot-jloe.4 deliberately flips it
-		// — that refusal is the designed intermediate state, not a fault.
+		// The SPA and the /v1 API answer on these hostnames, and the SPA answers
+		// on NO others: the viewer-request function above 301s anything else —
+		// in practice the default cloudfront.net name — to the apex.
+		//
 		// Both names, because the apex is the WebAuthn RP ID from
 		// rosterbot-jloe.6 and iOS native ceremonies report their origin as
 		// https://<rpId> — so the apex has to be a real served origin, not
-		// just a DNS name that redirects. dash. stays because every existing
-		// browser passkey and every bookmark names it.
+		// just a DNS name that redirects. dash. stays because bookmarks name
+		// it; it is no longer needed for credentials, since a passkey scoped
+		// to the apex RP ID is usable from any subdomain of it.
+		//
+		// This list and the function's allowlist are the same slice for a
+		// reason: a name served here but absent there would 301 away from
+		// itself, and the apex missing from there would 301 to itself forever.
 		//
 		// The certificate must cover BOTH or this deploy fails with
 		// InvalidViewerCertificate. It does not by default: SiteCert names
@@ -701,13 +789,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// (SubjectAlternativeNames is an update-requires-replacement property
 		// on AWS::CertificateManager::Certificate), which is why this deploy
 		// is slower and more failure-prone than its diff suggests.
-		DomainNames: jsii.Strings(dashHost, apexHost),
+		DomainNames: jsii.Strings(dashboardHosts...),
 		Certificate: props.Certificate,
 		DefaultBehavior: &awscloudfront.BehaviorOptions{
 			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(dashboardBucket, nil),
 			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
 			FunctionAssociations: &[]*awscloudfront.FunctionAssociation{{
-				Function:  inviteRewrite,
+				Function:  dashboardViewerRequest,
 				EventType: awscloudfront.FunctionEventType_VIEWER_REQUEST,
 			}},
 		},
@@ -760,8 +848,18 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardUrl"), &awscdk.CfnOutputProps{
 		Value: jsii.String("https://" + dashHost),
 	})
-	// Still emitted, and still the origin every passkey is bound to until the
-	// RP cutover. Losing sight of it would mean losing the URL that still works.
+	// DEPRECATED AS A DASHBOARD URL, and still emitted on purpose.
+	//
+	// It is no longer where anyone signs in: the SPA 301s from here to the
+	// apex, and it stopped being the WebAuthn RP ID at rosterbot-jloe.4. What
+	// survives is /v1/*, which carries no function association and so still
+	// answers on this name. That is the break-glass the props comment at the
+	// top of this file worries about — if the apex alias or the us-east-1
+	// certificate ever fails, this is the origin the bearer-token recovery
+	// curl in docs/aws-deployment.md can still reach. Dropping the output
+	// would satisfy the epic's "no in-repo references" tidily and throw that
+	// away; the name is not a secret, and an escape hatch nobody can find is
+	// not an escape hatch.
 	awscdk.NewCfnOutput(stack, jsii.String("DashboardCdnDefaultUrl"), &awscdk.CfnOutputProps{
 		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{jsii.String("https://"), dashboardDist.DistributionDomainName()}),
 	})

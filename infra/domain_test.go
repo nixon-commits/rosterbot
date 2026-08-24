@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -283,11 +285,46 @@ func TestApexAlias_CoversBothAddressFamilies(t *testing.T) {
 // reads those 401s to drive its sign-in gate, so it would sign users out into a
 // page that renders perfectly. Asserting the association's SCOPE is what keeps
 // a future "let's simplify this" from reintroducing that.
+//
+// The scoping now carries a second passenger: the deprecated-hostname 301.
+// Letting that reach /v1/* would break every POST that followed it — a 301
+// preserves neither method nor body — and would close the one break-glass the
+// DashboardCdnDefaultUrl output exists to keep open.
 func TestInviteRewrite_IsScopedToTheDefaultBehaviorOnly(t *testing.T) {
+	logicalID, cfg := dashboardDistribution(t)
+
+	def, _ := cfg["DefaultCacheBehavior"].(map[string]any)
+	if _, ok := def["FunctionAssociations"]; !ok {
+		t.Errorf("%s DefaultCacheBehavior has no FunctionAssociations; /invite will 403 "+
+			"and the universal-link fallback page will not render", logicalID)
+	}
+	for _, b := range asSlice(cfg["CacheBehaviors"]) {
+		beh, _ := b.(map[string]any)
+		if _, ok := beh["FunctionAssociations"]; ok {
+			t.Errorf("%s behavior %v carries a FunctionAssociation; the viewer-request function "+
+				"must not reach /v1/*, whose 401/403 responses the iOS sign-in gate depends on "+
+				"and whose POSTs a 301 would break", logicalID, beh["PathPattern"])
+		}
+	}
+}
+
+// dashboardDistribution returns DashboardCdn's logical id and synthesized
+// DistributionConfig.
+//
+// It matches on the apex being SOMEWHERE in Aliases rather than at a fixed
+// position. The prior spelling asserted aliases[0] == dashHost, which is a
+// property of the argument order in one jsii.Strings call and not of anything
+// CloudFront cares about — so reordering that call made the loop match nothing
+// and the test would have reported PASS by examining no distribution at all,
+// if the trailing count check had not caught it. The count check stays, here,
+// where every caller inherits it.
+func dashboardDistribution(t *testing.T) (string, map[string]any) {
+	t.Helper()
 	_, raw := infraTemplate(t)
 	resources, _ := raw["Resources"].(map[string]any)
 
-	var checked int
+	var ids []string
+	var cfgs []map[string]any
 	for logicalID, r := range resources {
 		res, _ := r.(map[string]any)
 		if res["Type"] != "AWS::CloudFront::Distribution" {
@@ -295,30 +332,26 @@ func TestInviteRewrite_IsScopedToTheDefaultBehaviorOnly(t *testing.T) {
 		}
 		props, _ := res["Properties"].(map[string]any)
 		cfg, _ := props["DistributionConfig"].(map[string]any)
-		aliases, _ := cfg["Aliases"].([]any)
-		if len(aliases) == 0 || aliases[0] != dashHost {
-			continue // the recap distribution; not this test's subject
+		if !containsHost(asSlice(cfg["Aliases"]), apexHost) {
+			continue // the recap distribution; not the dashboard
 		}
-		checked++
+		ids = append(ids, logicalID)
+		cfgs = append(cfgs, cfg)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("matched %d distributions carrying the apex alias %q, want exactly 1 — "+
+			"the test is not watching what it thinks it is", len(ids), apexHost)
+	}
+	return ids[0], cfgs[0]
+}
 
-		def, _ := cfg["DefaultCacheBehavior"].(map[string]any)
-		if _, ok := def["FunctionAssociations"]; !ok {
-			t.Errorf("%s DefaultCacheBehavior has no FunctionAssociations; /invite will 403 "+
-				"and the universal-link fallback page will not render", logicalID)
-		}
-		for _, b := range asSlice(cfg["CacheBehaviors"]) {
-			beh, _ := b.(map[string]any)
-			if _, ok := beh["FunctionAssociations"]; ok {
-				t.Errorf("%s behavior %v carries a FunctionAssociation; the /invite rewrite must "+
-					"not reach /v1/*, whose 401/403 responses the iOS sign-in gate depends on",
-					logicalID, beh["PathPattern"])
-			}
+func containsHost(vals []any, want string) bool {
+	for _, v := range vals {
+		if s, ok := v.(string); ok && s == want {
+			return true
 		}
 	}
-	if checked != 1 {
-		t.Fatalf("matched %d dashboard distributions, want exactly 1 — the test is not "+
-			"watching what it thinks it is", checked)
-	}
+	return false
 }
 
 func asSlice(v any) []any {
@@ -475,4 +508,129 @@ func TestMailRecords_DmarcIsDeliberatelyInertForNow(t *testing.T) {
 	if !strings.Contains(got[0][0], "p=none") {
 		t.Errorf("_dmarc = %q; if this was tightened deliberately, update this test and confirm DKIM signs first", got[0][0])
 	}
+}
+
+// The redirect allowlist and the distribution's aliases must name the SAME set.
+//
+// They are one Go slice at the call site, so this looks like it cannot fail —
+// which is the reason to assert it against the synthesized template instead of
+// against that slice. The two values land in unrelated corners of the output
+// (a CloudFront function's inline source, and a distribution's Aliases array),
+// and either can be edited without the other. Both directions are real bugs
+// and neither surfaces at deploy time:
+//
+//   - alias served but NOT allowlisted -> that hostname 301s away from itself,
+//     so the name is advertised, certificated, DNS'd, and unusable.
+//   - allowlisted but NOT served -> nothing, today; it is dead configuration
+//     that quietly stops being dead the day someone adds the alias back.
+func TestDashboardRedirect_AllowlistMatchesTheDistributionAliases(t *testing.T) {
+	_, cfg := dashboardDistribution(t)
+
+	var aliases []string
+	for _, a := range asSlice(cfg["Aliases"]) {
+		if s, ok := a.(string); ok {
+			aliases = append(aliases, s)
+		}
+	}
+	allow := redirectAllowlist(t)
+
+	sort.Strings(aliases)
+	sort.Strings(allow)
+	if !slices.Equal(aliases, allow) {
+		t.Errorf("distribution aliases %v != redirect allowlist %v; a served name missing from "+
+			"the allowlist 301s away from itself", aliases, allow)
+	}
+}
+
+// The redirect target must be a member of its own allowlist.
+//
+// This is the one failure here that is not merely a broken hostname: if the
+// apex were served but absent from the allowlist, every apex request would 301
+// to the apex, forever, and the dashboard would be gone for everyone at once.
+// It reads as pedantic — the target and the first allowlist entry are the same
+// constant today — and it is the difference between a deploy and an outage the
+// moment they stop being.
+func TestDashboardRedirect_TargetsAHostInsideItsOwnAllowlist(t *testing.T) {
+	code := dashboardFunctionCode(t)
+
+	const marker = "'https://"
+	i := strings.Index(code, marker)
+	if i < 0 {
+		t.Fatal("no redirect target in the viewer-request function; the deprecated " +
+			"*.cloudfront.net hostname serves the dashboard again")
+	}
+	rest := code[i+len(marker):]
+	j := strings.Index(rest, "'")
+	if j < 0 {
+		t.Fatal("unterminated redirect target in the viewer-request function")
+	}
+	target := rest[:j]
+
+	if !slices.Contains(redirectAllowlist(t), target) {
+		t.Errorf("redirect target %q is not in the allowlist %v; requests to it would 301 to "+
+			"themselves in an unbreakable loop", target, redirectAllowlist(t))
+	}
+	if target != apexHost {
+		t.Errorf("redirect target = %q, want the apex %q — the apex is the WebAuthn RP ID, so "+
+			"it is the only name a deprecated hostname may hand a signing-in user to",
+			target, apexHost)
+	}
+	if !strings.Contains(code, "301") {
+		t.Error("the hostname redirect is not a 301; a temporary redirect tells clients the " +
+			"deprecated name is coming back")
+	}
+}
+
+// dashboardFunctionCode returns the inline source of the one CloudFront
+// function in the stack. A plain string, not an Fn::Join: the code interpolates
+// only Go constants, so a token appearing here would mean someone reached for a
+// resource attribute and reintroduced the Function -> Distribution cycle.
+func dashboardFunctionCode(t *testing.T) string {
+	t.Helper()
+	_, raw := infraTemplate(t)
+	resources, _ := raw["Resources"].(map[string]any)
+
+	var codes []string
+	for _, r := range resources {
+		res, _ := r.(map[string]any)
+		if res["Type"] != "AWS::CloudFront::Function" {
+			continue
+		}
+		props, _ := res["Properties"].(map[string]any)
+		code, ok := props["FunctionCode"].(string)
+		if !ok {
+			t.Fatalf("FunctionCode is %T, not a literal string — an unresolved token here means "+
+				"the function references a resource attribute, which is the circular dependency "+
+				"the allowlist exists to avoid", props["FunctionCode"])
+		}
+		codes = append(codes, code)
+	}
+	if len(codes) != 1 {
+		t.Fatalf("found %d CloudFront functions, want exactly 1", len(codes))
+	}
+	return codes[0]
+}
+
+// redirectAllowlist parses the canonical-host array out of the function source.
+func redirectAllowlist(t *testing.T) []string {
+	t.Helper()
+	code := dashboardFunctionCode(t)
+
+	const marker = "var canonical = ["
+	i := strings.Index(code, marker)
+	if i < 0 {
+		t.Fatalf("no %q in the viewer-request function; without it every hostname is canonical "+
+			"and the deprecated *.cloudfront.net name serves the dashboard again", marker)
+	}
+	rest := code[i+len(marker):]
+	j := strings.Index(rest, "]")
+	if j < 0 {
+		t.Fatal("unterminated canonical-host array in the viewer-request function")
+	}
+
+	var hosts []string
+	for _, f := range strings.Split(rest[:j], ",") {
+		hosts = append(hosts, strings.Trim(strings.TrimSpace(f), "'"))
+	}
+	return hosts
 }
