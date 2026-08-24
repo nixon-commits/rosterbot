@@ -70,6 +70,27 @@ func TestHitterFPtsFromGame(t *testing.T) {
 	}
 }
 
+func TestHitterFPtsFromGame_CycleBonus(t *testing.T) {
+	w := ScoringWeights{"1B": 1, "2B": 2, "3B": 3, "HR": 4, "XBH": 2, "TB": 1, "CYC": 50}
+
+	cycle := mlbGameLogDay{H: 4, Doubles: 1, Triples: 1, HR: 1}
+	// 1B=1, 2B=1, 3B=1, HR=1, XBH=3, TB=1+2+3+4=10
+	// base = 1 + 2 + 3 + 4 + 3*2 + 10 = 26, + CYC 50 = 76
+	if got, want := hitterFPtsFromGame(cycle, w), 76.0; got != want {
+		t.Errorf("hitterFPtsFromGame(cycle) = %v, want %v", got, want)
+	}
+
+	near := mlbGameLogDay{H: 3, Doubles: 1, HR: 1} // no triple
+	// base = 1B(1) + 2B(2) + HR(4) + XBH(2*2=4) + TB(1+2+4=7*1=7) = 18
+	if got, want := hitterFPtsFromGame(near, w), 18.0; got != want {
+		t.Errorf("hitterFPtsFromGame(near-cycle, missing 3B) = %v, want %v (CYC must not fire)", got, want)
+	}
+
+	if got, want := hitterFPtsFromGame(cycle, ScoringWeights{}), 0.0; got != want {
+		t.Errorf("hitterFPtsFromGame(cycle, no CYC weight configured) = %v, want %v (CYC absent must not synthesize points)", got, want)
+	}
+}
+
 func TestPitcherFPtsFromGame(t *testing.T) {
 	w := ScoringWeights{
 		"IP": 3, "K": 1, "BB": -1, "H": -1, "ER": -2,
@@ -100,6 +121,68 @@ func TestPitcherFPtsFromGame(t *testing.T) {
 			game: mlbGameLogDay{IP: 1, K: 2, SV: 1},
 			// IP*3 + K*1 + SV*8 = 3 + 2 + 8 = 13
 			want: 13,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := pitcherFPtsFromGame(c.game, w)
+			if got != c.want {
+				t.Errorf("pitcherFPtsFromGame() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestPitcherFPtsFromGame_NoHitterAndPerfectGameBonus(t *testing.T) {
+	// Live league config: .cache/fantrax-pitcher-scoring-*.json (NH=25, PG=75).
+	w := ScoringWeights{"IP": 3, "K": 1, "BB": -1, "H": -1, "ER": -2, "NH": 25, "PG": 75}
+
+	cases := []struct {
+		name string
+		game mlbGameLogDay
+		want float64
+	}{
+		{
+			name: "perfect game — also qualifies as a no-hitter, both bonuses stack",
+			game: mlbGameLogDay{IP: 9, K: 10, OutsP: 27, BattersFaced: 27, GroundOutsP: 17, AirOutsP: 0},
+			// IP*3 + K*1 = 27 + 10 = 37, + NH 25 + PG 75 = 137
+			want: 137,
+		},
+		{
+			name: "no-hitter with a walk is not a perfect game",
+			game: mlbGameLogDay{IP: 9, K: 8, BBA: 1, OutsP: 27, BattersFaced: 28, GroundOutsP: 19, AirOutsP: 0},
+			// IP*3 + K*1 + BB*-1 = 27 + 8 - 1 = 34, + NH 25 (PG doesn't fire) = 59
+			want: 59,
+		},
+		{
+			name: "one hit allowed — neither bonus fires",
+			game: mlbGameLogDay{IP: 9, K: 6, HA: 1, OutsP: 27, BattersFaced: 28, GroundOutsP: 21, AirOutsP: 0},
+			// IP*3 + K*1 + H*-1 = 27 + 6 - 1 = 32
+			want: 32,
+		},
+		{
+			name: "8.2 complete-game shutout bid, pulled one out short of 9",
+			game: mlbGameLogDay{IP: 8.667, K: 9, OutsP: 26, BattersFaced: 26, GroundOutsP: 17, AirOutsP: 0},
+			// IP*3 + K*1 = 26 + 9 = 35 (8.667 rounds through float, not exact,
+			// but IP isn't under test here — OutsP is what gates NH/PG, and
+			// 26 < 27 keeps both bonuses off regardless of the IP value)
+			want: 8.667*3 + 9,
+		},
+		{
+			name: "reached on error — still a no-hitter, but not a perfect game",
+			game: mlbGameLogDay{IP: 9, K: 11, OutsP: 27, BattersFaced: 28, GroundOutsP: 16, AirOutsP: 0},
+			// IP*3 + K*1 = 27 + 11 = 38. H/BB/HBP are all zero so NH fires
+			// (a no-hitter permits a runner reaching by error); PG does not,
+			// since BattersFaced(28) != Outs(27) — this is exactly the case
+			// the H/BB/HBP-only check would have wrongly called perfect.
+			want: 38 + 25,
+		},
+		{
+			name: "BattersFaced missing from the feed — perfect-game bonus withheld conservatively",
+			game: mlbGameLogDay{IP: 9, K: 9, OutsP: 27},
+			// IP*3 + K*1 = 27 + 9 = 36, + NH 25 (Hits=0 still holds); PG needs
+			// BattersFaced>0 which isn't present here, so PG withheld.
+			want: 61,
 		},
 	}
 	for _, c := range cases {
@@ -784,5 +867,27 @@ func TestBackfillDailyFPts_SeparatesUnresolvedFromFetchFailure(t *testing.T) {
 	}
 	if stats.Flagged != 2 {
 		t.Errorf("Flagged = %d, want 2", stats.Flagged)
+	}
+}
+
+// TestPitcherFPtsFromGame_ErasedRunnerIsANoHitterNotAPerfectGame is the
+// end-to-end companion to scoring.TestIsPerfectGame_NoHitterWithARunnerErasedOnTheBases:
+// it pins that BatterOuts is actually threaded from the decoded game log into
+// the predicate, not merely present on the struct.
+//
+// 27 outs, no hits/walks/HBP, and battersFaced == outs — the shape that passes
+// the BattersFaced identity — but only 26 of the outs were charged to a
+// batter's plate appearance, because one runner reached on an error and was
+// erased on a double play. NH must fire; PG must not.
+func TestPitcherFPtsFromGame_ErasedRunnerIsANoHitterNotAPerfectGame(t *testing.T) {
+	w := ScoringWeights{"NH": 25, "PG": 75}
+	g := mlbGameLogDay{
+		IP: 9, K: 10, OutsP: 27, BattersFaced: 27,
+		GroundOutsP: 16, AirOutsP: 0, // 16 + 0 + 10 K = 26 batter outs, not 27
+	}
+	got := pitcherFPtsFromGame(g, w)
+	if got != 25 {
+		t.Errorf("FPts = %v, want 25 (no-hitter only) — a runner erased on the bases "+
+			"satisfies BattersFaced==Outs but must not award the perfect-game bonus", got)
 	}
 }
