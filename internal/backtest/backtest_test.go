@@ -185,10 +185,10 @@ func TestWriteLoadSnapshot_Roundtrip(t *testing.T) {
 		ProjectionSystem: "depthcharts",
 		GeneratedAt:      time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC),
 		Hitters: []SnapshotPlayer{
-			{PlayerID: "h1", Name: "Test Hitter", MLBTeam: "NYY", ProjPtsPerGame: 8.5, HasGame: true, WasStarted: true},
+			{PlayerID: "h1", Name: "Test Hitter", MLBTeam: "NYY", ProjPtsPerGame: 8.5, HasGame: true},
 		},
 		Pitchers: []SnapshotPlayer{
-			{PlayerID: "p1", Name: "Test SP", MLBTeam: "LAD", ProjPtsPerGame: 14.2, HasGame: true, WasStarted: true, IsStarter: true, Role: "SP"},
+			{PlayerID: "p1", Name: "Test SP", MLBTeam: "LAD", ProjPtsPerGame: 14.2, HasGame: true, IsStarter: true, Role: "SP"},
 		},
 	}
 	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {
@@ -673,7 +673,7 @@ func TestWriteLoadSnapshot_RichFieldsRoundtrip(t *testing.T) {
 		Date: "2026-05-29",
 		Hitters: []SnapshotPlayer{
 			{PlayerID: "h1", Name: "Rich Hitter", MLBTeam: "NYY", ProjPtsPerGame: 8.5,
-				HasGame: true, WasStarted: true, Slot: "OF", Locked: true, Eligibility: []string{"012", "014"}},
+				HasGame: true, Slot: "OF", Locked: true, Eligibility: []string{"012", "014"}},
 		},
 	}
 	if err := WriteSnapshot(NewFileSnapshotStore(dir), "", s); err != nil {

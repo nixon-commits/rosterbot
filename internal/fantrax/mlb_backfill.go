@@ -50,22 +50,33 @@ type mlbGameLogDay struct {
 	GIDP    int `json:"gidp"`
 
 	// Pitching stats
-	IP      float64 `json:"ip"`
-	HA      int     `json:"ha"`
-	ER      int     `json:"er"`
-	BBA     int     `json:"bba"`
-	K       int     `json:"k"`
-	HRA     int     `json:"hra"`
-	W       int     `json:"w"`
-	L       int     `json:"l"`
-	SV      int     `json:"sv"`
-	HLD     int     `json:"hld"`
-	BS      int     `json:"bs"`
-	PHBP    int     `json:"phbp"` // hit-by-pitch allowed (pitching)
-	WP      int     `json:"wp"`
-	BK      int     `json:"bk"`
-	OutsP   int     `json:"outs"` // raw outs; IP = OutsP/3
-	HasGame bool    `json:"has_game"`
+	IP    float64 `json:"ip"`
+	HA    int     `json:"ha"`
+	ER    int     `json:"er"`
+	BBA   int     `json:"bba"`
+	K     int     `json:"k"`
+	HRA   int     `json:"hra"`
+	W     int     `json:"w"`
+	L     int     `json:"l"`
+	SV    int     `json:"sv"`
+	HLD   int     `json:"hld"`
+	BS    int     `json:"bs"`
+	PHBP  int     `json:"phbp"` // hit-by-pitch allowed (pitching)
+	WP    int     `json:"wp"`
+	BK    int     `json:"bk"`
+	OutsP int     `json:"outs"` // raw outs; IP = OutsP/3
+	// BattersFaced backs the perfect-game predicate (scoring.IsPerfectGame):
+	// hits/walks/HBP allowed being zero can't rule out a runner reaching on a
+	// fielding error or catcher's interference, and BattersFaced == OutsP is
+	// what closes that gap. See internal/scoring/bonus.go for the identity.
+	BattersFaced int `json:"battersFaced"`
+	// GroundOutsP/AirOutsP join K to form BatterOuts — outs charged to a
+	// batter's own plate appearance. The perfect-game predicate needs them to
+	// tell a genuine perfect game from a no-hitter whose only baserunner was
+	// erased on the bases; see internal/scoring/bonus.go.
+	GroundOutsP int  `json:"ground_outs_p"`
+	AirOutsP    int  `json:"air_outs_p"`
+	HasGame     bool `json:"has_game"`
 }
 
 // backfillDailyFPts walks every DayRoster and resolves needsBackfill rows
@@ -357,6 +368,9 @@ func fetchMLBGameLogUncached(mlbamID int, group string, season int) ([]mlbGameLo
 					HitBatsmen     int    `json:"hitBatsmen"`
 					WildPitches    int    `json:"wildPitches"`
 					Balks          int    `json:"balks"`
+					BattersFaced   int    `json:"battersFaced"`
+					GroundOuts     int    `json:"groundOuts"`
+					AirOuts        int    `json:"airOuts"`
 				} `json:"stat"`
 			} `json:"splits"`
 		} `json:"stats"`
@@ -398,6 +412,10 @@ func fetchMLBGameLogUncached(mlbamID int, group string, season int) ([]mlbGameLo
 				d.PHBP = sp.Stat.HitBatsmen
 				d.WP = sp.Stat.WildPitches
 				d.BK = sp.Stat.Balks
+				d.OutsP = sp.Stat.Outs
+				d.BattersFaced = sp.Stat.BattersFaced
+				d.GroundOutsP = sp.Stat.GroundOuts
+				d.AirOutsP = sp.Stat.AirOuts
 			}
 			out = append(out, d)
 		}
@@ -438,29 +456,52 @@ func computeFPtsFromGameLog(log []mlbGameLogDay, date time.Time, isPitcher bool,
 
 // hitterFPtsFromGame computes single-game fantasy points from a hitter stat
 // line by adapting it to a scoring.HitterLine. No per-game division — the
-// input is already a single game.
+// input is already a single game. The cycle bonus is added here rather than
+// inside ApplyHitter (rosterbot-ec1): ApplyHitter's line can also represent a
+// season/window aggregate, where "has >=1 single/double/triple/HR" is true
+// for nearly every regular and would falsely fire every time.
 func hitterFPtsFromGame(g mlbGameLogDay, w ScoringWeights) float64 {
-	return scoring.ApplyHitter(scoring.HitterLine{
+	line := scoring.HitterLine{
 		H: float64(g.H), Doubles: float64(g.Doubles), Triples: float64(g.Triples),
 		HR: float64(g.HR), RBI: float64(g.RBI), R: float64(g.R),
 		BB: float64(g.BB), SB: float64(g.SB), CS: float64(g.CS),
 		HBP: float64(g.HBP), SO: float64(g.SO), GIDP: float64(g.GIDP),
-	}, w)
+	}
+	total := scoring.ApplyHitter(line, w)
+	if scoring.IsCycle(line) {
+		total += w["CYC"]
+	}
+	return total
 }
 
 // pitcherFPtsFromGame computes single-game fantasy points from a pitcher stat
 // line by adapting it to a scoring.PitcherLine. QS is derived here
 // (IP ≥ 6 AND ER ≤ 3). CG/SHO/PKO aren't tracked in the MLB game log, so they
-// are left zero — the rare events aren't worth a separate API call.
+// are left zero — the rare events aren't worth a separate API call. NH/PG are
+// event bonuses layered on afterward, same reasoning as the cycle bonus
+// above: they only make sense for a single outing, never a season aggregate.
 func pitcherFPtsFromGame(g mlbGameLogDay, w ScoringWeights) float64 {
 	var qs float64
 	if g.IP >= 6 && g.ER <= 3 {
 		qs = 1
 	}
-	return scoring.ApplyPitcher(scoring.PitcherLine{
+	total := scoring.ApplyPitcher(scoring.PitcherLine{
 		IP: g.IP, K: float64(g.K), BB: float64(g.BBA), H: float64(g.HA),
 		ER: float64(g.ER), HR: float64(g.HRA), W: float64(g.W), L: float64(g.L),
 		QS: qs, SV: float64(g.SV), HLD: float64(g.HLD), BS: float64(g.BS),
 		HBP: float64(g.PHBP), WP: float64(g.WP), BK: float64(g.BK),
 	}, w)
+
+	gameLine := scoring.PitcherGameLine{
+		Outs: g.OutsP, Hits: g.HA, Walks: g.BBA, HitBatsmen: g.PHBP,
+		BattersFaced: g.BattersFaced,
+		BatterOuts:   g.GroundOutsP + g.AirOutsP + g.K,
+	}
+	if scoring.IsNoHitter(gameLine) {
+		total += w["NH"]
+	}
+	if scoring.IsPerfectGame(gameLine) {
+		total += w["PG"]
+	}
+	return total
 }

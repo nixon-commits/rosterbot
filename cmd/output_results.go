@@ -33,6 +33,29 @@ func backtestToWireResult(rep backtest.Report) lineupapi.BacktestResult {
 		}
 		out.Accuracy = acc
 	}
+	if g := rep.Gate; g != nil {
+		gate := &lineupapi.BacktestGateOut{
+			Days:               g.Days,
+			DaysWithSnapshot:   g.DaysWithSnapshot,
+			DaysStale:          g.DaysStale,
+			SuppressedStarts:   g.SuppressedStarts,
+			SuppressedPtsGross: g.SuppressedPts,
+			ProtectedStarts:    g.ProtectedStarts,
+			ProtectedPtsGross:  g.ProtectedPts,
+			FloorMin:           g.FloorMin,
+			FloorMax:           g.FloorMax,
+		}
+		for _, d := range g.ByDate {
+			gate.ByDate = append(gate.ByDate, lineupapi.BacktestGateDayOut{
+				Date:              d.Date.UTC().Format(wireDate),
+				SuppressedStarts:  d.Starts,
+				PtsGross:          d.Pts,
+				ProtectedStarts:   d.Protected,
+				ProtectedPtsGross: d.ProtectedPts,
+			})
+		}
+		out.Gate = gate
+	}
 	return out
 }
 

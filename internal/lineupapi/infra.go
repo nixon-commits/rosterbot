@@ -34,6 +34,16 @@ type PrefixListing struct {
 	Bytes        int64     `json:"bytes"`
 	LastModified time.Time `json:"last_modified"`
 
+	// Truncated is true when the walk hit its object cap and stopped before
+	// enumerating the whole prefix. Every field above and below it is then a
+	// statement about the PART of the prefix that was read, not the prefix —
+	// and not merely approximate: Objects/Bytes are floors, but LastModified is
+	// the newest object SEEN, so a prefix with fresh objects past the cut can
+	// read stale, and Partitions/the sub-dimension values can omit the actual
+	// newest day entirely. A listing that never truncates (the local
+	// FileInfraStore has no cap) leaves this false.
+	Truncated bool `json:"truncated,omitempty"`
+
 	// Partitions holds the days this prefix has data for (YYYY-MM-DD), read
 	// either from a Hive dt= segment or from a bare YYYY-MM-DD.json basename.
 	// Empty for prefixes that carry no date in their keys.
@@ -116,6 +126,17 @@ type ArtifactStatus struct {
 	LastModified  time.Time `json:"last_modified,omitempty"`
 	AgeSeconds    float64   `json:"age_seconds,omitempty"`
 	MaxAgeSeconds float64   `json:"max_age_seconds,omitempty"`
+
+	// Truncated mirrors PrefixListing.Truncated: the listing this row is built
+	// from stopped before enumerating the whole prefix. Health is forced to
+	// HealthUnknown for a Durable row when this is set — the same treatment a
+	// failed listing already gets — because a truncated walk cannot support a
+	// freshness verdict (LastModified is only the newest object SEEN). Every
+	// partition-derived field (LatestPartition, Partitions, Gaps, LostGaps,
+	// Skipped) is withheld rather than computed from a partial read: a missing
+	// day and an unlisted day are not the same fact, and findGaps cannot tell
+	// them apart.
+	Truncated bool `json:"truncated,omitempty"`
 
 	LatestPartition string   `json:"latest_partition,omitempty"`
 	Partitions      int      `json:"partitions,omitempty"`
@@ -415,6 +436,7 @@ func buildStatusFor(ctx context.Context, lister InfraLister, artifacts []layout.
 
 		row.Objects, row.Bytes, row.LastModified = l.Objects, l.Bytes, l.LastModified
 		row.Subkeys = l.Subkeys
+		row.Truncated = l.Truncated
 		if !l.LastModified.IsZero() {
 			row.AgeSeconds = now.Sub(l.LastModified).Seconds()
 		}
@@ -454,7 +476,13 @@ func buildStatusFor(ctx context.Context, lister InfraLister, artifacts []layout.
 			}
 		}
 
-		if a.Partitioned && len(l.Partitions) > 0 {
+		// Every field this block derives — Partitions, LatestPartition, Gaps,
+		// LostGaps — is a claim about days that exist or don't, and a truncated
+		// walk cannot tell "missing" from "past the cut". Skip the whole
+		// derivation rather than compute it from a partial read: LatestPartition
+		// in particular reads keys lexicographically, so a walk that stops early
+		// can report an OLD day as the newest, the opposite of a floor.
+		if a.Partitioned && len(l.Partitions) > 0 && !l.Truncated {
 			days := make([]string, len(l.Partitions))
 			copy(days, l.Partitions)
 			sort.Strings(days)
@@ -528,6 +556,20 @@ func buildStatusFor(ctx context.Context, lister InfraLister, artifacts []layout.
 				row.Health = HealthGap
 			}
 		}
+
+		// A truncated listing overrides every verdict computed above it, for a
+		// Durable artifact — matching how a failed listing is already treated
+		// (HealthUnknown), because the reason is the same: we don't know enough
+		// to say. LastModified is only the newest object SEEN, so the staleness
+		// check above can read OK or Stale while the truth is the opposite, and
+		// nothing downstream should be trusted more than the walk that fed it.
+		// Ephemeral artifacts are exempt: their health never depends on
+		// freshness (artifactHealth returns HealthOK for them unconditionally),
+		// so a cache/ prefix hitting the object cap is not itself a problem.
+		if l.Truncated && a.Durable {
+			row.Health = HealthUnknown
+		}
+
 		st.Artifacts = append(st.Artifacts, row)
 	}
 	return st

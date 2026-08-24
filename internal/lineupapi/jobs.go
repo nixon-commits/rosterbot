@@ -126,8 +126,19 @@ var jobSpecs = map[string]JobSpec{
 	},
 	"grade": {
 		Name: "grade", Label: "Grade", Description: "Write graded snapshots to the Analysis Store.",
-		base:   []string{"grade"},
-		Params: []Param{{Name: "dry_run", Label: "Dry run", Type: "bool"}},
+		base: []string{"grade"},
+		Params: []Param{
+			// A dated backfill over a range with no actuals writes a full slate
+			// of actual=0 rows rather than a no-op (corruption, not a miss) —
+			// dry-run first and read the output before running it for real.
+			// A "grade --dates X" launch also won't match the scheduled
+			// "grade" JOB_SCHEDULES entry (the command string is the join key),
+			// so it won't satisfy that job's Overdue heartbeat — fine for a
+			// one-off backfill, not a substitute for the recurring run.
+			{Name: "dates", Label: "Window", Type: "daterange",
+				Help: "Backfill a specific date/range instead of the trailing 3-day default. Dry-run first: a range with no actuals writes actual=0 rows, not a no-op. Doesn't count toward the scheduled grade job's heartbeat."},
+			{Name: "dry_run", Label: "Dry run", Type: "bool"},
+		},
 	},
 	"recap-site": {
 		Name: "recap-site", Label: "Recap Site", Description: "Rebuild the weekly recap site.",

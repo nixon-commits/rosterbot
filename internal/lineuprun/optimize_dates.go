@@ -211,6 +211,7 @@ func optimizeOneDate(ft dateRosterClient, sched dateScheduleClient, in OptimizeI
 		warnings:      warnings,
 		venues:        venues,
 		benchedToday:  benchedToday,
+		budget:        dateBudget,
 	}
 
 	if in.ShowPipeline {

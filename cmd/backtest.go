@@ -91,7 +91,12 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	// Past periods are immutable — use a long TTL so repeat runs avoid the API.
 	snapTTL := cacheTTL(fantrax.PastPeriodTTL)
 
-	fmt.Printf("Fetching daily fantasy points for %s to %s...\n",
+	// Progress chatter goes to stderr, not stdout: under --json this function's
+	// stdout is a document, and a human-readable line in front of it made the
+	// output unparseable for exactly the consumers --json exists to serve
+	// (rosterbot-5cx). stderr keeps the line visible in a terminal and in the
+	// Fargate task's CloudWatch stream, which is where it is actually read.
+	fmt.Fprintf(os.Stderr, "Fetching daily fantasy points for %s to %s...\n",
 		start.Format("2006-01-02"), end.Format("2006-01-02"))
 	// DailyFantasyPoints resolves the MLB-statsapi backfill internally (soft-fail).
 	days, err := ft.DailyFantasyPoints(cfg.TeamID, start, end, seasonStart, cacheDir, snapTTL)
@@ -110,12 +115,34 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 
 	lineup := backtest.RunLineupAnalysis(days, hitterSlots, pitcherSlots)
 
+	// All three snapshot-derived sections are computed together and BEFORE the
+	// --json early return, so they reach every consumer rather than only
+	// stdout (rosterbot-5cx). They share one gate: each reads the projection
+	// snapshot directory, which is exactly what --skip-projections means it
+	// should not do. Two of them previously walked it anyway, making the flag
+	// a claim the code did not honour.
 	var proj []backtest.ProjectionDayResult
+	var gate *backtest.GateSummary
+	var shape *backtest.RosterShape
 	if !backtestSkipProjections {
 		proj = backtest.RunProjectionAnalysis(days, snapStore, backtestSnapshotDir)
+
+		dates := make([]time.Time, len(days))
+		for i, d := range days {
+			dates[i] = d.Date
+		}
+		if g := backtest.SummarizeGSGate(snapStore, backtestSnapshotDir, dates); g.Days > 0 {
+			gate = &g
+		}
+		if sh := backtest.SummarizeRosterShape(snapStore, backtestSnapshotDir, days,
+			len(hitterSlots), len(pitcherSlots)); sh.Days > 0 {
+			shape = &sh
+		}
 	}
 
 	report := backtest.BuildReport(start, end, lineup, proj)
+	report.Gate = gate
+	report.Shape = shape
 
 	lineupapi.RecordOutput("backtest", backtestToWireResult(report))
 
@@ -127,19 +154,15 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Print(backtest.FormatReport(report))
 
-	dates := make([]time.Time, len(days))
-	for i, d := range days {
-		dates[i] = d.Date
-	}
-	if gate := backtest.SummarizeGSGate(snapStore, backtestSnapshotDir, dates); gate.Days > 0 {
-		fmt.Print(backtest.FormatGateSummary(gate))
+	if report.Gate != nil {
+		fmt.Print(backtest.FormatGateSummary(*report.Gate))
 	}
 	// Roster shape is the analytical companion to the gate summary: the gate
 	// measures which starts the cap declined, this measures the structural
 	// imbalance that keeps producing them. Printed after so the measurement
 	// comes before its explanation.
-	if shape := backtest.SummarizeRosterShape(snapStore, backtestSnapshotDir, dates, len(hitterSlots), len(pitcherSlots)); shape.Days > 0 {
-		fmt.Print(backtest.FormatRosterShape(shape))
+	if report.Shape != nil {
+		fmt.Print(backtest.FormatRosterShape(*report.Shape))
 	}
 	return nil
 }
