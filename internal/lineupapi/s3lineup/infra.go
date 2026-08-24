@@ -153,6 +153,13 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 	out.Partitions = sortedKeys(parts)
 	out.Subkeys = sortedKeys(subs)
 
+	// Objects hits the cap exactly when the callback declined to continue (see
+	// the `return out.Objects < maxKeys` below), which is the only way this
+	// walk stops before Walk itself runs out of pages. That makes >= maxKeys
+	// the correct truncation test rather than == : a prefix whose true size is
+	// exactly maxKeys would otherwise be misread as cut off.
+	out.Truncated = out.Objects >= maxKeys
+
 	// A skipped day is a POSITIVE claim — "a marker is the only object under
 	// this day" — and a truncated walk cannot support it. Within a dt= day S3
 	// returns keys in lexicographic order, and "no-actuals.json" sorts before
@@ -160,17 +167,13 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 	// not the grades beside it, and the day reads as deliberately skipped when
 	// it was graded. Withhold the whole field rather than emit a label that is
 	// wrong for a reason nothing on the page discloses.
-	//
-	// Only this field is suppressed. Partitions and the gaps derived from it
-	// are equally unreliable under truncation, but that is pre-existing and
-	// unchanged here; a general truncation signal is tracked separately.
-	if out.Objects < maxKeys {
+	if !out.Truncated {
 		out.SkippedDays = lineupapi.MarkerOnlyDays(markerDays, dataDays)
 	}
 	// Same suppression for the per-tenant slices, which are cut from the one
 	// walk and are therefore truncated together with it.
 	skipped := func(marker, data map[string]bool) []string {
-		if out.Objects >= maxKeys {
+		if out.Truncated {
 			return nil
 		}
 		return lineupapi.MarkerOnlyDays(marker, data)

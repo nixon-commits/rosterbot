@@ -47,6 +47,15 @@ const HELP = {
     "fetched retroactively, so re-running the producer would write nothing.\n\n" +
     "Days listed as re-runnable are missing a run, not their input. Those do " +
     "fill in.",
+  truncated:
+    "This prefix has more objects than one listing will read, so the walk " +
+    "stopped early. Everything above is a statement about the PART that was " +
+    "read, not the whole prefix — object/byte counts are a floor, and the " +
+    "newest-object time can read fresher than reality if the actual newest " +
+    "object sits past the cut.\n\n" +
+    "Day counts, the latest day, and any missing-day list are withheld " +
+    "entirely rather than shown as a guess: a truncated walk cannot tell a " +
+    "day that's missing from one it simply never reached.",
 };
 
 function attachHelp(root) {
@@ -132,6 +141,17 @@ function artifactCard(a) {
   if (a.producer) bits.push(`<span class="muted">← ${escapeHtml(a.producer)}</span>`);
 
   let detail = "";
+
+  // Leads the detail section, ahead of every field it qualifies: a truncated
+  // walk withholds day counts, latest-day and gaps entirely (see the server
+  // side), so this is the only thing on the card explaining why a partitioned
+  // artifact with real data can show none of that detail.
+  if (a.truncated) {
+    detail += `<div class="infra-gap infra-gap-permanent">
+        Listing truncated — this row reflects a partial read of the prefix, not
+        the whole thing <span data-help="truncated"></span>
+      </div>`;
+  }
 
   if (a.partitioned && a.partitions) {
     detail += `<div class="infra-detail">${a.partitions} days`;
