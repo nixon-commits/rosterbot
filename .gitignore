@@ -18,6 +18,7 @@ rosterbot
 .trades/
 .tradevalues/
 .tradeoffers/
+.pool/
 .reports/
 # Anchored: the dashboard publish dir is ./report at the repo root. Unanchored,
 # this also matched internal/report/, silently ignoring every NEW file added to
@@ -26,6 +27,14 @@ rosterbot
 /report/
 .waivers/
 .lineup/
+# Every layout.Artifact.LocalDir belongs here. These three were missing:
+# .archive/ is the daily raw-upstream capture (HKB, 8 FanGraphs systems, 5
+# Savant CSVs, prospects) and is the largest of them; .alerts/ holds the
+# il-start and stale-cache dedup markers; .pool/ is the available-player
+# artifact. A local run of archive/lineup/team-values leaves them untracked,
+# where a broad `git add -A` sweeps them in.
+.archive/
+.alerts/
 .superpowers/
 fangraphs-leaderboard-projections*.csv
 verify_periods
