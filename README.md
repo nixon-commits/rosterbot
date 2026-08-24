@@ -266,6 +266,8 @@ lost device, and the troubleshooting table: **[docs/user-registration.md](docs/u
 rosterbot backtest
 rosterbot backtest --dates 2026-04-13:2026-04-19
 rosterbot backtest --skip-projections               # lineup-only, faster
+rosterbot backtest --json                           # machine-readable: adds the GS-gate
+                                                    # and roster-shape sections too
 
 # Compare recency-weighting strategies (YTD vs 14d/30d/decay) by lineup Gap
 rosterbot backtest --recency-experiment --dates 2026-05-01:2026-05-14
