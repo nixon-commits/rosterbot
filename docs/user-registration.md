@@ -96,14 +96,16 @@ to `.lineup/` and needs neither.
 ## Enrolling
 
 > **Which hostname?** Enrollment is a WebAuthn ceremony, so it only succeeds on
-> the origin the RP config currently names — today `https://<DashboardCdnDefaultUrl>`,
-> the `*.cloudfront.net` one, **not** `https://dash.rosterbot.dev`. The dashboard
-> serves on both hostnames since rosterbot-jloe.3, but passkeys are bound to their
-> RP ID forever, so the RP was deliberately left pointing at the old origin; a
-> ceremony from `dash.` is refused for RP mismatch until the cutover in
-> rosterbot-jloe.4. Send enrollment links against the origin in
-> `/rosterbot/DASHBOARD_RP_ORIGIN` rather than whatever `DashboardUrl` currently
-> prints — they are no longer the same value.
+> an origin listed in `/rosterbot/DASHBOARD_RP_ORIGIN` — since rosterbot-jloe.6
+> that is `https://rosterbot.dev` (the apex, and the RP ID) and
+> `https://dash.rosterbot.dev`. **Send enrollment links against the apex.**
+>
+> The `*.cloudfront.net` name is **not** one of them, and this is worth stating
+> because it was the correct answer until rosterbot-jloe.4 and reads like a
+> working URL: the SPA renders there perfectly and the ceremony is refused for
+> RP mismatch at the biometric prompt. It now 301s to the apex, so a stale link
+> against it recovers on its own rather than failing at the last step — but
+> mint new links against the apex, not against it.
 
 The invitee opens the dashboard with the token and enrolls a passkey. Their
 device prompts for Touch ID / Windows Hello / a security key, and on success

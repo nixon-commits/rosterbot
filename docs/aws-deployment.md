@@ -50,7 +50,7 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
   Exposed inside the SPA as the "Projections", "Value" and "Views" nav tabs, which render natively client-side (vendored Chart.js) — no iframe. The old standalone `ReportBucket`/`ReportCdn` (formerly at the `ReportUrl` stack output) has been retired. The `TeamValues` schedule (`cron(30 14 * * ? *)`) writes today's `analysis/team-values/` partition before `ProjectionSite` (15:00 UTC) renders `value.json`.
 
   **Cutover note:** the three old public objects are removed by the next `ProjectionSite` run without any manual step. `publishSite` mirrors `./report` with `--delete` scoped to the `report/` prefix, and `./report` no longer contains them, so `report/model.json`, `report/gap.json` and `report/views.json` are deleted as orphans and the following CloudFront invalidation clears the edge caches. Until that run completes, the stale copies remain readable — verify with an unauthenticated `curl` after the first post-deploy run.
-- **S3 dashboard bucket** (`DashboardBucket`) + **CloudFront** (`DashboardCdn`, served at **https://dash.rosterbot.dev**, also the `DashboardUrl` output; the default cloudfront.net name remains as `DashboardCdnDefaultUrl` and is still the origin every passkey is bound to — see Passkey auth below) — the private control-panel web UI (`web/dashboard/`, static, no build step). One distribution serves both surfaces: its default behavior serves the static files from `DashboardBucket`; an additional `/v1/*` behavior proxies straight to the `LineupApi` Function URL (`CachePolicy.CACHING_DISABLED`, `OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER` so the `Authorization` header passes through), making the browser's calls same-origin with zero CORS configuration anywhere. CodeBuild deploys the stack first, reads `DashboardBucketName` and `DashboardCdnId` from its outputs, then syncs `web/dashboard/` and invalidates the distribution on every push to `main` — including the first build that creates those resources.
+- **S3 dashboard bucket** (`DashboardBucket`) + **CloudFront** (`DashboardCdn`, served at **https://rosterbot.dev** and **https://dash.rosterbot.dev**, the latter also the `DashboardUrl` output; the default cloudfront.net name is **deprecated** — the SPA 301s from it to the apex, and it remains as the `DashboardCdnDefaultUrl` output only because `/v1/*` still answers there, which is the break-glass if the apex alias or the us-east-1 cert ever fails. See Passkey auth below) — the private control-panel web UI (`web/dashboard/`, static, no build step). One distribution serves both surfaces: its default behavior serves the static files from `DashboardBucket`; an additional `/v1/*` behavior proxies straight to the `LineupApi` Function URL (`CachePolicy.CACHING_DISABLED`, `OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER` so the `Authorization` header passes through), making the browser's calls same-origin with zero CORS configuration anywhere. CodeBuild deploys the stack first, reads `DashboardBucketName` and `DashboardCdnId` from its outputs, then syncs `web/dashboard/` and invalidates the distribution on every push to `main` — including the first build that creates those resources.
 - **Passkey auth** — the dashboard's real login is WebAuthn (`internal/lineupapi/webauthn.go`,
   library `github.com/go-webauthn/webauthn`). One `Identity` record (a stable user handle + every
   registered passkey) lives at `webauthn/identity.json` in the state bucket. Sessions are a
@@ -66,10 +66,17 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
   strings carrying no reference; the Lambda resolves them at cold start. `DASHBOARD_CF_DIST_ID`
   follows the same pattern for the same reason.
 
-  Both RP parameters still name the **cloudfront.net** domain, not `dash.rosterbot.dev`. Passkeys
-  are bound to their RP ID forever, so the hostname migration deliberately stopped short of touching
-  them (rosterbot-jloe.3); a WebAuthn ceremony attempted from `dash.rosterbot.dev` is refused for RP
-  mismatch until the cutover in rosterbot-jloe.4. That refusal is the designed intermediate state.
+  Both RP parameters name **`rosterbot.dev`**, the apex, since rosterbot-jloe.6 — `RP_ID` is the
+  apex alone, while `RP_ORIGIN` lists the apex *and* `dash.rosterbot.dev`. The asymmetry is
+  deliberate: the RP ID is the identity a credential is bound to (and an apex-scoped credential
+  works from any subdomain), whereas the origin is the concrete URL a ceremony came from, and there
+  are genuinely two — a browser on `dash.` reports itself, while an iOS native ceremony has no
+  browser origin and reports `https://<rpId>`.
+
+  The **cloudfront.net** name is on neither list. It held the RP ID until rosterbot-jloe.4, which
+  left it serving a dashboard nobody could sign into — the page rendered, the ceremony failed at the
+  biometric prompt. It is now deprecated: the SPA 301s from it to the apex (see the viewer-request
+  function in `infra/infra.go`). `/v1/*` deliberately still answers there; see below.
 
   **Recovering when a passkey is lost.** Not the bootstrap screen: it only appears when
   `login/begin` 404s (no identity has *ever* been registered), and the API-token path through it was
