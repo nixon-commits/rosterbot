@@ -413,3 +413,61 @@ func TestDeleteMembershipRouteCarriesItsPathValues(t *testing.T) {
 			rec.Body)
 	}
 }
+
+// countingUserStore counts PutUser calls. That is the only way to observe a
+// wasted write against FileUserStore, which versions by CONTENT HASH — an
+// identical rewrite leaves the record byte-for-byte unchanged, version
+// included, so nothing in the stored state distinguishes "wrote" from "did
+// not".
+type countingUserStore struct {
+	UserStore
+	puts int
+}
+
+func (c *countingUserStore) PutUser(ctx context.Context, u *User) error {
+	c.puts++
+	return c.UserStore.PutUser(ctx, u)
+}
+
+func deleteMembershipReq(uid UserID, platform, leagueID string) *http.Request {
+	req := httptest.NewRequest("DELETE", "/v1/memberships/"+platform+"/"+leagueID, nil)
+	req.SetPathValue("platform", platform)
+	req.SetPathValue("leagueID", leagueID)
+	return req.WithContext(withCaller(req.Context(), Caller{UserID: uid}))
+}
+
+// Deleting a membership that is not there must succeed — that rule is
+// deliberate — but it must not WRITE. Every write here is a real round trip to
+// DynamoDB in production and bumps User.Version, losing the race for any
+// optimistic write another request is holding. A retry, a double tap, or a
+// stale client should cost neither.
+func TestDeleteMembershipAbsentDoesNotWrite(t *testing.T) {
+	store := &countingUserStore{UserStore: membershipFixture(t, &User{ID: "u1",
+		Memberships: []Membership{{Platform: PlatformSleeper, LeagueID: "123"}}})}
+	cfg := Config{Users: store}
+
+	rec := httptest.NewRecorder()
+	cfg.handleDeleteMembership(rec, deleteMembershipReq("u1", "sleeper", "not-there"))
+
+	// Still a 200: an absent membership is a satisfied intent, not an error.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
+	}
+	if store.puts != 0 {
+		t.Errorf("PutUser called %d times; a delete that removed nothing wrote anyway",
+			store.puts)
+	}
+	// And the response still answers with the caller's real list, read from
+	// the same record the no-op path skipped writing.
+	if !strings.Contains(rec.Body.String(), `"league_id":"123"`) {
+		t.Errorf("body = %s, want the untouched membership list", rec.Body)
+	}
+
+	// The counter is not vacuous: a delete that DOES remove something writes.
+	rec = httptest.NewRecorder()
+	cfg.handleDeleteMembership(rec, deleteMembershipReq("u1", "sleeper", "123"))
+	if rec.Code != http.StatusOK || store.puts != 1 {
+		t.Errorf("real delete: status %d, puts %d; want 200 and exactly one write",
+			rec.Code, store.puts)
+	}
+}

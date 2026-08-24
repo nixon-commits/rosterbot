@@ -20,6 +20,13 @@ type client interface {
 	LeaguesForUser(userID, sport, season string) ([]sleeper.League, error)
 }
 
+// Pin the real client against the interface here rather than leaving it to
+// New()'s struct assignment. A refactor of New() — swapping in a wrapper,
+// taking the client as a parameter — would otherwise drop the only thing
+// checking that *sleeper.Client still satisfies this, with no signal at the
+// declaration a reader is looking at.
+var _ client = (*sleeper.Client)(nil)
+
 // Directory resolves a Sleeper username to the leagues that account is in.
 type Directory struct{ client client }
 
@@ -38,6 +45,15 @@ func New(cacheDir string) *Directory {
 // Sleeper the account id IS the roster owner id, so this is the value that
 // answers "which team in this league is yours" and it saves the client a
 // second round trip when it stores the membership.
+//
+// The ctx is DROPPED, and the interface promising otherwise is why that is
+// worth saying out loud. internal/sleeper is deliberately non-context, like
+// internal/schedule — so a caller's cancellation, including an HTTP client
+// hanging up, reaches nothing here. The only bound is sleeper.Client's own 10s
+// timeout, applied per call: two sequential calls means a wedged Sleeper can
+// hold a request for ~20s and there is no way to cut it short. Threading a ctx
+// through means giving internal/sleeper context-aware methods, which is a
+// change to that package's shape rather than to this adapter.
 func (d *Directory) LeaguesForUsername(_ context.Context, username, sport, season string) ([]lineupapi.SleeperLeague, error) {
 	u, err := d.client.UserByName(username)
 	if err != nil {

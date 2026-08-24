@@ -178,18 +178,37 @@ func (cfg Config) handleDeleteMembership(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// mutateUser hands the closure the record it just read; holding onto it
+	// lets the nothing-to-do path answer from that same read instead of
+	// issuing a second GetUser. mutateUser returns a closure error without
+	// retrying, so this is always the record the decision was made on.
+	errNothingRemoved := errors.New("no matching membership")
+	var read *User
 	u, err := cfg.mutateUser(r.Context(), caller.UserID, func(u *User) error {
+		read = u
 		kept := u.Memberships[:0]
+		removed := false
 		for _, m := range u.Memberships {
 			if m.Platform == platform && m.LeagueID == leagueID {
+				removed = true
 				continue
 			}
 			kept = append(kept, m)
+		}
+		if !removed {
+			return errNothingRemoved
 		}
 		u.Memberships = kept
 		return nil
 	})
 	switch {
+	// Nothing matched, so there is nothing to write. The 200 below is
+	// unchanged — removing an absent membership succeeding is the documented
+	// rule — but writing an identical record would cost a real round trip and
+	// bump User.Version, losing the race for any optimistic write another
+	// request is holding, in exchange for nothing.
+	case errors.Is(err, errNothingRemoved):
+		u = read
 	case errors.Is(err, errNoSuchUser):
 		writeErr(w, http.StatusNotFound, "no such user")
 		return

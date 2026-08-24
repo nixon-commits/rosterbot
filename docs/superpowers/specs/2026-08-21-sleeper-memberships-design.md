@@ -160,8 +160,11 @@ DELETE /v1/memberships/{platform}/{leagueID}        remove one
 ```
 
 Discovery is proxied server-side for two reasons: the client never needs to
-learn Sleeper's API shape or its base URL, and the lookup lands behind the
-client's existing cache instead of hitting Sleeper once per keystroke.
+learn Sleeper's API shape or its base URL, and the lookup goes through one
+place that can be cached or rate-limited rather than N app installs hitting
+Sleeper directly. Note the caching is weaker than it first appears — `serve`
+disables it entirely (`New("")`) and Lambda's is per-execution-environment
+`/tmp`, so a picker still reaches Sleeper across cold containers.
 
 `sport` and `season` are explicit because Sleeper scopes leagues by both — a
 username resolves to a different league set per sport per year. They default to
