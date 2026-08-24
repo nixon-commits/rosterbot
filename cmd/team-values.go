@@ -175,6 +175,7 @@ func buildAvailablePool(date time.Time, pool []models.PoolPlayer, hkbPlayers []h
 			ID:             pp.PlayerID,
 			Name:           pp.Name,
 			MLBTeam:        pp.MLBTeamShortName,
+			Positions:      pp.PosShortNames,
 			FantasyStatus:  pp.FantasyStatus,
 			MinorsEligible: pp.MinorsEligible,
 		})

@@ -168,7 +168,8 @@ that job has run once.
 { "generated_at": "2026-08-24T21:47:27Z", "hkb_as_of": "2026-08-24",
   "mlb": [
     { "id": "06dlz", "name": "Ryan Waldschmidt", "mlb_team": "AZ",
-      "pos": ["OF"], "level": "MLB", "prospect": false, "fypd": false,
+      "pos": ["OF"], "fantrax_pos": ["OF"], "level": "MLB",
+      "active_levels": "MLB/AAA", "prospect": false, "fypd": false,
       "age": 22.4, "hkb_value": 1369, "hkb_rank": 134,
       "rank_change_30d": 0, "value_change_30d": 0,
       "rank_history_30d": [137, 134, 130], "rank_history_starts_at": 0,
@@ -203,6 +204,16 @@ meaning only because rank is inverted. Pinned by `TestSignConvention`.
 Plot from `rank_history_starts_at`; plotting index 0 literally draws a new
 entrant as having fallen from the best possible rank. `rank_history_starts_at >
 0` means the player arrived on the board mid-window.
+
+**`pos` vs `fantrax_pos`** are different facts. `pos` is HKB's position list;
+`fantrax_pos` is the league's own eligibility — what answers "can I actually
+slot him". Prefer `fantrax_pos`, fall back to `pos` when it is absent.
+
+**`active_levels`** ("MLB/AAA") is HKB's shuttling marker, and `level` alone
+cannot express it: Ryan Waldschmidt and Cooper Pratt both read `level: "MLB"`
+while splitting the season with AAA, and both sit at the top of the `mlb`
+segment. A client badging "anything whose level is not MLB" shows nothing for
+exactly the players where it matters most.
 
 **`fantasy_status`** is `"FA"` or `"W"`, parsed — the pool feed puts markup in
 this field (`W <small>(Tue)</small>`), and no raw value reaches this payload.

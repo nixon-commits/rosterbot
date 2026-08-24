@@ -204,6 +204,80 @@ func TestIsUnownedMatchesWaiversDefinition(t *testing.T) {
 	}
 }
 
+// TestFantraxPosIsSeparateFromHKBPos: the two are different facts. HKB says
+// what a player is; Fantrax says where this league will let him play, which is
+// the question a pickup screen actually asks.
+func TestFantraxPosIsSeparateFromHKBPos(t *testing.T) {
+	hkbPlayers := []hkb.Player{
+		{Name: "Flex Guy", Value: 500, Rank: 300, Level: "AAA", Prospect: true,
+			Team: "MIL", Positions: []string{"SS"}, ActiveLevels: "MLB/AAA"},
+	}
+	pool := []PoolPlayer{{
+		ID: "1", Name: "Flex Guy", MLBTeam: "MIL", FantasyStatus: "FA",
+		MinorsEligible: true,
+		// Markup guarded even though this league's pool does not currently
+		// emit it — upstream documents the field as HTML, and this value lands
+		// in a durable artifact.
+		Positions: "<b>SS</b>,INF,UT",
+	}}
+
+	got := Build(now(), "2026-08-24", pool, hkbPlayers)
+	if len(got.Prospects) != 1 {
+		t.Fatalf("want 1 prospect, got %d", len(got.Prospects))
+	}
+	p := got.Prospects[0]
+	if want := []string{"SS", "INF", "UT"}; !equalStrings(p.FantraxPos, want) {
+		t.Errorf("fantrax_pos=%v, want %v (markup stripped, comma split)", p.FantraxPos, want)
+	}
+	if want := []string{"SS"}; !equalStrings(p.Pos, want) {
+		t.Errorf("pos=%v, want %v (HKB's own list, unchanged)", p.Pos, want)
+	}
+	if p.ActiveLevels != "MLB/AAA" {
+		t.Errorf("active_levels=%q, want %q", p.ActiveLevels, "MLB/AAA")
+	}
+}
+
+// TestActiveLevelsSurvivesAnMLBLevel is the Waldschmidt/Pratt case: a client
+// badging "anything whose level is not MLB" shows nothing for a shuttling
+// player, and these sit at the top of the mlb segment.
+func TestActiveLevelsSurvivesAnMLBLevel(t *testing.T) {
+	hkbPlayers := []hkb.Player{
+		{Name: "Ryan Waldschmidt", Value: 1369, Rank: 134, Level: "MLB",
+			Prospect: false, Team: "AZ", ActiveLevels: "MLB/AAA"},
+	}
+	pool := []PoolPlayer{{ID: "06dlz", Name: "Ryan Waldschmidt", MLBTeam: "AZ", FantasyStatus: "FA"}}
+
+	got := Build(now(), "2026-08-24", pool, hkbPlayers)
+	if len(got.MLB) != 1 {
+		t.Fatalf("want 1 mlb row, got %d", len(got.MLB))
+	}
+	if got.MLB[0].Level != "MLB" || got.MLB[0].ActiveLevels != "MLB/AAA" {
+		t.Errorf("level=%q active_levels=%q; a level of MLB must not erase the shuttling marker",
+			got.MLB[0].Level, got.MLB[0].ActiveLevels)
+	}
+}
+
+func TestParsePositionsHandlesAbsence(t *testing.T) {
+	if got := parsePositions(""); got != nil {
+		t.Errorf("parsePositions(\"\")=%v, want nil — absent, not an empty position", got)
+	}
+	if got := parsePositions("SP"); !equalStrings(got, []string{"SP"}) {
+		t.Errorf("parsePositions(SP)=%v, want [SP]", got)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func hasPlayer(ps []Player, name string) bool {
 	for _, p := range ps {
 		if p.Name == name {

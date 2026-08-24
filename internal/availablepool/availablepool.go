@@ -22,20 +22,36 @@ import (
 // ("W <small>(Tue)</small>"); ParseStatus is the only thing that reads it, and
 // no raw value reaches the artifact.
 type PoolPlayer struct {
-	ID             string
-	Name           string
-	MLBTeam        string
+	ID      string
+	Name    string
+	MLBTeam string
+	// Positions is the pool's raw PosShortNames ("SS,INF,UT"). Raw for the
+	// same reason as FantasyStatus: upstream documents it as HTML and this
+	// package owns the guarantee that no markup reaches the artifact.
+	Positions      string
 	FantasyStatus  string
 	MinorsEligible bool
 }
 
 // Player is one row of the artifact.
 type Player struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	MLBTeam string   `json:"mlb_team"`
-	Pos     []string `json:"pos"`
-	Level   string   `json:"level"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	MLBTeam string `json:"mlb_team"`
+	// Pos is HKB's position list. FantraxPos is the league's own eligibility,
+	// which is a DIFFERENT FACT and the one that answers "can I slot him" —
+	// the question this screen exists for. HKB says what a player is; Fantrax
+	// says where this league will let him play. Clients prefer FantraxPos and
+	// fall back to Pos.
+	Pos        []string `json:"pos"`
+	FantraxPos []string `json:"fantrax_pos,omitempty"`
+	Level      string   `json:"level"`
+
+	// ActiveLevels is HKB's own "MLB/AAA" shuttling marker. Level alone cannot
+	// express it: Ryan Waldschmidt and Cooper Pratt both read Level "MLB" while
+	// splitting the season with AAA, and both sit at the top of the mlb
+	// segment — the worst place for the screen to be silent about it.
+	ActiveLevels string `json:"active_levels,omitempty"`
 
 	Prospect bool    `json:"prospect"`
 	FYPD     bool    `json:"fypd"`
@@ -160,7 +176,9 @@ func Build(now time.Time, hkbAsOf string, pool []PoolPlayer, hkbPlayers []hkb.Pl
 			Name:                hp.Name,
 			MLBTeam:             pp.MLBTeam,
 			Pos:                 append([]string(nil), hp.Positions...),
+			FantraxPos:          parsePositions(pp.Positions),
 			Level:               hp.Level,
+			ActiveLevels:        hp.ActiveLevels,
 			Prospect:            hp.Prospect,
 			FYPD:                hp.FYPD,
 			Age:                 hp.Age,
@@ -278,6 +296,27 @@ func ParseStatus(raw string) (status, clearsOn string) {
 		}
 	}
 	return "W", clearsOn
+}
+
+// parsePositions turns the pool's PosShortNames into a clean list.
+//
+// PosShortNames is the right source despite the markup, and both obvious
+// alternatives are wrong: MultiPositions is populated only for players eligible
+// at more than one NAMED position (Juan Soto and Paul Skenes come back empty),
+// and deriving from position IDs cannot reproduce Fantrax's own rule for when
+// the UT flex slot is shown. cmd/team-values.go's positionDisplay says the same
+// thing at length for the trades table.
+func parsePositions(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, tok := range strings.Split(stripTags(raw), ",") {
+		if tok = strings.TrimSpace(tok); tok != "" {
+			out = append(out, tok)
+		}
+	}
+	return out
 }
 
 func stripTags(s string) string {
