@@ -158,6 +158,85 @@ when projection grading didn't run (`--skip-projections`). `bucket` ∈
 ```
 Graded-snapshot rows written to the Analysis Store, by date.
 
+### `GET /v1/pool/available`
+
+Every **unowned** player, joined onto HKB dynasty value and 30-day momentum.
+Backs the Pickups screen. Rebuilt daily by the `team-values` job; `404` until
+that job has run once.
+
+```json
+{ "generated_at": "2026-08-24T21:47:27Z", "hkb_as_of": "2026-08-24",
+  "mlb": [
+    { "id": "06dlz", "name": "Ryan Waldschmidt", "mlb_team": "AZ",
+      "pos": ["OF"], "fantrax_pos": ["OF"], "level": "MLB",
+      "active_levels": "MLB/AAA", "prospect": false, "fypd": false,
+      "age": 22.4, "hkb_value": 1369, "hkb_rank": 134,
+      "rank_change_30d": 0, "value_change_30d": 0,
+      "rank_history_30d": [137, 134, 130], "rank_history_starts_at": 0,
+      "fantasy_status": "FA" }
+  ],
+  "prospects": [],
+  "counts": { "mlb": 605, "prospects": 556, "matched": 1161,
+              "unmatched": 8791, "namesake_declined": 72 },
+  "declined": [
+    { "name": "Julio Rodriguez", "mlb_team": "HOU",
+      "reason": "name shared by another Fantrax player", "would_be_value": 4941 }
+  ] }
+```
+
+**Two arrays, pre-split by the server.** A flat top-N would return an empty
+prospects section on any day MLB free agents outvalued every prospect, and
+nothing in the payload would distinguish that from "no prospects available".
+
+**Segments partition on `prospect` alone** — disjoint because it is a boolean,
+exhaustive for the same reason. Assert `counts.mlb + counts.prospects ==
+counts.matched`. The tempting rule (`mlb = level=="MLB"`, `prospects = prospect
+&& level!="MLB"`) is disjoint but *not* exhaustive: it drops every non-prospect
+whose `level` is not MLB — 67 players on 2026-08-24, major leaguers optioned or
+rehabbing, Quinn Priester (307) the highest-value casualty.
+
+**Sign: positive always means better** — climbed the board, or gained value.
+HKB's two raw fields are computed with opposite formulas (`rank_change =
+history[0] - rank`, `value_change = value - history[0]`) and coincide on that
+meaning only because rank is inverted. Pinned by `TestSignConvention`.
+
+**`rank_history_30d` uses `0` as a "not ranked yet" sentinel, not as a rank.**
+Plot from `rank_history_starts_at`; plotting index 0 literally draws a new
+entrant as having fallen from the best possible rank. `rank_history_starts_at >
+0` means the player arrived on the board mid-window.
+
+**`generated_at` is RFC3339 UTC with no fractional seconds**, byte-compatible
+with `generated_at` on `GET /v1/lineup/today`. Parse both with the same strict
+formatter. Under artifact-serve this is the producer's run moment, so it is the
+field a staleness check should read — `hkb_as_of` is the same run's date and
+trails the underlying HKB scrape by at most its 8h cache TTL.
+
+**`pos` vs `fantrax_pos`** are different facts. `pos` is HKB's position list;
+`fantrax_pos` is the league's own eligibility — what answers "can I actually
+slot him". Prefer `fantrax_pos`, fall back to `pos` when it is absent.
+
+**`active_levels`** ("MLB/AAA") is HKB's shuttling marker, and `level` alone
+cannot express it: Ryan Waldschmidt and Cooper Pratt both read `level: "MLB"`
+while splitting the season with AAA, and both sit at the top of the `mlb`
+segment. A client badging "anything whose level is not MLB" shows nothing for
+exactly the players where it matters most.
+
+**`fantasy_status`** is `"FA"` or `"W"`, parsed — the pool feed puts markup in
+this field (`W <small>(Tue)</small>`), and no raw value reaches this payload.
+`waiver_clears_on` ("Tue") is present only for `"W"`.
+
+**`counts` are denominators, not decoration**, and the three failure modes are
+distinct: `unmatched` climbing means name normalization broke; `namesake_declined`
+climbing means the pool grew namesakes; `matched` diverging from the segment sum
+means the partition stopped being exhaustive. `unmatched` is ~8,800 on healthy
+data (HKB does not rank deep minors), so it is a number to watch, not to
+threshold.
+
+**`declined`** lists players the namesake guard refused to value, sorted by the
+value the wrong match *would* have claimed. HKB carries one row per name; Fantrax
+sometimes carries two players. Without the guard, the unowned minor-league Mason
+Miller inherits the SD closer's 3177 and sorts to the top of this screen.
+
 ### `GET /v1/notifications`
 
 The activity feed — every event that also went to Pushover (lineup applied,
@@ -246,3 +325,6 @@ POST /v1/jobs/optimize
    Confirm dialog before `optimize`.
 5. **Run result** — after a run succeeds, `GET /v1/runs/{id}/output`; switch on
    `type` to render the per-job view (`404` → fall back to `log_tail`).
+6. **Pickups** — `GET /v1/pool/available`; two sections (MLB, Prospects), each
+   ranked by `hkb_value`. Badge `rank_change_30d > 0` as a riser and
+   `rank_history_starts_at > 0` as new to the board.

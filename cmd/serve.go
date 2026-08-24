@@ -88,6 +88,8 @@ func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) h
 		// exactly what the producers wrote.
 		Trades:      lineupapi.NewFileBlobStore(layout.Trades.LocalDir, "trades-"),
 		TradeValues: lineupapi.NewFileBlobStore(layout.TradeValues.LocalDir, "tradevalues-"),
+		// The Pickups screen's payload, written by the same team-values job.
+		AvailablePool: lineupapi.NewFileBlobStore(layout.AvailablePool.LocalDir, "pool-"),
 		// Same arrangement for the private reports: projection-site writes
 		// .reports/{model,gap,views}.json, and `serve` reads exactly those
 		// bytes, so the Projections and Views tabs work locally against the

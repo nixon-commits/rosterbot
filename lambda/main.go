@@ -130,6 +130,9 @@ func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
 	if cfg.TradeValues, err = store(layout.TradeValues.PrefixFor(tenant)); err != nil {
 		return cfg, fmt.Errorf("init s3 trade values store: %w", err)
 	}
+	if cfg.AvailablePool, err = store(layout.AvailablePool.PrefixFor(tenant)); err != nil {
+		return cfg, fmt.Errorf("init s3 available pool store: %w", err)
+	}
 
 	// The three private dashboard reports. They live in the state bucket, not
 	// the dashboard bucket's world-readable report/ prefix, so serving them
