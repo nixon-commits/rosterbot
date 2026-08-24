@@ -110,6 +110,31 @@ func TestOptimizeCustomPeriod_ValidatesTheDate(t *testing.T) {
 	}
 }
 
+// A dated grade backfill (rosterbot-bf56) used to need a hand-built ECS
+// run-task because the "grade" spec exposed only dry_run. This pins that
+// genericBuild renders the dates param the same way it does for backtest's
+// sibling "dates" param, and that it composes with dry_run rather than one
+// flag crowding out the other — the safety rule in the Param's Help text
+// (dry-run first, since an actuals-free range writes actual=0 rows instead of
+// a no-op) is only useful if the two flags can actually be issued together.
+func TestBuildJobArgs_GradeDatesComposesWithDryRun(t *testing.T) {
+	args, ok, err := BuildJobArgs("grade", map[string]string{
+		"dates":   "2026-07-13:2026-07-15",
+		"dry_run": "true",
+	})
+	if !ok {
+		t.Fatal("grade is not in the allowlist")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := strings.Join(args, " ")
+	want := "grade --dates 2026-07-13:2026-07-15 --dry-run"
+	if got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
+
 // Every allowlisted job must produce runnable argv from an empty form — that is
 // what the Run button does when you touch nothing. A job whose base or build is
 // wrong fails here rather than as a FAILED ECS task minutes later.
