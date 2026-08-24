@@ -147,6 +147,18 @@ var (
 	// the same reasoning as infra.go's hourlyGap (13h), plus slack.
 	Trades      = Artifact{Name: "Pending Offers", S3Prefix: "trades/", LocalDir: ".trades", Durable: true, MaxAge: 14 * time.Hour, Producer: "Lineup", PerTenant: true}
 	TradeValues = Artifact{Name: "Trade Values Table", S3Prefix: "tradevalues/", LocalDir: ".tradevalues", Durable: true, MaxAge: 26 * time.Hour, Producer: "TeamValues"}
+	// AvailablePool backs the app's Pickups screen: every unowned player joined
+	// onto HKB value and 30-day momentum. Produced by TeamValues rather than a
+	// schedule of its own, because that job already fetches both inputs — the
+	// 10.7 MB player pool and the HKB rankings — and a separate schedule would
+	// re-fetch the pool for no freshness gain. Same reasoning, and the same
+	// 26h tolerance, as TradeValues beside it.
+	//
+	// NOT PerTenant, matching TradeValues: who is unowned is a property of the
+	// league, not of the manager asking. If this deployment ever spans more
+	// than one Fantrax league, both artifacts need a league segment together.
+	AvailablePool = Artifact{Name: "Available Player Pool", S3Prefix: "pool/", LocalDir: ".pool", Durable: true, MaxAge: 26 * time.Hour, Producer: "TeamValues"}
+
 	TradeOffers = Artifact{Name: "Trade Offer Log", S3Prefix: "analysis/trade-offers/", LocalDir: ".tradeoffers", Durable: true, MaxAge: 2 * Day, Producer: "Lineup", Partitioned: true, NoBackfill: true, PerTenant: true}
 
 	// Reports holds the three private dashboard artifacts — model.json,
@@ -250,7 +262,7 @@ var (
 func All() []Artifact {
 	return []Artifact{
 		TeamValues, TradeOffers, Analysis, LineupGaps, FootballValues, Archive, Backtest,
-		Lineup, Trades, TradeValues, Reports, RunLedger, RunOutput, Notification, Claims,
+		Lineup, Trades, TradeValues, AvailablePool, Reports, RunLedger, RunOutput, Notification, Claims,
 		Session, Cache, TenantRoster,
 	}
 }

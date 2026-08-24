@@ -76,6 +76,7 @@ var (
 	lineupArtifact           = of(layout.Lineup)
 	tradesArtifact           = of(layout.Trades)
 	tradeValuesArtifact      = of(layout.TradeValues)
+	availablePoolArtifact    = of(layout.AvailablePool)
 	tradeOfferArtifact       = of(layout.TradeOffers)
 	reportsArtifact          = of(layout.Reports)
 	footballTradesArtifact   = of(layout.FootballTrades)
@@ -382,6 +383,12 @@ func (s *Selector) TradesStore() (lineupapi.BlobStore, error) {
 // rewritten daily by the TeamValues job.
 func (s *Selector) TradeValuesStore() (lineupapi.BlobStore, error) {
 	return blobStore(s, tradeValuesArtifact, "tradevalues-")
+}
+
+// AvailablePoolStore is the Pickups screen's payload (pool/available.json),
+// rewritten daily by the TeamValues job.
+func (s *Selector) AvailablePoolStore() (lineupapi.BlobStore, error) {
+	return blobStore(s, availablePoolArtifact, "pool-")
 }
 
 // ReportsStore holds the three private dashboard reports (reports/model.json,

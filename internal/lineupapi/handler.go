@@ -51,6 +51,7 @@ type Config struct {
 	Infra         InfraLister
 	Trades        ObjectStore
 	TradeValues   ObjectStore
+	AvailablePool ObjectStore
 	Reports       ObjectStore
 
 	// Tenants resolves the eight stores above PER CALLER. When set it wins;
@@ -109,6 +110,7 @@ type Config struct {
 //	GET  /v1/infra          -> live state-bucket health (listed on demand)
 //	GET  /v1/trades         -> pending trade offers, HKB-valued
 //	GET  /v1/trades/values  -> league player/pick values table
+//	GET  /v1/pool/available -> unowned players with HKB value + 30d momentum
 //	GET  /v1/reports/{name} -> private dashboard report (model|gap|views)
 //	GET  /v1/tenants        -> all tenants (admin only)
 //	GET  /v1/me             -> the caller's own profile + Fantrax status
@@ -131,6 +133,7 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/infra", cfg.handleInfra)
 	mux.HandleFunc("GET /v1/trades", cfg.handleTrades)
 	mux.HandleFunc("GET /v1/trades/values", cfg.handleTradeValues)
+	mux.HandleFunc("GET /v1/pool/available", cfg.handleAvailablePool)
 	mux.HandleFunc("GET /v1/reports/{name}", cfg.handleReport)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
 	mux.HandleFunc("GET /v1/me", cfg.handleMe)

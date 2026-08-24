@@ -9,6 +9,7 @@ import (
 
 	"github.com/pmurley/go-fantrax/models"
 
+	"github.com/nixon-commits/rosterbot/internal/availablepool"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
@@ -87,6 +88,19 @@ func runTeamValues(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Trade values table: %d players, %d picks, HKB coverage %d/%d\n",
 		len(table.Players), len(table.Picks), table.Matched, table.Rostered)
 
+	// Same rule: built before the gate so --dry-run exercises the join, the
+	// namesake guard and the segment split. Only the write is gated.
+	//
+	// The coverage line is unconditional, the all-zero case included. This
+	// join's normal output is a healthy-looking list, so without the
+	// denominators a name-normalization regression that halves it and a
+	// genuinely thin waiver wire are indistinguishable. Same reasoning as
+	// "il-start check:" and "mlb recency coverage:".
+	poolTable := buildAvailablePool(date, pool, hkbPlayers)
+	fmt.Printf("available pool: %d mlb, %d prospects (%d matched), %d unmatched, %d namesake-declined\n",
+		poolTable.Counts.MLB, poolTable.Counts.Prospects, poolTable.Counts.Matched,
+		poolTable.Counts.Unmatched, poolTable.Counts.NamesakeDeclined)
+
 	if dryRun {
 		fmt.Printf("team-values (dry-run): computed %d team rows for %s; not written\n", len(rows), date.Format("2006-01-02"))
 		return nil
@@ -115,7 +129,57 @@ func runTeamValues(cmd *cobra.Command, args []string) error {
 	if err := publishTradeValues(table); err != nil {
 		warn("team-values: trade values table not written: %v", err)
 	}
+
+	// The Pickups screen's payload. Written here for the same reason as the
+	// values table above and stated once: this command already holds the pool
+	// and the HKB rankings, and nothing else daily does. A schedule of its own
+	// would re-fetch a 10.7 MB pool for no freshness gain, and would add a job
+	// that can die silently — one more row for opsalert.Overdue to assert on.
+	//
+	// Soft-fail for the same reason too: this is a rewritable snapshot the next
+	// run replaces, and it must not take the NoBackfill Team Value Store down
+	// with it.
+	if err := publishAvailablePool(poolTable); err != nil {
+		warn("team-values: available pool not written: %v", err)
+	}
 	return nil
+}
+
+// publishAvailablePool stores the app's Pickups payload: every unowned player
+// joined onto HKB value and 30-day momentum.
+func publishAvailablePool(table availablepool.Table) error {
+	data, err := json.Marshal(table)
+	if err != nil {
+		return fmt.Errorf("marshal available pool: %w", err)
+	}
+	store, err := statestore.FromEnv().AvailablePoolStore()
+	if err != nil {
+		return fmt.Errorf("open available pool store: %w", err)
+	}
+	if err := store.Publish(lineupapi.AvailablePoolKey, data); err != nil {
+		return fmt.Errorf("publish available pool: %w", err)
+	}
+	return nil
+}
+
+// buildAvailablePool maps the Fantrax pool across to the leaf package, which
+// deliberately does not import internal/fantrax (chromedp rides behind it).
+//
+// The FULL pool is passed, owned players included: the namesake guard can only
+// see that a name is contested if the owned twin is present. Filtering to
+// unowned rows here would silently disable it.
+func buildAvailablePool(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb.Player) availablepool.Table {
+	players := make([]availablepool.PoolPlayer, 0, len(pool))
+	for _, pp := range pool {
+		players = append(players, availablepool.PoolPlayer{
+			ID:             pp.PlayerID,
+			Name:           pp.Name,
+			MLBTeam:        pp.MLBTeamShortName,
+			FantasyStatus:  pp.FantasyStatus,
+			MinorsEligible: pp.MinorsEligible,
+		})
+	}
+	return availablepool.Build(time.Now().UTC(), date.Format("2006-01-02"), players, hkbPlayers)
 }
 
 // publishTradeValues stores the Trades tab's league values table.
