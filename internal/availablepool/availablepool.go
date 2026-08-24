@@ -43,9 +43,21 @@ type Player struct {
 	// the question this screen exists for. HKB says what a player is; Fantrax
 	// says where this league will let him play. Clients prefer FantraxPos and
 	// fall back to Pos.
-	Pos        []string `json:"pos"`
+	// Both omitempty, matching FantraxPos and ActiveLevels beside them. Absent
+	// means "HKB has no value for this", which is the honest reading and the
+	// one the rest of this struct already uses.
+	//
+	// Without it a nil Pos marshals as `"pos": null` — the classic Go array
+	// footgun, which a strict decoder rejects where absent and [] both work.
+	// And an unset Level arrives as "", which is worse than null because it is
+	// a VALID string that flows silently through a `level != "MLB"` test and
+	// lands in a UI as a real answer. Measured live 2026-08-24: Wander Franco
+	// carries an empty Level in HKB's own feed and sits in the mlb segment,
+	// where his row said active_levels absent (honest) and level "" (not) for
+	// the same missing fact.
+	Pos        []string `json:"pos,omitempty"`
 	FantraxPos []string `json:"fantrax_pos,omitempty"`
-	Level      string   `json:"level"`
+	Level      string   `json:"level,omitempty"`
 
 	// ActiveLevels is HKB's own "MLB/AAA" shuttling marker. Level alone cannot
 	// express it: Ryan Waldschmidt and Cooper Pratt both read Level "MLB" while
