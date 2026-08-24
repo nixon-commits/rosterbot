@@ -29,6 +29,7 @@ type fakeGSFantrax struct {
 	gsFor     fantrax.ScoringPeriod
 
 	limitMax *int
+	limitMin *int
 	limitErr error
 
 	limitCalls   int
@@ -50,7 +51,7 @@ func (f *fakeGSFantrax) GetTeamGS(_, _ string, sp fantrax.ScoringPeriod, _, _ ti
 func (f *fakeGSFantrax) GetGSLimits(_ string, period fantrax.WeeklyPeriod) (*int, *int, error) {
 	f.limitCalls++
 	f.limitsForPer = period
-	return nil, f.limitMax, f.limitErr
+	return f.limitMin, f.limitMax, f.limitErr
 }
 
 func intp(v int) *int { return &v }
@@ -66,6 +67,7 @@ func healthyGS() *fakeGSFantrax {
 		// entries let a test assert which of them the phase actually read.
 		gsThrough: map[string]int{"2026-07-24": 4, "2026-07-25": 5},
 		limitMax:  intp(12),
+		limitMin:  intp(10),
 	}
 }
 
@@ -315,5 +317,46 @@ func TestComputeGSBudget_ForecastProbablesFailureDisablesGate(t *testing.T) {
 	}
 	if !strings.Contains(logsJoined(d), "statsapi 503") {
 		t.Errorf("logs = %q, want the underlying cause named", logsJoined(d))
+	}
+}
+
+// TestComputeGSBudget_CarriesTheLiveFloor pins rosterbot-dpm's first step: the
+// minimum reaches the budget instead of being dropped at the call site.
+//
+// GetGSLimits has always returned both bounds; ComputeGSBudget discarded the
+// first with `_`, so nothing downstream could represent the floor even in
+// principle. Our team finished on the league minimum in three of four scoring
+// periods while the only component that knew the floor existed (gs-check)
+// reported it the day AFTER the period closed.
+func TestComputeGSBudget_CarriesTheLiveFloor(t *testing.T) {
+	d := ComputeGSBudget(healthyGS(), &fakeSchedule{}, gsInputs())
+	if d.Budget == nil {
+		t.Fatal("budget should be built")
+	}
+	if d.Budget.Floor != 10 {
+		t.Errorf("Floor = %d, want 10 — the live minimum must reach the budget", d.Budget.Floor)
+	}
+	if d.Budget.Limit != 12 {
+		t.Errorf("Limit = %d, want 12", d.Budget.Limit)
+	}
+}
+
+// TestComputeGSBudget_MissingFloorDoesNotDisableTheGate pins the asymmetry
+// between the two bounds. A missing MAXIMUM disables the gate — there is
+// nothing to gate against. A missing MINIMUM is an ordinary league
+// configuration: there is simply no floor to protect, and the ceiling side
+// must keep working exactly as before.
+func TestComputeGSBudget_MissingFloorDoesNotDisableTheGate(t *testing.T) {
+	f := healthyGS()
+	f.limitMin = nil
+	d := ComputeGSBudget(f, &fakeSchedule{}, gsInputs())
+	if d.Budget == nil {
+		t.Fatal("a missing GS minimum must NOT disable the gate")
+	}
+	if d.Budget.Floor != 0 {
+		t.Errorf("Floor = %d, want 0", d.Budget.Floor)
+	}
+	if d.Budget.NeedForFloor() != 0 {
+		t.Errorf("NeedForFloor() = %d, want 0 with no floor configured", d.Budget.NeedForFloor())
 	}
 }

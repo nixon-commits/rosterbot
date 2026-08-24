@@ -60,14 +60,17 @@ func TestBuildSnapshot_MapsRichFields(t *testing.T) {
 		t.Fatalf("want 2 hitters, got %d", len(snap.Hitters))
 	}
 	h := snap.Hitters[0]
-	if h.PlayerID != "h1" || h.ProjPtsPerGame != 8.5 || !h.WasStarted || h.Slot != "OF" || !h.Locked {
+	if h.PlayerID != "h1" || h.ProjPtsPerGame != 8.5 || h.Status != "Active" || h.Slot != "OF" || !h.Locked {
 		t.Errorf("started hitter mapping wrong: %+v", h)
 	}
 	if len(h.Eligibility) != 2 || h.Eligibility[0] != "012" {
 		t.Errorf("eligibility mapping wrong: %+v", h.Eligibility)
 	}
-	if bench := snap.Hitters[1]; bench.WasStarted || bench.Slot != "" {
-		t.Errorf("bench hitter should not be started or hold a slot: %+v", bench)
+	// Status, not a derived "was started" boolean: the snapshot records what the
+	// roster looked like when it was written and nothing more. Deployment is
+	// joined at grading time from the day's own roster (rosterbot-x3xo).
+	if bench := snap.Hitters[1]; bench.Status == "Active" || bench.Slot != "" {
+		t.Errorf("bench hitter should not be active or hold a slot: %+v", bench)
 	}
 	if len(snap.Pitchers) != 1 {
 		t.Fatalf("want 1 pitcher, got %d", len(snap.Pitchers))

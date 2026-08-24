@@ -155,7 +155,7 @@ func TestBuildGSForecast_EstimateCapsAtActivePitcherSlots(t *testing.T) {
 
 // Regression for rosterbot-abd: with more rostered SPs playing than there are
 // pitcher slots, the old code capped the pitcher count before dividing and
-// reported numPSlots/rotationSize — an understatement on nearly every day of a
+// reported numPSlots/RotationSize — an understatement on nearly every day of a
 // real roster (10 rostered SPs, 6 active P slots). The slot cap must not bind
 // here: 7 SPs playing is 1.4 expected starts, well under 6 slots.
 func TestBuildGSForecast_MoreSPsPlayingThanSlotsDoesNotUnderstate(t *testing.T) {

@@ -3,7 +3,8 @@ package backtest
 import (
 	"fmt"
 	"strings"
-	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
 )
 
 // SideShape holds one role's projected value over a window: what the roster
@@ -14,8 +15,8 @@ import (
 // an unrestricted denominator produces a number that looks like roster shape
 // and is actually rotation cadence.
 type SideShape struct {
-	OwnedPts   float64
-	FieldedPts float64
+	OwnedPts   float64 `json:"owned_pts"`
+	FieldedPts float64 `json:"fielded_pts"`
 
 	// DeployableCount is how many player-days entered OwnedPts — passed the
 	// role's deployable predicate. RosteredCount is how many player-days
@@ -28,8 +29,8 @@ type SideShape struct {
 	// pitchers — a FieldedRate on that base is a near-single-player fact
 	// wearing a percentage, and a reader has no way to see that without
 	// these two counts printed alongside it.
-	DeployableCount int
-	RosteredCount   int
+	DeployableCount int `json:"deployable_count"`
+	RosteredCount   int `json:"rostered_count"`
 }
 
 // StrandedPts is deployable projected value the roster owned and did not field.
@@ -95,8 +96,8 @@ func hitterIsDeployable(p SnapshotPlayer) bool {
 // depends on what happened next: applyGSGate discounts the pitcher to 0.05x
 // but OptimizePitcherLineup still adds him to the slot-assignment pool if he
 // has a game, so on a light slate the candidate pool fits inside the 6 P
-// slots, the suppressed SP is slotted anyway, WasStarted comes back true, and
-// his full projection lands in fielded, not stranded.
+// slots, the suppressed SP is slotted anyway, the day's roster records him as
+// active, and his full projection lands in fielded, not stranded.
 //
 // The branch keys on Role, which buildSnapshot sets to "SP" when PosShortNames
 // contains SP — so a player with any SP eligibility takes the starter branch,
@@ -131,33 +132,111 @@ func pitcherIsDeployable(p SnapshotPlayer) bool {
 // them. The two print together.
 type RosterShape struct {
 	// Days is the size of the window asked for.
-	Days int
+	Days int `json:"days"`
 	// DaysWithSnapshot is how many of those days had a snapshot that was fresh
 	// (same Eastern-time calendar day, per sameETDate) AND carried roster
 	// status. Only these contribute to the totals.
-	DaysWithSnapshot int
+	DaysWithSnapshot int `json:"days_with_snapshot"`
 	// DaysStale is how many days had a snapshot whose GeneratedAt falls on a
 	// different ET calendar day than the date it projects — a --matchup
 	// pre-write never overwritten by that day's own run. Its roster state
 	// belongs to a different day, so it is excluded.
-	DaysStale int
+	DaysStale int `json:"days_stale,omitempty"`
 	// DaysPreSchema is how many days had a fresh snapshot written before
 	// SnapshotPlayer.Status existed. Excluded, and counted separately, because
 	// an empty status fails the deployable filter for every player — leaving a
 	// day with zero owned value that is otherwise indistinguishable from a day
 	// measured as fully fielded.
-	DaysPreSchema int
+	DaysPreSchema int `json:"days_pre_schema,omitempty"`
 
-	HitterSlots, PitcherSlots int
+	HitterSlots  int `json:"hitter_slots"`
+	PitcherSlots int `json:"pitcher_slots"`
 
 	// GSCapMin/GSCapMax bound the weekly game-start cap over the counted days.
 	// They range over NON-ZERO caps only: a day with GS tracking disabled
 	// records 0, and letting that into the minimum would render "GS cap
 	// 0–18/wk". Both zero means no counted day recorded a cap at all.
-	GSCapMin, GSCapMax int
+	GSCapMin int `json:"gs_cap_min,omitempty"`
+	GSCapMax int `json:"gs_cap_max,omitempty"`
 
-	Hitters, Pitchers SideShape
+	Hitters  SideShape `json:"hitters"`
+	Pitchers SideShape `json:"pitchers"`
+
+	// SPRosterDaySum totals, over the counted days, how many rosterable
+	// SP-eligible pitchers the roster carried. It feeds RotationSupply, which
+	// answers the surplus question the FieldedRate above structurally cannot.
+	SPRosterDaySum int `json:"sp_roster_day_sum"`
 }
+
+// RotationSupply answers "does this roster carry more starting pitching than
+// the weekly game-start cap can deploy?" — the question the roster-shape
+// report was created for and the pitcher FieldedRate cannot answer.
+//
+// FieldedRate measures probable-start COMPLIANCE: its denominator is the
+// pitchers who were probable starters that day, and MLB's rotation cadence
+// holds that number to roughly one to six against six P slots no matter how
+// deep the staff is. So it fits inside the slots on essentially every day and
+// reads ~100% whether the roster carries seven starters or thirteen. Measured
+// over scoring period 20 with a correct fielded numerator it read exactly
+// 100.0% against a roster of thirteen pitchers — the opposite of the truth on
+// its headline question (rosterbot-8dl).
+//
+// This measure changes the frame from daily deployability to weekly capacity.
+// A staff of N starters on a standard rotation supplies about N*7/5 starts a
+// week; the cap permits GSCapMax. Their ratio is a real surplus signal and it
+// genuinely varies with roster depth, which is the property that makes it a
+// measurement rather than a constant.
+type RotationSupply struct {
+	SPRosterDays     int
+	DaysWithSnapshot int
+	GSCap            int
+}
+
+// MeanSPCount is the average number of rosterable SP-eligible pitchers carried
+// per counted day. ok is false when no day was counted.
+func (r RotationSupply) MeanSPCount() (float64, bool) {
+	if r.DaysWithSnapshot <= 0 {
+		return 0, false
+	}
+	return float64(r.SPRosterDays) / float64(r.DaysWithSnapshot), true
+}
+
+// SupplyPerWeek is the number of starts that staff supplies in a seven-day week
+// on a standard rotation. ok is false when no day was counted.
+func (r RotationSupply) SupplyPerWeek() (float64, bool) {
+	mean, ok := r.MeanSPCount()
+	if !ok {
+		return 0, false
+	}
+	return mean * 7.0 / standardRotationSize, true
+}
+
+// SupplyRate is supply divided by the weekly cap. Above 1.0 means the roster
+// owns more rotation than the league will let it deploy — the surplus this
+// report exists to surface. ok is false when no cap was recorded, since a
+// ratio against an untracked cap is not a number anyone should read.
+func (r RotationSupply) SupplyRate() (float64, bool) {
+	supply, ok := r.SupplyPerWeek()
+	if !ok || r.GSCap <= 0 {
+		return 0, false
+	}
+	return supply / float64(r.GSCap), true
+}
+
+// Rotation returns the rotation-supply view of this window.
+func (s RosterShape) Rotation() RotationSupply {
+	return RotationSupply{
+		SPRosterDays:     s.SPRosterDaySum,
+		DaysWithSnapshot: s.DaysWithSnapshot,
+		GSCap:            s.GSCapMax,
+	}
+}
+
+// standardRotationSize must equal lineuprun.RotationSize. It is duplicated
+// rather than imported because internal/lineuprun imports internal/backtest
+// (snapshot.go), so the dependency cannot run the other way; the external test
+// package pins the two together in TestStandardRotationSize_MatchesLineuprun.
+const standardRotationSize = 5.0
 
 // SummarizeRosterShape reads the projection snapshots for the given dates and
 // totals deployable versus fielded projected value on each side.
@@ -169,10 +248,26 @@ type RosterShape struct {
 // hitterSlots and pitcherSlots are carried through for rendering only — they
 // are never divided by. Normalizing by slot count is exactly the reduction this
 // measure exists to avoid (see SideShape.FieldedRate).
-func SummarizeRosterShape(st SnapshotStore, dir string, dates []time.Time, hitterSlots, pitcherSlots int) RosterShape {
-	s := RosterShape{Days: len(dates), HitterSlots: hitterSlots, PitcherSlots: pitcherSlots}
+//
+// It takes days []fantrax.DayRoster rather than bare dates because the FIELDED
+// numerator has to come from somewhere other than the snapshot. The snapshot
+// records the roster as it looked when the file was written — the last hourly
+// run of the ET day, after finished starters have been rotated back to Reserve
+// — so reading deployment out of it counted a constant six pitchers every day
+// and disagreed with the active-slot GS walk on every day of the period
+// measured (rosterbot-x3xo). DayRoster carries Fantrax's own frozen per-day
+// Active flag, which is the fact this measure needs and is settled by grading
+// time. The caller already holds it; nothing extra is fetched.
+//
+// A player present in the snapshot but absent from that day's DayRoster reads
+// as not deployed. That is the conservative direction and the honest one: the
+// day's roster is the authority on who was slotted, and a player it does not
+// list was not.
+func SummarizeRosterShape(st SnapshotStore, dir string, days []fantrax.DayRoster, hitterSlots, pitcherSlots int) RosterShape {
+	s := RosterShape{Days: len(days), HitterSlots: hitterSlots, PitcherSlots: pitcherSlots}
 
-	for _, d := range dates {
+	for _, day := range days {
+		d := day.Date
 		snap, ok := LoadSnapshot(st, dir, d)
 		if !ok {
 			continue
@@ -190,6 +285,11 @@ func SummarizeRosterShape(st SnapshotStore, dir string, dates []time.Time, hitte
 		}
 		s.DaysWithSnapshot++
 
+		deployed := make(map[string]bool, len(day.Players))
+		for _, p := range day.Players {
+			deployed[p.PlayerID] = p.Active
+		}
+
 		for _, h := range snap.Hitters {
 			s.Hitters.RosteredCount++
 			if !hitterIsDeployable(h) {
@@ -197,18 +297,24 @@ func SummarizeRosterShape(st SnapshotStore, dir string, dates []time.Time, hitte
 			}
 			s.Hitters.DeployableCount++
 			s.Hitters.OwnedPts += h.ProjPtsPerGame
-			if h.WasStarted {
+			if deployed[h.PlayerID] {
 				s.Hitters.FieldedPts += h.ProjPtsPerGame
 			}
 		}
 		for _, p := range snap.Pitchers {
 			s.Pitchers.RosteredCount++
+			// Counted BEFORE the deployable filter and independently of it:
+			// the surplus question is about how much rotation the roster
+			// carries, not how much of it happened to be probable today.
+			if statusIsRosterable(p.Status) && p.Role == "SP" {
+				s.SPRosterDaySum++
+			}
 			if !pitcherIsDeployable(p) {
 				continue
 			}
 			s.Pitchers.DeployableCount++
 			s.Pitchers.OwnedPts += p.ProjPtsPerGame
-			if p.WasStarted {
+			if deployed[p.PlayerID] {
 				s.Pitchers.FieldedPts += p.ProjPtsPerGame
 			}
 		}
@@ -276,7 +382,10 @@ func FormatRosterShape(s RosterShape) string {
 		s.Hitters.DeployableCount, s.Hitters.RosteredCount,
 		s.Pitchers.DeployableCount, s.Pitchers.RosteredCount)
 	fmt.Fprintf(&b, "A starter counts as deployable only on days he was a probable start, so the\n")
-	fmt.Fprintf(&b, "pitcher denominator is narrow — read its rate against that count, not alone.\n")
+	fmt.Fprintf(&b, "pitcher rate above measures probable-start compliance, NOT rotation surplus:\n")
+	fmt.Fprintf(&b, "MLB cadence holds the daily probable count under the 6 P slots almost always,\n")
+	fmt.Fprintf(&b, "so it reads ~100%% however deep the staff is. Surplus is the line below.\n")
+	fmt.Fprint(&b, formatRotationSupply(s))
 	fmt.Fprintf(&b, "\nEach side is normalized against its own owned value, not against the\n")
 	fmt.Fprintf(&b, "other, so the gap is not the %d:%d slot ratio — a roster carrying exactly\n",
 		s.HitterSlots, s.PitcherSlots)
@@ -340,4 +449,29 @@ func noMeasurableDaysReason(s RosterShape) string {
 	default:
 		return fmt.Sprintf("No snapshots on disk for these %d days — nothing to report.", s.Days)
 	}
+}
+
+// formatRotationSupply renders the weekly rotation-supply line — the surplus
+// signal the daily FieldedRate cannot carry.
+//
+// It says nothing at all when the GS cap was not tracked. A supply figure with
+// no cap to compare it against invites the reader to supply their own, and the
+// cap is exactly the quantity that moves (Fantrax rescales it for merged
+// periods), so a bare "supplies 15.4 starts/wk" is worse than silence.
+func formatRotationSupply(s RosterShape) string {
+	r := s.Rotation()
+	mean, ok := r.MeanSPCount()
+	if !ok || r.SPRosterDays == 0 {
+		return ""
+	}
+	rate, rateOK := r.SupplyRate()
+	if !rateOK {
+		// No cap recorded: the ratio is the whole point, and a bare
+		// "supplies 15.4 starts/wk" invites the reader to supply their own
+		// denominator for the one quantity that actually moves.
+		return ""
+	}
+	supply, _ := r.SupplyPerWeek()
+	return fmt.Sprintf("\nRotation supply: ~%.1f rosterable SPs → ~%.1f starts/wk against a %d/wk cap (%.0f%%).\nAbove 100%% is rotation the league will not let you deploy.\n",
+		mean, supply, r.GSCap, rate*100)
 }

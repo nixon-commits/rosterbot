@@ -129,6 +129,7 @@ type BacktestResult struct {
 	End      string            `json:"end"`
 	Days     []BacktestDayOut  `json:"days"`
 	Accuracy *BacktestAccuracy `json:"accuracy,omitempty"`
+	Gate     *BacktestGateOut  `json:"gs_gate,omitempty"`
 }
 
 type BacktestDayOut struct {
@@ -151,6 +152,41 @@ type BacktestPositionOut struct {
 	N      int     `json:"n"`
 	MAE    float64 `json:"mae"`
 	Bias   float64 `json:"bias"`
+}
+
+// BacktestGateOut is the weekly game-start gate summary on the wire.
+//
+// The dashboard's run viewer is a generic JSON-to-DOM renderer that prints
+// object keys verbatim as table headers, so these json names ARE the labels a
+// reader sees. Two of them are load-bearing for that reason:
+//
+//   - suppressed_pts_gross / protected_pts_gross say GROSS in the key itself.
+//     Neither is a net weekly change: a suppressed start's budget was spent on
+//     a higher-ranked one, and a protected start is value that stayed deployed.
+//     A key named "pts_lost" would be read as a subtraction from the week's
+//     score, which it is not.
+//   - days_with_snapshot and days_stale stay separate. A stale --matchup
+//     pre-write always carries no suppressions, so folding it into the measured
+//     count would report a gap in the run history as a quiet, well-behaved week.
+type BacktestGateOut struct {
+	Days               int                  `json:"days"`
+	DaysWithSnapshot   int                  `json:"days_with_snapshot"`
+	DaysStale          int                  `json:"days_stale,omitempty"`
+	SuppressedStarts   int                  `json:"suppressed_starts"`
+	SuppressedPtsGross float64              `json:"suppressed_pts_gross"`
+	ProtectedStarts    int                  `json:"protected_starts,omitempty"`
+	ProtectedPtsGross  float64              `json:"protected_pts_gross,omitempty"`
+	FloorMin           int                  `json:"floor_min,omitempty"`
+	FloorMax           int                  `json:"floor_max,omitempty"`
+	ByDate             []BacktestGateDayOut `json:"by_date,omitempty"`
+}
+
+type BacktestGateDayOut struct {
+	Date              string  `json:"date"`
+	SuppressedStarts  int     `json:"suppressed_starts"`
+	PtsGross          float64 `json:"pts_gross"`
+	ProtectedStarts   int     `json:"protected_starts,omitempty"`
+	ProtectedPtsGross float64 `json:"protected_pts_gross,omitempty"`
 }
 
 // GradeResult is the grade job output (what was written to the Analysis Store).

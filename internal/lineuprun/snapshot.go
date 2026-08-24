@@ -25,6 +25,10 @@ type dateResult struct {
 	hitterBreakdowns map[string]*projections.HitterBreakdown
 	hitterPipelines  map[string]*projections.HitterPipelineDetail
 	pitcherPipelines map[string]*projections.PitcherPipelineDetail
+	// budget is the GS budget the gate ran against, carried so the snapshot can
+	// archive the forward view the gate believed (see forecastRows). nil on
+	// every future date, since the gate applies to today only.
+	budget *optimizer.GSBudget
 }
 
 // writeProjectionSnapshot archives the per-date projection values the optimizer
@@ -50,6 +54,8 @@ func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string,
 		HittersNoData:    hittersNoData,
 		PitchersNoData:   pitchersNoData,
 		GSLimit:          dr.pitcherResult.GateReport.Limit,
+		GSFloor:          dr.pitcherResult.GateReport.Floor,
+		GSForecast:       forecastRows(dr.budget),
 	}
 
 	for _, sp := range dr.hitterResult.Scored {
@@ -59,7 +65,6 @@ func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string,
 			MLBTeam:        sp.Player.MLBTeam,
 			ProjPtsPerGame: sp.ExpectedPts,
 			HasGame:        sp.HasGame,
-			WasStarted:     sp.Player.Status == "Active",
 			IsPitcher:      false,
 			Slot:           slotName[sp.Player.RosterPosition],
 			Locked:         sp.Player.Locked,
@@ -72,6 +77,10 @@ func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string,
 	for _, s := range dr.pitcherResult.GateReport.Suppressed {
 		gsSuppressed[s.PlayerID] = true
 	}
+	gsProtected := make(map[string]bool, len(dr.pitcherResult.GateReport.Protected))
+	for _, s := range dr.pitcherResult.GateReport.Protected {
+		gsProtected[s.PlayerID] = true
+	}
 
 	for _, sp := range dr.pitcherResult.Scored {
 		role := "RP"
@@ -79,22 +88,46 @@ func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string,
 			role = "SP"
 		}
 		snap.Pitchers = append(snap.Pitchers, backtest.SnapshotPlayer{
-			PlayerID:       sp.Player.ID,
-			Name:           sp.Player.Name,
-			MLBTeam:        sp.Player.MLBTeam,
-			ProjPtsPerGame: sp.ExpectedPts,
-			HasGame:        sp.HasGame,
-			WasStarted:     sp.Player.Status == "Active",
-			IsStarter:      sp.IsStarter,
-			Role:           role,
-			IsPitcher:      true,
-			Slot:           slotName[sp.Player.RosterPosition],
-			Locked:         sp.Player.Locked,
-			Status:         sp.Player.Status,
-			GSSuppressed:   gsSuppressed[sp.Player.ID],
-			Eligibility:    sp.Player.Positions,
+			PlayerID:         sp.Player.ID,
+			Name:             sp.Player.Name,
+			MLBTeam:          sp.Player.MLBTeam,
+			ProjPtsPerGame:   sp.ExpectedPts,
+			HasGame:          sp.HasGame,
+			IsStarter:        sp.IsStarter,
+			Role:             role,
+			IsPitcher:        true,
+			Slot:             slotName[sp.Player.RosterPosition],
+			Locked:           sp.Player.Locked,
+			Status:           sp.Player.Status,
+			GSSuppressed:     gsSuppressed[sp.Player.ID],
+			GSFloorProtected: gsProtected[sp.Player.ID],
+			Eligibility:      sp.Player.Positions,
 		})
 	}
 
 	return snap
+}
+
+// forecastRows flattens the gate's forward view into the archived form.
+//
+// Days at or before today are dropped: the forecast covers today+1 onward by
+// construction, and a same-day row would record demand the gate never treated
+// as future. Nil when no budget was in force, matching the GSLimit==0
+// convention for a --matchup pre-write.
+func forecastRows(b *optimizer.GSBudget) []backtest.GSForecastDay {
+	if b == nil {
+		return nil
+	}
+	var rows []backtest.GSForecastDay
+	for _, f := range b.Forecast {
+		if !f.Date.After(b.Today) {
+			continue
+		}
+		rows = append(rows, backtest.GSForecastDay{
+			Date:           f.Date.Format("2006-01-02"),
+			ConfirmedCount: len(f.ConfirmedStarters),
+			Estimated:      f.Estimated,
+		})
+	}
+	return rows
 }

@@ -55,6 +55,14 @@ type PlayerProjection struct {
 	Source    string    `json:"source"` // "snapshot" or "reconstructed"
 	IsPitcher bool      `json:"is_pitcher"`
 	Bucket    string    `json:"bucket,omitempty"` // position bucket: C/INF/OF/UT/SP/RP
+	// Deployed records whether the player actually occupied an active roster
+	// slot on this date, taken from fantrax.DayRoster's frozen per-day roster
+	// rather than from the projection snapshot. It is the honest replacement
+	// for the removed SnapshotPlayer.WasStarted (rosterbot-x3xo): deployment
+	// cannot be known when the snapshot is written, because the snapshot
+	// describes a day still in progress, but it is plain fact by the time the
+	// day is graded.
+	Deployed bool `json:"deployed"`
 }
 
 // ProjectionDayResult aggregates projection grading for one date.
@@ -75,6 +83,18 @@ type Report struct {
 	Projections       []ProjectionDayResult `json:"projections,omitempty"`
 	TopBench          []PlayerPts           `json:"top_bench_cumulative"`
 	ProjectionSummary *ProjectionSummary    `json:"projection_summary,omitempty"`
+	// Gate is the weekly GS-gate summary. It used to be computed after the
+	// --json early return and rendered only to stdout, so every JSON consumer
+	// and the dashboard's run view saw a report with no gate section at all
+	// (rosterbot-5cx) — and the only scheduled backtest runs on Fargate, where
+	// stdout means a CloudWatch stream nobody reads by default.
+	//
+	// nil when the window was graded with --skip-projections, since the gate
+	// reads the same projection snapshots the accuracy rollup does.
+	Gate *GateSummary `json:"gate,omitempty"`
+	// Shape is the roster-shape companion to Gate, carried for the same reason
+	// and under the same --skip-projections condition.
+	Shape *RosterShape `json:"roster_shape,omitempty"`
 }
 
 // ProjectionSummary rolls up projection grading across all days.
@@ -107,40 +127,53 @@ type SnapshotPlayer struct {
 	MLBTeam        string  `json:"mlb_team"`
 	ProjPtsPerGame float64 `json:"proj_pts_per_game"`
 	HasGame        bool    `json:"has_game"`
-	// WasStarted is Status == "Active" on the roster AS FETCHED when the
-	// optimizer ran that pass — i.e. pre-apply for that run. It measures "was
-	// in an active slot when we looked," not "we chose to start them."
-	//
-	// This is an accepted limitation, not an oversight: the winning daily
-	// snapshot is written by the LAST run of the day (last write wins, see
-	// WriteSnapshot), by which point games are over and the idempotency
-	// invariant means the observed roster status has converged to the applied
-	// lineup — so on a normal day this is indistinguishable from "we started
-	// them." The residual exposure is a day whose later runs all failed: it
-	// keeps an early pre-apply snapshot that still passes the sameETDate
-	// freshness guard (same ET calendar day, just an earlier hour), biasing
-	// fielded downward exactly on the days the bot did the most retry work.
-	WasStarted bool   `json:"was_started"`
-	IsPitcher  bool   `json:"is_pitcher"`
-	IsStarter  bool   `json:"is_starter,omitempty"`
-	Role       string `json:"role,omitempty"`   // "SP" / "RP" for pitchers
-	Slot       string `json:"slot,omitempty"`   // active slot occupied, e.g. "OF"; "" if benched
-	Locked     bool   `json:"locked,omitempty"` // game in progress/final at snapshot time
+	IsPitcher      bool    `json:"is_pitcher"`
+	IsStarter      bool    `json:"is_starter,omitempty"`
+	Role           string  `json:"role,omitempty"`   // "SP" / "RP" for pitchers
+	Slot           string  `json:"slot,omitempty"`   // active slot occupied, e.g. "OF"; "" if benched
+	Locked         bool    `json:"locked,omitempty"` // game in progress/final at snapshot time
 	// GSSuppressed records that the weekly game-start gate declined this
 	// pitcher's start on this date. Written from the gate's own report, not
 	// inferred. Present only from 2026-08 forward; earlier snapshots read as
 	// false, which is why GateSummary counts days with snapshots separately.
-	GSSuppressed bool     `json:"gs_suppressed,omitempty"`
-	Eligibility  []string `json:"eligibility,omitempty"` // position IDs the player is eligible for
+	GSSuppressed bool `json:"gs_suppressed,omitempty"`
+	// GSFloorProtected records that the gate declined to suppress this
+	// pitcher's start because the week would otherwise be unable to reach the
+	// league's GS minimum. Disjoint from GSSuppressed. Present only from
+	// rosterbot-dpm forward; earlier snapshots read as false, which is
+	// indistinguishable from "no floor was in force" — the same accepted
+	// limitation GSSuppressed carries.
+	GSFloorProtected bool     `json:"gs_floor_protected,omitempty"`
+	Eligibility      []string `json:"eligibility,omitempty"` // position IDs the player is eligible for
 	// Status is the raw Fantrax roster status ("Active", "Reserve",
-	// "Injured Reserve", "Minors") at the moment the snapshot was written.
-	// WasStarted collapses this to a single boolean, which cannot distinguish
-	// a healthy benched player from an injured or minor-league one — so an
-	// injury would read as owned-but-not-fielded value, i.e. as a structural
-	// roster surplus, which is precisely what the roster-shape report exists
-	// to measure. Present only from 2026-08 forward; earlier snapshots read
-	// as "" and are excluded from that report as pre-schema rather than
-	// silently counted as a fully-fielded day.
+	// "Injured Reserve", "Minors") at the moment the snapshot was written —
+	// and that qualifier is the whole of it. It is a record of what we saw
+	// when we looked, NOT a record of what we deployed, and the two are
+	// routinely different: the winning daily snapshot is written by the last
+	// hourly run of the ET day, by which point a pitcher who started has
+	// already been rotated back to Reserve for tomorrow.
+	//
+	// This field used to have a companion, WasStarted, defined as
+	// Status == "Active" and named as though it recorded deployment. It was
+	// removed in rosterbot-x3xo. Measured over scoring period 20
+	// (2026-08-17..23) against the active-slot GS walk, which reads Fantrax's
+	// own frozen per-day rosters: the walk counted 10 active-slot starts, the
+	// field claimed 42, and not one of the seven days agreed. For pitchers it
+	// was a constant 6 every day — the number of active P slots — and marked
+	// two relievers as "started" daily. It was wrong in both directions at
+	// once, so no reinterpretation could rescue it, and a field that merely
+	// restates another is worse than an absent one.
+	//
+	// Deployment is not knowable when this file is written, because the file
+	// describes a day that is still being played. It is joined at grading
+	// time instead, from fantrax.DayRoster's per-day Active flag — see
+	// PlayerProjection.Deployed and SummarizeRosterShape.
+	//
+	// Present only from 2026-08 forward; earlier snapshots read as "" and are
+	// excluded from the roster-shape report as pre-schema rather than
+	// silently counted as a fully-fielded day. Status still cannot distinguish
+	// a healthy benched player from an injured or minor-league one on its own,
+	// which is why that report filters IL and Minors explicitly.
 	Status string `json:"status,omitempty"`
 }
 
@@ -169,6 +202,43 @@ type Snapshot struct {
 	// budget was in force — the ordinary state of a --matchup pre-write, since
 	// optimize_dates.go applies the gate to today's date only.
 	GSLimit int `json:"gs_limit,omitempty"`
+	// GSFloor is the weekly game-start MINIMUM in force when this date was
+	// optimized. Recorded per day for the same reason as GSLimit: Fantrax
+	// rescales both bounds whenever a period spans more than one calendar week.
+	GSFloor int `json:"gs_floor,omitempty"`
+	// GSForecast is what the gate BELIEVED about the rest of the matchup week
+	// when this date was optimized — per remaining day, how many of our starts
+	// were confirmed probables and how much rotation-math demand was estimated
+	// on top.
+	//
+	// It exists because that belief state is otherwise unrecoverable.
+	// optimizer.DayForecast is built fresh inside ComputeGSBudget on every run,
+	// consumed once by the gate, and discarded; the archived GS walk records
+	// what we ACTUALLY started, which is silent on what we expected in advance,
+	// and internal/schedule's probables cache merges in place rather than
+	// keeping a time series. Without this field the certaintyMargin sweep
+	// (rosterbot-xsm) has no data to sweep over, and cannot be backfilled --
+	// only accumulated going forward.
+	//
+	// Only counts and the estimate are kept, not optimizer.DayForecast's
+	// per-pitcher point values: the sweep needs "how many did we expect" against
+	// "how many happened", and the projections are already archived per player.
+	//
+	// Present only from rosterbot-xsm forward. Note that any pre-2026-08-19
+	// history would read Estimated≈0 regardless, because the rotation-math
+	// branch was unreachable until rosterbot-1jvj merged.
+	GSForecast []GSForecastDay `json:"gs_forecast,omitempty"`
+}
+
+// GSForecastDay is one future day of the GS forecast as the gate saw it.
+type GSForecastDay struct {
+	Date string `json:"date"`
+	// ConfirmedCount is how many of our rostered SPs were named as their club's
+	// probable starter for that day.
+	ConfirmedCount int `json:"confirmed_count"`
+	// Estimated is fractional rotation-math demand from our clubs that had not
+	// yet named a starter.
+	Estimated float64 `json:"estimated"`
 }
 
 // RunLineupAnalysis grades each day's actual lineup against the hindsight
@@ -582,6 +652,7 @@ func RunProjectionAnalysis(days []fantrax.DayRoster, st SnapshotStore, snapshotD
 				Diff:      p.FPts - archived.ProjPtsPerGame,
 				Source:    "snapshot",
 				IsPitcher: p.IsPitcher,
+				Deployed:  p.Active,
 				// Bucket from the snapshot's eligibility/role — the live-roster
 				// source is authoritative, unlike the historical actuals feed.
 				Bucket: positionBucket(archived.IsPitcher, archived.Role, archived.Eligibility),

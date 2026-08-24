@@ -418,6 +418,27 @@ func renderDateResult(w io.Writer, dr dateResult, multiDate bool, slotName map[s
 				n, plural(n), dr.pitcherResult.GateReport.SuppressedPts()))
 			pGreen = append(pGreen, false)
 		}
+		// The floor side. Printed whenever the week is still short of the
+		// league minimum, not only when a start had to be protected: the
+		// suppression line above reads as healthy on exactly the weeks that
+		// finish under the floor, so a shortfall that produces no protection
+		// would otherwise be invisible until gs-check reports it the day after
+		// the period closes, when nothing can be done (rosterbot-dpm).
+		if need := gsBudget.NeedForFloor(); need > 0 {
+			hLines = append(hLines, "")
+			hGreen = append(hGreen, false)
+			pLines = append(pLines, fmt.Sprintf("GS floor: %d/%d — %d more start%s needed by %s",
+				gsBudget.Used, gsBudget.Floor, need, plural(need),
+				gsBudget.WeekEnd.Format("Mon Jan 2")))
+			pGreen = append(pGreen, false)
+		}
+		if n := len(dr.pitcherResult.GateReport.Protected); n > 0 {
+			hLines = append(hLines, "")
+			hGreen = append(hGreen, false)
+			pLines = append(pLines, fmt.Sprintf("GS floor: %d start%s protected from the gate",
+				n, plural(n)))
+			pGreen = append(pGreen, false)
+		}
 	}
 
 	// Print side by side.

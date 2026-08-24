@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
 )
 
 // TestPitcherIsDeployable_ExcludesRestDayStarters is the guard that keeps this
@@ -168,22 +170,34 @@ func writeShapeSnapshotGenerated(t *testing.T, dir string, date, generatedAt tim
 	}
 }
 
+// shapeDay builds the per-day roster SummarizeRosterShape now takes its FIELDED
+// numerator from. activeIDs are the players Fantrax's frozen roster for that
+// date records in an active slot — the fact that used to be (wrongly) read off
+// the snapshot's own WasStarted field, see rosterbot-x3xo.
+func shapeDay(d time.Time, activeIDs ...string) fantrax.DayRoster {
+	players := make([]fantrax.DayPlayerFP, 0, len(activeIDs))
+	for _, id := range activeIDs {
+		players = append(players, fantrax.DayPlayerFP{PlayerID: id, Active: true})
+	}
+	return fantrax.DayRoster{Date: d, Players: players}
+}
+
 func TestSummarizeRosterShape_AccumulatesBothSides(t *testing.T) {
 	dir := t.TempDir()
 	writeShapeSnapshot(t, dir, day("2026-08-06"), 12,
 		[]SnapshotPlayer{
-			{PlayerID: "h1", Status: "Active", HasGame: true, WasStarted: true, ProjPtsPerGame: 10},
+			{PlayerID: "h1", Status: "Active", HasGame: true, ProjPtsPerGame: 10},
 			{PlayerID: "h2", Status: "Reserve", HasGame: true, ProjPtsPerGame: 4},
 			{PlayerID: "h3", Status: "Minors", HasGame: true, ProjPtsPerGame: 99},
 		},
 		[]SnapshotPlayer{
-			{PlayerID: "p1", IsPitcher: true, Role: "SP", Status: "Active", IsStarter: true, HasGame: true, WasStarted: true, ProjPtsPerGame: 16},
+			{PlayerID: "p1", IsPitcher: true, Role: "SP", Status: "Active", IsStarter: true, HasGame: true, ProjPtsPerGame: 16},
 			{PlayerID: "p2", IsPitcher: true, Role: "SP", Status: "Active", GSSuppressed: true, HasGame: true, ProjPtsPerGame: 11},
 			{PlayerID: "p3", IsPitcher: true, Role: "SP", Status: "Active", HasGame: true, ProjPtsPerGame: 20},
 		},
 	)
 
-	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []fantrax.DayRoster{shapeDay(day("2026-08-06"), "h1", "p1")}, 13, 6)
 
 	if got.DaysWithSnapshot != 1 || got.Days != 1 {
 		t.Errorf("Days = %d / DaysWithSnapshot = %d, want 1 / 1", got.Days, got.DaysWithSnapshot)
@@ -212,11 +226,11 @@ func TestSummarizeRosterShape_AccumulatesBothSides(t *testing.T) {
 func TestSummarizeRosterShape_ExcludesPreSchemaDay(t *testing.T) {
 	dir := t.TempDir()
 	writeShapeSnapshot(t, dir, day("2026-08-06"), 0,
-		[]SnapshotPlayer{{PlayerID: "h1", HasGame: true, WasStarted: true, ProjPtsPerGame: 10}},
+		[]SnapshotPlayer{{PlayerID: "h1", HasGame: true, ProjPtsPerGame: 10}},
 		[]SnapshotPlayer{{PlayerID: "p1", IsPitcher: true, Role: "SP", IsStarter: true, HasGame: true, ProjPtsPerGame: 16}},
 	)
 
-	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []fantrax.DayRoster{shapeDay(day("2026-08-06"), "h1", "p1")}, 13, 6)
 
 	if got.DaysPreSchema != 1 {
 		t.Errorf("DaysPreSchema = %d, want 1", got.DaysPreSchema)
@@ -240,11 +254,11 @@ func TestSummarizeRosterShape_ExcludesPreSchemaDay(t *testing.T) {
 func TestSummarizeRosterShape_MixedStatusSnapshotIsMeasuredNotPreSchema(t *testing.T) {
 	dir := t.TempDir()
 	writeShapeSnapshot(t, dir, day("2026-08-06"), 12,
-		[]SnapshotPlayer{{PlayerID: "h1", Status: "", HasGame: true, WasStarted: true, ProjPtsPerGame: 10}},
-		[]SnapshotPlayer{{PlayerID: "p1", IsPitcher: true, Role: "SP", Status: "Active", IsStarter: true, HasGame: true, WasStarted: true, ProjPtsPerGame: 16}},
+		[]SnapshotPlayer{{PlayerID: "h1", Status: "", HasGame: true, ProjPtsPerGame: 10}},
+		[]SnapshotPlayer{{PlayerID: "p1", IsPitcher: true, Role: "SP", Status: "Active", IsStarter: true, HasGame: true, ProjPtsPerGame: 16}},
 	)
 
-	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []fantrax.DayRoster{shapeDay(day("2026-08-06"), "p1")}, 13, 6)
 
 	if got.DaysWithSnapshot != 1 {
 		t.Errorf("DaysWithSnapshot = %d, want 1 — a mixed-status snapshot is measured, not pre-schema", got.DaysWithSnapshot)
@@ -267,11 +281,11 @@ func TestSummarizeRosterShape_ExcludesStaleDay(t *testing.T) {
 	dir := t.TempDir()
 	d := day("2026-08-06")
 	writeShapeSnapshotGenerated(t, dir, d, sameDayGeneratedAt(d.AddDate(0, 0, -3)), 12,
-		[]SnapshotPlayer{{PlayerID: "h1", Status: "Active", HasGame: true, WasStarted: true, ProjPtsPerGame: 10}},
+		[]SnapshotPlayer{{PlayerID: "h1", Status: "Active", HasGame: true, ProjPtsPerGame: 10}},
 		nil,
 	)
 
-	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{d}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []fantrax.DayRoster{shapeDay(d, "h1")}, 13, 6)
 
 	if got.DaysStale != 1 || got.DaysWithSnapshot != 0 {
 		t.Errorf("DaysStale = %d / DaysWithSnapshot = %d, want 1 / 0", got.DaysStale, got.DaysWithSnapshot)
@@ -287,11 +301,11 @@ func TestSummarizeRosterShape_ExcludesStaleDay(t *testing.T) {
 func TestSummarizeRosterShape_MissingDayIsNotMeasured(t *testing.T) {
 	dir := t.TempDir()
 	writeShapeSnapshot(t, dir, day("2026-08-06"), 12,
-		[]SnapshotPlayer{{PlayerID: "h1", Status: "Active", HasGame: true, WasStarted: true, ProjPtsPerGame: 10}},
+		[]SnapshotPlayer{{PlayerID: "h1", Status: "Active", HasGame: true, ProjPtsPerGame: 10}},
 		nil,
 	)
 
-	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06"), day("2026-08-07")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []fantrax.DayRoster{shapeDay(day("2026-08-06"), "h1"), shapeDay(day("2026-08-07"), "h1")}, 13, 6)
 
 	if got.Days != 2 || got.DaysWithSnapshot != 1 {
 		t.Errorf("Days = %d / DaysWithSnapshot = %d, want 2 / 1", got.Days, got.DaysWithSnapshot)
@@ -310,9 +324,9 @@ func TestSummarizeRosterShape_IsValueWeightedNotMeanOfRates(t *testing.T) {
 	writeShapeSnapshot(t, dir, day("2026-08-06"), 12,
 		[]SnapshotPlayer{{PlayerID: "h1", Status: "Reserve", HasGame: true, ProjPtsPerGame: 100}}, nil)
 	writeShapeSnapshot(t, dir, day("2026-08-07"), 12,
-		[]SnapshotPlayer{{PlayerID: "h2", Status: "Active", HasGame: true, WasStarted: true, ProjPtsPerGame: 10}}, nil)
+		[]SnapshotPlayer{{PlayerID: "h2", Status: "Active", HasGame: true, ProjPtsPerGame: 10}}, nil)
 
-	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06"), day("2026-08-07")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []fantrax.DayRoster{shapeDay(day("2026-08-06")), shapeDay(day("2026-08-07"), "h2")}, 13, 6)
 
 	rate, ok := got.Hitters.FieldedRate()
 	if !ok {
@@ -328,7 +342,7 @@ func TestSummarizeRosterShape_IsValueWeightedNotMeanOfRates(t *testing.T) {
 // zero and rendering a bogus "GS cap 0–18/wk".
 func TestSummarizeRosterShape_CapRangeIgnoresUntrackedDays(t *testing.T) {
 	dir := t.TempDir()
-	hitters := []SnapshotPlayer{{PlayerID: "h1", Status: "Active", HasGame: true, WasStarted: true, ProjPtsPerGame: 5}}
+	hitters := []SnapshotPlayer{{PlayerID: "h1", Status: "Active", HasGame: true, ProjPtsPerGame: 5}}
 	// Caps arrive high-then-low (18, untracked, 12) so that GSCapMin is
 	// actually exercised as a running minimum rather than set once by the
 	// first non-zero day and never revisited — that ordering is what makes
@@ -337,7 +351,7 @@ func TestSummarizeRosterShape_CapRangeIgnoresUntrackedDays(t *testing.T) {
 	writeShapeSnapshot(t, dir, day("2026-08-07"), 0, hitters, nil)
 	writeShapeSnapshot(t, dir, day("2026-08-08"), 12, hitters, nil)
 
-	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []time.Time{day("2026-08-06"), day("2026-08-07"), day("2026-08-08")}, 13, 6)
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []fantrax.DayRoster{shapeDay(day("2026-08-06"), "h1"), shapeDay(day("2026-08-07"), "h1"), shapeDay(day("2026-08-08"), "h1")}, 13, 6)
 
 	if got.GSCapMin != 12 || got.GSCapMax != 18 {
 		t.Errorf("cap = %d–%d, want 12–18", got.GSCapMin, got.GSCapMax)
@@ -465,8 +479,36 @@ func TestFormatRosterShape_RendersCoverageLine(t *testing.T) {
 	if !strings.Contains(out, "pitchers 2 of 13") {
 		t.Errorf("output missing pitcher coverage figures:\n%s", out)
 	}
-	if !strings.Contains(out, "so the") || !strings.Contains(out, "pitcher denominator is narrow") {
+	// The caveat now names WHY the pitcher rate is narrow rather than only
+	// that it is: it measures probable-start compliance, and surplus is
+	// reported separately by the rotation-supply line (rosterbot-8dl).
+	if !strings.Contains(out, "probable-start compliance, NOT rotation surplus") {
 		t.Errorf("output missing the narrow-denominator caveat sentence:\n%s", out)
+	}
+	if !strings.Contains(out, "Surplus is the line below") {
+		t.Errorf("output does not point the reader at the surplus measure:\n%s", out)
+	}
+}
+
+// TestFormatRosterShape_RotationSupplyLine pins the surplus line's presence and
+// its interpretation cue. 10 SPs over 5 days is a mean of 2... deliberately
+// unrealistic; the point is the arithmetic, not the roster.
+func TestFormatRosterShape_RotationSupplyLine(t *testing.T) {
+	out := FormatRosterShape(RosterShape{
+		Days: 7, DaysWithSnapshot: 7, HitterSlots: 13, PitcherSlots: 6,
+		GSCapMin: 12, GSCapMax: 12, SPRosterDaySum: 77,
+		Hitters:  SideShape{OwnedPts: 100, FieldedPts: 90, DeployableCount: 14, RosteredCount: 19},
+		Pitchers: SideShape{OwnedPts: 50, FieldedPts: 50, DeployableCount: 2, RosteredCount: 13},
+	})
+	// 77/7 = 11 SPs → 11*7/5 = 15.4 starts/wk against a 12 cap = 128%.
+	if !strings.Contains(out, "~11.0 rosterable SPs") || !strings.Contains(out, "~15.4 starts/wk") {
+		t.Errorf("rotation supply figures missing or wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "128%") {
+		t.Errorf("supply ratio missing:\n%s", out)
+	}
+	if !strings.Contains(out, "Above 100%") {
+		t.Errorf("output does not tell the reader how to read the ratio:\n%s", out)
 	}
 }
 
@@ -517,5 +559,148 @@ func TestFormatRosterShape_NoMeasurableDaysExplainsWhy(t *testing.T) {
 				t.Errorf("must not report a rate with no measurable days:\n%s", out)
 			}
 		})
+	}
+}
+
+// TestSummarizeRosterShape_DeployedComesFromTheDayRosterNotTheSnapshot pins the
+// rosterbot-x3xo fix by replaying the exact production case that exposed it.
+//
+// On 2026-08-19 two of our starters took the ball from active slots and earned
+// game starts — the active-slot GS walk counts them, and the week's total only
+// reconciles if it does. The projection snapshot for that
+// date records both as Status "Reserve", because it is written by the last
+// hourly run of the ET day, by which point finished starters have been rotated
+// back to Reserve for tomorrow. The old numerator read the snapshot and scored
+// both as not fielded.
+//
+// Over the whole of scoring period 20 that numerator claimed 42 pitcher-days
+// fielded against the walk's 10 actual starts, and agreed with the walk on
+// none of the seven days. So this is not a tie-break detail: the snapshot is
+// simply not a record of deployment, and the day's own roster is.
+func TestSummarizeRosterShape_DeployedComesFromTheDayRosterNotTheSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	d := day("2026-08-19")
+	writeShapeSnapshot(t, dir, d, 12, nil,
+		[]SnapshotPlayer{
+			// Rotated back to Reserve before the snapshot was written, but he
+			// started: deployable (a probable starter) and genuinely fielded.
+			{PlayerID: "rocker", IsPitcher: true, Role: "SP", Status: "Reserve",
+				IsStarter: true, HasGame: true, ProjPtsPerGame: 10},
+			// Same shape, and he did not start.
+			{PlayerID: "smith", IsPitcher: true, Role: "SP", Status: "Reserve",
+				IsStarter: true, HasGame: true, ProjPtsPerGame: 4},
+		},
+	)
+
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []fantrax.DayRoster{shapeDay(d, "rocker")}, 13, 6)
+
+	if got.DaysWithSnapshot != 1 {
+		t.Fatalf("DaysWithSnapshot = %d, want 1", got.DaysWithSnapshot)
+	}
+	if got.Pitchers.OwnedPts != 14 {
+		t.Errorf("OwnedPts = %v, want 14 — both are probable starters and owned",
+			got.Pitchers.OwnedPts)
+	}
+	if got.Pitchers.FieldedPts != 10 {
+		t.Errorf("FieldedPts = %v, want 10 — the day's roster says Rocker was active, "+
+			"and it outranks the snapshot's post-rotation Status", got.Pitchers.FieldedPts)
+	}
+}
+
+// TestSummarizeRosterShape_PlayerMissingFromDayRosterIsNotFielded pins the
+// conservative direction for a join miss. The day's roster is the authority on
+// who was slotted; a player it does not list was not deployed. Silently
+// crediting him would turn a data gap into fielded value, which is the
+// direction that flatters the report.
+func TestSummarizeRosterShape_PlayerMissingFromDayRosterIsNotFielded(t *testing.T) {
+	dir := t.TempDir()
+	d := day("2026-08-19")
+	writeShapeSnapshot(t, dir, d, 12,
+		[]SnapshotPlayer{{PlayerID: "ghost", Status: "Active", HasGame: true, ProjPtsPerGame: 9}}, nil)
+
+	got := SummarizeRosterShape(NewFileSnapshotStore(dir), "", []fantrax.DayRoster{shapeDay(d)}, 13, 6)
+
+	if got.Hitters.OwnedPts != 9 {
+		t.Errorf("OwnedPts = %v, want 9", got.Hitters.OwnedPts)
+	}
+	if got.Hitters.FieldedPts != 0 {
+		t.Errorf("FieldedPts = %v, want 0 — absent from the day's roster is not deployed",
+			got.Hitters.FieldedPts)
+	}
+}
+
+// TestRotationSupply_RespondsToRosterDepth is the acceptance test for
+// rosterbot-8dl: the pitcher-surplus measure must actually VARY with pitcher
+// surplus. The FieldedRate it sits beside cannot — MLB's rotation cadence keeps
+// the daily probable count inside the 6 P slots, so that rate reads ~100%
+// whether the roster carries seven starters or thirteen.
+//
+// A statistic that can only emit one value is not a measurement, which is the
+// whole finding of this bead; a test that only checks one roster size would not
+// have caught it. So this drives two materially different rosters through the
+// same window and asserts the readings separate.
+func TestRotationSupply_RespondsToRosterDepth(t *testing.T) {
+	shapeFor := func(t *testing.T, nSP int) RotationSupply {
+		t.Helper()
+		dir := t.TempDir()
+		d := day("2026-08-19")
+		var pitchers []SnapshotPlayer
+		var ids []string
+		for i := 0; i < nSP; i++ {
+			id := "sp" + string(rune('a'+i))
+			// Only the first is a probable starter today — exactly the cadence
+			// that pins FieldedRate at 100% regardless of depth.
+			pitchers = append(pitchers, SnapshotPlayer{
+				PlayerID: id, IsPitcher: true, Role: "SP", Status: "Reserve",
+				IsStarter: i == 0, HasGame: true, ProjPtsPerGame: 10,
+			})
+			if i == 0 {
+				ids = append(ids, id)
+			}
+		}
+		writeShapeSnapshot(t, dir, d, 12, nil, pitchers)
+		got := SummarizeRosterShape(NewFileSnapshotStore(dir), "",
+			[]fantrax.DayRoster{shapeDay(d, ids...)}, 13, 6)
+
+		// The control: the old measure is blind to the difference.
+		if rate, ok := got.Pitchers.FieldedRate(); !ok || rate != 1.0 {
+			t.Fatalf("FieldedRate = %v (ok=%v), want exactly 1.0 — this test's premise is that "+
+				"the daily rate is pinned at 100%% for every roster depth", rate, ok)
+		}
+		return got.Rotation()
+	}
+
+	thin := shapeFor(t, 6)
+	deep := shapeFor(t, 13)
+
+	thinRate, ok1 := thin.SupplyRate()
+	deepRate, ok2 := deep.SupplyRate()
+	if !ok1 || !ok2 {
+		t.Fatal("both supply rates should be defined against a tracked cap")
+	}
+	// 6 SPs → 8.4 starts/wk against a 12 cap = 70%.
+	// 13 SPs → 18.2 starts/wk against a 12 cap = 152%.
+	if thinRate >= 1.0 {
+		t.Errorf("thin roster SupplyRate = %.2f, want below 1.0 — six starters cannot fill a 12-start week", thinRate)
+	}
+	if deepRate <= 1.0 {
+		t.Errorf("deep roster SupplyRate = %.2f, want above 1.0 — thirteen starters exceed a 12-start cap", deepRate)
+	}
+	if deepRate <= thinRate {
+		t.Errorf("SupplyRate did not respond to depth: thin %.2f vs deep %.2f", thinRate, deepRate)
+	}
+}
+
+// TestRotationSupply_UndefinedWithoutATrackedCap pins that the ratio is
+// withheld rather than guessed when no day recorded a GS cap. The cap is the
+// quantity that moves — Fantrax rescales it for merged periods — so inventing
+// a denominator is the one thing this measure must not do.
+func TestRotationSupply_UndefinedWithoutATrackedCap(t *testing.T) {
+	r := RotationSupply{SPRosterDays: 10, DaysWithSnapshot: 1, GSCap: 0}
+	if supply, ok := r.SupplyPerWeek(); !ok || supply != 14 {
+		t.Errorf("SupplyPerWeek = %v (ok=%v), want 14 — supply itself does not need a cap", supply, ok)
+	}
+	if _, ok := r.SupplyRate(); ok {
+		t.Error("SupplyRate must be undefined when no cap was recorded")
 	}
 }

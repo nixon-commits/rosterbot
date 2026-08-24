@@ -26,9 +26,9 @@ type gsFantraxClient interface {
 	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
 }
 
-// rotationSize is the standard starting rotation depth used to estimate how
+// RotationSize is the standard starting rotation depth used to estimate how
 // many starts a team will get on a day with no published probables.
-const rotationSize = 5.0
+const RotationSize = 5.0
 
 // GSInputs is everything ComputeGSBudget needs that it does not fetch itself.
 // Periods/PeriodsErr come from the LoadInputs phase rather than being refetched
@@ -145,7 +145,7 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 		return d
 	}
 
-	_, liveMax, gerr := ft.GetGSLimits(in.TeamID, sp.Number)
+	liveMin, liveMax, gerr := ft.GetGSLimits(in.TeamID, sp.Number)
 	if gerr != nil {
 		msg := fmt.Sprintf("optimize: live GS limit fetch failed for period %d (%v) — GS limit disabled", sp.Number, gerr)
 		d.logf("WARNING: %s", msg)
@@ -158,8 +158,26 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 	}
 
 	gsLimit := *liveMax
-	d.logf("GS limit: %d per week (%s to %s)",
-		gsLimit, weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"))
+	// The floor is captured but, unlike the ceiling, a missing one does NOT
+	// disable the gate: a league with no configured minimum simply has no
+	// floor to protect, whereas a missing maximum leaves the gate with nothing
+	// to gate against. Zero is therefore an ordinary value here, not a failure.
+	//
+	// Like Limit it comes from the live per-period fetch and never from a
+	// constant — Fantrax rescales both bounds for merged multi-week periods
+	// (period 16 carried min 15, not 10), which is why the static GS_MIN/GS_MAX
+	// env vars were removed (rosterbot-513, rosterbot-r10).
+	gsFloor := 0
+	if liveMin != nil {
+		gsFloor = *liveMin
+	}
+	if gsFloor > 0 {
+		d.logf("GS limit: %d per week (floor %d) (%s to %s)",
+			gsLimit, gsFloor, weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"))
+	} else {
+		d.logf("GS limit: %d per week (%s to %s)",
+			gsLimit, weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"))
+	}
 
 	spNames := rosterSPNames(in.PitcherRoster)
 	// The forecast is the last step of the cascade and obeys the same rule as
@@ -175,13 +193,19 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 
 	d.Budget = &optimizer.GSBudget{
 		Limit:    gsLimit,
+		Floor:    gsFloor,
 		Used:     usedGS,
 		Today:    in.Today,
 		WeekEnd:  weekEnd,
 		Forecast: forecast,
 	}
-	d.logf("GS budget: %d/%d used, %.1f projected future starts",
-		usedGS, gsLimit, d.Budget.FutureDemand())
+	if need := d.Budget.NeedForFloor(); need > 0 {
+		d.logf("GS budget: %d/%d used (floor %d, %d more needed), %.1f projected future starts",
+			usedGS, gsLimit, gsFloor, need, d.Budget.FutureDemand())
+	} else {
+		d.logf("GS budget: %d/%d used, %.1f projected future starts",
+			usedGS, gsLimit, d.Budget.FutureDemand())
+	}
 	return d
 }
 
@@ -297,7 +321,7 @@ func buildGSForecast(
 		// claimed slots, so the estimate may only fill what they left. Capping
 		// each regime at numPSlots separately would forecast up to 2x the
 		// starts the roster can physically field.
-		df.Estimated = max(min(unannouncedSPs/rotationSize,
+		df.Estimated = max(min(unannouncedSPs/RotationSize,
 			float64(numPSlots-len(df.ConfirmedStarters))), 0)
 
 		forecast = append(forecast, df)

@@ -11,6 +11,7 @@ import (
 // A nil *GSBudget means no GS limit is configured.
 type GSBudget struct {
 	Limit    int       // max GS per matchup week (fetched live from Fantrax's per-period config)
+	Floor    int       // min GS per matchup week (0 = unset); live-fetched like Limit, never a constant
 	Used     int       // GS already consumed this matchup week (past days)
 	Today    time.Time // the date being optimized
 	WeekEnd  time.Time // last day of matchup week (inclusive)
@@ -35,9 +36,27 @@ type DayForecast struct {
 // and the display layer re-derived an approximation of it by inference.
 type GSGateReport struct {
 	Suppressed []SuppressedStart
+	// Protected are today's starts the gate declined to suppress because the
+	// week would otherwise be unable to reach the league's GS MINIMUM. It is
+	// disjoint from Suppressed by construction.
+	//
+	// Protection is the only floor-side lever the optimizer actually has.
+	// It cannot make a pitcher start — MLB names the probables — so it cannot
+	// manufacture a start on a day when none of our arms has the ball. What it
+	// can do is refuse to spend the ceiling-side gate against a week that is
+	// already short. Measured on scoring period 20, both zero-start days had
+	// our clubs playing and other pitchers starting, so no promotion rule
+	// could have raised that week's count; only not-declining can (dpm).
+	Protected []SuppressedStart
 	// Budget state echoed so a consumer can report the cost and its cause
 	// together without also carrying the *GSBudget.
 	Limit, Used, Remaining int
+	// Floor is the league's weekly GS minimum in force (0 = unset) and
+	// FloorNeed is how many more starts the week still needs to reach it.
+	// Both are populated on every gate run, including runs that suppress
+	// nothing, so the summary can report floor state on a quiet day rather
+	// than only when something fired.
+	Floor, FloorNeed int
 }
 
 // SuppressedStart is one start the gate declined to spend budget on.
@@ -66,6 +85,17 @@ func (r GSGateReport) SuppressedPts() float64 {
 	return total
 }
 
+// ProtectedPts is the GROSS projected value of the starts the gate declined to
+// suppress on the floor's behalf. Same accounting caveat as SuppressedPts: it
+// is not a gain to the week, it is value that stayed deployed.
+func (r GSGateReport) ProtectedPts() float64 {
+	var total float64
+	for _, s := range r.Protected {
+		total += s.ProjectedPts
+	}
+	return total
+}
+
 // Remaining returns how many GS are available from today onward.
 func (b *GSBudget) Remaining() int {
 	if b == nil || b.Limit == 0 {
@@ -76,6 +106,25 @@ func (b *GSBudget) Remaining() int {
 		return 0
 	}
 	return r
+}
+
+// NeedForFloor returns how many more game starts the week still needs to reach
+// the league's weekly minimum. It is the floor-side counterpart to Remaining():
+// Remaining says how many starts we MAY still spend, this says how many we must
+// still make.
+//
+// Zero when no floor is configured, and zero once the floor is met — a met
+// floor imposes no constraint, so the gate's ceiling-side behaviour is
+// unchanged on every week that is comfortably clear of it.
+func (b *GSBudget) NeedForFloor() int {
+	if b == nil || b.Floor == 0 {
+		return 0
+	}
+	need := b.Floor - b.Used
+	if need < 0 {
+		return 0
+	}
+	return need
 }
 
 // FutureDemand returns the projected count of SP starts on days strictly
@@ -124,7 +173,11 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) ([]ScoredPitcher, GSG
 	}
 
 	remaining := budget.Remaining()
-	report := GSGateReport{Limit: budget.Limit, Used: budget.Used, Remaining: remaining}
+	floorNeed := budget.NeedForFloor()
+	report := GSGateReport{
+		Limit: budget.Limit, Used: budget.Used, Remaining: remaining,
+		Floor: budget.Floor, FloorNeed: floorNeed,
+	}
 	if remaining <= 0 {
 		for i := range scored {
 			// Locked players' GS is already decided (either consumed in an
@@ -320,7 +373,64 @@ func applyGSGate(scored []ScoredPitcher, budget *GSBudget) ([]ScoredPitcher, GSG
 		}
 	}
 
+	// FLOOR SIDE. The cut above is purely ceiling-driven: it asks which starts
+	// are worth the remaining budget. It never asks whether declining them
+	// leaves the week short of the league's MINIMUM, and a team that finishes
+	// under the floor takes a penalty regardless of how well it spent what it
+	// did use.
+	//
+	// floorReserve is how many of today's starts must survive the cut for the
+	// floor to stay reachable: what the week still needs, less the starts
+	// already CONFIRMED for later in the week.
+	//
+	// Only futureConfirmed is subtracted, never futureEstimated. Estimated is
+	// rotation math over clubs that have not named a starter — a ~1-in-5 claim
+	// on a pitcher who may never take an active-slot turn (rosterbot-tmb9).
+	// Spending a certain start today against a speculative one later is
+	// exactly how a floor-bound week ends up under the floor, and weekly GS is
+	// use-it-or-lose-it, so the unspent probability is burned rather than
+	// banked. The floor is the one place in this gate that must not be staked
+	// on an estimate.
+	//
+	// The clamps are what make the ceiling constraint provably safe. Capping at
+	// `remaining` means the post-top-up keepToday can never exceed `remaining`:
+	// the loop above put at most `remaining` entries in, and the top-up raises
+	// the count to at most floorReserve <= remaining. So protection can never
+	// push the week past Limit, which is not an assertion here but a
+	// consequence of the bound — pinned by
+	// TestApplyGSGate_FloorNeverProtectsPastLimit.
+	var protectedRefs []int
+	if floorNeed > 0 {
+		floorReserve := floorNeed - len(futureConfirmed)
+		if floorReserve > len(todayStarters) {
+			floorReserve = len(todayStarters)
+		}
+		if floorReserve > remaining {
+			floorReserve = remaining
+		}
+		// Top up in the same value order the cut used, so protection promotes
+		// the most valuable declined start first and no re-sort is needed.
+		for i := 0; i < len(entries) && len(keepToday) < floorReserve; i++ {
+			if !entries[i].isToday || keepToday[entries[i].todayRef] {
+				continue
+			}
+			keepToday[entries[i].todayRef] = true
+			protectedRefs = append(protectedRefs, entries[i].todayRef)
+		}
+	}
+	protected := make(map[int]bool, len(protectedRefs))
+	for _, ref := range protectedRefs {
+		protected[ref] = true
+	}
+
 	for i, s := range todayStarters {
+		if protected[i] {
+			report.Protected = append(report.Protected, SuppressedStart{
+				PlayerID:     scored[s.idx].Player.ID,
+				Name:         scored[s.idx].Player.Name,
+				ProjectedPts: scored[s.idx].ExpectedPts,
+			})
+		}
 		if !keepToday[i] {
 			report.Suppressed = append(report.Suppressed, SuppressedStart{
 				PlayerID:     scored[s.idx].Player.ID,

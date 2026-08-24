@@ -601,3 +601,194 @@ func TestApplyGSGate_MixedDayEstimateStillCompetesForBudget(t *testing.T) {
 			got[0].IsStarter, got[1].IsStarter)
 	}
 }
+
+func TestGSBudget_NeedForFloor(t *testing.T) {
+	tests := []struct {
+		name   string
+		budget *GSBudget
+		want   int
+	}{
+		{"nil budget", nil, 0},
+		{"floor unset", &GSBudget{Limit: 12, Used: 3}, 0},
+		{"short of floor", &GSBudget{Limit: 12, Floor: 10, Used: 3}, 7},
+		{"exactly on floor", &GSBudget{Limit: 12, Floor: 10, Used: 10}, 0},
+		{"past floor", &GSBudget{Limit: 12, Floor: 10, Used: 11}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.budget.NeedForFloor(); got != tt.want {
+				t.Errorf("NeedForFloor() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestApplyGSGate_FloorProtectsAStartTheCeilingWouldHaveCut is the core
+// rosterbot-dpm regression. Same inputs as
+// TestApplyGSGate_TightBudget_SuppressesWeakestToday, which suppresses p2 —
+// but with a floor the week cannot otherwise reach, p2 must survive.
+//
+// The scenario is the one the season actually produced: Intentional Balk
+// finished on the league floor in three of four periods while five other teams
+// hit the cap, and since rosterbot-1jvj revived the forecast the gate can now
+// decline starts on exactly such a week.
+func TestApplyGSGate_FloorProtectsAStartTheCeilingWouldHaveCut(t *testing.T) {
+	scored := []ScoredPitcher{
+		{Player: fantrax.Player{ID: "p1", PosShortNames: "SP"}, ExpectedPts: 10, IsStarter: true},
+		{Player: fantrax.Player{ID: "p2", PosShortNames: "SP"}, ExpectedPts: 5, IsStarter: true},
+	}
+	budget := &GSBudget{
+		Limit: 12, Floor: 12, Used: 10,
+		Today: date("2026-04-10"), WeekEnd: date("2026-04-12"),
+		Forecast: []DayForecast{
+			{Date: date("2026-04-11"), ConfirmedStarters: []float64{8}},
+		},
+	}
+	// remaining=2, need=2, futureConfirmed=1 -> floorReserve=1... but the
+	// ceiling cut already keeps p1, so keepToday=1 >= floorReserve and nothing
+	// is protected. Raise the need by one to force protection.
+	budget.Floor = 12
+	budget.Used = 9
+	budget.Limit = 12
+	// remaining=3, need=3, futureConfirmed=1 -> floorReserve=2: both of today's
+	// starters must survive.
+	result, report := applyGSGate(scored, budget)
+	if !result[0].IsStarter {
+		t.Error("p1 should not be suppressed")
+	}
+	if !result[1].IsStarter {
+		t.Error("p2 should be PROTECTED by the floor, not suppressed")
+	}
+	if len(report.Suppressed) != 0 {
+		t.Errorf("Suppressed = %+v, want none", report.Suppressed)
+	}
+	if report.Floor != 12 || report.FloorNeed != 3 {
+		t.Errorf("Floor/FloorNeed = %d/%d, want 12/3", report.Floor, report.FloorNeed)
+	}
+}
+
+// TestApplyGSGate_FloorNeverProtectsPastLimit pins the one constraint that must
+// hold unconditionally: the floor may keep starts alive, but it can never let
+// the week spend more than the ceiling allows. Floor above Limit is a
+// misconfiguration Fantrax should never emit, and the gate must fail safe on it
+// rather than trusting the invariant.
+func TestApplyGSGate_FloorNeverProtectsPastLimit(t *testing.T) {
+	scored := []ScoredPitcher{
+		{Player: fantrax.Player{ID: "p1", PosShortNames: "SP"}, ExpectedPts: 10, IsStarter: true},
+		{Player: fantrax.Player{ID: "p2", PosShortNames: "SP"}, ExpectedPts: 9, IsStarter: true},
+		{Player: fantrax.Player{ID: "p3", PosShortNames: "SP"}, ExpectedPts: 8, IsStarter: true},
+		{Player: fantrax.Player{ID: "p4", PosShortNames: "SP"}, ExpectedPts: 7, IsStarter: true},
+	}
+	budget := &GSBudget{
+		// Only ONE start may still be spent, but the floor "needs" nine.
+		Limit: 12, Floor: 20, Used: 11,
+		Today: date("2026-04-10"), WeekEnd: date("2026-04-12"),
+		Forecast: []DayForecast{{Date: date("2026-04-11"), Estimated: 2}},
+	}
+	result, report := applyGSGate(scored, budget)
+
+	kept := 0
+	for _, sp := range result {
+		if sp.IsStarter {
+			kept++
+		}
+	}
+	if kept > budget.Remaining() {
+		t.Fatalf("kept %d starters with only %d remaining — floor protection breached the ceiling",
+			kept, budget.Remaining())
+	}
+	// A start kept by the ceiling cut is neither protected nor suppressed, so
+	// the three sets partition today's starters as kept+suppressed, with
+	// protected a subset of kept. What must never happen is a player in both
+	// Protected and Suppressed.
+	if kept+len(report.Suppressed) != len(scored) {
+		t.Errorf("kept %d + suppressed %d != %d starters", kept, len(report.Suppressed), len(scored))
+	}
+	sup := make(map[string]bool, len(report.Suppressed))
+	for _, s := range report.Suppressed {
+		sup[s.PlayerID] = true
+	}
+	for _, p := range report.Protected {
+		if sup[p.PlayerID] {
+			t.Errorf("%s is reported as both protected and suppressed", p.PlayerID)
+		}
+	}
+	if report.FloorNeed != 9 {
+		t.Errorf("FloorNeed = %d, want 9 — the need is reported honestly even when unreachable", report.FloorNeed)
+	}
+}
+
+// TestApplyGSGate_FloorDoesNotStakeItselfOnEstimatedStarts pins the deliberate
+// asymmetry: floorReserve subtracts CONFIRMED future starts only.
+//
+// Estimated is rotation math over clubs that have not named a starter — a
+// roughly 1-in-5 claim on a pitcher who may never take an active-slot turn
+// (rosterbot-tmb9). Counting it toward the floor would decline a certain start
+// today to protect a speculative one later, on a week already short of the
+// minimum, and weekly GS is use-it-or-lose-it so the unspent probability is
+// burned rather than banked. The two budgets below are identical except that
+// one's future demand is confirmed and the other's is estimated.
+func TestApplyGSGate_FloorDoesNotStakeItselfOnEstimatedStarts(t *testing.T) {
+	mk := func() []ScoredPitcher {
+		return []ScoredPitcher{
+			{Player: fantrax.Player{ID: "p1", PosShortNames: "SP"}, ExpectedPts: 10, IsStarter: true},
+			{Player: fantrax.Player{ID: "p2", PosShortNames: "SP"}, ExpectedPts: 1, IsStarter: true},
+		}
+	}
+	base := func(f []DayForecast) *GSBudget {
+		return &GSBudget{
+			Limit: 12, Floor: 12, Used: 10,
+			Today: date("2026-04-10"), WeekEnd: date("2026-04-12"), Forecast: f,
+		}
+	}
+	// need=2, remaining=2.
+	// Confirmed: floorReserve = 2-2 = 0, so the weak p2 is free to be cut.
+	confirmed := base([]DayForecast{{Date: date("2026-04-11"), ConfirmedStarters: []float64{9, 9}}})
+	// Estimated: nothing is subtracted, floorReserve = 2, so p2 is protected.
+	estimated := base([]DayForecast{{Date: date("2026-04-11"), Estimated: 2}})
+
+	cResult, _ := applyGSGate(mk(), confirmed)
+	eResult, eReport := applyGSGate(mk(), estimated)
+
+	if cResult[1].IsStarter {
+		t.Error("with TWO confirmed future starts the floor is already covered — the weak start should be cut")
+	}
+	if !eResult[1].IsStarter {
+		t.Error("with only ESTIMATED future demand the floor must not rely on it — the weak start should be protected")
+	}
+	if len(eReport.Protected) != 1 || eReport.Protected[0].PlayerID != "p2" {
+		t.Errorf("Protected = %+v, want exactly p2", eReport.Protected)
+	}
+}
+
+// TestApplyGSGate_MetFloorLeavesCeilingBehaviourUnchanged pins that the floor
+// is inert once satisfied, so every week comfortably clear of the minimum
+// behaves exactly as it did before rosterbot-dpm.
+func TestApplyGSGate_MetFloorLeavesCeilingBehaviourUnchanged(t *testing.T) {
+	mk := func() []ScoredPitcher {
+		return []ScoredPitcher{
+			{Player: fantrax.Player{ID: "p1", PosShortNames: "SP"}, ExpectedPts: 10, IsStarter: true},
+			{Player: fantrax.Player{ID: "p2", PosShortNames: "SP"}, ExpectedPts: 5, IsStarter: true},
+		}
+	}
+	forecast := []DayForecast{{Date: date("2026-04-11"), ConfirmedStarters: []float64{8}}}
+	noFloor := &GSBudget{Limit: 12, Used: 10, Today: date("2026-04-10"), WeekEnd: date("2026-04-12"), Forecast: forecast}
+	metFloor := &GSBudget{Limit: 12, Floor: 8, Used: 10, Today: date("2026-04-10"), WeekEnd: date("2026-04-12"), Forecast: forecast}
+
+	a, ra := applyGSGate(mk(), noFloor)
+	b, rb := applyGSGate(mk(), metFloor)
+
+	for i := range a {
+		if a[i].IsStarter != b[i].IsStarter {
+			t.Fatalf("player %d: floor=0 gave IsStarter=%v, met floor gave %v — a met floor must change nothing",
+				i, a[i].IsStarter, b[i].IsStarter)
+		}
+	}
+	if len(ra.Suppressed) != len(rb.Suppressed) || len(rb.Protected) != 0 {
+		t.Errorf("met floor altered the report: suppressed %d vs %d, protected %d",
+			len(ra.Suppressed), len(rb.Suppressed), len(rb.Protected))
+	}
+	if rb.Floor != 8 || rb.FloorNeed != 0 {
+		t.Errorf("Floor/FloorNeed = %d/%d, want 8/0", rb.Floor, rb.FloorNeed)
+	}
+}
