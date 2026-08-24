@@ -108,8 +108,28 @@ type Counts struct {
 
 // Table is the whole pool/available.json payload.
 type Table struct {
-	GeneratedAt time.Time `json:"generated_at"`
-	HKBAsOf     string    `json:"hkb_as_of"`
+	// GeneratedAt is RFC3339 UTC with NO fractional seconds, matching
+	// lineuprun/publish.go's generated_at on GET /v1/lineup/today — the same
+	// field name in the same API, read by the same client.
+	//
+	// A plain time.Time here would marshal as RFC3339Nano, whose fraction is
+	// VARIABLE-LENGTH and vanishes entirely when the nanosecond count happens
+	// to be zero:
+	//
+	//	nanos=902729184 -> "2026-08-24T21:47:27.902729184Z"
+	//	nanos=900000000 -> "2026-08-24T21:47:27.9Z"
+	//	nanos=0         -> "2026-08-24T21:47:27Z"
+	//
+	// That is worse than a consistently fractional format, because a strict
+	// parser tested against the third shape passes and then fails
+	// intermittently in production. Reported by the iOS client, whose
+	// ISO8601DateFormatter([.withInternetDateTime]) rejects fractional
+	// seconds by returning nil, and whose staleness check treats an
+	// unparseable timestamp as "not stale" — so the notice would have silently
+	// never fired. No error, no failing test, just a feature that quietly does
+	// not exist.
+	GeneratedAt string `json:"generated_at"`
+	HKBAsOf     string `json:"hkb_as_of"`
 
 	MLB       []Player `json:"mlb"`
 	Prospects []Player `json:"prospects"`
@@ -131,7 +151,7 @@ func Build(now time.Time, hkbAsOf string, pool []PoolPlayer, hkbPlayers []hkb.Pl
 		namesakes[playername.Normalize(pp.Name)]++
 	}
 
-	t := Table{GeneratedAt: now, HKBAsOf: hkbAsOf}
+	t := Table{GeneratedAt: now.UTC().Format(time.RFC3339), HKBAsOf: hkbAsOf}
 	for _, pp := range pool {
 		if !IsUnowned(pp.FantasyStatus) {
 			continue

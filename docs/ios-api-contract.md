@@ -205,6 +205,12 @@ Plot from `rank_history_starts_at`; plotting index 0 literally draws a new
 entrant as having fallen from the best possible rank. `rank_history_starts_at >
 0` means the player arrived on the board mid-window.
 
+**`generated_at` is RFC3339 UTC with no fractional seconds**, byte-compatible
+with `generated_at` on `GET /v1/lineup/today`. Parse both with the same strict
+formatter. Under artifact-serve this is the producer's run moment, so it is the
+field a staleness check should read — `hkb_as_of` is the same run's date and
+trails the underlying HKB scrape by at most its 8h cache TTL.
+
 **`pos` vs `fantrax_pos`** are different facts. `pos` is HKB's position list;
 `fantrax_pos` is the league's own eligibility — what answers "can I actually
 slot him". Prefer `fantrax_pos`, fall back to `pos` when it is absent.

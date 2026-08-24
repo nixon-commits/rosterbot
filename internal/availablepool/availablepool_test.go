@@ -1,6 +1,8 @@
 package availablepool
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,6 +278,50 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestGeneratedAtHasNoFractionalSeconds pins the wire format against a strict
+// RFC3339 parser.
+//
+// encoding/json marshals a time.Time as RFC3339Nano, whose fraction is
+// variable-length and ABSENT when nanos are zero — so a client tested against
+// a whole-second fixture passes and then fails intermittently on real data.
+// The iOS client's formatter rejects fractional seconds by returning nil, and
+// its staleness check reads an unparseable timestamp as "not stale", which
+// composes into a warning that can never fire.
+//
+// This also keeps the field byte-compatible with generated_at on
+// GET /v1/lineup/today (lineuprun/publish.go), the same name in the same API.
+func TestGeneratedAtHasNoFractionalSeconds(t *testing.T) {
+	// A nanosecond count that RFC3339Nano would render as ".902729184".
+	stamp := time.Date(2026, 8, 24, 21, 47, 27, 902729184, time.UTC)
+
+	got := Build(stamp, "2026-08-24", nil, nil)
+	if want := "2026-08-24T21:47:27Z"; got.GeneratedAt != want {
+		t.Errorf("generated_at=%q, want %q", got.GeneratedAt, want)
+	}
+	if strings.Contains(got.GeneratedAt, ".") {
+		t.Errorf("generated_at=%q carries a fractional component", got.GeneratedAt)
+	}
+	// Survives a round trip through the encoder that actually ships it.
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"generated_at":"2026-08-24T21:47:27Z"`) {
+		t.Errorf("serialized form wrong: %s", firstN(string(b), 120))
+	}
+	// The strict parser the client uses must accept it.
+	if _, err := time.Parse(time.RFC3339, got.GeneratedAt); err != nil {
+		t.Errorf("strict RFC3339 parse failed: %v", err)
+	}
+}
+
+func firstN(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func hasPlayer(ps []Player, name string) bool {
