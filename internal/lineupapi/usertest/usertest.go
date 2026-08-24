@@ -76,6 +76,72 @@ func Run(t *testing.T, newStore func(t *testing.T) lineupapi.UserStore) {
 		}
 	})
 
+	t.Run("MembershipsRoundTrip", func(t *testing.T) {
+		// Memberships is a slice of structs containing a time.Time, and it
+		// crosses two entirely different codecs: JSON by field tag in
+		// FileUserStore, DynamoDB by Go field NAME in ddbuser's whole-struct
+		// MarshalMap. Nothing in the interface makes either carry it. If
+		// ddbuser ever moves to explicit attributes — it already hand-builds
+		// pk/sk/ver — this field disappears in production while every
+		// handler-level test in lineupapi keeps passing, because those tests
+		// use the file store.
+		s := newStore(t)
+
+		// A tenant created before this field existed has none, which decodes
+		// to nil. That is every record in production today, so it must read
+		// back as an empty list rather than as a decode failure.
+		bare := newUser("bare")
+		if err := s.CreateUser(ctx, bare); err != nil {
+			t.Fatalf("CreateUser(bare): %v", err)
+		}
+		got, ok, err := s.GetUser(ctx, bare.ID)
+		if err != nil || !ok {
+			t.Fatalf("GetUser(bare): ok=%v err=%v", ok, err)
+		}
+		if len(got.Memberships) != 0 {
+			t.Errorf("Memberships = %+v, want none for a record that never had any",
+				got.Memberships)
+		}
+
+		addedAt := time.Date(2026, 8, 21, 9, 30, 15, 0, time.UTC)
+		joined := newUser("joined")
+		joined.Memberships = []lineupapi.Membership{{
+			Platform:    lineupapi.PlatformSleeper,
+			LeagueID:    "1312135439800356864",
+			TeamID:      "456",
+			DisplayName: "Palm Trees & Promethazine",
+			// True here even though the API refuses to write a writable
+			// Sleeper membership, and deliberately so: a false bool cannot
+			// tell "persisted" from "dropped by the codec", which is the
+			// failure this subtest exists to catch. It is safe to store
+			// because AllMemberships forces the invariant at projection time
+			// rather than trusting what is on disk.
+			Writable: true,
+			AddedAt:  addedAt,
+		}}
+		if err := s.CreateUser(ctx, joined); err != nil {
+			t.Fatalf("CreateUser(joined): %v", err)
+		}
+		got, ok, err = s.GetUser(ctx, joined.ID)
+		if err != nil || !ok {
+			t.Fatalf("GetUser(joined): ok=%v err=%v", ok, err)
+		}
+		if len(got.Memberships) != 1 {
+			t.Fatalf("Memberships = %+v, want the one that was stored", got.Memberships)
+		}
+		m, want := got.Memberships[0], joined.Memberships[0]
+		if m.Platform != want.Platform || m.LeagueID != want.LeagueID ||
+			m.TeamID != want.TeamID || m.DisplayName != want.DisplayName ||
+			m.Writable != want.Writable {
+			t.Errorf("membership = %+v, want %+v", m, want)
+		}
+		// Equal, not ==: a codec is free to round-trip an instant in a
+		// different location, and == compares the wall clock and the location.
+		if !m.AddedAt.Equal(want.AddedAt) {
+			t.Errorf("AddedAt = %v, want %v", m.AddedAt, want.AddedAt)
+		}
+	})
+
 	t.Run("CreateIsConditionalOnAbsence", func(t *testing.T) {
 		s, u := seed(t)
 		again := newUser(u.ID)

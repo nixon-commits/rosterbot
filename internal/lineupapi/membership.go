@@ -63,6 +63,19 @@ func (u *User) AllMemberships() []Membership {
 	}
 	// append onto a fresh slice, never returning u.Memberships itself — a
 	// caller appending to the result would otherwise write into the record.
-	out = append(out, u.Memberships...)
+	//
+	// Writable is forced false on the way past rather than trusted from the
+	// store. Only Fantrax, projected above, is writable, and clients read this
+	// field to decide whether to offer a write action — so "the one
+	// constructor always sets it false" being a convention rather than a
+	// guarantee is not good enough. A hand-edited record or a second
+	// constructor added later would otherwise put a true in front of a user.
+	// m is a copy, so the stored membership is untouched.
+	for _, m := range u.Memberships {
+		if m.Platform != PlatformFantrax {
+			m.Writable = false
+		}
+		out = append(out, m)
+	}
 	return out
 }
