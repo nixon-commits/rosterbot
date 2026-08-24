@@ -56,6 +56,12 @@ const (
 	// 4033-3799, decayed favors Intentional Balk 3799-3778) and
 	// hdh6we5pmsi3229b (raw favors Yordan's Schlong 4222-4205, decayed
 	// favors Intentional Balk 3829.4-3492.52).
+	// No trade in the 25-group baseline priced exactly level on both methods.
+	// Symmetric swaps of equally valued players are rare in this league's
+	// executed history; the guard exists because the cost of getting one wrong
+	// is a confidently stated winner, not because the case is common.
+	wantDeadEven = 0
+
 	wantGroups = 25
 )
 
@@ -162,6 +168,14 @@ func TestCorpus_VerdictDistributionOverRealTrades(t *testing.T) {
 		}
 		if counts[StatusTooClose] != wantTooClose {
 			t.Errorf("too-close = %d, want %d", counts[StatusTooClose], wantTooClose)
+		}
+		// Asserted at the baseline value rather than merely logged: a
+		// dead-even verdict is new (rosterbot-h688) and none of the 25
+		// baseline trades produced one, so any appearance here is a real
+		// change in the corpus worth stopping on — the same reason the three
+		// counts above are pinned.
+		if counts[StatusDeadEven] != wantDeadEven {
+			t.Errorf("dead-even = %d, want %d", counts[StatusDeadEven], wantDeadEven)
 		}
 	} else {
 		t.Logf("corpus has moved (%d groups, baseline %d) — exact counts not asserted. "+

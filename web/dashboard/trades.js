@@ -28,11 +28,24 @@ function fmtWhen(iso) {
 
 // ---------------------------------------------------------------- offers
 
-// The verdict badge deliberately distinguishes four states, not two. "Too
-// close" and "incomplete" are different kinds of not-knowing: the first means
-// the models disagree, the second means an asset could not be priced at all
-// (today, always an unidentified draft pick — Fantrax sends pick rows with an
-// empty name, while HKB prices picks up to 1419).
+// The verdict badge deliberately distinguishes every state separately, because
+// they are different kinds of not-knowing: "too close" means the two pricing
+// methods disagree, "dead even" means they agree on a number that cannot
+// separate the sides, and "incomplete" means an asset could not be priced at
+// all (today, always an unidentified draft pick — Fantrax sends pick rows with
+// an empty name, while HKB prices picks up to 1419).
+//
+// Collapsing any of them into "no verdict" would lose the only thing that tells
+// a reader whether the data or the trade is the reason (rosterbot-h688).
+
+// methodReading renders one pricing method's finding. An empty leader means
+// that method came out exactly level and named nobody, which reaches the
+// too-close branch when the OTHER method did separate the sides.
+function methodReading(leaderTeam, pct) {
+  if (!leaderTeam) return "dead even";
+  return `favours ${leaderTeam} by ${(pct || 0).toFixed(1)}%`;
+}
+
 function verdictBadge(v, myTeam) {
   if (v.status === "favors") {
     const mine = v.favored_team === myTeam;
@@ -41,6 +54,7 @@ function verdictBadge(v, myTeam) {
     return b;
   }
   if (v.status === "too-close") return el("span", "badge badge-info", "Too close to call");
+  if (v.status === "dead-even") return el("span", "badge badge-info", "Dead even");
   return el("span", "badge badge-info", "Cannot be priced");
 }
 
@@ -62,8 +76,8 @@ function verdictExplain(v, myTeam) {
   }
   if (v.status === "too-close") {
     return {
-      short: `Too close — raw favours ${v.raw_leader} by ${v.raw_pct.toFixed(1)}%, ` +
-        `adjusted favours ${v.adj_leader} by ${v.adj_pct.toFixed(1)}%.`,
+      short: `Too close — raw ${methodReading(v.raw_leader, v.raw_pct)}, ` +
+        `adjusted ${methodReading(v.adj_leader, v.adj_pct)}.`,
       long:
         `Each side is priced twice. Raw value is a straight sum of HKB dynasty ` +
         `values. Adjusted value discounts every asset after the best one, because ` +
@@ -72,6 +86,19 @@ function verdictExplain(v, myTeam) {
         `uncertainty and no verdict is stated. A single number would have been ` +
         `confidently wrong — on the 2-for-1 that prompted this feature, raw ` +
         `favoured one side by 12.7% while adjusted favoured the other.`,
+    };
+  }
+  if (v.status === "dead-even") {
+    return {
+      short: `The leading sides price exactly level, so no verdict is stated.`,
+      long:
+        `Every asset here priced fine — this is not a gap in the data. Both ` +
+        `readings, raw and package-adjusted, put the top sides exactly equal, ` +
+        `so nothing separates them.\n\nA verdict would have to come from the ` +
+        `order the teams happen to sort in, which says nothing about the ` +
+        `trade. The most common way to reach this is a symmetric swap of two ` +
+        `equally valued players — though in a trade with more than two sides ` +
+        `it only means no side leads, not that every side is equal.`,
     };
   }
   const n = v.unpriced_assets || 0;

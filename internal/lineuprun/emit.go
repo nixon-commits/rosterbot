@@ -18,7 +18,7 @@ import (
 // in the whole run that mutate anything outside the process.
 type emitClient interface {
 	ApplyLineup(period fantrax.DailyPeriod, active []fantrax.PlayerSlot, reserve []string) error
-	InvalidatePeriodRosterCache(period fantrax.DailyPeriod)
+	InvalidatePeriodRosterCache(period fantrax.DailyPeriod) error
 }
 
 // EmitInputs is everything the emit phase consumes: the optimized results plus
@@ -422,7 +422,16 @@ func applyLineupFor(ft emitClient, in EmitInputs, dr dateResult, auth applyAutho
 		return
 	}
 	fmt.Fprintln(in.Out, "Lineup applied successfully.")
-	ft.InvalidatePeriodRosterCache(dr.period)
+	// A failed invalidation cannot be recovered from here — the apply has
+	// already landed and is not undoable — so it is printed rather than acted
+	// on. What it costs is the next run within the 15-minute todayTTL reading
+	// the pre-apply snapshot and re-proposing moves that are already in place;
+	// naming it here is what separates that from the unexplained churn
+	// rosterbot-sza presented as. No Pushover: the window is short and
+	// self-healing, and the operator has no action to take.
+	if err := ft.InvalidatePeriodRosterCache(dr.period); err != nil {
+		fmt.Fprintf(in.Out, "  ⚠ roster cache not invalidated for %s: %v — the next run may read the pre-apply roster\n", dateKey, err)
+	}
 
 	in.Notify(applySummary(dr, *plan, in.SlotName))
 }

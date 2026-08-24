@@ -2,6 +2,7 @@ package fantrax
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -275,13 +276,17 @@ func (c *Client) getLeagueInfo() (*gofantrax.LeagueInfo, error) {
 // memoization a single recap-site build issued five identical POSTs to
 // Fantrax. Only in-memory — the in-progress week mutates during the day,
 // and a fresh process boundary is the right TTL.
+//
+// That deliberate absence of a disk cache is also what leaves this call with
+// no fallback when Fantrax blips, so it retries (see retry.go). It is a pure
+// read, which is what makes retrying it safe.
 func (c *Client) allMatchups() (*auth_client.AllMatchupsResult, error) {
 	c.matchupsMu.Lock()
 	defer c.matchupsMu.Unlock()
 	if c.matchupsMemo != nil {
 		return c.matchupsMemo, nil
 	}
-	result, err := c.auth.GetAllMatchups()
+	result, err := withRetry("getAllMatchups", fantraxBackoff, c.auth.GetAllMatchups)
 	if err != nil {
 		return nil, err
 	}
@@ -303,23 +308,41 @@ func (c *Client) allMatchups() (*auth_client.AllMatchupsResult, error) {
 // key is not an error it failed silently (rosterbot-sza). The current-day keys
 // carry no season by design — they sit at todayTTL, where a period number
 // never appears and a stale entry expires in 15 minutes on its own.
-func (c *Client) InvalidatePeriodRosterCache(period DailyPeriod) {
+//
+// It returns errors.Join of every Invalidate failure rather than discarding
+// them (rosterbot-6ds9).
+// On the local fsStore a missing key is not an error, so this is nil in
+// development whatever happens; on S3 blob.Delete can genuinely fail, and a
+// failed Delete leaves the pre-apply snapshot readable — the rosterbot-sza
+// symptom reached by a different cause. The sole caller cannot undo the apply
+// that has already landed, so it prints the failure rather than acting on it:
+// the point is that the next run reading a stale roster is preceded by a line
+// saying why, instead of being silent. Degrade to noise, never to silence.
+//
+// All four keys are attempted even after one fails, and every failure is joined
+// into the result rather than only the first. Stopping early would leave the
+// remaining keys readable while reporting one error, which is a smaller
+// invalidation than the caller is told about; reporting only the first would
+// name one stale key while another stayed silently readable.
+func (c *Client) InvalidatePeriodRosterCache(period DailyPeriod) error {
 	if c.cacheDir == "" {
-		return
+		return nil
 	}
 	fc := cache.New[[]Player](c.cacheDir, 0)
-	// The Invalidate errors are discarded because this function is void and
-	// sits behind two interfaces (lineuprun.emitClient, lineuprun's Client) —
-	// surfacing them is a signature change, tracked separately. Note the
-	// discard is NOT free on S3: a failed Delete leaves the pre-apply snapshot
-	// readable, which is the rosterbot-sza symptom by a different cause.
+	var errs []error
+	drop := func(key string) {
+		if err := fc.Invalidate(key); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", key, err))
+		}
+	}
 	for _, prefix := range []string{keyHitterRoster, keyPitcherRoster} {
 		// Period-specific, season-scoped (GetHitterRosterForPeriod et al).
 		key, _ := c.periodCacheKey(prefix, c.teamID, period)
-		_ = fc.Invalidate(key)
+		drop(key)
 		// Current-day (GetHitterRoster / GetPitcherRoster).
-		_ = fc.Invalidate(cache.Key(prefix, c.teamID))
+		drop(cache.Key(prefix, c.teamID))
 	}
+	return errors.Join(errs...)
 }
 
 // GetHitterRoster returns all hitters on the team (active + reserve; excludes IL/minors).

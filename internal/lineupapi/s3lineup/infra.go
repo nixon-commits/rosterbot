@@ -2,11 +2,13 @@ package s3lineup
 
 import (
 	"context"
+	pathpkg "path"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/analysis"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/s3blob"
 )
@@ -71,6 +73,21 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 	tenantObjects := map[string]int{}
 	tenantNewest := map[string]time.Time{}
 	tenantParts := map[string]map[string]bool{}
+	// Marker-vs-data day sets, differenced at the end. A day counts as
+	// deliberately skipped only when a skip marker is the ONLY thing under it;
+	// markers are never deleted and grade re-grades a trailing window, so a
+	// marker can outlive the emptiness it recorded. See
+	// lineupapi.PrefixListing.SkippedDays.
+	markerDays := map[string]bool{}
+	dataDays := map[string]bool{}
+	tenantMarker := map[string]map[string]bool{}
+	tenantData := map[string]map[string]bool{}
+	mark := func(m map[string]map[string]bool, uid, day string) {
+		if m[uid] == nil {
+			m[uid] = map[string]bool{}
+		}
+		m[uid][day] = true
+	}
 
 	err := s.blob.Walk(ctx, prefix, func(o s3blob.Object) bool {
 		out.Objects++
@@ -89,6 +106,10 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 			day = m[1]
 		}
 
+		// The basename is the only signal available: this lister holds
+		// ListBucket and no GetObject, so it can never open the body.
+		isSkipMarker := pathpkg.Base(rel) == analysis.SkipMarkerFilename
+
 		if m := userRe.FindStringSubmatch(rel); m != nil {
 			uid := m[1]
 			tenantObjects[uid]++
@@ -100,10 +121,20 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 					tenantParts[uid] = map[string]bool{}
 				}
 				tenantParts[uid][day] = true
+				if isSkipMarker {
+					mark(tenantMarker, uid, day)
+				} else {
+					mark(tenantData, uid, day)
+				}
 			}
 		}
 		if day != "" {
 			parts[day] = true
+			if isSkipMarker {
+				markerDays[day] = true
+			} else {
+				dataDays[day] = true
+			}
 		}
 		if m := systemRe.FindStringSubmatch(rel); m != nil {
 			subs[m[1]] = true
@@ -121,6 +152,29 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 
 	out.Partitions = sortedKeys(parts)
 	out.Subkeys = sortedKeys(subs)
+
+	// A skipped day is a POSITIVE claim — "a marker is the only object under
+	// this day" — and a truncated walk cannot support it. Within a dt= day S3
+	// returns keys in lexicographic order, and "no-actuals.json" sorts before
+	// "system=…" (n < s), so a walk that stops in between sees the marker and
+	// not the grades beside it, and the day reads as deliberately skipped when
+	// it was graded. Withhold the whole field rather than emit a label that is
+	// wrong for a reason nothing on the page discloses.
+	//
+	// Only this field is suppressed. Partitions and the gaps derived from it
+	// are equally unreliable under truncation, but that is pre-existing and
+	// unchanged here; a general truncation signal is tracked separately.
+	if out.Objects < maxKeys {
+		out.SkippedDays = lineupapi.MarkerOnlyDays(markerDays, dataDays)
+	}
+	// Same suppression for the per-tenant slices, which are cut from the one
+	// walk and are therefore truncated together with it.
+	skipped := func(marker, data map[string]bool) []string {
+		if out.Objects >= maxKeys {
+			return nil
+		}
+		return lineupapi.MarkerOnlyDays(marker, data)
+	}
 	if len(tenantObjects) > 0 {
 		out.Tenants = make(map[string]lineupapi.TenantListing, len(tenantObjects))
 		for uid, n := range tenantObjects {
@@ -128,6 +182,7 @@ func (s *InfraStore) ListPrefix(ctx context.Context, prefix string) (lineupapi.P
 				Objects:      n,
 				LastModified: tenantNewest[uid],
 				Partitions:   sortedKeys(tenantParts[uid]),
+				SkippedDays:  skipped(tenantMarker[uid], tenantData[uid]),
 			}
 		}
 	}

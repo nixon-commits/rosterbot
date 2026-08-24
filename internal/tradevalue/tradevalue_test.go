@@ -175,8 +175,14 @@ func TestEvaluate_FewerThanTwoSides_IsIncomplete(t *testing.T) {
 }
 
 // Equal-value sides must resolve the same way on every run -- the same
-// stability requirement as the optimizer's player-ID tiebreaker.
-func TestEvaluate_TiedSides_AreStable(t *testing.T) {
+// stability requirement as the optimizer's player-ID tiebreaker -- but that
+// stability must not escape as a verdict (rosterbot-h688).
+//
+// This test previously asserted `RawLeader == "Aardvark"`, i.e. that the
+// lexical tiebreak WAS the answer, which pinned the bug as intended behaviour.
+// A symmetric 1-for-1 swap of equally valued players rendered as
+// "favors Aardvark (+0%)" in both the dashboard and the Pushover trade alert.
+func TestEvaluate_TiedSides_AreNotAVerdict(t *testing.T) {
 	sides := []Side{player("Zebra", "p1", 500), player("Aardvark", "p2", 500)}
 	first := Evaluate(sides)
 	for i := 0; i < 20; i++ {
@@ -184,8 +190,103 @@ func TestEvaluate_TiedSides_AreStable(t *testing.T) {
 			t.Fatalf("verdict not stable: %+v then %+v", first, got)
 		}
 	}
-	if first.RawLeader != "Aardvark" {
-		t.Errorf("tie broke to %q, want Aardvark (lexical)", first.RawLeader)
+	if first.Status != StatusDeadEven {
+		t.Fatalf("Status = %q, want %q", first.Status, StatusDeadEven)
+	}
+	if first.FavoredTeam != "" || first.RawLeader != "" || first.AdjLeader != "" {
+		t.Errorf("verdict named a team on a tie: %+v", first)
+	}
+	// Nothing failed to price, so the view must not blame an asset.
+	if first.UnpricedAssets != 0 {
+		t.Errorf("UnpricedAssets = %d, want 0", first.UnpricedAssets)
+	}
+}
+
+// Every side worth zero reaches StatusDeadEven by the same route as any other
+// tie -- all priced, all equal -- which is why this package needs no separate
+// zero guard of the kind internal/dynasty carries.
+func TestEvaluate_AllSidesWorthZero_IsNotAVerdict(t *testing.T) {
+	v := Evaluate([]Side{player("Alpha", "p1", 0), player("Beta", "p2", 0)})
+	if v.Status != StatusDeadEven {
+		t.Fatalf("Status = %q, want %q", v.Status, StatusDeadEven)
+	}
+	if v.FavoredTeam != "" {
+		t.Errorf("FavoredTeam = %q, want empty", v.FavoredTeam)
+	}
+}
+
+// A raw tie that the adjusted method DOES separate is a disagreement about
+// whether there is a winner at all, and must read too-close.
+//
+// Before rosterbot-h688 this was decided by luck: raw's lexical tiebreak
+// produced a leader, and the verdict depended on whether that leader happened
+// to coincide with the adjusted winner. Alpha sorts first and also wins on
+// adjusted value here, so the old code returned StatusFavors at raw 0.0% --
+// the losing side of the coin toss the bead's own measurement never saw.
+func TestEvaluate_RawTieSeparatedByAdjusted_IsTooClose(t *testing.T) {
+	// Both sides total 600 raw. Alpha carries it in one asset, Beta splits it
+	// across two, so PackageDecay separates them: 600 vs 300 + 300(0.70) = 510.
+	alpha := Side{Team: "Alpha", Assets: []Asset{{Name: "a1", Value: 600, Priced: true}}}
+	beta := Side{Team: "Beta", Assets: []Asset{
+		{Name: "b1", Value: 300, Priced: true},
+		{Name: "b2", Value: 300, Priced: true},
+	}}
+	v := Evaluate([]Side{alpha, beta})
+	if v.Status != StatusTooClose {
+		t.Fatalf("Status = %q, want %q (raw is level, adjusted is not)", v.Status, StatusTooClose)
+	}
+	if v.FavoredTeam != "" {
+		t.Errorf("FavoredTeam = %q, want empty", v.FavoredTeam)
+	}
+	if v.RawLeader != "" {
+		t.Errorf("RawLeader = %q, want empty — raw did not separate the sides", v.RawLeader)
+	}
+	if v.AdjLeader != "Alpha" {
+		t.Errorf("AdjLeader = %q, want Alpha", v.AdjLeader)
+	}
+}
+
+// A tie between the LEADING sides is still a tie when a third, lower side
+// exists — no side leads, so no winner can be named. The package is n-sided
+// throughout (this league has only ever traded two-sided, but internal/dynasty
+// grades Sleeper trades where three rosters are ordinary), so the verdict must
+// be about the leaders rather than about "both sides".
+//
+// The copy this drives is deliberately count-neutral for the same reason:
+// "the leading sides price exactly level" is true at any N, where "both sides"
+// asserts a two-sided trade the verdict does not know it has.
+func TestEvaluate_ThreeSides_TopTwoLevel_IsDeadEven(t *testing.T) {
+	v := Evaluate([]Side{
+		player("Alpha", "p1", 1000),
+		player("Beta", "p2", 1000),
+		player("Gamma", "p3", 10),
+	})
+	if v.Status != StatusDeadEven {
+		t.Fatalf("Status = %q, want %q — the two leading sides are level, so none leads", v.Status, StatusDeadEven)
+	}
+	if v.FavoredTeam != "" {
+		t.Errorf("FavoredTeam = %q, want empty", v.FavoredTeam)
+	}
+}
+
+// A clear leader over two level runners-up is a real verdict: the leader is
+// unique, which is the only thing that has to be true to name one.
+func TestEvaluate_ThreeSides_ClearLeaderOverLevelRunnersUp_Favors(t *testing.T) {
+	v := Evaluate([]Side{
+		player("Alpha", "p1", 2000),
+		player("Beta", "p2", 500),
+		player("Gamma", "p3", 500),
+	})
+	if v.Status != StatusFavors || v.FavoredTeam != "Alpha" {
+		t.Fatalf("verdict = %+v, want favors Alpha", v)
+	}
+}
+
+// The tie guard must not swallow a real, merely-narrow verdict.
+func TestEvaluate_NearTie_StillFavorsTheLeader(t *testing.T) {
+	v := Evaluate([]Side{player("Alpha", "p1", 501), player("Beta", "p2", 500)})
+	if v.Status != StatusFavors || v.FavoredTeam != "Alpha" {
+		t.Fatalf("verdict = %+v, want favors Alpha", v)
 	}
 }
 

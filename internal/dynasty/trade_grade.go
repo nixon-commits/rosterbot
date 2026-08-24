@@ -55,6 +55,20 @@ const (
 	// TradeIncomplete means at least one asset could not be priced, so no
 	// comparison is meaningful.
 	TradeIncomplete TradeStatus = "incomplete"
+	// TradeDeadEven means every asset priced, the sides carry real value, and
+	// the two leading sides came out EXACTLY equal.
+	//
+	// It is a separate status from TradeIncomplete, and the reason is the view.
+	// football.js already splits TradeIncomplete on UnpricedAssets: >0 renders
+	// "Cannot be priced", and 0 renders "No value in this format" — correct for
+	// the all-sides-zero guard, and a false statement about a 500-vs-500 swap,
+	// where both sides carry plenty of value and are merely equal. Reusing
+	// TradeIncomplete for a tie would tell the reader to go switch format
+	// toggles to fix something no toggle can change (rosterbot-h688).
+	//
+	// Mirrors tradevalue.StatusDeadEven so the two sports answer the same
+	// question the same way.
+	TradeDeadEven TradeStatus = "dead-even"
 )
 
 // TradeVerdict is the graded outcome of one trade.
@@ -80,7 +94,13 @@ type TradeVerdict struct {
 // to measure it properly), and StatsGuy's own /trades/evaluate applies none
 // (measured: 9361+1757=11118 exactly, a plain sum). With only one pricing
 // method, there is no second method to disagree with, so there is no
-// too-close state -- a trade either grades cleanly or it is incomplete.
+// too-close state.
+//
+// It is NOT two-branch, though, and was never quite: TradeDeadEven is a third
+// outcome (rosterbot-h688). That is not a disagreement between methods — the
+// one method here simply comes out level — so it does not reintroduce
+// too-close by another name. A trade grades cleanly, prices level, or is
+// incomplete.
 //
 // Any unpriced asset on any side makes the whole verdict Incomplete, the
 // same verdict-suppression discipline as tradevalue.Evaluate: a side total
@@ -144,6 +164,21 @@ func GradeTrade(sides []TradeSide) TradeVerdict {
 	// than blaming an asset it did price.
 	if all[0].val == 0 {
 		return TradeVerdict{Status: TradeIncomplete}
+	}
+
+	// The sides are sorted descending, so an exact tie between the two leaders
+	// means the pricing produced no discriminating input at all. Left ungated,
+	// the sort's id tiebreak picks a "winner" and pctDiff returns 0, rendering
+	// as "favors <whoever sorted first> (+0%)" — the same rosterbot-hx5 shape
+	// as the zero guard above, reached one step later, when the totals are
+	// equal but non-zero. A symmetric swap is the ordinary way to get here.
+	//
+	// UnpricedAssets stays 0 for the same reason it does above: every asset
+	// priced fine, so the view must say "no verdict" rather than blame one.
+	// The status is TradeDeadEven, not TradeIncomplete, because the view draws a
+	// further distinction the zero guard does not need — see the constant.
+	if all[0].val == all[1].val {
+		return TradeVerdict{Status: TradeDeadEven}
 	}
 
 	return TradeVerdict{
