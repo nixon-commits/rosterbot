@@ -98,6 +98,9 @@ func (t *tenantStores) build(ctx context.Context, uid lineupapi.UserID) (lineupa
 	if v.TradeValues, err = store(layout.TradeValues.PrefixFor(tenant)); err != nil {
 		return v, fmt.Errorf("tenant %s: trade values store: %w", uid, err)
 	}
+	if v.AvailablePool, err = store(layout.AvailablePool.PrefixFor(tenant)); err != nil {
+		return v, fmt.Errorf("tenant %s: available pool store: %w", uid, err)
+	}
 	if v.Reports, err = store(layout.Reports.PrefixFor(tenant)); err != nil {
 		return v, fmt.Errorf("tenant %s: reports store: %w", uid, err)
 	}
