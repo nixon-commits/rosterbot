@@ -274,10 +274,16 @@ func (c *Client) GetTeamGS(teamID, teamName string, sp ScoringPeriod, seasonStar
 }
 
 // getPlayerGSSnapshotForPeriod returns per-player YTD GS and active-slot status for a single daily period.
+//
+// Retried for the same reason as fetchPeriodSnapshot (rosterbot-exaf): it is
+// the identical pure roster read, reached by the GS walk instead of the FPts
+// walk, and gsPeriodWalk makes one per day of a period.
 func (c *Client) getPlayerGSSnapshotForPeriod(teamID string, period DailyPeriod) (map[string]playerGSSnapshot, error) {
-	rosterResp, err := c.auth.GetTeamRosterInfoRaw(strconv.Itoa(int(period)), teamID,
-		auth_client.WithScoringCategoryType("1"),
-		auth_client.WithStatsType("2"))
+	rosterResp, err := withRetry("getTeamRosterInfoRaw", fantraxBackoff, func() (*models.TeamRosterResponse, error) {
+		return c.auth.GetTeamRosterInfoRaw(strconv.Itoa(int(period)), teamID,
+			auth_client.WithScoringCategoryType("1"),
+			auth_client.WithStatsType("2"))
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get roster for period %d: %w", period, err)
 	}
