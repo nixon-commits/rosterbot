@@ -199,7 +199,6 @@ func scorePitcherRoster(
 	projSrc projections.PitcherSource,
 	scoring fantrax.ScoringWeights,
 ) []ScoredPitcher {
-	pps, hasPPS := projSrc.(projections.PitcherPtsPerGameSource)
 	hasProbableData := len(probableStarters) > 0
 
 	scored := make([]ScoredPitcher, 0, len(roster))
@@ -242,23 +241,9 @@ func scorePitcherRoster(
 			hasGame = teamPlays
 		}
 
-		// Get projection.
-		var pts float64
-		found := false
-
-		if hasPPS {
-			if blended, ok := pps.GetPitcherPtsPerGame(p.Name, p.MLBTeam, scoring); ok {
-				pts = blended
-				found = true
-			}
-		}
-
-		if !found {
-			proj, ok := projSrc.GetPitcherProjection(p.Name, p.MLBTeam)
-			if ok && proj.G > 0 {
-				pts = projections.PitcherExpectedPtsFromProj(proj, scoring)
-			}
-		}
+		// Get projection. A false from the accessor leaves pts at 0 — a
+		// pitcher this source cannot value scores nothing, as before.
+		pts, _ := projections.PitcherPointsPerGame(projSrc, p.Name, p.MLBTeam, scoring)
 
 		scored = append(scored, ScoredPitcher{
 			Player:      p,

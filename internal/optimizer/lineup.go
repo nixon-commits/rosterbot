@@ -321,27 +321,12 @@ func scoreRoster(
 	scoring fantrax.ScoringWeights,
 	benchedToday map[string]bool,
 ) []ScoredPlayer {
-	pps, hasPPS := projSrc.(projections.PtsPerGameSource)
-
 	scored := make([]ScoredPlayer, 0, len(roster))
 	for _, p := range roster {
 		hasGame := playingToday[p.MLBTeam] && !p.InMinors && !p.IsInjured && !benchedToday[projections.NormalizeName(p.Name)]
-		var pts float64
-		found := false
-
-		if hasPPS {
-			if blended, ok := pps.GetPtsPerGame(p.Name, p.MLBTeam, scoring); ok {
-				pts = blended
-				found = true
-			}
-		}
-
-		if !found {
-			proj, ok := projSrc.GetProjection(p.Name, p.MLBTeam)
-			if ok && proj.G > 0 {
-				pts = expectedPts(proj, scoring)
-			}
-		}
+		// A false from the accessor leaves pts at 0 — a player this source
+		// cannot value scores nothing, exactly as before the shared accessor.
+		pts, _ := projections.PointsPerGame(projSrc, p.Name, p.MLBTeam, scoring)
 
 		scored = append(scored, ScoredPlayer{
 			Player:      p,

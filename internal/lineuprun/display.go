@@ -60,16 +60,11 @@ func isZeroGainDelta(delta float64) bool {
 // when no projection exists. Used by the GS budget forecast to rank starters
 // across the week by value.
 func pitcherProjectedPts(p fantrax.Player, src projections.PitcherSource, scoring fantrax.ScoringWeights) float64 {
-	if pps, ok := src.(projections.PitcherPtsPerGameSource); ok {
-		if v, ok := pps.GetPitcherPtsPerGame(p.Name, p.MLBTeam, scoring); ok {
-			return v
-		}
-	}
-	proj, ok := src.GetPitcherProjection(p.Name, p.MLBTeam)
-	if !ok || proj.G <= 0 {
-		return 0
-	}
-	return projections.PitcherExpectedPtsFromProj(proj, scoring)
+	// The fourth hand-rolled copy of this fallback until rosterbot-bryu; the
+	// accessor owns the semantics now, and a valueless pitcher scores 0 here
+	// exactly as before.
+	pts, _ := projections.PitcherPointsPerGame(src, p.Name, p.MLBTeam, scoring)
+	return pts
 }
 
 // padRight pads s with spaces to the given display width.
