@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/pmurley/go-fantrax/auth_client"
 )
@@ -209,7 +210,6 @@ func scorePitcherRoster(
 		}
 
 		teamPlays := playingToday[p.MLBTeam]
-		normalizedName := projections.NormalizeName(p.Name)
 
 		spEligible := SPEligiblePlayer(p)
 
@@ -218,7 +218,10 @@ func scorePitcherRoster(
 
 		if spEligible {
 			if hasProbableData {
-				if team, ok := probableStarters[normalizedName]; ok && team == p.MLBTeam {
+				// A TeamMismatch (announced for another club — a lagging
+				// trade) deliberately falls through to the team-plays branch,
+				// the conservative reading the shared predicate documents.
+				if playername.MatchProbable(p.Name, p.MLBTeam, probableStarters) == playername.ConfirmedStarter {
 					// SP listed as probable starter: full value.
 					hasGame = true
 					isStarter = true

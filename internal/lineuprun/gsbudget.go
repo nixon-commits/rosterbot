@@ -7,6 +7,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
+	"github.com/nixon-commits/rosterbot/internal/playername"
 )
 
 // gsScheduleClient is the MLB-schedule surface the GS-budget phase needs.
@@ -285,8 +286,8 @@ func buildGSForecast(
 
 		df := optimizer.DayForecast{Date: d}
 		var unannouncedSPs float64
-		for normName, p := range spNames {
-			if team, ok := probs[normName]; ok && team == p.MLBTeam {
+		for _, p := range spNames {
+			if playername.MatchProbable(p.Name, p.MLBTeam, probs) == playername.ConfirmedStarter {
 				df.ConfirmedStarters = append(df.ConfirmedStarters, projPts(p))
 				continue
 			}

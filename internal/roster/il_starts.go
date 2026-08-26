@@ -21,11 +21,13 @@ func CheckILStarters(players []fantrax.Player, probables map[string]string, date
 		if p.Status != "Injured Reserve" {
 			continue
 		}
-		team, ok := probables[playername.Normalize(p.Name)]
-		if !ok {
+		switch playername.MatchProbable(p.Name, p.MLBTeam, probables) {
+		case playername.NotProbable:
 			continue
-		}
-		if team != p.MLBTeam {
+		case playername.TeamMismatch:
+			// A name hit whose club disagrees is a lagging trade on one side
+			// or the other — surfaced, never dropped, because it would
+			// otherwise turn into a silent non-alert.
 			teamMismatch = append(teamMismatch, p.Name)
 			continue
 		}
