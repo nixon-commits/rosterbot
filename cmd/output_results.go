@@ -161,8 +161,8 @@ func round1(v float64) float64 { return math.Round(v*10) / 10 }
 
 // gradeToWireResult summarizes what grade wrote: the sorted set of dates and the
 // total graded-row count.
-func gradeToWireResult(rowsByDate map[string]int) lineupapi.GradeResult {
-	out := lineupapi.GradeResult{}
+func gradeToWireResult(rowsByDate map[string]int, windowNotes []string) lineupapi.GradeResult {
+	out := lineupapi.GradeResult{WindowNotes: windowNotes}
 	for dt, n := range rowsByDate {
 		out.Dates = append(out.Dates, dt)
 		out.RowsWritten += n
