@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-webauthn/webauthn/webauthn"
 
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/nixon-commits/rosterbot/internal/wiretime"
 )
@@ -98,8 +99,8 @@ func TestWireTypes_CarryNoRawTimeTime(t *testing.T) {
 		RunsResponse{}, RunDetail{},
 		// GET /v1/runs/{id}/output — Data is `any`, so the concrete results follow.
 		RunOutput{},
-		ProspectsResult{}, WaiversResult{}, ClaimsResult{}, TransactionsResult{},
-		GSCheckResult{}, BacktestResult{}, GradeResult{},
+		jobwire.ProspectsResult{}, jobwire.WaiversResult{}, jobwire.ClaimsResult{}, jobwire.TransactionsResult{},
+		jobwire.GSCheckResult{}, jobwire.BacktestResult{}, jobwire.GradeResult{},
 		// GET /v1/notifications, /v1/jobs, POST /v1/jobs/{name}
 		NotificationsResponse{}, JobsResponse{}, JobResponse{},
 		// GET /v1/infra
