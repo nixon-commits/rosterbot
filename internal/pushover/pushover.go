@@ -19,11 +19,11 @@ import (
 )
 
 // Send sends a push notification via the Pushover API. Messages longer than
-// Pushover's 1024-character limit are truncated silently.
+// MaxMessageLen are truncated on a rune boundary with a trailing ellipsis —
+// the never-should-fire backstop behind callers that budget whole blocks via
+// Builder before sending.
 func Send(userKey, apiToken, title, message string) error {
-	if len(message) > 1024 {
-		message = message[:1024]
-	}
+	message = Truncate(message)
 
 	data := url.Values{
 		"token":    {apiToken},

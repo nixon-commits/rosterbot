@@ -11,6 +11,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/dynasty"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
+	"github.com/nixon-commits/rosterbot/internal/pushover"
 	"github.com/nixon-commits/rosterbot/internal/sleeper"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/nixon-commits/rosterbot/internal/statsguy"
@@ -404,11 +405,9 @@ func formatTradeAlert(txn sleeper.Transaction, sides []dynasty.TradeSide, v dyna
 		// not exist.
 		title = "Trade: nothing to compare, so no verdict"
 	}
-	// formatPushover-style truncation to fit Pushover's 1024-char message limit.
-	const maxLen = 1024
-	if len(body) > maxLen {
-		body = body[:maxLen-1] + "…"
-	}
+	// Rune-safe fit to Pushover's limit — the old inline slice could cut a
+	// multibyte team or player name mid-rune.
+	body = pushover.Truncate(body)
 	return title, body
 }
 

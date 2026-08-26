@@ -19,6 +19,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/pushover"
 	"github.com/pmurley/go-fantrax/models"
 	"golang.org/x/sync/errgroup"
 )
@@ -669,40 +670,41 @@ func alertEmoji(kind AlertKind) string {
 // and the top upgrade recommendation. Returns "" when there's nothing to send.
 // Two-line structure per item: emoji + bold name + team on line 1, detail on line 2.
 func formatProspectPushover(r Report) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "<b>Prospects · %s</b>", r.Date.Format("Jan 2"))
+	var b pushover.Builder
+	b.Add(fmt.Sprintf("<b>Prospects · %s</b>", r.Date.Format("Jan 2"))) // always fits an empty builder
 
 	for _, a := range r.Alerts {
 		if a.Priority == "low" {
 			continue
 		}
-		name := shortProspectName(a.PlayerName)
+		name := pushover.ShortName(a.PlayerName)
 		team := a.MLBTeam
 		if team == "" {
 			team = "???"
 		}
 		block := fmt.Sprintf("\n\n%s <b>%s</b> (%s)\n%s",
 			alertEmoji(a.Kind), name, team, a.Detail)
-		if b.Len()+len(block) > 1000 {
+		if !b.Add(block) {
 			break
 		}
-		b.WriteString(block)
 	}
 
-	// Top upgrade from each source (one per source).
+	// Top upgrade from each source (one per source). A refused alert block
+	// above does not close the builder, so a smaller upgrade line may still
+	// fit — pushover.Builder documents that non-latching property for exactly
+	// this two-section shape.
 	for _, set := range r.Upgrades {
 		if len(set.Candidates) == 0 {
 			continue
 		}
 		u := set.Candidates[0]
 		line := fmt.Sprintf("\n\n📈 drop %s #%d → <b>%s</b> #%d (+%d) %s",
-			shortProspectName(u.Drop.Name), u.Drop.Rank,
-			shortProspectName(u.Add.Name), u.Add.Rank,
+			pushover.ShortName(u.Drop.Name), u.Drop.Rank,
+			pushover.ShortName(u.Add.Name), u.Add.Rank,
 			u.RankGap, set.Source)
-		if b.Len()+len(line) > 1000 {
+		if !b.Add(line) {
 			break
 		}
-		b.WriteString(line)
 	}
 
 	// Nothing beyond the header means no actionable alerts.
@@ -710,18 +712,6 @@ func formatProspectPushover(r Report) string {
 		return ""
 	}
 	return b.String()
-}
-
-func shortProspectName(name string) string {
-	parts := strings.Fields(name)
-	if len(parts) < 2 {
-		return name
-	}
-	first := []rune(parts[0])
-	if len(first) == 0 {
-		return name
-	}
-	return string(first[:1]) + ". " + strings.Join(parts[1:], " ")
 }
 
 // writeGHASummary — GHA markdown output

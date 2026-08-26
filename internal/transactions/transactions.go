@@ -13,6 +13,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
+	"github.com/nixon-commits/rosterbot/internal/pushover"
 	"github.com/nixon-commits/rosterbot/internal/tradevalue"
 	"github.com/pmurley/go-fantrax/models"
 )
@@ -128,16 +129,8 @@ func CheckTrades(ctx context.Context, ft TradeClient, cacheDir string, dryRun bo
 		return nil
 	}
 
-	var notifyParts []string
-	if len(pendingGrouped) > 0 {
-		notifyParts = append(notifyParts, formatTrades("Pending Trades", pendingGrouped, false))
-	}
-	if len(executedGrouped) > 0 {
-		notifyParts = append(notifyParts, formatTrades("Recent Trades", executedGrouped, false))
-	}
-	if len(notifyParts) > 0 {
-		plain := strings.Join(notifyParts, "\n")
-		if err := notify.Send(ctx, notify.Event{Kind: "transactions", Title: "Trade Alert", Message: plain}); err != nil {
+	if body := notifyBody(pendingGrouped, executedGrouped); body != "" {
+		if err := notify.Send(ctx, notify.Event{Kind: "transactions", Title: "Trade Alert", Message: body}); err != nil {
 			log.Printf("notification failed: %v", err)
 		}
 	}
@@ -282,67 +275,78 @@ const nbsp = " "
 func formatTrades(header string, trades []Trade, color bool) string {
 	var b strings.Builder
 	b.WriteString(header + "\n")
-	indent := strings.Repeat(nbsp, 3)
 	for _, t := range trades {
-		if len(t.Sides) == 0 {
-			continue
-		}
-		b.WriteString("\n")
-		names := make([]string, 0, len(t.Sides))
-		for _, s := range t.Sides {
-			names = append(names, s.TeamName)
-		}
-		fmt.Fprintf(&b, "%s\n", strings.Join(names, " ⇄ "))
-
-		for si, side := range t.Sides {
-			// The pairwise "(±diff)" only means something with exactly two
-			// sides. With three it would compare against an arbitrary one of
-			// the other two, so the verdict line below carries the comparison
-			// instead.
-			diff := 0
-			if len(t.Sides) == 2 {
-				diff = side.Total - t.Sides[1-si].Total
-			}
-			var sideClr string
-			if color {
-				switch {
-				case diff > 0:
-					sideClr = colorGreen
-				case diff < 0:
-					sideClr = colorRed
-				}
-			}
-
-			b.WriteString("\n")
-			fmt.Fprintf(&b, "%s receives:\n", side.TeamName)
-			for _, p := range side.Players {
-				formatPlayer(&b, p, indent, color)
-			}
-			reset := ""
-			if sideClr != "" {
-				reset = colorReset
-			}
-			// Adjusted is shown only when it differs from raw, i.e. when the
-			// side is a multi-asset package — for a one-for-one they are equal
-			// by construction and the second number is noise.
-			adj := ""
-			if math.Abs(float64(side.Total)-side.Adjusted) >= 1 {
-				adj = fmt.Sprintf(" · adj %s", hkb.FormatValue(int(math.Round(side.Adjusted))))
-			}
-			if diff != 0 {
-				diffSign := "+"
-				absDiff := diff
-				if diff < 0 {
-					diffSign = "-"
-					absDiff = -diff
-				}
-				fmt.Fprintf(&b, "Total: %s%s (%s%s)%s%s\n", sideClr, hkb.FormatValue(side.Total), diffSign, hkb.FormatValue(absDiff), reset, adj)
-			} else {
-				fmt.Fprintf(&b, "Total: %s%s\n", hkb.FormatValue(side.Total), adj)
-			}
-		}
-		fmt.Fprintf(&b, "→ %s\n", formatVerdict(t.Verdict))
+		b.WriteString(formatTrade(t, color))
 	}
+	return b.String()
+}
+
+// formatTrade renders one trade as a self-contained block, leading blank
+// line included: the teams line, each side's players and totals, and the
+// verdict — or "" for a trade with no sides. Shared by formatTrades (stdout,
+// color) and notifyBody (the budgeted dispatcher message), so the two
+// renderings cannot fork and the budget drops whole trades, never lines.
+func formatTrade(t Trade, color bool) string {
+	if len(t.Sides) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	indent := strings.Repeat(nbsp, 3)
+	b.WriteString("\n")
+	names := make([]string, 0, len(t.Sides))
+	for _, s := range t.Sides {
+		names = append(names, s.TeamName)
+	}
+	fmt.Fprintf(&b, "%s\n", strings.Join(names, " ⇄ "))
+
+	for si, side := range t.Sides {
+		// The pairwise "(±diff)" only means something with exactly two
+		// sides. With three it would compare against an arbitrary one of
+		// the other two, so the verdict line below carries the comparison
+		// instead.
+		diff := 0
+		if len(t.Sides) == 2 {
+			diff = side.Total - t.Sides[1-si].Total
+		}
+		var sideClr string
+		if color {
+			switch {
+			case diff > 0:
+				sideClr = colorGreen
+			case diff < 0:
+				sideClr = colorRed
+			}
+		}
+
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "%s receives:\n", side.TeamName)
+		for _, p := range side.Players {
+			formatPlayer(&b, p, indent, color)
+		}
+		reset := ""
+		if sideClr != "" {
+			reset = colorReset
+		}
+		// Adjusted is shown only when it differs from raw, i.e. when the
+		// side is a multi-asset package — for a one-for-one they are equal
+		// by construction and the second number is noise.
+		adj := ""
+		if math.Abs(float64(side.Total)-side.Adjusted) >= 1 {
+			adj = fmt.Sprintf(" · adj %s", hkb.FormatValue(int(math.Round(side.Adjusted))))
+		}
+		if diff != 0 {
+			diffSign := "+"
+			absDiff := diff
+			if diff < 0 {
+				diffSign = "-"
+				absDiff = -diff
+			}
+			fmt.Fprintf(&b, "Total: %s%s (%s%s)%s%s\n", sideClr, hkb.FormatValue(side.Total), diffSign, hkb.FormatValue(absDiff), reset, adj)
+		} else {
+			fmt.Fprintf(&b, "Total: %s%s\n", hkb.FormatValue(side.Total), adj)
+		}
+	}
+	fmt.Fprintf(&b, "→ %s\n", formatVerdict(t.Verdict))
 	return b.String()
 }
 
@@ -541,4 +545,41 @@ func newDraftPickTradePlayer(tx models.Transaction, players []hkb.Player) TradeP
 		IsPick:    true,
 		Estimated: a.Estimated,
 	}
+}
+
+// notifyBody assembles the dispatcher message from whole per-trade blocks
+// under pushover.MaxMessageLen. This formatter used to reach pushover.Send
+// with no budget at all — the only protection was Send's raw byte-slice
+// backstop, i.e. a mid-rune cut on exactly the multibyte names the other
+// formatters went out of their way to keep whole. Sections mirror
+// formatTrades' rendering (formatTrade is shared); a section whose trades do
+// not all fit gains a "+N more" line naming the dropped count.
+func notifyBody(pending, executed []Trade) string {
+	var b pushover.Builder
+	first := true
+	section := func(header string, trades []Trade) {
+		if len(trades) == 0 {
+			return
+		}
+		h := header + "\n"
+		if !first {
+			h = "\n" + h
+		}
+		if !b.Add(h) {
+			return
+		}
+		first = false
+		dropped := 0
+		for _, t := range trades {
+			if !b.Add(formatTrade(t, false)) {
+				dropped++
+			}
+		}
+		if dropped > 0 {
+			b.Add(fmt.Sprintf("\n+%d more\n", dropped))
+		}
+	}
+	section("Pending Trades", pending)
+	section("Recent Trades", executed)
+	return b.String()
 }

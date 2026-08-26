@@ -3,6 +3,7 @@ package claims
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -104,16 +105,9 @@ func Run(ctx context.Context, ft ClaimsClient, today time.Time, opts Options) er
 	// Output: stdout (color) always; GHA summary (no color) when configured.
 	fmt.Println(FormatReport(moves, opts.DropsMin, true))
 	if summaryPath := os.Getenv("GITHUB_STEP_SUMMARY"); summaryPath != "" {
-		if f, ferr := os.OpenFile(summaryPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); ferr != nil {
-			log.Printf("WARNING: failed to open GHA summary: %v", ferr)
-		} else {
-			fmt.Fprint(f, FormatReport(moves, opts.DropsMin, false))
-			// Checked, not dropped: the write above is only flushed by Close, so
-			// its error is the one that says the summary is truncated.
-			if cerr := f.Close(); cerr != nil {
-				log.Printf("WARNING: GHA summary may be incomplete: %v", cerr)
-			}
-		}
+		notify.AppendGHASummary(summaryPath, func(w io.Writer) {
+			fmt.Fprint(w, FormatReport(moves, opts.DropsMin, false))
+		})
 	}
 
 	// Ledger (skipped in dry-run).
