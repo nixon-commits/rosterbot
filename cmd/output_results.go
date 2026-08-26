@@ -20,16 +20,16 @@ func backtestToWireResult(rep backtest.Report) lineupapi.BacktestResult {
 	for _, d := range rep.Lineup {
 		out.Days = append(out.Days, lineupapi.BacktestDayOut{
 			Date:    d.Date.UTC().Format(wireDate),
-			Actual:  d.ActualPts,
-			Optimal: d.OptimalPts,
-			Gap:     d.Gap,
+			Actual:  round1(d.ActualPts),
+			Optimal: round1(d.OptimalPts),
+			Gap:     round1(d.Gap),
 		})
 	}
 	if s := rep.ProjectionSummary; s != nil {
-		acc := &lineupapi.BacktestAccuracy{MAE: s.MAE, Bias: s.Bias, RMSE: s.RMSE, N: s.TotalPlayerDays}
+		acc := &lineupapi.BacktestAccuracy{MAE: round1(s.MAE), Bias: round1(s.Bias), RMSE: round1(s.RMSE), N: s.TotalPlayerDays}
 		for _, p := range s.ByPosition {
 			acc.ByPosition = append(acc.ByPosition, lineupapi.BacktestPositionOut{
-				Bucket: p.Bucket, N: p.N, MAE: p.MAE, Bias: p.Bias,
+				Bucket: p.Bucket, N: p.N, MAE: round1(p.MAE), Bias: round1(p.Bias),
 			})
 		}
 		out.Accuracy = acc
@@ -40,9 +40,9 @@ func backtestToWireResult(rep backtest.Report) lineupapi.BacktestResult {
 			DaysWithSnapshot:   g.DaysWithSnapshot,
 			DaysStale:          g.DaysStale,
 			SuppressedStarts:   g.SuppressedStarts,
-			SuppressedPtsGross: g.SuppressedPts,
+			SuppressedPtsGross: round1(g.SuppressedPts),
 			ProtectedStarts:    g.ProtectedStarts,
-			ProtectedPtsGross:  g.ProtectedPts,
+			ProtectedPtsGross:  round1(g.ProtectedPts),
 			FloorMin:           g.FloorMin,
 			FloorMax:           g.FloorMax,
 		}
@@ -50,9 +50,9 @@ func backtestToWireResult(rep backtest.Report) lineupapi.BacktestResult {
 			gate.ByDate = append(gate.ByDate, lineupapi.BacktestGateDayOut{
 				Date:              d.Date.UTC().Format(wireDate),
 				SuppressedStarts:  d.Starts,
-				PtsGross:          d.Pts,
+				PtsGross:          round1(d.Pts),
 				ProtectedStarts:   d.Protected,
-				ProtectedPtsGross: d.ProtectedPts,
+				ProtectedPtsGross: round1(d.ProtectedPts),
 			})
 		}
 		out.Gate = gate
@@ -133,20 +133,28 @@ func rotationToWire(r backtest.RotationSupply) *lineupapi.BacktestRotationOut {
 
 // pctOf converts a 0..1 rate to a percentage rounded to one decimal.
 //
-// Every float this section puts on the wire goes through round1, and that is
-// not cosmetic. The dashboard's run viewer prints values verbatim, and the two
-// worst offenders are both manufactured here rather than inherited: converting
-// a ratio yields 77.12344999999999, and StrandedPts subtracts two four-digit
-// sums of hundreds of per-day projections, which produced 238.80000000000007
-// from figures a reader would subtract to 238.8. Presenting either as-is
-// offers float artifacts as precision that a projected-point total never had —
-// the stdout report prints the same quantities at %.1f for the same reason.
+// EVERY float backtestToWireResult puts on the wire goes through round1, and
+// that is a property of the whole mapper rather than of any one section. The
+// dashboard's run viewer prints values verbatim, and the two worst offenders
+// are manufactured right here rather than inherited: converting a ratio yields
+// 77.12344999999999, and StrandedPts subtracts two four-digit sums of hundreds
+// of per-day projections, which produced 238.80000000000007 from figures a
+// reader would subtract to 238.8. Presenting either as-is offers float
+// artifacts as precision that a projected-point total never had — the stdout
+// report prints the same quantities at %.1f for the same reason.
+//
+// Applying it to the two sections that happened to manufacture the artifacts
+// and not to their siblings would be worse than not rounding at all: one
+// response body would carry a clean 77.1 beside a raw 78.30000000000001, and
+// the difference would encode nothing except which lines a past commit
+// touched. The rule is uniform so a reader never has to ask.
 //
 // The cost is that the dashboard and backtest --json disagree in the third
-// decimal of the same quantity. That is the smaller of the two divergences
-// this wire type already carries deliberately (the key names differ outright),
-// and one rule for the whole section beats a per-field judgement a later
-// reader has to re-derive.
+// decimal of the same quantity, since --json marshals backtest.Report directly
+// and never passes through here. That is the smaller of the two divergences
+// this wire type already carries deliberately (the key names differ outright).
+// internal/backtest itself stays exact: other consumers need full precision,
+// and rounding belongs at a presentation boundary, which this is.
 func pctOf(rate float64) float64 { return round1(rate * 100) }
 
 func round1(v float64) float64 { return math.Round(v*10) / 10 }

@@ -267,6 +267,34 @@ func TestBuildValuesTable(t *testing.T) {
 	}
 }
 
+// assertWireTimestamp checks the four things a generated_at must satisfy: the
+// exact expected string, no fractional component, that same string surviving
+// the encoder that actually ships the payload, and acceptance by the strict
+// RFC3339 parser the iOS client uses.
+//
+// It takes the whole payload rather than just the field because marshalling
+// the real struct is the half that matters — the field could be a correct
+// string while a MarshalJSON somewhere above it re-encoded the value.
+func assertWireTimestamp(t *testing.T, got, want string, payload any) {
+	t.Helper()
+	if got != want {
+		t.Errorf("generated_at = %q, want %q", got, want)
+	}
+	if strings.Contains(got, ".") {
+		t.Errorf("generated_at = %q carries a fractional component", got)
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"generated_at":"`+want+`"`) {
+		t.Errorf("serialized form wrong: %s", string(b[:min(len(b), 160)]))
+	}
+	if _, err := time.Parse(time.RFC3339, got); err != nil {
+		t.Errorf("strict RFC3339 parse failed: %v", err)
+	}
+}
+
 // TestValuesTableGeneratedAtHasNoFractionalSeconds pins the wire format of
 // generated_at on GET /v1/trades/values against a strict RFC3339 parser.
 //
@@ -284,29 +312,11 @@ func TestValuesTableGeneratedAtHasNoFractionalSeconds(t *testing.T) {
 	// A nanosecond count RFC3339Nano would render as ".902729184".
 	stamp := time.Date(2026, 8, 24, 21, 47, 27, 902729184, time.UTC)
 
+	// The encoder that actually ships it: cmd/team-values.go json.Marshals the
+	// whole table and publishes the bytes, and lineupapi serves them without
+	// reparsing.
 	vt := BuildValuesTable(stamp, nil, nil, nil, nil)
-	if want := "2026-08-24T21:47:27Z"; vt.GeneratedAt != want {
-		t.Errorf("generated_at = %q, want %q", vt.GeneratedAt, want)
-	}
-	if strings.Contains(vt.GeneratedAt, ".") {
-		t.Errorf("generated_at = %q carries a fractional component", vt.GeneratedAt)
-	}
-
-	// Through the encoder that actually ships it: cmd/team-values.go
-	// json.Marshals the whole table and publishes the bytes, and
-	// lineupapi serves them without reparsing.
-	b, err := json.Marshal(vt)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if !strings.Contains(string(b), `"generated_at":"2026-08-24T21:47:27Z"`) {
-		t.Errorf("serialized form wrong: %s", string(b[:min(len(b), 160)]))
-	}
-
-	// The strict parser the client uses must accept it.
-	if _, err := time.Parse(time.RFC3339, vt.GeneratedAt); err != nil {
-		t.Errorf("strict RFC3339 parse failed: %v", err)
-	}
+	assertWireTimestamp(t, vt.GeneratedAt, "2026-08-24T21:47:27Z", vt)
 }
 
 // TestValuesTableGeneratedAtIsUTC pins the .UTC() call, which is easy to drop
@@ -345,28 +355,11 @@ func TestNewSnapshotGeneratedAtHasNoFractionalSeconds(t *testing.T) {
 	// A nanosecond count RFC3339Nano would render as ".523083".
 	stamp := time.Date(2026, 8, 26, 19, 37, 34, 523083000, time.UTC)
 
+	// The encoder that ships it: cmd/trades.go json.Marshals the snapshot and
+	// publishes the bytes; lineupapi's serveBlob returns them byte-for-byte
+	// without reparsing.
 	snap := NewSnapshot(stamp, "Team A", nil)
-	if want := "2026-08-26T19:37:34Z"; snap.GeneratedAt != want {
-		t.Errorf("generated_at = %q, want %q", snap.GeneratedAt, want)
-	}
-	if strings.Contains(snap.GeneratedAt, ".") {
-		t.Errorf("generated_at = %q carries a fractional component", snap.GeneratedAt)
-	}
-
-	// Through the encoder that ships it: cmd/trades.go json.Marshals the
-	// snapshot and publishes the bytes; lineupapi's serveBlob returns them
-	// byte-for-byte without reparsing.
-	b, err := json.Marshal(snap)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if !strings.Contains(string(b), `"generated_at":"2026-08-26T19:37:34Z"`) {
-		t.Errorf("serialized form wrong: %s", string(b[:min(len(b), 160)]))
-	}
-
-	if _, err := time.Parse(time.RFC3339, snap.GeneratedAt); err != nil {
-		t.Errorf("strict RFC3339 parse failed: %v", err)
-	}
+	assertWireTimestamp(t, snap.GeneratedAt, "2026-08-26T19:37:34Z", snap)
 }
 
 // TestNewSnapshotGeneratedAtIsUTC pins the .UTC() call. cmd/optimize.go passes

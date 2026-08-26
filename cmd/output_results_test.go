@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -30,6 +33,88 @@ func TestBacktestToWireResult(t *testing.T) {
 	if out.Accuracy == nil || out.Accuracy.MAE != 1.4 || out.Accuracy.N != 240 || len(out.Accuracy.ByPosition) != 1 {
 		t.Fatalf("accuracy: %+v", out.Accuracy)
 	}
+}
+
+// TestBacktestToWireResult_RoundsEveryFloat pins rounding as a property of the
+// whole mapper rather than of whichever section a past commit last touched.
+//
+// It walks the result by reflection instead of naming fields, so a float added
+// to the wire type later is covered the day it appears. That is the whole
+// point: the rule was broken once already by adding two sections that rounded
+// while their siblings, in the same response body, did not — an
+// enumerate-the-fields test written at that moment would have been updated to
+// match the new fields and stayed green.
+//
+// The inputs carry deliberate binary-float artifacts. Every value here is one
+// a reader would write with at most one decimal, and none of them survives
+// float64 arithmetic as such.
+func TestBacktestToWireResult_RoundsEveryFloat(t *testing.T) {
+	rep := backtest.Report{
+		Start: time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
+		End:   time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC),
+		Lineup: []backtest.LineupDayResult{{
+			Date:       time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
+			ActualPts:  238.80000000000007,
+			OptimalPts: 317.10000000000002,
+			Gap:        -78.30000000000001,
+		}},
+		ProjectionSummary: &backtest.ProjectionSummary{
+			MAE: 1.4000000000000004, Bias: 0.30000000000000004, RMSE: 2.1000000000000005,
+			TotalPlayerDays: 240,
+			ByPosition:      []backtest.PositionMAE{{Bucket: "OF", N: 50, MAE: 1.1000000000000003, Bias: 0.20000000000000004}},
+		},
+		Gate: &backtest.GateSummary{
+			Days: 7, DaysWithSnapshot: 7,
+			SuppressedPts: 12.300000000000004, ProtectedPts: 9.900000000000002,
+			ByDate: []backtest.GateDay{{
+				Date: time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
+				Pts:  12.300000000000004, ProtectedPts: 9.900000000000002,
+			}},
+		},
+	}
+
+	for path, v := range floatsOnTheWire(t, backtestToWireResult(rep)) {
+		if v != math.Round(v*10)/10 {
+			t.Errorf("%s = %v, want it rounded to one decimal — every float this mapper "+
+				"emits must go through round1, see pctOf's doc comment", path, v)
+		}
+	}
+}
+
+// floatsOnTheWire collects every float64 reachable from v, keyed by a
+// dotted path so a failure names the offending field rather than a value.
+// It follows pointers, slices and structs, which is every shape the backtest
+// wire types use.
+func floatsOnTheWire(t *testing.T, v any) map[string]float64 {
+	t.Helper()
+	out := map[string]float64{}
+	var walk func(rv reflect.Value, path string)
+	walk = func(rv reflect.Value, path string) {
+		switch rv.Kind() {
+		case reflect.Pointer, reflect.Interface:
+			if !rv.IsNil() {
+				walk(rv.Elem(), path)
+			}
+		case reflect.Slice, reflect.Array:
+			for i := range rv.Len() {
+				walk(rv.Index(i), fmt.Sprintf("%s[%d]", path, i))
+			}
+		case reflect.Struct:
+			for i := range rv.NumField() {
+				if f := rv.Type().Field(i); f.IsExported() {
+					walk(rv.Field(i), path+"."+f.Name)
+				}
+			}
+		case reflect.Float64, reflect.Float32:
+			out[path] = rv.Float()
+		}
+	}
+	walk(reflect.ValueOf(v), "BacktestResult")
+	if len(out) == 0 {
+		t.Fatal("walked the wire result and found no float at all; the walk is broken " +
+			"and this guard would pass against anything")
+	}
+	return out
 }
 
 func TestGradeToWireResult(t *testing.T) {
