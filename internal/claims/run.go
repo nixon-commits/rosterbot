@@ -10,7 +10,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/statcast"
@@ -100,7 +100,7 @@ func Run(ctx context.Context, ft ClaimsClient, today time.Time, opts Options) er
 	}
 
 	led := BuildLedger(today, moves)
-	lineupapi.RecordOutput("claims", toWireResult(led))
+	jobwire.RecordOutput("claims", toWireResult(led))
 
 	// Output: stdout (color) always; GHA summary (no color) when configured.
 	fmt.Println(FormatReport(moves, opts.DropsMin, true))

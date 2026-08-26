@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	positionspkg "github.com/nixon-commits/rosterbot/internal/positions"
 	"github.com/nixon-commits/rosterbot/internal/projections"
@@ -176,7 +176,7 @@ func Run(ctx context.Context, ft FantraxClient, today time.Time, opts Options) e
 		report.Top = candidates
 	}
 
-	lineupapi.RecordOutput("waivers", toWireResult(report))
+	jobwire.RecordOutput("waivers", toWireResult(report))
 
 	printReport(report)
 

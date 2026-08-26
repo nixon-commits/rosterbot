@@ -9,7 +9,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 )
 
@@ -293,7 +293,7 @@ func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error 
 		}
 	}
 
-	lineupapi.RecordOutput("gs-check", toWireResult(violations, periodLabel, gsMax, gsMin))
+	jobwire.RecordOutput("gs-check", toWireResult(violations, periodLabel, gsMax, gsMin))
 
 	// Print report.
 	sort.Slice(results, func(i, j int) bool { return results[i].gs > results[j].gs })

@@ -11,7 +11,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/pushover"
 	"github.com/nixon-commits/rosterbot/internal/tradevalue"
@@ -123,7 +123,7 @@ func CheckTrades(ctx context.Context, ft TradeClient, cacheDir string, dryRun bo
 	}
 
 	allTrades := append(append([]Trade{}, pendingGrouped...), executedGrouped...)
-	lineupapi.RecordOutput("transactions", toWireResult(allTrades))
+	jobwire.RecordOutput("transactions", toWireResult(allTrades))
 
 	if dryRun {
 		return nil

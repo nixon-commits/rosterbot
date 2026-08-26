@@ -1,14 +1,14 @@
 package prospects
 
-import "github.com/nixon-commits/rosterbot/internal/lineupapi"
+import "github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 
 // toWireResult flattens the prospect Report into the iOS wire shape. Alerts keep
 // their kind so the client can split call-ups from breakouts; upgrades flatten
 // the drop→add pair to names+ranks.
-func toWireResult(r Report) lineupapi.ProspectsResult {
-	out := lineupapi.ProspectsResult{}
+func toWireResult(r Report) jobwire.ProspectsResult {
+	out := jobwire.ProspectsResult{}
 	for _, a := range r.Alerts {
-		out.Alerts = append(out.Alerts, lineupapi.ProspectAlertOut{
+		out.Alerts = append(out.Alerts, jobwire.ProspectAlertOut{
 			Name:     a.PlayerName,
 			Team:     a.MLBTeam,
 			Pos:      a.Position,
@@ -20,7 +20,7 @@ func toWireResult(r Report) lineupapi.ProspectsResult {
 	}
 	for _, set := range r.Upgrades {
 		for _, u := range set.Candidates {
-			out.Upgrades = append(out.Upgrades, lineupapi.ProspectUpgradeOut{
+			out.Upgrades = append(out.Upgrades, jobwire.ProspectUpgradeOut{
 				Source:   set.Source,
 				Drop:     u.Drop.Name,
 				DropRank: u.Drop.Rank,

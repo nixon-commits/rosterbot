@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 )
@@ -410,13 +411,13 @@ func TestRunOutputRoundTripPerJob(t *testing.T) {
 		}
 		samples[id] = b
 	}
-	add("r-prospects", "prospects", ProspectsResult{Alerts: []ProspectAlertOut{{Name: "A", Team: "BAL", Kind: "called-up", Priority: "high", Detail: "promoted"}}})
-	add("r-waivers", "waivers", WaiversResult{Picks: []WaiverPickOut{{Name: "B", Team: "NYY", Pos: "OF", Signal: "HOT", ProjectedFPG: 4.1, Rank: 1}}, Total: 1})
-	add("r-claims", "claims", ClaimsResult{Claims: []ClaimOut{{Team: "T", ClaimType: "FA", Added: "C", NetValue: 3}}})
-	add("r-transactions", "transactions", TransactionsResult{Trades: []TradeOut{{Teams: []string{"a", "b"}, ProcessedAt: "2026-06-20T00:00:00Z"}}})
-	add("r-gs-check", "gs-check", GSCheckResult{Violations: []GSViolationOut{{Team: "X", Kind: "over", Used: 6, Limit: 5, OverBy: 1}}})
-	add("r-backtest", "backtest", BacktestResult{Start: "2026-06-08", End: "2026-06-14", Days: []BacktestDayOut{{Date: "2026-06-08", Actual: 40, Optimal: 42, Gap: -2}}})
-	add("r-grade", "grade", GradeResult{Dates: []string{"2026-06-19"}, RowsWritten: 12})
+	add("r-prospects", "prospects", jobwire.ProspectsResult{Alerts: []jobwire.ProspectAlertOut{{Name: "A", Team: "BAL", Kind: "called-up", Priority: "high", Detail: "promoted"}}})
+	add("r-waivers", "waivers", jobwire.WaiversResult{Picks: []jobwire.WaiverPickOut{{Name: "B", Team: "NYY", Pos: "OF", Signal: "HOT", ProjectedFPG: 4.1, Rank: 1}}, Total: 1})
+	add("r-claims", "claims", jobwire.ClaimsResult{Claims: []jobwire.ClaimOut{{Team: "T", ClaimType: "FA", Added: "C", NetValue: 3}}})
+	add("r-transactions", "transactions", jobwire.TransactionsResult{Trades: []jobwire.TradeOut{{Teams: []string{"a", "b"}, ProcessedAt: "2026-06-20T00:00:00Z"}}})
+	add("r-gs-check", "gs-check", jobwire.GSCheckResult{Violations: []jobwire.GSViolationOut{{Team: "X", Kind: "over", Used: 6, Limit: 5, OverBy: 1}}})
+	add("r-backtest", "backtest", jobwire.BacktestResult{Start: "2026-06-08", End: "2026-06-14", Days: []jobwire.BacktestDayOut{{Date: "2026-06-08", Actual: 40, Optimal: 42, Gap: -2}}})
+	add("r-grade", "grade", jobwire.GradeResult{Dates: []string{"2026-06-19"}, RowsWritten: 12})
 
 	h := Handler(Config{Token: "t", Output: fakeOutput{data: samples}})
 	for id, want := range samples {

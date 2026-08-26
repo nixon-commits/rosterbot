@@ -15,7 +15,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
@@ -331,7 +331,7 @@ func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Confi
 		Upgrades: upgradeSets,
 	}
 
-	lineupapi.RecordOutput("prospects", toWireResult(report))
+	jobwire.RecordOutput("prospects", toWireResult(report))
 
 	printReport(report, rosterRanked, sourceNames)
 

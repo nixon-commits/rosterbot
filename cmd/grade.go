@@ -9,7 +9,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/analysis"
 	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/lineupgap"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/spf13/cobra"
@@ -416,7 +416,7 @@ func runGrade(cmd *cobra.Command, args []string) error {
 	// same "Re-runnable" list as one real one (rosterbot-u9u). A date that did
 	// grade rows is never marked, so the two signals can't contradict.
 	skips := ungradeableDays(days, counts)
-	lineupapi.RecordOutput("grade", gradeToWireResult(counts, windowLog))
+	jobwire.RecordOutput("grade", gradeToWireResult(counts, windowLog))
 
 	if cfg.DryRun {
 		for _, sys := range shadowSystems {
