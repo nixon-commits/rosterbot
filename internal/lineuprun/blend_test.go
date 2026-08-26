@@ -349,3 +349,86 @@ func TestBlendSources_RolesDegradeIndependently(t *testing.T) {
 		}
 	})
 }
+
+// A fetch that SUCCEEDS with zero rows is the same absence as one that failed,
+// and used to take the success branch: the run logged "loaded: 0 players with
+// data", blended over an empty map, exited 0, and the ledger recorded SUCCESS
+// (rosterbot-l56d). Observed in production on 2026-08-26 as "Recent stats: 0
+// hitters · 14 pitchers" with no warning line anywhere.
+//
+// The fixture reproduces it exactly: a nil day series with a nil error, which
+// is what DailyFantasyPoints returns when the upstream answers with nothing.
+func TestBlendSources_ZeroRowRecencyIsUnavailableNotSuccess(t *testing.T) {
+	t.Run("hitter window comes back empty", func(t *testing.T) {
+		ft := healthyBlendClient()
+		ft.days = nil // succeeds, returns nothing
+		in := blendInputs()
+
+		got := BlendSources(ft, in)
+
+		if got.Hitters != in.HitterBase {
+			t.Error("hitters should fall back to base, not blend over an empty map")
+		}
+		if got.RecentHitterCount != 0 {
+			t.Errorf("RecentHitterCount = %d, want 0", got.RecentHitterCount)
+		}
+		logs := strings.Join(got.Logs, "\n")
+		if !strings.Contains(logs,
+			"WARNING: recent hitter stats unavailable (zero rows) — using DepthCharts RoS only") {
+			t.Errorf("missing degraded-mode warning in %v", got.Logs)
+		}
+		// The whole defect was that this line printed instead of the warning.
+		if strings.Contains(logs, "recent hitter stats loaded") {
+			t.Errorf("zero rows must not report as loaded: %v", got.Logs)
+		}
+		// Degradation stays per-role, exactly as it does for a failed fetch.
+		if _, ok := got.Pitchers.(*projections.PitcherBlendedSource); !ok {
+			t.Error("an empty hitter window must not cost pitchers their blend")
+		}
+	})
+
+	t.Run("pitcher snapshot comes back empty", func(t *testing.T) {
+		ft := healthyBlendClient()
+		ft.pitcherStats = map[string]fantrax.RecentStat{}
+		in := blendInputs()
+
+		got := BlendSources(ft, in)
+
+		if got.Pitchers != in.PitcherBase {
+			t.Error("pitchers should fall back to base, not blend over an empty map")
+		}
+		if got.RecentPitcherCount != 0 {
+			t.Errorf("RecentPitcherCount = %d, want 0", got.RecentPitcherCount)
+		}
+		logs := strings.Join(got.Logs, "\n")
+		if !strings.Contains(logs,
+			"WARNING: recent pitcher stats unavailable (zero rows) — using DepthCharts RoS only") {
+			t.Errorf("missing degraded-mode warning in %v", got.Logs)
+		}
+		if strings.Contains(logs, "recent pitcher stats loaded") {
+			t.Errorf("zero rows must not report as loaded: %v", got.Logs)
+		}
+		if _, ok := got.Hitters.(*projections.BlendedSource); !ok {
+			t.Error("an empty pitcher snapshot must not cost hitters their blend")
+		}
+	})
+
+	// The guard must key on emptiness, not on "small" — one row is real data
+	// and still blends. Without this the fix could over-match and silently
+	// disable the blend that rosterbot-2nd measured as worth ~1 pt/game/day.
+	t.Run("a single row still blends", func(t *testing.T) {
+		ft := healthyBlendClient()
+		got := BlendSources(ft, blendInputs())
+
+		if _, ok := got.Hitters.(*projections.BlendedSource); !ok {
+			t.Error("non-empty recency must still build a blended hitter source")
+		}
+		if _, ok := got.Pitchers.(*projections.PitcherBlendedSource); !ok {
+			t.Error("non-empty recency must still build a blended pitcher source")
+		}
+		if got.RecentHitterCount == 0 || got.RecentPitcherCount == 0 {
+			t.Errorf("counts = %d hitters / %d pitchers, want both non-zero",
+				got.RecentHitterCount, got.RecentPitcherCount)
+		}
+	})
+}

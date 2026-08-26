@@ -132,6 +132,30 @@ func TestRetryableFantraxStatus(t *testing.T) {
 	}
 }
 
+// Exhaustion must keep the ORIGINAL error reachable, not just say "retries
+// exhausted". The wrapper uses two %w verbs for exactly this: an operator
+// reading the ledger's log_tail needs the cause, and a caller matching on a
+// sentinel needs errors.Is to still reach through (rosterbot-exaf).
+func TestWithRetry_ExhaustionKeepsTheUnderlyingErrorReachable(t *testing.T) {
+	underlying := errors.New("read tcp 192.168.50.2:61462->104.18.7.8:443: operation timed out")
+
+	_, err := withRetry("getTeamRosterInfoRaw", fastBackoff, func() (string, error) {
+		return "", underlying
+	})
+	if err == nil {
+		t.Fatal("want error after exhaustion")
+	}
+	if !errors.Is(err, errRetryExhausted) {
+		t.Errorf("want errRetryExhausted, got %v", err)
+	}
+	if !errors.Is(err, underlying) {
+		t.Errorf("the original error must stay reachable through errors.Is, got %v", err)
+	}
+	if !contains(err.Error(), "getTeamRosterInfoRaw") {
+		t.Errorf("error must name the call, got %q", err.Error())
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

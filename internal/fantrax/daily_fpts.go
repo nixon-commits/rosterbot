@@ -294,10 +294,21 @@ func (c *Client) getPeriodSnapshotCached(
 
 // fetchPeriodSnapshot pulls the raw team roster info for a period and extracts
 // hitter + pitcher YTD values.
+//
+// The read retries (rosterbot-exaf). It is a pure, side-effect-free roster
+// fetch, which is the whole safety case — see retry.go, and note the wrap is at
+// the CALL SITE rather than in the fork's transport, where it would also cover
+// edit_roster/set_period_matchups. A windowed recency fetch makes ~35 of these
+// in sequence, so one transport blip anywhere in the walk used to abort the
+// entire range: DailyFantasyPoints correctly fails the whole window on any
+// single day's error, which makes each individual day a single point of
+// failure for the run.
 func (c *Client) fetchPeriodSnapshot(teamID string, period DailyPeriod) (periodSnapshot, error) {
-	rosterResp, err := c.auth.GetTeamRosterInfoRaw(strconv.Itoa(int(period)), teamID,
-		auth_client.WithScoringCategoryType("1"),
-		auth_client.WithStatsType("1"))
+	rosterResp, err := withRetry("getTeamRosterInfoRaw", fantraxBackoff, func() (*models.TeamRosterResponse, error) {
+		return c.auth.GetTeamRosterInfoRaw(strconv.Itoa(int(period)), teamID,
+			auth_client.WithScoringCategoryType("1"),
+			auth_client.WithStatsType("1"))
+	})
 	if err != nil {
 		return periodSnapshot{}, fmt.Errorf("get roster for period %d: %w", period, err)
 	}
