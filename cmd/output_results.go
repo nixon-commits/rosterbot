@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"math"
 	"sort"
 
 	"github.com/nixon-commits/rosterbot/internal/backtest"
@@ -56,8 +57,99 @@ func backtestToWireResult(rep backtest.Report) lineupapi.BacktestResult {
 		}
 		out.Gate = gate
 	}
+	if sh := rep.Shape; sh != nil {
+		shape := &lineupapi.BacktestShapeOut{
+			Days:             sh.Days,
+			DaysWithSnapshot: sh.DaysWithSnapshot,
+			DaysStale:        sh.DaysStale,
+			DaysPreSchema:    sh.DaysPreSchema,
+			HitterSlots:      sh.HitterSlots,
+			PitcherSlots:     sh.PitcherSlots,
+			GSCapMinPerWeek:  sh.GSCapMin,
+			GSCapMaxPerWeek:  sh.GSCapMax,
+		}
+		shape.Hitters.BacktestSideShapeOut = sideShapeToWire(sh.Hitters)
+		shape.Hitters.FieldedPctOfOwned = fieldedPct(sh.Hitters)
+		shape.Pitchers.BacktestSideShapeOut = sideShapeToWire(sh.Pitchers)
+		shape.Pitchers.ProbableStartCompliancePct = fieldedPct(sh.Pitchers)
+		shape.Rotation = rotationToWire(sh.Rotation())
+		out.Shape = shape
+	}
 	return out
 }
+
+// sideShapeToWire copies the part of a side's shape that means the same thing
+// for both roles. The fielded rate is deliberately NOT copied here: the two
+// sides name it differently on purpose, so that the pitcher rate cannot be read
+// as the hitter one's counterpart (lineupapi.BacktestShapeOut).
+func sideShapeToWire(s backtest.SideShape) lineupapi.BacktestSideShapeOut {
+	return lineupapi.BacktestSideShapeOut{
+		OwnedPts:             round1(s.OwnedPts),
+		FieldedPts:           round1(s.FieldedPts),
+		StrandedPts:          round1(s.StrandedPts()),
+		DeployablePlayerDays: s.DeployableCount,
+		RosteredPlayerDays:   s.RosteredCount,
+	}
+}
+
+// fieldedPct renders a side's fielded rate as a percentage, or nil when the
+// side had no deployable value at all. The nil is load-bearing rather than
+// defensive: SideShape.FieldedRate reports that case as ok=false precisely
+// because 0% and "nothing to measure" are opposite readings, and the dashboard
+// prints verbatim whatever it is handed.
+func fieldedPct(s backtest.SideShape) *float64 {
+	rate, ok := s.FieldedRate()
+	if !ok {
+		return nil
+	}
+	p := pctOf(rate)
+	return &p
+}
+
+// rotationToWire carries the weekly rotation-supply view, and returns nil in
+// exactly the cases formatRotationSupply prints nothing: no counted day, no
+// SP-eligible pitcher carried, or no recorded game-start cap. Keeping those
+// conditions identical is the point — a reader comparing the stdout report
+// against the dashboard for one run must not find a figure in one and not the
+// other, and a supply figure without its cap is a ratio the reader would
+// complete themselves.
+func rotationToWire(r backtest.RotationSupply) *lineupapi.BacktestRotationOut {
+	mean, ok := r.MeanSPCount()
+	if !ok || r.SPRosterDays == 0 {
+		return nil
+	}
+	rate, ok := r.SupplyRate()
+	if !ok {
+		return nil
+	}
+	supply, _ := r.SupplyPerWeek()
+	return &lineupapi.BacktestRotationOut{
+		MeanSPCount:         round1(mean),
+		SupplyStartsPerWeek: round1(supply),
+		GSCapPerWeek:        r.GSCap,
+		SupplyPctOfCap:      pctOf(rate),
+	}
+}
+
+// pctOf converts a 0..1 rate to a percentage rounded to one decimal.
+//
+// Every float this section puts on the wire goes through round1, and that is
+// not cosmetic. The dashboard's run viewer prints values verbatim, and the two
+// worst offenders are both manufactured here rather than inherited: converting
+// a ratio yields 77.12344999999999, and StrandedPts subtracts two four-digit
+// sums of hundreds of per-day projections, which produced 238.80000000000007
+// from figures a reader would subtract to 238.8. Presenting either as-is
+// offers float artifacts as precision that a projected-point total never had —
+// the stdout report prints the same quantities at %.1f for the same reason.
+//
+// The cost is that the dashboard and backtest --json disagree in the third
+// decimal of the same quantity. That is the smaller of the two divergences
+// this wire type already carries deliberately (the key names differ outright),
+// and one rule for the whole section beats a per-field judgement a later
+// reader has to re-derive.
+func pctOf(rate float64) float64 { return round1(rate * 100) }
+
+func round1(v float64) float64 { return math.Round(v*10) / 10 }
 
 // gradeToWireResult summarizes what grade wrote: the sorted set of dates and the
 // total graded-row count.
