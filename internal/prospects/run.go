@@ -65,11 +65,30 @@ func saveTxnCursor(date time.Time) error {
 // hkbRanks builds a name → rank map from HKB players.
 // Includes all non-MLB players with a rank — Fantrax minors designation
 // is the source of truth for who is a prospect, HKB just enriches data.
+//
+// Ranks resolve through hkb.Lookup rather than direct map assignment: the
+// unconditional write this replaced was last-write-wins on a normalized-name
+// collision — the pre-rosterbot-5z7 join bug restated (the Team Value
+// Store's Namesake Re-baseline), where a contested minors name silently got
+// whichever HKB row scraped last and rendered a confident wrong rank. A
+// contested key is now omitted; an unranked prospect beats a misranked one.
+//
+// The Level filter runs BEFORE the lookup is built, and that order is
+// load-bearing: an MLB veteran sharing a prospect's key (the luis garcia
+// class) must not contest it — filtering first keeps that case resolving,
+// where a lookup over the full list would decline it.
 func hkbRanks(players []hkb.Player) map[string]int {
-	m := make(map[string]int)
+	prospects := make([]hkb.Player, 0, len(players))
 	for _, p := range players {
 		if p.AssetType == "PLAYER" && p.Level != "MLB" && p.Rank > 0 {
-			m[projections.NormalizeName(p.Name)] = p.Rank
+			prospects = append(prospects, p)
+		}
+	}
+	lookup := hkb.BuildLookup(prospects)
+	m := make(map[string]int, len(prospects))
+	for _, p := range prospects {
+		if found, ok := lookup.Find(p.Name); ok {
+			m[projections.NormalizeName(p.Name)] = found.Rank
 		}
 	}
 	return m
