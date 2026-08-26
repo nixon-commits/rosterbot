@@ -2,6 +2,7 @@ package lineupapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -46,26 +47,75 @@ func TestVerifySessionRejectsTamperedValue(t *testing.T) {
 	}
 }
 
-func TestHasValidSession(t *testing.T) {
+// TestSessionAuth_EmptySecretFailsClosed replaces TestHasValidSession, deleted
+// along with hasValidSession itself once rosterbot-crq.10 landed per-route
+// authorization and left the helper with no non-test caller (rosterbot-w200).
+//
+// The assertion it carried is not dead, which is why this is a replacement and
+// not a deletion: sessionFromRequest refuses outright when SessionSecret is
+// empty, and every route reaches that through resolveCaller. An SSM read that
+// came back empty would otherwise leave the door verifying HMACs under a
+// zero-length key — a key the attacker has too — so anyone could mint their own
+// cookie naming any user and walk in as them.
+//
+// THE FORGERY IS THE WHOLE TEST, and getting this wrong once is worth
+// recording: the first draft presented a cookie signed with a REAL secret to a
+// server holding none, got its 401, and pinned nothing at all. That 401 came
+// from the signature mismatch, not from the guard — deleting the guard left the
+// test green. The cookie has to be signed with the same empty key the server
+// holds, so that a server without the guard would genuinely accept it.
+//
+// The control is the other half: the same forgery against a server that DOES
+// hold that secret must reach the route (200 from /v1/me). Without it a 401
+// proves only that something refused the request, which a broken session codec
+// or an unwired user store would also produce.
+//
+// It asserts on the OUTCOME at the door, not on either guard that produces it.
+// The refusal is currently implemented twice — sessionFromRequest and
+// verifyPayload both reject an empty key — so deleting either one alone leaves
+// this green, and that is correct: defence in depth means no single layer is
+// the property. Pinning one of them by name would fail the day someone
+// consolidated them, which is a refactor and not a regression.
+func TestSessionAuth_EmptySecretFailsClosed(t *testing.T) {
+	users := NewFileUserStore(t.TempDir())
+	if err := users.CreateUser(context.Background(), &User{
+		ID: "alice", Email: "a@example.test", Role: RoleMember, Status: UserActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// What an attacker can build knowing only that the server's secret is unset.
+	forged := &http.Cookie{Name: sessionCookieName, Value: signSession(nil, "alice", 0, time.Now())}
+
+	get := func(cfg Config) int {
+		req := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+		req.AddCookie(forged)
+		rec := httptest.NewRecorder()
+		Handler(cfg).ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Control: a server whose secret really IS empty would find this cookie's
+	// HMAC perfectly valid, so the refusal below has to be the guard.
+	if code := get(Config{Token: "t", Users: users, SessionSecret: []byte{}}); code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 — a server with no configured session secret must "+
+			"refuse a cookie signed under the empty key, not verify it", code)
+	}
+	if code := get(Config{Token: "t", Users: users, SessionSecret: nil}); code != http.StatusUnauthorized {
+		t.Fatalf("nil secret: status = %d, want 401 (nil and []byte{} must behave alike)", code)
+	}
+
+	// The control the other way round: the same construction under a real
+	// secret does authenticate, so the 401s above are about the empty key
+	// rather than about a session codec or user store that never works.
 	secret := []byte("test-secret")
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/auth/passkeys", nil)
-	if hasValidSession(req, secret) {
-		t.Fatal("want false with no cookie set")
-	}
-
+	live := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	live.AddCookie(&http.Cookie{Name: sessionCookieName, Value: signSession(secret, "alice", 0, time.Now())})
 	rec := httptest.NewRecorder()
-	setSessionCookie(rec, secret, "alice", 0, time.Now())
-	req = httptest.NewRequest(http.MethodGet, "/v1/auth/passkeys", nil)
-	for _, c := range rec.Result().Cookies() {
-		req.AddCookie(c)
-	}
-	if !hasValidSession(req, secret) {
-		t.Fatal("want true with a freshly set cookie")
-	}
-
-	if hasValidSession(req, nil) {
-		t.Fatal("want false when the server has no configured secret (misconfiguration must fail closed)")
+	Handler(Config{Token: "t", Users: users, SessionSecret: secret}).ServeHTTP(rec, live)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("control: status = %d, want 200 — a properly signed session must reach "+
+			"the route, or the assertions above prove nothing, body=%s", rec.Code, rec.Body.String())
 	}
 }
 

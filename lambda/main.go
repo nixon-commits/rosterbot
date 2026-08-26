@@ -88,10 +88,6 @@ func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
 	if cfg.Infra, err = s3lineup.NewInfra(ctx, bucket); err != nil {
 		return cfg, fmt.Errorf("init s3 infra store: %w", err)
 	}
-	if cfg.Identities, err = s3lineup.NewIdentity(ctx, bucket, identityPrefix); err != nil {
-		return cfg, fmt.Errorf("init s3 identity store: %w", err)
-	}
-
 	// The tenant directory (rosterbot-crq.10). A session's subject resolves
 	// against this; the bearer token deliberately does not, so an operator can
 	// still get in when this table is unreachable or has not been migrated yet.
@@ -149,11 +145,6 @@ func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
 
 	return cfg, nil
 }
-
-// identityPrefix is the WebAuthn identity store's key prefix. It has no
-// layout.Artifact because it is not an operator-facing artifact — GET /v1/infra
-// deliberately does not list it, and the task role cannot read it.
-const identityPrefix = "webauthn/"
 
 func main() {
 	ctx := context.Background()
