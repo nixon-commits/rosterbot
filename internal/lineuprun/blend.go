@@ -97,6 +97,21 @@ func (r *BlendResult) logf(format string, args ...any) {
 // Both roles degrade the same way: any failure falls back to the base source
 // rather than a partial blend, since a blend built from missing recency data
 // would quietly shift every player's expected points.
+//
+// # A zero-row success IS missing recency data (rosterbot-l56d)
+//
+// The guard above is not only about the error return. A fetch that succeeds
+// with an EMPTY map is the same absence reached by a different route, and it
+// used to take the success branch: the run logged "loaded: 0 players with
+// data", built a blend over nothing, exited 0, and the ledger recorded
+// SUCCESS — the soft-failure the ledger cannot see. Zero rows and a failed
+// fetch are therefore reported identically, because they mean the same thing
+// to every consumer downstream.
+//
+// This stays a WARNING plus fallback rather than a hard error, because the
+// surrounding contract is degrade-not-fail: a lineup run must still produce a
+// lineup. What it must not do is produce one whose numbers moved for a reason
+// nothing reported.
 func BlendSources(ft blendClient, in BlendInputs) BlendResult {
 	var r BlendResult
 
@@ -114,10 +129,14 @@ func BlendSources(ft blendClient, in BlendInputs) BlendResult {
 		r.logf("fetching recent hitter stats (trailing %dd window as of %s)...",
 			recencyWindowDays, in.Today.Format("2006-01-02"))
 		recentStats, err := windowedHitterRecent(ft, in.TeamID, in.Today, in.SeasonStart, in.NoCache)
-		if err != nil {
+		switch {
+		case err != nil:
 			r.logf("WARNING: recent hitter stats unavailable (%v) — using %s only", err, in.SystemName)
 			r.Hitters = in.HitterBase
-		} else {
+		case len(recentStats) == 0:
+			r.logf("WARNING: recent hitter stats unavailable (zero rows) — using %s only", in.SystemName)
+			r.Hitters = in.HitterBase
+		default:
 			r.RecentHitterCount = len(recentStats)
 			r.logf("recent hitter stats loaded: %d players with data", len(recentStats))
 			r.Hitters = projections.NewBlendedSource(
@@ -131,10 +150,14 @@ func BlendSources(ft blendClient, in BlendInputs) BlendResult {
 		r.Pitchers = in.PitcherBase
 	} else {
 		recentPitStats, err := ft.GetRecentPitcherStats(in.CurrentPeriod)
-		if err != nil {
+		switch {
+		case err != nil:
 			r.logf("WARNING: recent pitcher stats unavailable (%v) — using %s only", err, in.SystemName)
 			r.Pitchers = in.PitcherBase
-		} else {
+		case len(recentPitStats) == 0:
+			r.logf("WARNING: recent pitcher stats unavailable (zero rows) — using %s only", in.SystemName)
+			r.Pitchers = in.PitcherBase
+		default:
 			r.RecentPitcherCount = len(recentPitStats)
 			r.logf("recent pitcher stats loaded: %d players with data", len(recentPitStats))
 			r.Pitchers = projections.NewPitcherBlendedSource(
