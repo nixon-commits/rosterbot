@@ -75,7 +75,6 @@ func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) h
 		Notifications: lineupapi.NewFileNotificationStore(lineupDir + "/notifications"),
 		Output:        lineupapi.NewFileOutputStore(lineupDir + "/outputs"),
 		Progress:      lineupapi.NewFileProgressStore(lineupDir + "/progress"),
-		Identities:    lineupapi.NewFileIdentityStore(lineupDir),
 		// Tenant directory + enrollment links, both backed by the same local
 		// store so `serve` exercises the real authorization path rather than a
 		// permissive dev shortcut.

@@ -64,9 +64,6 @@ type Config struct {
 	// that crq.11 left undone.
 	Tenants TenantStores
 
-	// WebAuthn passkey auth (see webauthn.go).
-	Identities IdentityStore
-
 	// Users and Enrollments back multi-tenant auth (rosterbot-crq.10). Users
 	// is what a session's subject resolves against; without it every session
 	// is refused, which is deliberate -- see resolveCaller.
@@ -101,25 +98,58 @@ type Config struct {
 // either a valid session cookie (the everyday passkey-login path) or the
 // legacy bearer token (break-glass / CLI use) — except /v1/auth/*, where each
 // handler gates itself: login is open, register accepts session-or-token,
-// and passkey management (list/revoke) requires a session only. Routes:
+// and passkey management (list/revoke) requires a session only.
 //
-//	GET  /v1/lineup/today   -> precomputed lineup JSON
-//	GET  /v1/runs           -> run ledger (newest first)
-//	GET  /v1/runs/{id}      -> one run + log tail
-//	GET  /v1/runs/{id}/progress -> live phase progress for a run
-//	GET  /v1/infra          -> live state-bucket health (listed on demand)
-//	GET  /v1/trades         -> pending trade offers, HKB-valued
-//	GET  /v1/trades/values  -> league player/pick values table
-//	GET  /v1/pool/available -> unowned players with HKB value + 30d momentum
-//	GET  /v1/reports/{name} -> private dashboard report (model|gap|views)
-//	GET  /v1/tenants        -> all tenants (admin only)
-//	GET  /v1/me             -> the caller's own profile + Fantrax status
-//	GET  /v1/sleeper/leagues -> discover a Sleeper account's leagues by username
-//	GET/POST /v1/memberships          -> the caller's own leagues; add a Sleeper one
-//	DELETE   /v1/memberships/{p}/{id} -> remove a Sleeper league
-//	POST /v1/me/preferences -> update the caller's own auto_apply
-//	POST /v1/jobs/{name}    -> launch a job (async), 202
-//	POST /v1/auth/*         -> passkey login/register/logout, session mgmt
+// The table below is EXHAUSTIVE, and TestHandlerDocListsEveryRoute pins it to
+// the registrations rather than trusting anyone to keep it current. It was
+// hand-maintained until rosterbot-w200 and had drifted badly: twelve live
+// routes were simply absent (all five tenant-management verbs, the /v1/connect
+// pair, the whole push-device registry, /v1/jobs, /v1/notifications and two
+// run sub-resources), and four more hid inside a "POST /v1/auth/*" wildcard
+// that read as coverage. Deleting the table and pointing at the code was the
+// other option on the table; it buys the same immunity by having nothing left
+// to be wrong about, which costs the reader the one map of this file that fits
+// on a screen. A checked table keeps the map and cannot go stale.
+//
+//	GET    /v1/lineup/today                      -> the applied lineup, as the last run left it
+//	GET    /v1/lineup/preview                    -> the lineup a dry run computed but did not apply
+//	GET    /v1/runs                              -> run ledger, newest first
+//	GET    /v1/runs/{id}                         -> one run plus its log tail
+//	GET    /v1/runs/{id}/output                  -> that run's captured stdout document
+//	GET    /v1/runs/{id}/progress                -> live phase progress for a run
+//	GET    /v1/notifications                     -> the caller's activity feed
+//	GET    /v1/jobs                              -> the jobs this caller is allowed to launch
+//	GET    /v1/infra                             -> live state-bucket health (listed on demand)
+//	GET    /v1/trades                            -> pending trade offers, HKB-valued
+//	GET    /v1/trades/values                     -> league player/pick values table
+//	GET    /v1/pool/available                    -> unowned players with HKB value + 30d momentum
+//	GET    /v1/reports/{name}                    -> private dashboard report (model|gap|views)
+//	POST   /v1/jobs/{name}                       -> launch a job (async), 202
+//	GET    /v1/me                                -> the caller's own profile + Fantrax status
+//	GET    /v1/sleeper/leagues                   -> discover a Sleeper account's leagues by username
+//	GET    /v1/memberships                       -> the caller's own leagues
+//	POST   /v1/memberships                       -> add a Sleeper league
+//	DELETE /v1/memberships/{platform}/{leagueID} -> remove a Sleeper league
+//	GET    /v1/tenants                           -> every tenant (admin only)
+//	POST   /v1/tenants/invite                    -> mint an enrollment link for a new tenant
+//	POST   /v1/tenants/{id}/status               -> park or reactivate a tenant
+//	POST   /v1/tenants/{id}/auto-apply           -> operator kill switch for auto-apply
+//	POST   /v1/tenants/{id}/recovery             -> mint a re-enrollment link for an existing tenant
+//	DELETE /v1/tenants/{id}                      -> delete a tenant, releasing its email/team claims
+//	POST   /v1/me/preferences                    -> update the caller's own auto_apply
+//	POST   /v1/connect                           -> store sealed Fantrax credentials
+//	GET    /v1/connect                           -> Fantrax connection status
+//	POST   /v1/push/devices                      -> register an APNs device
+//	GET    /v1/push/devices                      -> the caller's registered devices
+//	DELETE /v1/push/devices/{id}                 -> revoke one device
+//	POST   /v1/auth/register/begin               -> start passkey enrollment (link or session)
+//	POST   /v1/auth/register/finish              -> complete enrollment, store the credential
+//	POST   /v1/auth/login/begin                  -> start a discoverable login
+//	POST   /v1/auth/login/finish                 -> complete login, mint the session cookie
+//	GET    /v1/auth/passkeys                     -> list the caller's passkeys
+//	POST   /v1/auth/passkeys/{id}/name           -> rename one passkey
+//	DELETE /v1/auth/passkeys/{id}                -> revoke one passkey
+//	POST   /v1/auth/logout                       -> clear the session cookie
 func Handler(cfg Config) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/lineup/today", cfg.handleLineup)

@@ -1,6 +1,8 @@
 package tradeboard
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,6 +264,118 @@ func TestBuildValuesTable(t *testing.T) {
 	// Picks come through as a reference list, value-sorted.
 	if len(vt.Picks) != 2 || vt.Picks[0].Name != "2027 Early 1st" {
 		t.Errorf("Picks = %+v, want 2 with the 1419 first", vt.Picks)
+	}
+}
+
+// assertWireTimestamp checks the four things a generated_at must satisfy: the
+// exact expected string, no fractional component, that same string surviving
+// the encoder that actually ships the payload, and acceptance by the strict
+// RFC3339 parser the iOS client uses.
+//
+// It takes the whole payload rather than just the field because marshalling
+// the real struct is the half that matters — the field could be a correct
+// string while a MarshalJSON somewhere above it re-encoded the value.
+func assertWireTimestamp(t *testing.T, got, want string, payload any) {
+	t.Helper()
+	if got != want {
+		t.Errorf("generated_at = %q, want %q", got, want)
+	}
+	if strings.Contains(got, ".") {
+		t.Errorf("generated_at = %q carries a fractional component", got)
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"generated_at":"`+want+`"`) {
+		t.Errorf("serialized form wrong: %s", string(b[:min(len(b), 160)]))
+	}
+	if _, err := time.Parse(time.RFC3339, got); err != nil {
+		t.Errorf("strict RFC3339 parse failed: %v", err)
+	}
+}
+
+// TestValuesTableGeneratedAtHasNoFractionalSeconds pins the wire format of
+// generated_at on GET /v1/trades/values against a strict RFC3339 parser.
+//
+// The input carries a NONZERO nanosecond count on purpose. That is the whole
+// test: a whole-second input passes against a time.Time field too, because
+// RFC3339Nano only renders a fraction when there is one to render. So the
+// obvious fixture -- today's real caller, which passes a UTC-midnight date --
+// cannot fail, and neither can a client tested against the live endpoint. Only
+// a fractional input separates the fixed field from the broken one.
+//
+// The iOS client's ISO8601DateFormatter([.withInternetDateTime]) returns nil
+// on a fractional timestamp, and a nil date there reads as "not stale" rather
+// than as an error -- a staleness notice that silently never fires.
+func TestValuesTableGeneratedAtHasNoFractionalSeconds(t *testing.T) {
+	// A nanosecond count RFC3339Nano would render as ".902729184".
+	stamp := time.Date(2026, 8, 24, 21, 47, 27, 902729184, time.UTC)
+
+	// The encoder that actually ships it: cmd/team-values.go json.Marshals the
+	// whole table and publishes the bytes, and lineupapi serves them without
+	// reparsing.
+	vt := BuildValuesTable(stamp, nil, nil, nil, nil)
+	assertWireTimestamp(t, vt.GeneratedAt, "2026-08-24T21:47:27Z", vt)
+}
+
+// TestValuesTableGeneratedAtIsUTC pins the .UTC() call, which is easy to drop
+// as redundant -- today's caller already passes UTC, so nothing else in the
+// tree would notice.
+//
+// A non-UTC time formats as a numeric offset ("-04:00") instead of "Z". That
+// still parses as RFC3339, so this is a convention pin rather than a parse
+// guard: the field's doc comment promises UTC, and generated_at on
+// GET /v1/lineup/today and GET /v1/pool/available both keep it, so a client
+// comparing two artifacts' stamps as strings would silently start disagreeing.
+func TestValuesTableGeneratedAtIsUTC(t *testing.T) {
+	eastern, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("no tzdata: %v", err)
+	}
+	stamp := time.Date(2026, 8, 24, 17, 47, 27, 0, eastern)
+
+	vt := BuildValuesTable(stamp, nil, nil, nil, nil)
+	if want := "2026-08-24T21:47:27Z"; vt.GeneratedAt != want {
+		t.Errorf("generated_at = %q, want %q (UTC, not a numeric offset)", vt.GeneratedAt, want)
+	}
+}
+
+// TestNewSnapshotGeneratedAtHasNoFractionalSeconds is the GET /v1/trades twin
+// of TestValuesTableGeneratedAtHasNoFractionalSeconds, and it is the half that
+// was actually broken in production.
+//
+// ValuesTable is built from a UTC-midnight date, so its nanosecond count is
+// always zero and the endpoint never emitted a fractional stamp. Snapshot is
+// built from time.Now() on every hourly optimize run, so its nanosecond count
+// is never zero -- measured 1000/1000 -- and GET /v1/trades served
+// "2026-08-26T19:37:34.523083Z" every single time, which is precisely the
+// shape the iOS client's ISO8601DateFormatter returns nil on.
+func TestNewSnapshotGeneratedAtHasNoFractionalSeconds(t *testing.T) {
+	// A nanosecond count RFC3339Nano would render as ".523083".
+	stamp := time.Date(2026, 8, 26, 19, 37, 34, 523083000, time.UTC)
+
+	// The encoder that ships it: cmd/trades.go json.Marshals the snapshot and
+	// publishes the bytes; lineupapi's serveBlob returns them byte-for-byte
+	// without reparsing.
+	snap := NewSnapshot(stamp, "Team A", nil)
+	assertWireTimestamp(t, snap.GeneratedAt, "2026-08-26T19:37:34Z", snap)
+}
+
+// TestNewSnapshotGeneratedAtIsUTC pins the .UTC() call. cmd/optimize.go passes
+// time.Now(), which carries the machine's local zone -- so unlike the
+// ValuesTable twin, this one is not merely a convention pin: drop the .UTC()
+// and a Fargate task in a non-UTC zone would emit a numeric offset.
+func TestNewSnapshotGeneratedAtIsUTC(t *testing.T) {
+	eastern, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("no tzdata: %v", err)
+	}
+	stamp := time.Date(2026, 8, 26, 15, 37, 34, 0, eastern)
+
+	snap := NewSnapshot(stamp, "Team A", nil)
+	if want := "2026-08-26T19:37:34Z"; snap.GeneratedAt != want {
+		t.Errorf("generated_at = %q, want %q (UTC, not a numeric offset)", snap.GeneratedAt, want)
 	}
 }
 

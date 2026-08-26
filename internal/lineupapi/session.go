@@ -140,8 +140,6 @@ func clearSessionCookie(w http.ResponseWriter) {
 }
 
 // sessionFromRequest returns the verified payload on the request, if any.
-// Callers that need the subject use this; callers that only need "is anyone
-// logged in" use hasValidSession.
 func sessionFromRequest(r *http.Request, secret []byte) (sessionPayload, error) {
 	if len(secret) == 0 {
 		return sessionPayload{}, errInvalidSession
@@ -151,16 +149,4 @@ func sessionFromRequest(r *http.Request, secret []byte) (sessionPayload, error) 
 		return sessionPayload{}, errInvalidSession
 	}
 	return parseSession(secret, c.Value, time.Now())
-}
-
-// hasValidSession reports whether the request carries a signed, unexpired
-// session naming some user. An empty secret (misconfiguration) fails closed,
-// matching authorized()'s empty-token behavior.
-//
-// It deliberately does not check Ver, so it cannot see a revoked session. That
-// is why it survives only until rosterbot-crq.10 replaces the blanket isAuthed
-// check with per-route, per-tenant authorization that loads the user.
-func hasValidSession(r *http.Request, secret []byte) bool {
-	_, err := sessionFromRequest(r, secret)
-	return err == nil
 }

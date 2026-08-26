@@ -64,9 +64,38 @@ type Side struct {
 
 // Snapshot is the whole trades/current.json payload.
 type Snapshot struct {
-	GeneratedAt time.Time `json:"generated_at"`
-	MyTeam      string    `json:"my_team"`
-	Offers      []Offer   `json:"offers"`
+	// GeneratedAt is RFC3339 UTC with NO fractional seconds, for the reason
+	// spelled out on ValuesTable.GeneratedAt below -- same API, same field
+	// name, same iOS client.
+	//
+	// The asymmetry between the two is worth keeping in mind, because it is
+	// the opposite of what the field names suggest. ValuesTable is built from
+	// a UTC-midnight DATE, so its nanosecond count is always zero and every
+	// value that endpoint has ever emitted was already the safe shape -- the
+	// defect there is latent. This one is built from time.Now() on every
+	// hourly optimize run (cmd/optimize.go's captureTradeOffers), so its
+	// nanosecond count is never zero and GET /v1/trades emitted a fractional
+	// timestamp every single time. Fixing only the endpoint whose name is on
+	// the bead would have repaired the harmless half.
+	GeneratedAt string  `json:"generated_at"`
+	MyTeam      string  `json:"my_team"`
+	Offers      []Offer `json:"offers"`
+}
+
+// NewSnapshot stamps the payload with a wire-safe timestamp.
+//
+// It exists so the format guarantee lives in this package rather than at the
+// call site: a caller assembling Snapshot{GeneratedAt: now.UTC().Format(...)}
+// by hand is one careless edit away from the RFC3339Nano shape, and that edit
+// looks harmless in review because the resulting string is still valid
+// RFC3339 -- it just stops being PARSEABLE by a strict client. Build it here
+// and there is no way to hold it wrong.
+func NewSnapshot(now time.Time, myTeam string, offers []Offer) Snapshot {
+	return Snapshot{
+		GeneratedAt: now.UTC().Format(time.RFC3339),
+		MyTeam:      myTeam,
+		Offers:      offers,
+	}
 }
 
 // PlayerValue is one rostered player in the values table.
@@ -100,7 +129,32 @@ type PickValue struct {
 
 // ValuesTable is the whole trades/values.json payload.
 type ValuesTable struct {
-	GeneratedAt time.Time       `json:"generated_at"`
+	// GeneratedAt is RFC3339 UTC with NO fractional seconds, matching
+	// availablepool.Table and lineuprun/publish.go's generated_at on
+	// GET /v1/lineup/today -- the same field name in the same API, read by
+	// the same client.
+	//
+	// A plain time.Time here would marshal as RFC3339Nano, whose fraction is
+	// VARIABLE-LENGTH and vanishes entirely when the nanosecond count happens
+	// to be zero:
+	//
+	//	nanos=902729184 -> "2026-08-24T21:47:27.902729184Z"
+	//	nanos=900000000 -> "2026-08-24T21:47:27.9Z"
+	//	nanos=0         -> "2026-08-24T21:47:27Z"
+	//
+	// The trap here is sharper than "sometimes fractional", because the only
+	// caller (cmd/team-values.go) passes a UTC-midnight DATE, so every value
+	// this endpoint has ever emitted is the third shape. A client built and
+	// tested against the live endpoint therefore passes -- and breaks the day
+	// somebody changes that caller to time.Now(), a one-word edit with no
+	// visible connection to the wire format. Storing the formatted string
+	// puts the guarantee in the type instead of in the caller's accident.
+	//
+	// The exposure is the iOS client, whose
+	// ISO8601DateFormatter([.withInternetDateTime]) returns nil on a
+	// fractional timestamp; a nil date is not an error there, it is a
+	// staleness check that silently never fires.
+	GeneratedAt string          `json:"generated_at"`
 	Players     []PlayerValue   `json:"players"`
 	Picks       []PickValue     `json:"picks"`
 	Teams       []teamvalue.Row `json:"teams"`
@@ -137,7 +191,7 @@ type PoolPlayer struct {
 func BuildValuesTable(now time.Time, pool []PoolPlayer, hkbPlayers []hkb.Player, teams []teamvalue.Row, teamNames map[string]string) ValuesTable {
 	lookup := hkb.BuildLookup(hkbPlayers)
 
-	t := ValuesTable{GeneratedAt: now, Teams: teams}
+	t := ValuesTable{GeneratedAt: now.UTC().Format(time.RFC3339), Teams: teams}
 	for _, pp := range pool {
 		if pp.FantasyTeamID == "" {
 			continue // free agent

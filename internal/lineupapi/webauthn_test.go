@@ -6,66 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 )
-
-// fakeIdentities is an in-memory IdentityStore for handler tests. It enforces
-// the same optimistic-concurrency contract as the real stores — a double that
-// accepted every write would let a handler regress to a blind overwrite while
-// every test here stayed green.
-type fakeIdentities struct {
-	id      *Identity
-	ok      bool
-	err     error
-	version int
-}
-
-func (f *fakeIdentities) currentVersion() IdentityVersion {
-	return IdentityVersion(strconv.Itoa(f.version))
-}
-
-// GetIdentity hands back a copy, as a store that deserializes fresh bytes does.
-// Sharing the live pointer would let a caller's in-place mutation take effect
-// without a write, which is precisely the bug being guarded against.
-func (f *fakeIdentities) GetIdentity(_ context.Context) (*Identity, bool, error) {
-	if f.err != nil {
-		return nil, false, f.err
-	}
-	if !f.ok || f.id == nil {
-		return nil, false, nil
-	}
-	cp := *f.id
-	cp.Credentials = append([]webauthn.Credential(nil), f.id.Credentials...)
-	cp.Version = f.currentVersion()
-	return &cp, true, nil
-}
-
-func (f *fakeIdentities) PutIdentity(_ context.Context, id *Identity) error {
-	if f.err != nil {
-		return f.err
-	}
-	switch {
-	case id.Version == "" && f.ok:
-		return ErrIdentityConflict
-	case id.Version != "" && !f.ok:
-		return ErrIdentityConflict
-	case id.Version != "" && id.Version != f.currentVersion():
-		return ErrIdentityConflict
-	}
-	f.version++
-	cp := *id
-	cp.Credentials = append([]webauthn.Credential(nil), id.Credentials...)
-	cp.Version = f.currentVersion()
-	f.id = &cp
-	f.ok = true
-	id.Version = cp.Version
-	return nil
-}
 
 func testWebAuthn(t *testing.T) *webauthn.WebAuthn {
 	t.Helper()
@@ -81,7 +27,7 @@ func testWebAuthn(t *testing.T) *webauthn.WebAuthn {
 }
 
 func TestRegisterBegin_RejectsWithoutSessionOrToken(t *testing.T) {
-	h := Handler(Config{Token: "secret-token", Identities: &fakeIdentities{}, WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
+	h := Handler(Config{Token: "secret-token", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -208,7 +154,7 @@ func TestRegisterFinish_RejectsWithoutCeremonyCookie(t *testing.T) {
 }
 
 func TestRegisterFinish_RejectsWithoutSessionOrToken(t *testing.T) {
-	h := Handler(Config{Token: "secret-token", Identities: &fakeIdentities{}, WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
+	h := Handler(Config{Token: "secret-token", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/finish", strings.NewReader("{}"))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -230,7 +176,7 @@ func TestRegisterFinish_RejectsWithoutSessionOrToken(t *testing.T) {
 // unauthenticated caller can no longer distinguish "nobody is registered" from
 // "someone is", so login/begin is not a user-enumeration oracle.
 func TestLoginBegin_DoesNotRevealWhetherAnyoneIsRegistered(t *testing.T) {
-	h := Handler(Config{Token: "t", Identities: &fakeIdentities{}, WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
+	h := Handler(Config{Token: "t", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login/begin", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -243,12 +189,16 @@ func TestLoginBegin_DoesNotRevealWhetherAnyoneIsRegistered(t *testing.T) {
 	}
 }
 
-func TestLoginBegin_ReturnsOptionsWhenPasskeyExists(t *testing.T) {
-	identities := &fakeIdentities{ok: true, id: &Identity{
-		WebAuthnUserID: []byte("handle-123"),
-		Credentials:    []webauthn.Credential{{ID: []byte("cred-1")}},
-	}}
-	h := Handler(Config{Token: "t", Identities: identities, WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
+// TestLoginBegin_SetsCeremonyCookie was TestLoginBegin_ReturnsOptionsWhenPasskeyExists,
+// seeded with a stored identity holding one credential.
+//
+// That setup was decorative and the rename records why: BeginDiscoverableLogin
+// consults no store at all, so seeding one changed nothing about the response.
+// Deleting the seed alongside the dead Config.Identities field (rosterbot-w200)
+// left the assertions byte-identical, which is the evidence that the field had
+// no reader — a store whose removal a test cannot feel was never being read.
+func TestLoginBegin_SetsCeremonyCookie(t *testing.T) {
+	h := Handler(Config{Token: "t", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login/begin", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -267,8 +217,7 @@ func TestLoginBegin_ReturnsOptionsWhenPasskeyExists(t *testing.T) {
 }
 
 func TestLoginFinish_RejectsWithoutCeremonyCookie(t *testing.T) {
-	identities := &fakeIdentities{ok: true, id: &Identity{WebAuthnUserID: []byte("h"), Credentials: []webauthn.Credential{{ID: []byte("c")}}}}
-	h := Handler(Config{Token: "t", Identities: identities, WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
+	h := Handler(Config{Token: "t", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login/finish", strings.NewReader("{}"))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -278,7 +227,7 @@ func TestLoginFinish_RejectsWithoutCeremonyCookie(t *testing.T) {
 }
 
 func TestListPasskeys_RequiresSession(t *testing.T) {
-	h := Handler(Config{Token: "t", Identities: &fakeIdentities{}, WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
+	h := Handler(Config{Token: "t", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/passkeys", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -372,7 +321,7 @@ func seedUserWithCredential(t *testing.T, id UserID, credID string) *FileUserSto
 }
 
 func TestLogout_ClearsSessionCookie(t *testing.T) {
-	h := Handler(Config{Token: "t", Identities: &fakeIdentities{}, WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
+	h := Handler(Config{Token: "t", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

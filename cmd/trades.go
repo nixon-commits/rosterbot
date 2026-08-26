@@ -91,7 +91,7 @@ func captureTradeOffers(ft *fantrax.Client, cfg *config.Config, now time.Time) e
 		}
 	}
 
-	snap := tradeboard.Snapshot{GeneratedAt: now, MyTeam: myTeam, Offers: mine}
+	snap := tradeboard.NewSnapshot(now, myTeam, mine)
 	printTradeSnapshot(snap, table)
 
 	if dryRun {
@@ -181,10 +181,13 @@ func printTradeSnapshot(s tradeboard.Snapshot, table *tradeboard.ValuesTable) {
 		fmt.Printf("Pending offers for %s: none\n", s.MyTeam)
 		return
 	}
-	fmt.Printf("Pending offers for %s — %s\n", s.MyTeam, s.GeneratedAt.Format("2006-01-02 15:04 MST"))
+	fmt.Printf("Pending offers for %s — %s\n", s.MyTeam, s.GeneratedAt)
 	if table != nil {
+		// Printed verbatim, not reformatted: GeneratedAt is already the
+		// RFC3339 string that ships on GET /v1/trades/values, and the job
+		// log is where an operator checks what the endpoint is serving.
 		fmt.Printf("  (values as of %s, HKB coverage %d/%d)\n",
-			table.GeneratedAt.Format("2006-01-02"), table.Matched, table.Rostered)
+			table.GeneratedAt, table.Matched, table.Rostered)
 	}
 
 	for _, o := range s.Offers {

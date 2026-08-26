@@ -15,7 +15,7 @@ import (
 // feed, whoever they had signed in as — with the fan-out busy writing each
 // tenant's real data to prefixes nothing read.
 //
-// Infra, Identities, Users, Enrollments, Connections, Sealer and Jobs are
+// Infra, Users, Enrollments, Connections, Sealer and Jobs are
 // deliberately NOT here: they are league-wide, identity-scoped, or a launcher,
 // and scoping them per tenant would be wrong rather than merely unnecessary.
 type TenantView struct {
