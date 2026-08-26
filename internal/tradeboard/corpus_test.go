@@ -260,7 +260,14 @@ func TestCorpus_ValuesTableShape(t *testing.T) {
 			t.Error("Matched < Rostered but no row is flagged unmatched")
 		}
 	}
-	if vt.GeneratedAt.IsZero() || vt.GeneratedAt.After(time.Now().Add(time.Hour)) {
-		t.Errorf("GeneratedAt = %v, implausible", vt.GeneratedAt)
+	// GeneratedAt is a preformatted RFC3339 string, so parsing it here is
+	// not ceremony: it proves against a real artifact that what ships is
+	// what a strict client parser accepts, which is the whole point of the
+	// field being a string rather than a time.Time (rosterbot-xj14).
+	gen, err := time.Parse(time.RFC3339, vt.GeneratedAt)
+	if err != nil {
+		t.Errorf("GeneratedAt = %q, not strict RFC3339: %v", vt.GeneratedAt, err)
+	} else if gen.IsZero() || gen.After(time.Now().Add(time.Hour)) {
+		t.Errorf("GeneratedAt = %v, implausible", gen)
 	}
 }
