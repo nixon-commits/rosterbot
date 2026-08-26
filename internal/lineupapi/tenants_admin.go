@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/wiretime"
 )
 
 // The tenant management routes. All of them live under /v1/tenants/, which the
@@ -178,10 +180,17 @@ func (cfg Config) handleDeleteTenant(w http.ResponseWriter, r *http.Request) {
 // inviteResponse is the one place a minted token ever appears. Only its hash
 // is stored, so this response is shown once and is not recoverable.
 type inviteResponse struct {
-	UserID    UserID    `json:"user_id"`
-	Email     string    `json:"email"`
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
+	UserID UserID `json:"user_id"`
+	Email  string `json:"email"`
+	Token  string `json:"token"`
+
+	// ExpiresAt is wiretime.Time while the Enrollment record it mirrors keeps a
+	// plain time.Time. The stored record is Go-writes-Go-reads (file store and
+	// DynamoDB) where RFC3339Nano round-trips exactly; this copy is read by a
+	// client, and its constructor is time.Now().UTC().Add(ttl) — a nanosecond
+	// count that is non-zero on every mint, so this field has never once
+	// emitted the parseable shape (rosterbot-4e1j).
+	ExpiresAt wiretime.Time `json:"expires_at"`
 }
 
 // defaultEnrollmentTTL matches cmd/invite.go's --ttl default, so a link minted
@@ -212,7 +221,8 @@ func (cfg Config) mintEnrollmentAndRespond(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, inviteResponse{
-		UserID: uid, Email: email, Token: string(token), ExpiresAt: expires,
+		UserID: uid, Email: email, Token: string(token),
+		ExpiresAt: wiretime.New(expires),
 	})
 }
 

@@ -3,7 +3,8 @@ package lineupapi
 import (
 	"encoding/json"
 	"net/http"
-	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/wiretime"
 )
 
 // MeResponse is what a signed-in user is told about themselves.
@@ -32,10 +33,16 @@ type MeResponse struct {
 
 // FantraxStatus is the connection state the settings page shows.
 type FantraxStatus struct {
-	Status         ConnStatus `json:"status"`
-	LastError      string     `json:"last_error,omitempty"`
-	FantraxEmail   string     `json:"fantrax_email,omitempty"`
-	LastVerifiedAt time.Time  `json:"last_verified_at,omitempty"`
+	Status       ConnStatus `json:"status"`
+	LastError    string     `json:"last_error,omitempty"`
+	FantraxEmail string     `json:"fantrax_email,omitempty"`
+
+	// LastVerifiedAt is wiretime.Time, not time.Time: the stored value comes
+	// from the connect task's time.Now(), so a raw field here emits a
+	// variable-length RFC3339Nano fraction that the iOS client's strict
+	// ISO8601 formatter decodes to nil — and a nil date here is a staleness
+	// check that silently never fires (rosterbot-4e1j).
+	LastVerifiedAt wiretime.Time `json:"last_verified_at,omitempty"`
 }
 
 // handleMe serves the caller their own profile.
@@ -81,7 +88,8 @@ func (cfg Config) handleMe(w http.ResponseWriter, r *http.Request) {
 		if conn, found, cerr := cfg.Connections.GetConnection(r.Context(), caller.UserID); cerr == nil && found {
 			resp.Fantrax = &FantraxStatus{
 				Status: conn.Status, LastError: conn.LastError,
-				FantraxEmail: conn.FantraxEmail, LastVerifiedAt: conn.LastVerifiedAt,
+				FantraxEmail:   conn.FantraxEmail,
+				LastVerifiedAt: wiretime.New(conn.LastVerifiedAt),
 			}
 			if resp.TeamID == "" {
 				resp.TeamID = conn.TeamID

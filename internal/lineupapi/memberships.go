@@ -46,7 +46,7 @@ func (cfg Config) handleListMemberships(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusNotFound, "no such user")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"memberships": u.AllMemberships()})
+	writeJSON(w, http.StatusOK, map[string]any{"memberships": MembershipsOut(u.AllMemberships())})
 }
 
 // handleAddMembership records one Sleeper league on the caller's own record.
@@ -148,7 +148,7 @@ func (cfg Config) handleAddMembership(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "could not update memberships")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"memberships": u.AllMemberships()})
+	writeJSON(w, http.StatusOK, map[string]any{"memberships": MembershipsOut(u.AllMemberships())})
 }
 
 // handleDeleteMembership removes one Sleeper league from the caller's record.
@@ -216,5 +216,5 @@ func (cfg Config) handleDeleteMembership(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusBadGateway, "could not update memberships")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"memberships": u.AllMemberships()})
+	writeJSON(w, http.StatusOK, map[string]any{"memberships": MembershipsOut(u.AllMemberships())})
 }

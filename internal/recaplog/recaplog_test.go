@@ -3,10 +3,13 @@ package recaplog
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/wiretime"
 )
 
 // header is the exact two-line preamble CloudFront writes, captured from a real
@@ -62,7 +65,7 @@ func TestParseSkipsHeadersAndReadsFields(t *testing.T) {
 	}
 	got := hits[0]
 	want := Hit{
-		Time:         time.Date(2026, 7, 27, 20, 12, 50, 0, time.UTC),
+		Time:         wiretime.New(time.Date(2026, 7, 27, 20, 12, 50, 0, time.UTC)),
 		ClientIP:     "66.189.172.157",
 		URI:          "/",
 		EdgeLocation: "SFO5-P3",
@@ -119,11 +122,12 @@ func TestIsPageRead(t *testing.T) {
 
 func TestBuildModelFiltersOrdersAndCaps(t *testing.T) {
 	at := func(min int) time.Time { return time.Date(2026, 7, 27, 20, min, 0, 0, time.UTC) }
+	wt := func(min int) wiretime.Time { return wiretime.New(at(min)) }
 	hits := []Hit{
-		{Time: at(1), ClientIP: "1.1.1.1", URI: "/", Status: 200},
-		{Time: at(3), ClientIP: "2.2.2.2", URI: "/week-08.html", Status: 200},
-		{Time: at(2), ClientIP: "3.3.3.3", URI: "/favicon.ico", Status: 403},
-		{Time: at(5), ClientIP: "4.4.4.4", URI: "/week-09.html", Status: 200},
+		{Time: wt(1), ClientIP: "1.1.1.1", URI: "/", Status: 200},
+		{Time: wt(3), ClientIP: "2.2.2.2", URI: "/week-08.html", Status: 200},
+		{Time: wt(2), ClientIP: "3.3.3.3", URI: "/favicon.ico", Status: 403},
+		{Time: wt(5), ClientIP: "4.4.4.4", URI: "/week-09.html", Status: 200},
 	}
 	m := BuildModel(hits, 2, at(9))
 
@@ -133,8 +137,9 @@ func TestBuildModelFiltersOrdersAndCaps(t *testing.T) {
 	if len(m.Hits) != 2 {
 		t.Fatalf("want the limit of 2, got %d", len(m.Hits))
 	}
-	if !m.Hits[0].Time.Equal(at(5)) || !m.Hits[1].Time.Equal(at(3)) {
-		t.Errorf("want newest-first [20:05, 20:03], got %v", []time.Time{m.Hits[0].Time, m.Hits[1].Time})
+	if !m.Hits[0].Time.Time().Equal(at(5)) || !m.Hits[1].Time.Time().Equal(at(3)) {
+		t.Errorf("want newest-first [20:05, 20:03], got %v",
+			[]time.Time{m.Hits[0].Time.Time(), m.Hits[1].Time.Time()})
 	}
 	for _, h := range m.Hits {
 		if h.URI == "/favicon.ico" {
@@ -158,9 +163,9 @@ func TestBuildModelEmptyIsNotAnError(t *testing.T) {
 func TestBuildModelBreaksTiesStably(t *testing.T) {
 	ts := time.Date(2026, 7, 27, 20, 0, 0, 0, time.UTC)
 	hits := []Hit{
-		{Time: ts, ClientIP: "9.9.9.9", URI: "/b.html", Status: 200},
-		{Time: ts, ClientIP: "1.1.1.1", URI: "/a.html", Status: 200},
-		{Time: ts, ClientIP: "1.1.1.1", URI: "/b.html", Status: 200},
+		{Time: wiretime.New(ts), ClientIP: "9.9.9.9", URI: "/b.html", Status: 200},
+		{Time: wiretime.New(ts), ClientIP: "1.1.1.1", URI: "/a.html", Status: 200},
+		{Time: wiretime.New(ts), ClientIP: "1.1.1.1", URI: "/b.html", Status: 200},
 	}
 	first := BuildModel(hits, 0, ts)
 	second := BuildModel(hits, 0, ts)
@@ -220,7 +225,7 @@ func TestReadRecentWalksNewestFirstAndStopsEarly(t *testing.T) {
 	if len(m.Hits) != 3 {
 		t.Fatalf("want 3 hits, got %d", len(m.Hits))
 	}
-	if got := m.Hits[0].Time.Hour(); got != 20 {
+	if got := m.Hits[0].Time.Time().Hour(); got != 20 {
 		t.Errorf("newest hit hour = %d, want 20 (newest object first)", got)
 	}
 	// Three objects hold three page reads, so it must stop after three gets
@@ -257,5 +262,58 @@ func TestReadRecentOnEmptyPrefixIsEmptyNotError(t *testing.T) {
 	}
 	if !m.Empty {
 		t.Error("want Empty=true for a prefix with no objects")
+	}
+}
+
+// GET /v1/reports/views serves this model's bytes verbatim, so its timestamps
+// are a wire contract. Measured 2026-08-26, the endpoint emitted
+// "generatedAt":"2026-08-26T21:08:27.746239Z" — a fractional shape the iOS
+// client's ISO8601DateFormatter([.withInternetDateTime]) returns nil on
+// (rosterbot-4e1j).
+//
+// The fixture feeds a NONZERO nanosecond count deliberately. This is the whole
+// testing note of that bead: a whole-second fixture serializes identically
+// through a raw time.Time, so it passes against the unfixed code and cannot
+// distinguish fixed from broken.
+func TestBuildModelTimestampsCarryNoFractionalSecond(t *testing.T) {
+	fractional := time.Date(2026, 8, 26, 21, 8, 27, 746239000, time.UTC)
+	hits := []Hit{{Time: wiretime.New(fractional), ClientIP: "1.1.1.1", URI: "/", Status: 200}}
+
+	b, err := json.Marshal(BuildModel(hits, 0, fractional))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Guard the guard: a fixture that lost its sub-second component before
+	// marshalling would make the assertion below vacuous.
+	if fractional.Nanosecond() == 0 {
+		t.Fatal("fixture has no fractional component, so it cannot detect the bug")
+	}
+	for _, want := range []string{
+		`"generatedAt":"2026-08-26T21:08:27Z"`,
+		`"time":"2026-08-26T21:08:27Z"`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("want %s in the response body, got %s", want, b)
+		}
+	}
+	if strings.Contains(string(b), ".746239") {
+		t.Errorf("a fractional second reached the wire: %s", b)
+	}
+
+	// Proof that the assertions above are not vacuous, kept in the test rather
+	// than done by hand once: the SAME instant through a raw time.Time field —
+	// which is exactly what this struct held before rosterbot-4e1j — does emit
+	// the fraction. If this ever stops being true, the test above has stopped
+	// being able to detect the defect and should be re-derived, not deleted.
+	raw, err := json.Marshal(struct {
+		T time.Time `json:"t"`
+	}{fractional})
+	if err != nil {
+		t.Fatalf("marshal control: %v", err)
+	}
+	if !strings.Contains(string(raw), ".746239") {
+		t.Fatalf("the control did not reproduce the defect, so this fixture "+
+			"cannot distinguish fixed from broken: %s", raw)
 	}
 }

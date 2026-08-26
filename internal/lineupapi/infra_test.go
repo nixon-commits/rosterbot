@@ -238,7 +238,7 @@ func TestBuildStatus_PerArtifactErrorIsIsolated(t *testing.T) {
 func TestBuildStatus_StampsGeneratedAt(t *testing.T) {
 	now := ymd(2026, 7, 25)
 	st := buildStatus(context.Background(), &fakeInfraLister{}, nil, now)
-	if !st.GeneratedAt.Equal(now) {
+	if !st.GeneratedAt.Time().Equal(now) {
 		t.Errorf("GeneratedAt = %v, want %v", st.GeneratedAt, now)
 	}
 }

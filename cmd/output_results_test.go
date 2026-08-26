@@ -119,7 +119,7 @@ func floatsOnTheWire(t *testing.T, v any) map[string]float64 {
 
 func TestGradeToWireResult(t *testing.T) {
 	byDate := map[string]int{"2026-06-18": 10, "2026-06-19": 12}
-	out := gradeToWireResult(byDate)
+	out := gradeToWireResult(byDate, nil)
 	if out.RowsWritten != 22 {
 		t.Fatalf("rows: %d", out.RowsWritten)
 	}

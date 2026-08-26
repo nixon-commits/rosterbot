@@ -300,6 +300,18 @@ type BacktestRotationOut struct {
 type GradeResult struct {
 	Dates       []string `json:"dates"`
 	RowsWritten int      `json:"rows_written"`
+
+	// WindowNotes is the run's own account of the range it chose and, when the
+	// --max-window cap bound, what it declined to re-grade.
+	//
+	// It rides the structured result rather than stdout because stdout does not
+	// reach anyone on the run that matters. cmd/ledger.go captures log_tail
+	// ONLY when a run FAILED, and a capped grade run SUCCEEDS — so printing the
+	// cap was "named rather than silently dropped" into a channel with no
+	// reader, which is this repo's no-silent-caps rule satisfied in letter and
+	// broken in substance (rosterbot-n30). The dashboard's run viewer renders
+	// object keys verbatim, so the json name is the label an operator reads.
+	WindowNotes []string `json:"window_notes,omitempty"`
 }
 
 // --- Store interfaces + local file adapter + global hook ---

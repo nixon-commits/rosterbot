@@ -18,6 +18,43 @@ Backend implementation: `internal/lineupapi` (contract + handler), `lambda/`
   name, `501` route not available (local `serve` only), `502` backend error.
   Error bodies: `{"error":"..."}`.
 
+## Timestamps
+
+**Every timestamp on every `/v1` response is RFC3339 UTC with NO fractional
+seconds** — `"2026-08-24T21:47:27Z"`, always that many characters. Parse the
+whole API with one strict formatter
+(`ISO8601DateFormatter([.withInternetDateTime])`); no endpoint needs a
+fractional-second fallback, and adding one would hide a server regression rather
+than tolerate it.
+
+Server-side this is held by two different mechanisms, and it is worth knowing
+which covers what — the second is the weaker one.
+
+Endpoints that marshal a Go type in `internal/lineupapi` are held **by the
+type**: `internal/wiretime.Time` is the only timestamp type those response
+structs may declare, and `TestWireTypes_CarryNoRawTimeTime` walks them by
+reflection and fails on any `time.Time` that reaches it.
+
+Five endpoints are **byte passthroughs** and that walk cannot see them at all —
+`GET /v1/trades`, `/v1/trades/values`, `/v1/pool/available`, `/v1/reports/{name}`
+and `/v1/runs/{id}/progress` are served via `serveBlob` from bytes produced in
+`internal/{tradeboard,availablepool,report,lineupgap,recaplog,progress}`. Their
+shape is each producer's own responsibility, so **a regression there is not
+caught by the guard and reports green**. Four hold it by formatting to a
+`string` at construction; `internal/recaplog` holds it with `wiretime.Time`
+after `GET /v1/reports/views` was measured emitting
+`"generatedAt":"2026-08-26T21:08:27.746239Z"` (rosterbot-4e1j). If you add a
+timestamp to a passthrough producer, one of those two is on you. The
+guarantee exists because Go's default is the opposite — `time.Time` marshals as
+RFC3339Nano, whose fraction is variable-length and disappears entirely when the
+nanosecond count happens to be zero, so a client tested once against a live
+endpoint can pass and then fail intermittently in production
+(rosterbot-xj14, rosterbot-4e1j).
+
+An **unset** timestamp is `"0001-01-01T00:00:00Z"` on a field tagged
+`omitempty` (Go has never omitted a struct for that tag) and **absent** on one
+tagged `omitzero`. Treat both as "no value", never as a date in year 1.
+
 ## Endpoints
 
 ### `GET /v1/lineup/today`
