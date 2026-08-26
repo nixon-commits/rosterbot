@@ -51,7 +51,9 @@ func (s *RunsStore) List(ctx context.Context, limit int) ([]lineupapi.Run, error
 func (s *RunsStore) Get(ctx context.Context, id string) (*lineupapi.RunDetail, bool, error) {
 	// Run detail lookups are always for a recent run (just triggered or visible
 	// in the list), so scanning the newest window is sufficient and bounded.
-	recs, err := s.recent(ctx, 200)
+	// The window is the interface's documented contract (lineupapi.RunLookback),
+	// pinned to the file adapter by runstoretest.
+	recs, err := s.recent(ctx, lineupapi.RunLookback)
 	if err != nil {
 		return nil, false, err
 	}

@@ -106,6 +106,12 @@ func (s *FileRunStore) Get(_ context.Context, id string) (*RunDetail, bool, erro
 	if err != nil {
 		return nil, false, err
 	}
+	// The RunLookback window is the interface's contract, not an S3 detail:
+	// this store used to scan everything, so a run resolvable locally 404'd in
+	// production. records() is newest-first, so capping the scan is the cap.
+	if len(recs) > RunLookback {
+		recs = recs[:RunLookback]
+	}
 	for i := range recs {
 		if recs[i].ID == id {
 			return &recs[i], true, nil
