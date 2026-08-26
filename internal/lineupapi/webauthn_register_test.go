@@ -324,3 +324,152 @@ func fabricateAttestation(t *testing.T, rpID, origin, challenge string, credID [
 		},
 	}
 }
+
+// productionRPOrigins is the exact value infra.go publishes into
+// /rosterbot/DASHBOARD_RP_ORIGIN (see RpOriginParam; the infra side pins the
+// synthesized parameter against its own apexHost/dashHost constants in
+// infra/domain_test.go). It is spelled once on this side of the module
+// boundary so the two tests that need it cannot drift from each other.
+const productionRPOrigins = "https://rosterbot.dev,https://dash.rosterbot.dev"
+
+// TestRegisterFinish_CompletesFromEitherProductionOrigin drives a full
+// ceremony from EACH origin in the production list, and refuses one from an
+// origin that is not on it.
+//
+// TestNewWebAuthn_AcceptsBothProductionOrigins is not this test. It asserts
+// that the config holds two strings; it never hands go-webauthn a
+// clientDataJSON to judge, so it passes just as happily if the origin
+// validator is never reached. The distinction is the whole point of
+// rosterbot-jloe.6: RP ID is the APEX while the origin list holds BOTH, and
+// the surfaces really do report different origins for that one RP ID — a
+// browser on the dashboard reports https://dash.rosterbot.dev, an iOS native
+// ceremony reports https://rosterbot.dev. So rpID is the apex in every subtest
+// below and only the clientDataJSON origin moves. That asymmetry is the thing
+// under test, not an artifact of the fixture.
+//
+// It exists because the alternative was a MANUAL check. The cutover was
+// verified in production by a real iOS registration (2026-08-21), which
+// exercised the apex entry and only the apex entry; proving the dash entry
+// meant asking a human to go and log in once, and nothing would ever re-check
+// it. That is the failure ParseRPOrigins' own doc comment describes: one bad
+// entry in a two-origin list leaves the OTHER surface working perfectly, so
+// the symptom is passkeys mysteriously failing on one surface with a generic
+// ceremony error and nothing connecting it to an SSM parameter.
+//
+// The negative subtest is load-bearing and its choice of origin is deliberate.
+// A stranger origin like https://example.com would be refused by a validator
+// that only checked the registrable domain, so it cannot tell "the origin list
+// is enforced" from "the RP ID check happens to catch this". An unlisted
+// SUBDOMAIN OF THE RP ID can: rosterbot.dev is its registrable domain, so RP
+// ID scoping alone would admit it, and only the exact-match origin list turns
+// it away. Without that case, a build with origin validation disabled entirely
+// would pass the two positive subtests.
+func TestRegisterFinish_CompletesFromEitherProductionOrigin(t *testing.T) {
+	origins, dropped := ParseRPOrigins(productionRPOrigins)
+	if len(dropped) != 0 {
+		t.Fatalf("the production origin parameter dropped %q", dropped)
+	}
+	if len(origins) != 2 {
+		t.Fatalf("parsed %d origin(s) from %q, want 2 — a one-entry list silently "+
+			"strands whichever surface is missing", len(origins), productionRPOrigins)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		origin  string
+		wantOK  bool
+		surface string
+	}{{
+		name:    "apex, as an iOS native ceremony reports it",
+		origin:  "https://rosterbot.dev",
+		wantOK:  true,
+		surface: "the iOS app",
+	}, {
+		name:    "dash, as the dashboard browser reports it",
+		origin:  "https://dash.rosterbot.dev",
+		wantOK:  true,
+		surface: "the web dashboard",
+	}, {
+		name:   "an unlisted subdomain of the RP ID is refused",
+		origin: "https://evil.rosterbot.dev",
+		wantOK: false,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			wa, err := NewWebAuthn("rosterbot.dev", origins, "rosterbot")
+			if err != nil {
+				t.Fatalf("NewWebAuthn rejected the production RP config: %v", err)
+			}
+
+			secret := []byte("s")
+			users := NewFileUserStore(t.TempDir())
+			if err := users.CreateUser(context.Background(), &User{
+				ID: "alice", Email: "a@example.test", Role: RoleMember, Status: UserActive,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			h := Handler(Config{Token: "secret-token", Users: users, Enrollments: users,
+				WebAuthn: wa, SessionSecret: secret})
+
+			rec := httptest.NewRecorder()
+			setSessionCookie(rec, secret, "alice", 0, time.Now())
+			authCookies := rec.Result().Cookies()
+
+			beginRec := httptest.NewRecorder()
+			h.ServeHTTP(beginRec, jsonPost(t, "/v1/auth/register/begin", nil, authCookies))
+			if beginRec.Code != http.StatusOK {
+				t.Fatalf("register/begin = %d, want 200, body=%s", beginRec.Code, beginRec.Body.String())
+			}
+			var begin struct {
+				PublicKey struct {
+					Challenge string `json:"challenge"`
+					// Creation options nest the RP as rp:{id,name}, unlike the
+					// request options login/begin returns, which carry a flat
+					// rpId. Reading the wrong one yields "" and an assertion
+					// that fails for a reason unrelated to the RP ID.
+					RP struct {
+						ID string `json:"id"`
+					} `json:"rp"`
+				} `json:"publicKey"`
+			}
+			if err := json.Unmarshal(beginRec.Body.Bytes(), &begin); err != nil {
+				t.Fatalf("decoding register/begin response: %v", err)
+			}
+			// The credential the ceremony mints is bound to whatever rpId begin
+			// advertised, forever. Asserting it here means a regression that moved
+			// the RP ID off the apex would fail as a wrong-identity bug rather
+			// than sailing through as a passing origin test.
+			if begin.PublicKey.RP.ID != "rosterbot.dev" {
+				t.Errorf("register/begin advertised rpId %q, want the apex — a credential "+
+					"minted here would be bound to the wrong identity", begin.PublicKey.RP.ID)
+			}
+
+			// rpID is the APEX in every subtest; only the origin moves.
+			credID := []byte("fabricated-credential-id")
+			body := fabricateAttestation(t, "rosterbot.dev", tc.origin,
+				begin.PublicKey.Challenge, credID)
+
+			finishRec := httptest.NewRecorder()
+			h.ServeHTTP(finishRec, jsonPost(t, "/v1/auth/register/finish", body,
+				slices.Concat(authCookies, beginRec.Result().Cookies())))
+
+			if !tc.wantOK {
+				if finishRec.Code == http.StatusOK {
+					t.Fatalf("register/finish accepted a ceremony from %s, which is not in "+
+						"the origin list — the list is not being enforced", tc.origin)
+				}
+				return
+			}
+			if finishRec.Code != http.StatusOK {
+				t.Fatalf("register/finish = %d from %s, want 200: %s is locked out "+
+					"of passkeys entirely. body=%s",
+					finishRec.Code, tc.origin, tc.surface, finishRec.Body.String())
+			}
+			// A 200 that stored nothing would be a ceremony that "succeeded" into
+			// a user with no passkey, so assert the credential the ceremony was for.
+			if owner, ok, err := users.UserByCredential(context.Background(), credID); err != nil || !ok || owner != "alice" {
+				t.Errorf("UserByCredential after a ceremony from %s = (%q, %v, %v), want (alice, true, nil)",
+					tc.origin, owner, ok, err)
+			}
+		})
+	}
+}
