@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/wiretime"
 )
 
 // connectInFlightWindow is how long a pending verification blocks a second
@@ -146,11 +148,32 @@ func (cfg Config) handleConnectStatus(w http.ResponseWriter, r *http.Request) {
 	// Only the fields a user needs. The ciphertexts are not serialized here even
 	// though they are opaque — an endpoint that returns them invites someone to
 	// build a client that stores them.
-	writeJSON(w, http.StatusOK, map[string]any{
-		"connected":        conn.Status == ConnVerified,
-		"status":           conn.Status,
-		"team_id":          conn.TeamID,
-		"last_error":       conn.LastError,
-		"last_verified_at": conn.LastVerifiedAt,
+	writeJSON(w, http.StatusOK, connectStatusOut{
+		Connected:      conn.Status == ConnVerified,
+		Status:         conn.Status,
+		TeamID:         conn.TeamID,
+		LastError:      conn.LastError,
+		LastVerifiedAt: wiretime.New(conn.LastVerifiedAt),
 	})
+}
+
+// connectStatusOut is GET /v1/connect's body for a tenant that has a connection
+// record. The no-record case above stays an anonymous {"connected": false},
+// because that response genuinely has one field.
+//
+// It is a NAMED TYPE purely so the wire surface is reachable by reflection.
+// This response was an inline map[string]any handing out conn.LastVerifiedAt —
+// a raw time.Time — and TestWireTypes_CarryNoRawTimeTime structurally cannot
+// see inside a map literal: there is no type to walk. A response body that only
+// exists as an expression is a response body no guard can cover, which is the
+// whole reason this one survived a survey that named every other site
+// (rosterbot-4e1j). Key ORDER changes from the map's alphabetical sort to
+// declaration order here; JSON objects are unordered and both clients read by
+// key, so that is not a contract change.
+type connectStatusOut struct {
+	Connected      bool          `json:"connected"`
+	Status         ConnStatus    `json:"status"`
+	TeamID         string        `json:"team_id"`
+	LastError      string        `json:"last_error"`
+	LastVerifiedAt wiretime.Time `json:"last_verified_at"`
 }

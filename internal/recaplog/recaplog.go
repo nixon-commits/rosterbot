@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/wiretime"
 )
 
 // Prefix is where CloudFront writes the recap site's access logs within the log
@@ -39,18 +41,33 @@ type Store interface {
 }
 
 // Hit is one page read.
+//
+// Time is a wiretime.Time rather than a time.Time because this struct is a
+// RESPONSE BODY, not a durable record: it is built here, published to the
+// reports/ prefix, and served byte-for-byte over GET /v1/reports/views. A raw
+// time.Time marshals as RFC3339Nano, whose fractional part is variable-length
+// and vanishes at a zero nanosecond count, and the iOS client's
+// ISO8601DateFormatter([.withInternetDateTime]) returns nil on it — a nil date
+// there is not an error but a staleness check that silently never fires
+// (rosterbot-4e1j).
 type Hit struct {
-	Time         time.Time `json:"time"`
-	ClientIP     string    `json:"ip"`
-	URI          string    `json:"uri"`
-	EdgeLocation string    `json:"edge"`
-	Status       int       `json:"status"`
+	Time         wiretime.Time `json:"time"`
+	ClientIP     string        `json:"ip"`
+	URI          string        `json:"uri"`
+	EdgeLocation string        `json:"edge"`
+	Status       int           `json:"status"`
 }
 
 // Model is the JSON the dashboard fetches.
+//
+// GeneratedAt was the LIVE instance of the defect, not a latent one: it is fed
+// time.Now(), so it has never once emitted the safe whole-second shape, where a
+// field fed a UTC-midnight date always has. That is the triage rule
+// rosterbot-4e1j establishes — judge a timestamp by the call path that supplies
+// it, not by its type.
 type Model struct {
-	GeneratedAt time.Time `json:"generatedAt"`
-	Hits        []Hit     `json:"hits"`
+	GeneratedAt wiretime.Time `json:"generatedAt"`
+	Hits        []Hit         `json:"hits"`
 	// Empty distinguishes "no readers yet" from "failed to load", so the tab
 	// can say the former rather than showing an error. A freshly deployed log
 	// prefix is empty for real and must render cleanly.
@@ -104,7 +121,7 @@ func Parse(gz []byte) ([]Hit, error) {
 			continue
 		}
 		hits = append(hits, Hit{
-			Time:         ts.UTC(),
+			Time:         wiretime.New(ts),
 			ClientIP:     f[fIP],
 			URI:          f[fURI],
 			EdgeLocation: f[fEdge],
@@ -143,8 +160,12 @@ func BuildModel(hits []Hit, limit int, now time.Time) Model {
 	}
 	sort.SliceStable(page, func(i, j int) bool {
 		a, b := page[i], page[j]
-		if !a.Time.Equal(b.Time) {
-			return a.Time.After(b.Time)
+		// .Time() unwraps for the comparison. The truncation wiretime applies
+		// costs nothing here: CloudFront's log format is parsed at second
+		// resolution ("2006-01-02 15:04:05" above), so there is no sub-second
+		// component for the wire shape to drop.
+		if at, bt := a.Time.Time(), b.Time.Time(); !at.Equal(bt) {
+			return at.After(bt)
 		}
 		if a.ClientIP != b.ClientIP {
 			return a.ClientIP < b.ClientIP
@@ -154,7 +175,7 @@ func BuildModel(hits []Hit, limit int, now time.Time) Model {
 	if limit > 0 && len(page) > limit {
 		page = page[:limit]
 	}
-	return Model{GeneratedAt: now.UTC(), Hits: page, Empty: len(page) == 0}
+	return Model{GeneratedAt: wiretime.New(now), Hits: page, Empty: len(page) == 0}
 }
 
 // ReadRecent loads the newest log objects from store until it has at least

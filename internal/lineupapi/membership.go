@@ -1,6 +1,10 @@
 package lineupapi
 
-import "time"
+import (
+	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/wiretime"
+)
 
 // Platform names a fantasy provider.
 //
@@ -76,6 +80,55 @@ func (u *User) AllMemberships() []Membership {
 			m.Writable = false
 		}
 		out = append(out, m)
+	}
+	return out
+}
+
+// MembershipOut is one membership as a CLIENT sees it, and it exists solely so
+// AddedAt can be a wiretime.Time.
+//
+// Membership itself must keep its time.Time: it is stored inside the user
+// record, which FileUserStore writes as JSON and ddbuser writes through
+// attributevalue — which ignores json tags entirely and encodes a struct as a
+// time only when the type is ConvertibleTo(time.Time). wiretime.Time wraps its
+// instant in an UNEXPORTED field, so it is not convertible, and attributevalue
+// falls through to the generic struct path and emits an empty M. Measured: a
+// time.Time field marshals to an S attribute, the wrapper to an M with no
+// members — so converting the stored struct would silently persist no timestamp
+// at all, which is worse than the durable-format churn rosterbot-4e1j rules out.
+// This is the other half of that rule: where a durable record is also served on
+// the wire, convert at the response boundary.
+//
+// Field order mirrors Membership exactly, because encoding/json emits struct
+// order and these keys are an existing contract.
+type MembershipOut struct {
+	Platform    Platform      `json:"platform"`
+	LeagueID    string        `json:"league_id,omitempty"`
+	TeamID      string        `json:"team_id,omitempty"`
+	DisplayName string        `json:"display_name,omitempty"`
+	Writable    bool          `json:"writable"`
+	AddedAt     wiretime.Time `json:"added_at"`
+}
+
+// MembershipsOut projects the stored memberships onto the wire type. Every
+// /v1/memberships response goes through it; handing AllMemberships' result
+// straight to writeJSON is the mistake it exists to remove.
+//
+// Non-nil for an empty input, so the JSON is [] rather than null — the three
+// handlers all report the caller's whole list, and a client distinguishing
+// "no leagues" from "field missing" would be reading a difference that means
+// nothing.
+func MembershipsOut(ms []Membership) []MembershipOut {
+	out := make([]MembershipOut, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, MembershipOut{
+			Platform:    m.Platform,
+			LeagueID:    m.LeagueID,
+			TeamID:      m.TeamID,
+			DisplayName: m.DisplayName,
+			Writable:    m.Writable,
+			AddedAt:     wiretime.New(m.AddedAt),
+		})
 	}
 	return out
 }

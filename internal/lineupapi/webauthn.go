@@ -15,6 +15,8 @@ import (
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
+
+	"github.com/nixon-commits/rosterbot/internal/wiretime"
 )
 
 const (
@@ -385,8 +387,15 @@ type passkeyOut struct {
 	ID string `json:"id"`
 	// Name and CreatedAt come from the credential's meta key (CredentialMeta);
 	// a passkey registered before metadata existed carries neither.
-	Name      string    `json:"name,omitzero"`
-	CreatedAt time.Time `json:"created_at,omitzero"`
+	//
+	// CreatedAt is wiretime.Time rather than the stored CredentialMeta's
+	// time.Time — the conversion belongs HERE, at the response boundary,
+	// because CredentialMeta is also a durable record and ddbuser marshals it
+	// through attributevalue, where the wrapper would encode as an empty map
+	// rather than a timestamp (see MembershipOut for the measurement)
+	// (rosterbot-4e1j). omitzero still fires: wiretime.Time carries its own IsZero.
+	Name      string        `json:"name,omitzero"`
+	CreatedAt wiretime.Time `json:"created_at,omitzero"`
 }
 
 // sessionUser resolves the logged-in user for the passkey-management routes.
@@ -429,7 +438,7 @@ func (cfg Config) handleListPasskeys(w http.ResponseWriter, r *http.Request) {
 	for _, c := range creds {
 		row := passkeyOut{ID: CredentialKey(c.ID)}
 		if m, ok := metas[CredentialKey(c.ID)]; ok {
-			row.Name, row.CreatedAt = m.Name, m.CreatedAt
+			row.Name, row.CreatedAt = m.Name, wiretime.New(m.CreatedAt)
 		}
 		out = append(out, row)
 	}

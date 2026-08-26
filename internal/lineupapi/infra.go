@@ -13,6 +13,7 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/analysis"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
+	"github.com/nixon-commits/rosterbot/internal/wiretime"
 )
 
 // Health is a per-artifact verdict, ordered from best to worst.
@@ -121,11 +122,21 @@ type ArtifactStatus struct {
 	NoBackfill  bool   `json:"no_backfill,omitempty"`
 	Partitioned bool   `json:"partitioned,omitempty"`
 
-	Objects       int       `json:"objects"`
-	Bytes         int64     `json:"bytes"`
-	LastModified  time.Time `json:"last_modified,omitempty"`
-	AgeSeconds    float64   `json:"age_seconds,omitempty"`
-	MaxAgeSeconds float64   `json:"max_age_seconds,omitempty"`
+	Objects int   `json:"objects"`
+	Bytes   int64 `json:"bytes"`
+
+	// LastModified is wiretime.Time even though PrefixListing.LastModified —
+	// the value it is copied from — stays a real time.Time. That split is the
+	// point: the listing's timestamp comes off S3 object metadata and is
+	// arithmetic input (artifactHealth subtracts it from now), while this copy
+	// is display, read by a client. Converting the listing instead would push a
+	// wire concern into both InfraLister implementations and truncate the
+	// operand of the staleness comparison; converting HERE, at the response
+	// boundary, is the shape rosterbot-4e1j prescribes for a timestamp that is
+	// genuinely a time.Time upstream.
+	LastModified  wiretime.Time `json:"last_modified,omitempty"`
+	AgeSeconds    float64       `json:"age_seconds,omitempty"`
+	MaxAgeSeconds float64       `json:"max_age_seconds,omitempty"`
 
 	// Truncated mirrors PrefixListing.Truncated: the listing this row is built
 	// from stopped before enumerating the whole prefix. Health is forced to
@@ -192,7 +203,11 @@ type ArtifactStatus struct {
 // exists to detect, and could report "all healthy" while the job that writes it
 // is the thing that died.
 type InfraStatus struct {
-	GeneratedAt time.Time        `json:"generated_at"`
+	// wiretime.Time, not time.Time: `now` here is always the request moment
+	// (handleInfra passes time.Now()), so a raw field emits a variable-length
+	// RFC3339Nano fraction on every single response — the live half of
+	// rosterbot-4e1j rather than the latent half.
+	GeneratedAt wiretime.Time    `json:"generated_at"`
 	Artifacts   []ArtifactStatus `json:"artifacts"`
 }
 
@@ -407,7 +422,7 @@ func buildStatus(ctx context.Context, lister InfraLister, artifacts []layout.Art
 // behaviour, so the plain entry point stays honest for the single-tenant cases
 // (`serve`, and every test that has one tenant by construction).
 func buildStatusFor(ctx context.Context, lister InfraLister, artifacts []layout.Artifact, now time.Time, filter tenantFilter) InfraStatus {
-	st := InfraStatus{GeneratedAt: now, Artifacts: make([]ArtifactStatus, 0, len(artifacts))}
+	st := InfraStatus{GeneratedAt: wiretime.New(now), Artifacts: make([]ArtifactStatus, 0, len(artifacts))}
 	// A prefix can be needed twice — once as its own row, once as another
 	// artifact's RecoveryInput — and listing it twice would double the S3 calls
 	// for no new information.
@@ -434,7 +449,8 @@ func buildStatusFor(ctx context.Context, lister InfraLister, artifacts []layout.
 			continue
 		}
 
-		row.Objects, row.Bytes, row.LastModified = l.Objects, l.Bytes, l.LastModified
+		row.Objects, row.Bytes = l.Objects, l.Bytes
+		row.LastModified = wiretime.New(l.LastModified)
 		row.Subkeys = l.Subkeys
 		row.Truncated = l.Truncated
 		if !l.LastModified.IsZero() {

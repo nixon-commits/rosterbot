@@ -3,7 +3,8 @@ package lineupapi
 import (
 	"net/http"
 	"sort"
-	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/wiretime"
 )
 
 // TenantSummary is one tenant's row on the admin Tenants tab.
@@ -38,7 +39,10 @@ type TenantSummary struct {
 	ConnStatus ConnStatus `json:"conn_status,omitempty"`
 	ConnError  string     `json:"conn_error,omitempty"`
 
-	LastVerifiedAt time.Time `json:"last_verified_at,omitempty"`
+	// LastVerifiedAt is wiretime.Time for the reason spelled out on
+	// FantraxStatus.LastVerifiedAt (me.go): the same stored value, fed by the
+	// connect task's time.Now(), reaching the same client (rosterbot-4e1j).
+	LastVerifiedAt wiretime.Time `json:"last_verified_at,omitempty"`
 }
 
 // TenantsResponse is the admin tab's payload.
@@ -94,7 +98,7 @@ func (cfg Config) handleTenants(w http.ResponseWriter, r *http.Request) {
 		if cfg.Connections != nil {
 			if conn, ok, cerr := cfg.Connections.GetConnection(r.Context(), u.ID); cerr == nil && ok {
 				s.ConnStatus, s.ConnError = conn.Status, conn.LastError
-				s.LastVerifiedAt = conn.LastVerifiedAt
+				s.LastVerifiedAt = wiretime.New(conn.LastVerifiedAt)
 				if s.TeamID == "" {
 					s.TeamID = conn.TeamID
 				}
