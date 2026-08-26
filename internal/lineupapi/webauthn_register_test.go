@@ -2,7 +2,8 @@ package lineupapi
 
 import (
 	"context"
-	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -256,13 +257,34 @@ func jsonPost(t *testing.T, path string, body map[string]any, cookies []*http.Co
 // AuthenticatorData" with nothing pointing at the key.
 func fabricateAttestation(t *testing.T, rpID, origin, challenge string, credID []byte) map[string]any {
 	t.Helper()
+	body, _ := fabricateAttestationWithKey(t, rpID, origin, challenge, credID)
+	return body
+}
 
-	key, err := ecdh.P256().GenerateKey(rand.Reader)
+// fabricateAttestationWithKey is fabricateAttestation plus the private key the
+// authenticator kept, so a later assertion can actually be signed.
+//
+// The key is ECDSA rather than ECDH — the same P-256 point either way, but only
+// ecdsa can sign, and an assertion the server can verify is the whole point of
+// having the key at all. Registration alone never needed it, which is why the
+// original generated an ecdh key and threw it away.
+func fabricateAttestationWithKey(t *testing.T, rpID, origin, challenge string, credID []byte) (map[string]any, *ecdsa.PrivateKey) {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Uncompressed point: 0x04 || x(32) || y(32).
-	point := key.PublicKey().Bytes()
+	// COSE wants each coordinate as a fixed-width 32-byte big-endian integer.
+	// Bytes() returns the uncompressed point 0x04 || x(32) || y(32), which is
+	// already fixed-width, so slicing it needs no padding step. Reading
+	// PublicKey.X/.Y instead is both deprecated (Go 1.26) and a trap:
+	// big.Int.Bytes() left-trims a leading zero byte and yields 31, which is a
+	// valid-looking key that verifies nothing.
+	point, err := key.PublicKey.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
 	coseKey, err := webauthncbor.Marshal(webauthncose.EC2PublicKeyData{
 		PublicKeyData: webauthncose.PublicKeyData{
 			KeyType: int64(webauthncose.EllipticKey),
@@ -322,7 +344,7 @@ func fabricateAttestation(t *testing.T, rpID, origin, challenge string, credID [
 			"clientDataJSON":    b64(clientData),
 			"attestationObject": b64(attObj),
 		},
-	}
+	}, key
 }
 
 // productionRPOrigins is the exact value infra.go publishes into
