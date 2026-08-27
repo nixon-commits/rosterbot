@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/pmurley/go-fantrax/auth_client"
 )
@@ -198,7 +199,6 @@ func scorePitcherRoster(
 	projSrc projections.PitcherSource,
 	scoring fantrax.ScoringWeights,
 ) []ScoredPitcher {
-	pps, hasPPS := projSrc.(projections.PitcherPtsPerGameSource)
 	hasProbableData := len(probableStarters) > 0
 
 	scored := make([]ScoredPitcher, 0, len(roster))
@@ -209,7 +209,6 @@ func scorePitcherRoster(
 		}
 
 		teamPlays := playingToday[p.MLBTeam]
-		normalizedName := projections.NormalizeName(p.Name)
 
 		spEligible := SPEligiblePlayer(p)
 
@@ -218,7 +217,10 @@ func scorePitcherRoster(
 
 		if spEligible {
 			if hasProbableData {
-				if team, ok := probableStarters[normalizedName]; ok && team == p.MLBTeam {
+				// A TeamMismatch (announced for another club — a lagging
+				// trade) deliberately falls through to the team-plays branch,
+				// the conservative reading the shared predicate documents.
+				if playername.MatchProbable(p.Name, p.MLBTeam, probableStarters) == playername.ConfirmedStarter {
 					// SP listed as probable starter: full value.
 					hasGame = true
 					isStarter = true
@@ -239,23 +241,9 @@ func scorePitcherRoster(
 			hasGame = teamPlays
 		}
 
-		// Get projection.
-		var pts float64
-		found := false
-
-		if hasPPS {
-			if blended, ok := pps.GetPitcherPtsPerGame(p.Name, p.MLBTeam, scoring); ok {
-				pts = blended
-				found = true
-			}
-		}
-
-		if !found {
-			proj, ok := projSrc.GetPitcherProjection(p.Name, p.MLBTeam)
-			if ok && proj.G > 0 {
-				pts = projections.PitcherExpectedPtsFromProj(proj, scoring)
-			}
-		}
+		// Get projection. A false from the accessor leaves pts at 0 — a
+		// pitcher this source cannot value scores nothing, as before.
+		pts, _ := projections.PitcherPointsPerGame(projSrc, p.Name, p.MLBTeam, scoring)
 
 		scored = append(scored, ScoredPitcher{
 			Player:      p,

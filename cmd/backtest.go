@@ -9,7 +9,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/spf13/cobra"
@@ -144,7 +144,7 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	report.Gate = gate
 	report.Shape = shape
 
-	lineupapi.RecordOutput("backtest", backtestToWireResult(report))
+	jobwire.RecordOutput("backtest", backtestToWireResult(report))
 
 	if backtestJSON {
 		enc := json.NewEncoder(os.Stdout)

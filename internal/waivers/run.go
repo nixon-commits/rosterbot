@@ -12,10 +12,11 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	positionspkg "github.com/nixon-commits/rosterbot/internal/positions"
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/pushover"
 	"github.com/nixon-commits/rosterbot/internal/statcast"
 	"github.com/pmurley/go-fantrax/models"
 	"golang.org/x/sync/errgroup"
@@ -175,7 +176,7 @@ func Run(ctx context.Context, ft FantraxClient, today time.Time, opts Options) e
 		report.Top = candidates
 	}
 
-	lineupapi.RecordOutput("waivers", toWireResult(report))
+	jobwire.RecordOutput("waivers", toWireResult(report))
 
 	printReport(report)
 
@@ -614,42 +615,29 @@ func signalEmoji(s statcast.Signal) string {
 	}
 }
 
-// formatPushover builds an HTML-friendly body that fits Pushover's 1024-char
-// limit. Each candidate is two lines: action (add → drop + FPG gain) and
-// evidence (stat details), separated by a blank line for scannability.
+// formatPushover builds an HTML-friendly body that fits pushover.MaxMessageLen
+// on whole candidate blocks (via pushover.Builder — this used to budget
+// against a hand-rolled 1000 while the "+N more" suffix checked 1024). Each
+// candidate is two lines: action (add → drop + FPG gain) and evidence (stat
+// details), separated by a blank line for scannability. The suffix is
+// best-effort: on a body filled to the last byte it is dropped rather than
+// splitting anything.
 func formatPushover(r Report) string {
 	if len(r.Top) == 0 {
 		return ""
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "<b>Waiver Picks · %s</b>\n", r.Date.Format("Jan 2"))
+	var b pushover.Builder
+	b.Add(fmt.Sprintf("<b>Waiver Picks · %s</b>\n", r.Date.Format("Jan 2"))) // always fits an empty builder
 	for _, c := range r.Top {
 		action := fmt.Sprintf("\n%s <b>%s</b> (%s) → drop %s · +%.2f FPG\n%s\n",
-			signalEmoji(c.Signal), shortName(c.Name), c.MLBTeam,
-			shortName(c.DropName), c.Gap, candidateDetail(c))
-		if b.Len()+len(action) > 1000 {
+			signalEmoji(c.Signal), pushover.ShortName(c.Name), c.MLBTeam,
+			pushover.ShortName(c.DropName), c.Gap, candidateDetail(c))
+		if !b.Add(action) {
 			break
 		}
-		b.WriteString(action)
 	}
 	if r.Total > len(r.Top) {
-		extra := fmt.Sprintf("+%d more", r.Total-len(r.Top))
-		if b.Len()+len(extra) <= 1024 {
-			b.WriteString(extra)
-		}
+		b.Add(fmt.Sprintf("+%d more", r.Total-len(r.Top)))
 	}
 	return b.String()
-}
-
-// shortName collapses "First Last" to "F. Last" to save Pushover bytes.
-func shortName(name string) string {
-	parts := strings.Fields(name)
-	if len(parts) < 2 {
-		return name
-	}
-	first := []rune(parts[0])
-	if len(first) == 0 {
-		return name
-	}
-	return string(first[:1]) + ". " + strings.Join(parts[1:], " ")
 }

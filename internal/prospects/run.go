@@ -15,10 +15,11 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/pushover"
 	"github.com/pmurley/go-fantrax/models"
 	"golang.org/x/sync/errgroup"
 )
@@ -64,11 +65,30 @@ func saveTxnCursor(date time.Time) error {
 // hkbRanks builds a name → rank map from HKB players.
 // Includes all non-MLB players with a rank — Fantrax minors designation
 // is the source of truth for who is a prospect, HKB just enriches data.
+//
+// Ranks resolve through hkb.Lookup rather than direct map assignment: the
+// unconditional write this replaced was last-write-wins on a normalized-name
+// collision — the pre-rosterbot-5z7 join bug restated (the Team Value
+// Store's Namesake Re-baseline), where a contested minors name silently got
+// whichever HKB row scraped last and rendered a confident wrong rank. A
+// contested key is now omitted; an unranked prospect beats a misranked one.
+//
+// The Level filter runs BEFORE the lookup is built, and that order is
+// load-bearing: an MLB veteran sharing a prospect's key (the luis garcia
+// class) must not contest it — filtering first keeps that case resolving,
+// where a lookup over the full list would decline it.
 func hkbRanks(players []hkb.Player) map[string]int {
-	m := make(map[string]int)
+	prospects := make([]hkb.Player, 0, len(players))
 	for _, p := range players {
 		if p.AssetType == "PLAYER" && p.Level != "MLB" && p.Rank > 0 {
-			m[projections.NormalizeName(p.Name)] = p.Rank
+			prospects = append(prospects, p)
+		}
+	}
+	lookup := hkb.BuildLookup(prospects)
+	m := make(map[string]int, len(prospects))
+	for _, p := range prospects {
+		if found, ok := lookup.Find(p.Name); ok {
+			m[projections.NormalizeName(p.Name)] = found.Rank
 		}
 	}
 	return m
@@ -330,7 +350,7 @@ func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Confi
 		Upgrades: upgradeSets,
 	}
 
-	lineupapi.RecordOutput("prospects", toWireResult(report))
+	jobwire.RecordOutput("prospects", toWireResult(report))
 
 	printReport(report, rosterRanked, sourceNames)
 
@@ -669,40 +689,41 @@ func alertEmoji(kind AlertKind) string {
 // and the top upgrade recommendation. Returns "" when there's nothing to send.
 // Two-line structure per item: emoji + bold name + team on line 1, detail on line 2.
 func formatProspectPushover(r Report) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "<b>Prospects · %s</b>", r.Date.Format("Jan 2"))
+	var b pushover.Builder
+	b.Add(fmt.Sprintf("<b>Prospects · %s</b>", r.Date.Format("Jan 2"))) // always fits an empty builder
 
 	for _, a := range r.Alerts {
 		if a.Priority == "low" {
 			continue
 		}
-		name := shortProspectName(a.PlayerName)
+		name := pushover.ShortName(a.PlayerName)
 		team := a.MLBTeam
 		if team == "" {
 			team = "???"
 		}
 		block := fmt.Sprintf("\n\n%s <b>%s</b> (%s)\n%s",
 			alertEmoji(a.Kind), name, team, a.Detail)
-		if b.Len()+len(block) > 1000 {
+		if !b.Add(block) {
 			break
 		}
-		b.WriteString(block)
 	}
 
-	// Top upgrade from each source (one per source).
+	// Top upgrade from each source (one per source). A refused alert block
+	// above does not close the builder, so a smaller upgrade line may still
+	// fit — pushover.Builder documents that non-latching property for exactly
+	// this two-section shape.
 	for _, set := range r.Upgrades {
 		if len(set.Candidates) == 0 {
 			continue
 		}
 		u := set.Candidates[0]
 		line := fmt.Sprintf("\n\n📈 drop %s #%d → <b>%s</b> #%d (+%d) %s",
-			shortProspectName(u.Drop.Name), u.Drop.Rank,
-			shortProspectName(u.Add.Name), u.Add.Rank,
+			pushover.ShortName(u.Drop.Name), u.Drop.Rank,
+			pushover.ShortName(u.Add.Name), u.Add.Rank,
 			u.RankGap, set.Source)
-		if b.Len()+len(line) > 1000 {
+		if !b.Add(line) {
 			break
 		}
-		b.WriteString(line)
 	}
 
 	// Nothing beyond the header means no actionable alerts.
@@ -710,18 +731,6 @@ func formatProspectPushover(r Report) string {
 		return ""
 	}
 	return b.String()
-}
-
-func shortProspectName(name string) string {
-	parts := strings.Fields(name)
-	if len(parts) < 2 {
-		return name
-	}
-	first := []rune(parts[0])
-	if len(first) == 0 {
-		return name
-	}
-	return string(first[:1]) + ". " + strings.Join(parts[1:], " ")
 }
 
 // writeGHASummary — GHA markdown output

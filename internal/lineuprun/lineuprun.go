@@ -25,7 +25,6 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/progress"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/roster"
-	"github.com/nixon-commits/rosterbot/internal/schedule"
 	"golang.org/x/term"
 )
 
@@ -101,6 +100,46 @@ type Options struct {
 	// of what was sent, repeating is the safe direction — a duplicate push is
 	// recoverable, a silently dropped one is the failure this alert exists for.
 	ILStartMarkers ilStartMarkers
+
+	// The five dependency seams. Each nil field is resolved to its production
+	// implementation by withDefaults, called once at the top of Run — the
+	// nil-means-default idiom Out already uses, extended from "where output
+	// goes" to "where input comes from". cmd never sets them; TestRun sets all
+	// five. Setting SOME of them is legal but easy to get wrong: a fake stack
+	// that forgets one field silently reaches the real network for that
+	// dependency, so tests build the full set through one helper rather than
+	// hand-assembling a partial one.
+
+	// Schedule serves MLB schedule facts (games, probables, locks, venues,
+	// benchings) to the roster-alert, GS-budget and per-date optimize phases.
+	// Nil constructs the real schedule.Client with CacheDir set to the package
+	// cacheDir — matching Run's previous inline construction exactly,
+	// including that the cache dir is set regardless of NoCache (a
+	// pre-existing quirk the seam preserves, not fixes).
+	Schedule ScheduleClient
+
+	// LoadBattingProjections and LoadPitcherProjections load the FanGraphs
+	// projection sources the run blends and optimizes against. Nil defaults to
+	// projections.LoadBattingProjections / LoadPitcherProjections. Overriding
+	// them is how a test substitutes fixture-backed sources (see
+	// projections.NewFanGraphsSourceFromEntries) without a live fetch. Note
+	// Run still calls projections.SetProjectionSystem up front — a package
+	// global — so tests that inject these must not run t.Parallel() against
+	// each other; when internal/projections someday takes the system as a real
+	// parameter, only these defaults change, not Run or any fake.
+	LoadBattingProjections func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error)
+	LoadPitcherProjections func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error)
+
+	// FetchHandedness resolves MLBAM IDs to bats/throws for matchup
+	// adjustments. Nil defaults to projections.FetchMLBHandednessCached — the
+	// field names the operation, not the caching behind it.
+	FetchHandedness func(mlbamIDs map[string]int, cacheDir string, ttl time.Duration) (bats, throws map[string]string, err error)
+
+	// LoadHKBMeta loads the HKB dynasty age/value enrichment for the published
+	// lineup JSON. Nil defaults to this package's LoadHKBMeta. Like the
+	// enrichment itself it is only ever called when Publisher is non-nil, so a
+	// test that leaves Publisher nil never needs to fake it.
+	LoadHKBMeta func(cacheDir string) (map[string]lineupapi.Dynasty, error)
 
 	// Out is where the run's human-readable output goes — the per-date board,
 	// the planned-moves block, the warning lines and the apply log. The caller
@@ -193,6 +232,10 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	if err := projections.SetProjectionSystem(opts.ProjectionSystem); err != nil {
 		return Result{}, err
 	}
+	// Resolve the five dependency seams before anything reads them; every nil
+	// field becomes its production implementation and nothing downstream needs
+	// its own nil check. Keep this ahead of any dependency use.
+	opts = opts.withDefaults()
 	out := opts.Out
 	if out == nil {
 		out = os.Stdout
@@ -222,7 +265,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	}
 
 	// --- Load projections early to determine system for header ---
-	fgSrc, batLoadResult, err := projections.LoadBattingProjections(opts.ProjectionSystem, cacheDir, projTTL)
+	fgSrc, batLoadResult, err := opts.LoadBattingProjections(opts.ProjectionSystem, cacheDir, projTTL)
 	if err != nil {
 		msg := fmt.Sprintf("batting projections unavailable: %v", err)
 		sendOptimizeNotify(ctx, msg)
@@ -231,7 +274,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	if batLoadResult.NoData {
 		prog.Logf("WARNING: batting projections unavailable — running on schedule + recent stats only")
 	}
-	fgPitSrc, pitLoadResult, err := projections.LoadPitcherProjections(opts.ProjectionSystem, cacheDir, projTTL)
+	fgPitSrc, pitLoadResult, err := opts.LoadPitcherProjections(opts.ProjectionSystem, cacheDir, projTTL)
 	if err != nil {
 		msg := fmt.Sprintf("pitching projections unavailable: %v", err)
 		sendOptimizeNotify(ctx, msg)
@@ -249,9 +292,10 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 
 	// Hoisted above the roster-alert block: CheckILStarters needs probables,
 	// and the alert has to run before the per-date optimize pass so an
-	// operator hears about a lost start while it is still recoverable.
-	schedClient := schedule.NewClient()
-	schedClient.CacheDir = cacheDir
+	// operator hears about a lost start while it is still recoverable. One
+	// value feeds all three schedule-consuming phases, so a shared underlying
+	// fetch (the sticky probables cache) is reused rather than re-fetched.
+	schedClient := opts.Schedule
 
 	// --- Roster alerts (if requested) ---
 	if opts.CheckRoster {
@@ -378,7 +422,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	}
 	prog.Start("Handedness")
 	if len(allMLBAMIDs) > 0 {
-		bats, throws, err := projections.FetchMLBHandednessCached(allMLBAMIDs, cacheDir, staticTTL)
+		bats, throws, err := opts.FetchHandedness(allMLBAMIDs, cacheDir, staticTTL)
 		if err != nil {
 			prog.Logf("WARNING: MLB handedness unavailable (%v) — matchup adjustments disabled", err)
 			prog.Warn("Handedness", "unavailable — matchup adjustments disabled")
@@ -503,7 +547,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	var hkbMeta map[string]lineupapi.Dynasty
 	if opts.Publisher != nil {
 		var err error
-		if hkbMeta, err = LoadHKBMeta(cacheDir); err != nil {
+		if hkbMeta, err = opts.LoadHKBMeta(cacheDir); err != nil {
 			prog.Logf("WARNING: HKB values unavailable — publishing lineup without age/value: %v", err)
 		}
 	}

@@ -325,15 +325,3 @@ func TestWorstRosteredHitter(t *testing.T) {
 		t.Errorf("want Bench Guy as worst, got %q (FPG %.2f)", got.Name, got.FPG)
 	}
 }
-
-func TestShortName(t *testing.T) {
-	if got := shortName("Juan Soto"); got != "J. Soto" {
-		t.Errorf("shortName: got %q", got)
-	}
-	if got := shortName("Madonna"); got != "Madonna" {
-		t.Errorf("single-name shortName: got %q", got)
-	}
-	if got := shortName("Vladimir Guerrero Jr"); got != "V. Guerrero Jr" {
-		t.Errorf("multi-word: got %q", got)
-	}
-}

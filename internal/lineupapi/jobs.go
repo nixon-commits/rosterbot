@@ -383,10 +383,22 @@ func JobNames() []string {
 }
 
 // RunStore is the read side of the run ledger (GET /v1/runs, /v1/runs/{id}).
+//
+// Get resolves runs within the newest RunLookback ledger records ONLY; an
+// older run reads as not-found. The window is part of the interface, not an
+// adapter detail: the S3 adapter bounds its scan (run-detail lookups are for
+// runs just triggered or visible in the list, and an unbounded walk would
+// grow with the season), and before the window was stated here the file
+// adapter scanned everything — so a run resolvable in local `serve` 404'd in
+// production. runstoretest.Run holds every implementation to it from both
+// sides.
 type RunStore interface {
 	List(ctx context.Context, limit int) ([]Run, error)
 	Get(ctx context.Context, id string) (*RunDetail, bool, error)
 }
+
+// RunLookback is RunStore.Get's resolution window, in ledger records.
+const RunLookback = 200
 
 // JobRunner launches a job asynchronously (ECS RunTask) and returns the run id.
 //

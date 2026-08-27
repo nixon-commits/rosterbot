@@ -27,7 +27,7 @@ type Snapshot struct {
 // pipeline's Start/Done sequence and the phaseWeight keys.
 var PipelinePhases = []string{"Roster", "Projections", "Recent stats", "Pitcher info", "Handedness", "GS budget", "Optimize"}
 
-// Recorder is a nil-safe global hook (mirrors lineupapi.OutputRecorder). cmd
+// Recorder is a nil-safe global hook (mirrors jobwire.OutputRecorder). cmd
 // installs it to write runs/<RUN_ID>/progress.json. Unset => no-op.
 var Recorder func(Snapshot)
 

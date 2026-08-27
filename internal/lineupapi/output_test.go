@@ -3,14 +3,15 @@ package lineupapi
 import (
 	"context"
 	"encoding/json"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
 func TestMarshalOutputEnvelope(t *testing.T) {
-	data := WaiversResult{
-		Picks: []WaiverPickOut{{
+	data := jobwire.WaiversResult{
+		Picks: []jobwire.WaiverPickOut{{
 			Name: "Jane Doe", Team: "BAL", Pos: "OF", Signal: "HOT",
 			ProjectedFPG: 4.2, Rank: 1,
 		}},
@@ -30,7 +31,7 @@ func TestMarshalOutputEnvelope(t *testing.T) {
 	if env.Type != "waivers" {
 		t.Fatalf("type = %q, want waivers", env.Type)
 	}
-	var got WaiversResult
+	var got jobwire.WaiversResult
 	if err := json.Unmarshal(env.Data, &got); err != nil {
 		t.Fatalf("unmarshal data: %v", err)
 	}
@@ -45,7 +46,7 @@ func TestFileOutputStoreRoundTrip(t *testing.T) {
 	if _, ok, _ := s.GetOutput(context.Background(), "run-1"); ok {
 		t.Fatal("expected miss before write")
 	}
-	body, _ := MarshalOutput("gs-check", GSCheckResult{Violations: []GSViolationOut{{Team: "X", Kind: "over", Used: 6, Limit: 5, OverBy: 1}}})
+	body, _ := MarshalOutput("gs-check", jobwire.GSCheckResult{Violations: []jobwire.GSViolationOut{{Team: "X", Kind: "over", Used: 6, Limit: 5, OverBy: 1}}})
 	if err := s.PutOutput(context.Background(), "run-1", body); err != nil {
 		t.Fatalf("put: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestFileOutputStore_NormalIDStillRoundTrips(t *testing.T) {
 	s := NewFileOutputStore(dir)
 	ctx := context.Background()
 
-	body, _ := MarshalOutput("waivers", WaiversResult{Total: 0})
+	body, _ := MarshalOutput("waivers", jobwire.WaiversResult{Total: 0})
 	if err := s.PutOutput(ctx, "run123", body); err != nil {
 		t.Fatalf("put: %v", err)
 	}

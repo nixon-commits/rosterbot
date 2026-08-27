@@ -59,6 +59,12 @@ _Avoid_: period resolver, period lookup, anchor.
 The inclusive calendar-date span of one H2H matchup, derived per-team by grouping consecutive same-opponent entries from `GetAllMatchups` (`MatchupWeekBounds`). Measured 2026-07-25, this agrees with the Weekly Period list **exactly** — same count, same bounds, same numbering, including both irregular weeks — so it is the *same concept reached by a second route*, not a rival axis. Prefer the Weekly Period list when you need Fantrax's own number (GS limits); prefer Matchup Week when you need date bounds without a standings fetch. If they ever disagree, the standings caption is authoritative.
 _Avoid_: matchup period, week bounds, fantasy week.
 
+### Schedule
+
+**Confirmed Starter**:
+A pitcher MLB's probables feed names as starting *for his own club* on a date — the only start the optimizer values at full weight and the GS forecast counts exactly. Classified by `playername.MatchProbable(name, club, probables)`, the single shared join (NotProbable / ConfirmedStarter / TeamMismatch); a TeamMismatch — name announced, club disagrees — signals a lagging trade and is surfaced by the IL-start check rather than dropped.
+_Avoid_: probable (the feed lists probables; confirmation is the club-equality check), starter flag, is-starting.
+
 ### Statcast
 
 **Statcast Bundle**:

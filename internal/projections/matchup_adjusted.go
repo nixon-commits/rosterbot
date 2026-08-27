@@ -26,7 +26,6 @@ type OpposingPitcher struct {
 // and opposing pitcher quality multipliers to hitter pts/game values.
 type MatchupAdjustedSource struct {
 	inner            Source
-	innerPPS         PtsPerGameSource
 	opposingPitchers map[string]OpposingPitcher // batting team abbr → opposing SP
 	hitterBats       map[string]string          // NormalizeName(name) → "R"/"L"/"S"
 	leagueAvgFIP     float64
@@ -42,10 +41,8 @@ func NewMatchupAdjustedSource(
 	hitterBats map[string]string,
 	leagueAvgFIP float64,
 ) *MatchupAdjustedSource {
-	pps, _ := inner.(PtsPerGameSource)
 	return &MatchupAdjustedSource{
 		inner:            inner,
-		innerPPS:         pps,
 		opposingPitchers: opposingPitchers,
 		hitterBats:       hitterBats,
 		leagueAvgFIP:     leagueAvgFIP,
@@ -101,17 +98,9 @@ func (s *MatchupAdjustedSource) GetProjection(name, mlbTeam string) (*Projection
 // The combined multiplier is clamped to [0.80, 1.15].
 // Falls back gracefully when opposing pitcher, handedness, or FIP data is missing.
 func (s *MatchupAdjustedSource) GetPtsPerGame(name, mlbTeam string, scoring fantrax.ScoringWeights) (float64, bool) {
-	var basePts float64
-	var ok bool
-	if s.innerPPS != nil {
-		basePts, ok = s.innerPPS.GetPtsPerGame(name, mlbTeam, scoring)
-	}
+	basePts, ok := PointsPerGame(s.inner, name, mlbTeam, scoring)
 	if !ok {
-		proj, projOK := s.inner.GetProjection(name, mlbTeam)
-		if !projOK || proj.G <= 0 {
-			return 0, false
-		}
-		basePts = ExpectedPtsFromProj(proj, scoring)
+		return 0, false
 	}
 
 	opp, oppOK := s.opposingPitchers[mlbTeam]

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/hkb"
+	"github.com/nixon-commits/rosterbot/internal/pushover"
 	"github.com/nixon-commits/rosterbot/internal/statcast"
 )
 
@@ -142,9 +143,10 @@ func writeDropsWatch(b *strings.Builder, drops []SidePlayer) {
 
 // FormatPushover renders a compact digest grouped by processed date: a date
 // header, then one stacked block per move (team + net on a line, each added/
-// dropped player indented beneath). Whole move blocks are appended until the
-// next would exceed Pushover's 1024-char limit — byte-slicing would split
-// multibyte UTF-8 names, so we break on whole blocks instead.
+// dropped player indented beneath). Whole blocks are appended through
+// pushover.Builder until the next would exceed pushover.MaxMessageLen —
+// byte-slicing would split multibyte UTF-8 names, which is exactly what the
+// builder exists to prevent.
 // dateDivider is a horizontal rule drawn above each date group (after the
 // first) to visually separate days. Box-drawing chars survive Pushover's
 // whitespace collapsing and read as a rule rather than a drop "-" line.
@@ -152,7 +154,7 @@ const dateDivider = "──────────"
 
 func FormatPushover(moves []Move) string {
 	groups, dates := groupByDate(moves)
-	var b strings.Builder
+	var b pushover.Builder
 	first := true
 outer:
 	for _, d := range dates {
@@ -160,17 +162,14 @@ outer:
 		if !first {
 			header = dateDivider + "\n" + header
 		}
-		if b.Len()+len(header) > 1024 {
+		if !b.Add(header) {
 			break
 		}
-		b.WriteString(header)
 		first = false
 		for _, t := range aggregateByTeam(groups[d]) {
-			line := teamBlock(t)
-			if b.Len()+len(line) > 1024 {
+			if !b.Add(teamBlock(t)) {
 				break outer
 			}
-			b.WriteString(line)
 		}
 	}
 	return b.String()
