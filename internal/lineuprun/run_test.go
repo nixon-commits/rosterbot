@@ -33,6 +33,14 @@ type fakeLineupClient struct {
 
 	applies     []appliedLineup
 	invalidated []fantrax.DailyPeriod
+
+	// GS-budget inputs. Every zero value reproduces the pre-existing
+	// behaviour exactly — no week bounds, no periods, no limits — so the
+	// idempotency test above is untouched by their presence.
+	weekStart, weekEnd time.Time
+	periods            []fantrax.ScoringPeriod
+	gsMin, gsMax       *int
+	usedGS             int
 }
 
 func (f *fakeLineupClient) copyOf(ps []fantrax.Player) []fantrax.Player {
@@ -64,10 +72,10 @@ func (f *fakeLineupClient) GetPitcherScoringWeights() (fantrax.ScoringWeights, e
 }
 func (f *fakeLineupClient) GetCurrentPeriod() (fantrax.DailyPeriod, error) { return 1, nil }
 func (f *fakeLineupClient) GetMatchupWeekBounds(_, _ time.Time) (time.Time, time.Time, error) {
-	return time.Time{}, time.Time{}, nil
+	return f.weekStart, f.weekEnd, nil
 }
 func (f *fakeLineupClient) GetScoringPeriodsAndTeams() ([]fantrax.ScoringPeriod, map[string]string, map[string]string, error) {
-	return nil, nil, nil, nil
+	return f.periods, nil, nil, nil
 }
 func (f *fakeLineupClient) DailyPeriodFor(_, _ time.Time) fantrax.DailyPeriod { return f.period }
 func (f *fakeLineupClient) GetHitterRosterForPeriod(_ fantrax.DailyPeriod) ([]fantrax.Player, error) {
@@ -77,10 +85,10 @@ func (f *fakeLineupClient) GetPitcherRosterForPeriod(_ fantrax.DailyPeriod) ([]f
 	return f.copyOf(f.pitchers), nil
 }
 func (f *fakeLineupClient) GetGSLimits(_ string, _ fantrax.WeeklyPeriod) (*int, *int, error) {
-	return nil, nil, nil
+	return f.gsMin, f.gsMax, nil
 }
 func (f *fakeLineupClient) GetTeamGS(_, _ string, _ fantrax.ScoringPeriod, _, _ time.Time, _ int, _ bool) (int, []fantrax.PitcherStart, error) {
-	return 0, nil, nil
+	return f.usedGS, nil, nil
 }
 func (f *fakeLineupClient) GetRecentPitcherStats(_ fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error) {
 	return map[string]fantrax.RecentStat{}, nil
@@ -254,5 +262,122 @@ func TestRun_SecondRunAppliesNothing(t *testing.T) {
 	}
 	if len(ft.applies) != 1 {
 		t.Fatalf("second run applied a lineup: ApplyLineup calls = %d, want still 1", len(ft.applies))
+	}
+}
+
+// TestRun_RaisesTheGSFloorAlert drives the floor alert through Run itself,
+// not through reportGSFloor directly.
+//
+// That distinction is the whole point of this test. rosterbot-ch0s records an
+// attempt at a different bug whose headline test called the new helper rather
+// than the call site, so reverting the fix left the entire test file green —
+// the change was never wired to anything and nothing said so. The unit tests in
+// gs_floor_test.go have exactly that shape on their own, so this one asserts
+// the composition: GS tracking on, a floor configured, a week projecting short,
+// and the alert reaching Run's output with the marker store consulted under a
+// key carrying the period ComputeGSBudget resolved.
+func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
+	today := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	weekStart := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	weekEnd := time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC)
+	gsMin, gsMax := 10, 12
+
+	ft := &fakeLineupClient{
+		hitters: []fantrax.Player{
+			{ID: "h1", Name: "Only Bat", MLBTeam: "NYY", Positions: []string{"012"}, Status: "Active", RosterPosition: "014"},
+		},
+		pitchers: []fantrax.Player{
+			{ID: "p1", Name: "Lone Starter", MLBTeam: "BOS", Positions: []string{"015"}, PosShortNames: "SP", Status: "Active", RosterPosition: "017"},
+		},
+		seasonStart: time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC),
+		seasonEnd:   time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC),
+		period:      155,
+
+		weekStart: weekStart,
+		weekEnd:   weekEnd,
+		periods: []fantrax.ScoringPeriod{
+			{Number: 21, StartDate: weekStart, EndDate: weekEnd},
+		},
+		gsMin:  &gsMin,
+		gsMax:  &gsMax,
+		usedGS: 4, // four banked against a minimum of ten, mid-week
+	}
+
+	bat := projections.NewFanGraphsSourceFromEntries([]projections.SourceEntry{
+		{Name: "Only Bat", Team: "NYY", Proj: projections.Projection{G: 100, HR: 20}},
+	})
+	pit := projections.NewFanGraphsPitcherSourceFromEntries([]projections.PitcherSourceEntry{
+		{Name: "Lone Starter", Team: "BOS", Proj: projections.PitcherProjection{G: 30, IP: 180, K: 200}},
+	})
+
+	// Thu 27 and Fri 28 nobody of ours plays at all — the empty days the alert
+	// has to name. Sat 29 and Sun 30 our one SP's club plays and has named
+	// nobody, which is 0.2 estimated starts each: nowhere near the six the
+	// floor still needs.
+	sched := &fakeDateSchedule{
+		fakeSchedule: fakeSchedule{
+			playing: map[string]map[string]bool{
+				today.Format("2006-01-02"): {"NYY": true, "BOS": true},
+				"2026-08-29":               {"BOS": true},
+				"2026-08-30":               {"BOS": true},
+			},
+		},
+	}
+
+	markers := newFakeMarkers()
+	cfg := &config.Config{
+		LeagueID: "lg1", TeamID: "team1",
+		DryRun: false, AutoApply: true,
+		GSTrackingEnabled: true,
+		Dates:             []time.Time{today},
+	}
+	var out bytes.Buffer
+	opts := withFakeDeps(Options{
+		Today:            today,
+		ProjectionSystem: "depthcharts",
+		GSFloorMarkers:   markers,
+		Out:              &out,
+	}, bat, pit, sched)
+
+	if _, err := Run(context.Background(), ft, cfg, opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := out.String()
+
+	// Matched on the COVERAGE line's own shape, not on the "gs floor check:"
+	// prefix: the send-failure line carries that prefix too (the dispatcher is
+	// unconfigured in tests), so the looser assertion passed even with the
+	// coverage line deleted — it was not testing what its message claimed.
+	if !strings.Contains(got, "gs floor check: 4/12 used, floor 10") {
+		t.Fatalf("Run never printed the floor coverage line; the phase is not wired in.\n%s", got)
+	}
+	if !strings.Contains(got, "=== GS Floor Risk ===") {
+		t.Fatalf("a week four starts into a ten-start minimum did not raise the alert.\n%s", got)
+	}
+	for _, day := range []string{"Thu Aug 27", "Fri Aug 28"} {
+		if !strings.Contains(got, day) {
+			t.Errorf("alert does not name the empty day %s — the actionable half.\n%s", day, got)
+		}
+	}
+
+	// The marker key proves Period and Season survived the trip from
+	// ComputeGSBudget's period lookup out to the dedup seam. A zero here would
+	// still dedup consistently and would still look fine in the output, while
+	// silently sharing one marker across every week of every season.
+	if _, ok := markers.seen["2026-p21"]; ok {
+		t.Error("marker written despite an unconfigured dispatcher: a failed send must never be marked")
+	}
+	if !strings.Contains(got, "2026-p21") {
+		t.Errorf("the alert did not key on season+period; a zero Period/Season would share one marker "+
+			"across the whole season.\n%s", got)
+	}
+
+	// And the store Options carried must be the one consulted. Without this
+	// the Options field could go unthreaded, dedup would silently vanish, and
+	// the only symptom would be the alert firing every hour forever — the
+	// flood this repo already fixed once for the stale-cache alert.
+	if len(markers.getKeys) != 1 || markers.getKeys[0] != "2026-p21" {
+		t.Errorf("marker store consulted with %v, want exactly [2026-p21] — "+
+			"Options.GSFloorMarkers is not reaching the dedup check", markers.getKeys)
 	}
 }

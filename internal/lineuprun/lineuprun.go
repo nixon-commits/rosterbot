@@ -101,6 +101,12 @@ type Options struct {
 	// recoverable, a silently dropped one is the failure this alert exists for.
 	ILStartMarkers ilStartMarkers
 
+	// GSFloorMarkers dedups the proactive GS-floor alert, one marker per
+	// (season, weekly period). Nil disables dedup rather than the alert, the
+	// same direction ILStartMarkers chooses and for the same reason: with no
+	// record of what was sent, repeating is recoverable and going quiet is not.
+	GSFloorMarkers gsFloorMarkers
+
 	// The five dependency seams. Each nil field is resolved to its production
 	// implementation by withDefaults, called once at the top of Run — the
 	// nil-means-default idiom Out already uses, extended from "where output
@@ -492,6 +498,31 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		} else {
 			prog.Warn("GS budget", "unavailable — limit disabled")
 		}
+
+		// The floor alert reads the budget this phase just built and fetches
+		// nothing of its own. It sits here, beside the ceiling-side gate rather
+		// than in Emit, because it is a statement about the WEEK and not about
+		// any one date's lineup — a --matchup run optimizing five dates still
+		// has exactly one floor to be short of.
+		reportGSFloor(gsFloorInputs{
+			Budget:  gsBudget,
+			Period:  dec.Period,
+			Season:  dec.Season,
+			Markers: opts.GSFloorMarkers,
+			// Same contract as the IL-start alert: notify.Send errors only on a
+			// failed FEED write, which is the durable half of check→send→mark,
+			// and an unconfigured dispatcher no-ops with a nil error — so the
+			// Configured guard is what stops a marker being written for an
+			// alert that was never recorded anywhere.
+			Notify: func(message string) error {
+				if !notify.Configured() {
+					return fmt.Errorf("notify dispatcher not configured")
+				}
+				return notify.Send(ctx, notify.Event{Kind: "lineup", Title: "GS Floor Risk", Message: message})
+			},
+			DryRun: cfg.DryRun,
+			Out:    out,
+		})
 	}
 
 	// Build name/slot lookup maps for display.

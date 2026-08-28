@@ -32,11 +32,17 @@ type fakeMarkers struct {
 	getErr    error
 	publErr   error
 	publCalls int
+	// getKeys records every key the caller asked about. It is what lets a test
+	// pin that a marker store was actually CONSULTED, rather than that the
+	// alert merely mentioned a key — the difference between dedup being wired
+	// and dedup being silently disabled.
+	getKeys []string
 }
 
 func newFakeMarkers() *fakeMarkers { return &fakeMarkers{seen: map[string][]byte{}} }
 
 func (f *fakeMarkers) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	f.getKeys = append(f.getKeys, key)
 	if f.getErr != nil {
 		return nil, false, f.getErr
 	}

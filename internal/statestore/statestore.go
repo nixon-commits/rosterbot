@@ -82,6 +82,7 @@ var (
 	footballTradesArtifact   = of(layout.FootballTrades)
 	footballTradeLogArtifact = of(layout.FootballTradeLog)
 	ilStartsArtifact         = of(layout.ILStarts)
+	gsFloorArtifact          = of(layout.GSFloorAlerts)
 	staleCacheArtifact       = of(layout.StaleCacheAlerts)
 	archiveArtifact          = of(layout.Archive)
 	backtestArtifact         = of(layout.Backtest)
@@ -439,6 +440,14 @@ func (s *Selector) FootballTradeLogReader() (dynasty.TradeLogReader, error) {
 // where a player-only key would alert once and then go quiet for the season.
 func (s *Selector) ILStartMarkers() (lineupapi.BlobStore, error) {
 	return blobStore(s, ilStartsArtifact, "")
+}
+
+// GSFloorMarkers is one dedup marker per (season, weekly period) for the
+// proactive GS-floor alert. The season is part of the key because Fantrax
+// restarts weekly period numbers every year, so a bare period number would let
+// next season's week 21 find this season's marker and stay silent.
+func (s *Selector) GSFloorMarkers() (lineupapi.BlobStore, error) {
+	return blobStore(s, gsFloorArtifact, "")
 }
 
 // StaleCacheMarkers is one dedup marker per cache key for the stale-cache
