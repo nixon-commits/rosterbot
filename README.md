@@ -376,6 +376,8 @@ Backtracking with pruning finds the slot assignment that maximizes total expecte
 
 Pitchers are scored off probable-starter data. A confirmed SP start gets full value; an SP not listed as probable gets a `0.05×` discount so relievers are preferred for scarce P slots. With `GS_TRACKING_ENABLED=true`, a games-started budget gate fetches the real GS limit live from Fantrax's own per-period config (which scales it whenever a period spans more than one calendar week, e.g. the All-Star break) and keeps only the highest-value starts across the matchup period.
 
+The same gate also watches the league's weekly GS **minimum**. Protecting starts from the ceiling-side cut is all the optimizer itself can do — MLB names the probables, so it can never manufacture a start on a day none of your arms has the ball — so when the matchup week projects to finish under the minimum with days still to play, the hourly `optimize` run raises one alert per week naming **the days on which no rostered starter has a turn**. That is the actionable part: the fix is claiming a starter whose turn falls on an open day, and it needs lead time. The alert stays quiet on a week that reaches the floor, on a league with no minimum configured, once too few days remain to act, and during the opening days of a week — when too little of the rotation has been announced for the projection to mean anything.
+
 ### Projection blending
 
 Projections blend FanGraphs season numbers with recent Fantrax scoring, weighted **dynamically** by sample size. The recent signal is a **trailing 30-day window** for hitters and **season-to-date** for pitchers:

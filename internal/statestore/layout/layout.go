@@ -238,6 +238,19 @@ var (
 	// nothing all season, so an age check would read the normal case as stale.
 	ILStarts = Artifact{Name: "IL Start Markers", S3Prefix: "alerts/il-starts/", LocalDir: ".alerts/il-starts", Durable: true, Producer: "Lineup", PerTenant: true}
 
+	// GSFloorAlerts holds one dedup marker per (season, weekly period) for the
+	// "this matchup week projects to finish under the league's GS minimum"
+	// alert. Same no-MaxAge, absent-from-All() shape as ILStarts, and for the
+	// same reason: a marker exists only while something is wrong, so a season
+	// of comfortable weeks writes nothing and an age check would read the
+	// healthy case as stale.
+	//
+	// PerTenant, unlike StaleCacheAlerts and for the opposite reason. The GS
+	// minimum is a per-team obligation graded against one team's own starts, so
+	// two tenants short in the same week are two separate problems and one
+	// marker each is the correct number — the same split ILStarts makes.
+	GSFloorAlerts = Artifact{Name: "GS Floor Markers", S3Prefix: "alerts/gs-floor/", LocalDir: ".alerts/gs-floor", Durable: true, Producer: "Lineup", PerTenant: true}
+
 	// StaleCacheAlerts holds one dedup marker per cache key for the "serving a
 	// stale copy" alert, so a standing upstream outage reports itself once
 	// rather than once per key per run. Same no-MaxAge, absent-from-All()

@@ -105,6 +105,13 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		ilMarkers = nil
 	}
 
+	// Same soft policy as the IL-start markers, one artifact over.
+	gsFloorMarkers, err := statestore.FromEnv().GSFloorMarkers()
+	if err != nil {
+		warn("optimize: init GS-floor markers: %v (alert will repeat until resolved)", err)
+		gsFloorMarkers = nil
+	}
+
 	snapStore, err := statestore.FromEnv().SnapshotStore()
 	if err != nil {
 		return fmt.Errorf("snapshot store: %w", err)
@@ -123,6 +130,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		PublishLineupFlag:  publishLineupFlag,
 		Publisher:          pub,
 		ILStartMarkers:     ilMarkers,
+		GSFloorMarkers:     gsFloorMarkers,
 		Out:                os.Stdout,
 		NoCache:            noCache,
 		Verbose:            verbose,

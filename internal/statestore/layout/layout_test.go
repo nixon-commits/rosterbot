@@ -255,3 +255,49 @@ func TestStaleCacheAlerts_LayoutChoicesArePinned(t *testing.T) {
 		}
 	}
 }
+
+// The GS-floor marker's layout choices, pinned for the same reason the
+// stale-cache marker's are: it is absent from All(), so none of the table walks
+// above see it, and every choice here is an exclusion — the kind of thing that
+// fails silently when it stops holding.
+func TestGSFloorAlerts_LayoutChoicesArePinned(t *testing.T) {
+	a := GSFloorAlerts
+
+	if a.S3Prefix != "alerts/gs-floor/" {
+		t.Errorf("S3Prefix = %q, want alerts/gs-floor/", a.S3Prefix)
+	}
+	for _, other := range []Artifact{ILStarts, StaleCacheAlerts} {
+		if a.S3Prefix == other.S3Prefix {
+			t.Errorf("shares a prefix with %s; one marker family would overwrite the other", other.Name)
+		}
+	}
+	if a.LocalDir != ".alerts/gs-floor" {
+		t.Errorf("LocalDir = %q, want .alerts/gs-floor", a.LocalDir)
+	}
+
+	// No MaxAge and absent from All(). A marker exists only while a week is
+	// projected short, so a season of comfortable weeks writes nothing — an age
+	// check would read the healthy case as stale, and
+	// TestAll_DurableArtifactsDeclareAMaxAge would fail outright.
+	if a.MaxAge != 0 {
+		t.Errorf("MaxAge = %v, want 0 — a week that reaches its floor is normal, not stale", a.MaxAge)
+	}
+	for _, in := range All() {
+		if in.S3Prefix == a.S3Prefix {
+			t.Error("GSFloorAlerts is in All(); the Infra page would gap-scan a series that is " +
+				"legitimately empty for most of the season")
+		}
+	}
+
+	// PerTenant, unlike StaleCacheAlerts and for the opposite reason. The GS
+	// minimum is a per-team obligation graded against one team's own starts, so
+	// two tenants short in the same week are two separate problems — one marker
+	// each is the correct number, exactly as it is for the IL-start alert.
+	if !a.PerTenant {
+		t.Error("PerTenant = false: one tenant's alert would dedup away another tenant's, " +
+			"and the floor is graded per team")
+	}
+	if a.Producer != "Lineup" {
+		t.Errorf("Producer = %q, want Lineup — the alert fires from the hourly optimize run", a.Producer)
+	}
+}

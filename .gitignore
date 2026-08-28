@@ -26,6 +26,10 @@ rosterbot
 /report/
 .waivers/
 .lineup/
+# Local dedup markers for the IL-start and GS-floor alerts (layout.ILStarts,
+# layout.GSFloorAlerts). Written by any non-dry-run local `optimize`, and
+# committable by a `git add -A` the way zz_*_test.go once was.
+.alerts/
 .superpowers/
 fangraphs-leaderboard-projections*.csv
 verify_periods

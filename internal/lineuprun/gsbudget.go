@@ -69,6 +69,16 @@ type GSDecision struct {
 	Budget *optimizer.GSBudget
 	Logs   []string
 	Alert  *GSAlert
+
+	// Period and Season identify the matchup week the budget describes. They
+	// are returned rather than re-resolved by the caller because this phase
+	// already did the lookup, and a second FindCurrentPeriod over the same list
+	// is one more place for the two answers to disagree.
+	//
+	// Both are zero when the cascade short-circuited before the period lookup,
+	// which is why the floor alert keys off Budget != nil rather than off them.
+	Period fantrax.WeeklyPeriod
+	Season int
 }
 
 func (d *GSDecision) logf(format string, args ...any) {
@@ -145,6 +155,7 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 		d.logf("WARNING: could not resolve scoring period for today — GS limit disabled")
 		return d
 	}
+	d.Period, d.Season = sp.Number, in.SeasonStart.Year()
 
 	liveMin, liveMax, gerr := ft.GetGSLimits(in.TeamID, sp.Number)
 	if gerr != nil {
