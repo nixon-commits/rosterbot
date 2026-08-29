@@ -33,6 +33,17 @@ const HELP = {
     "so they carry no freshness signal and are excluded from this row's " +
     "verdict. Judging them would leave the row permanently red with no action " +
     "that could clear it.",
+  dormant:
+    "These tenants exist — real accounts, on the page and in the Tenants tab — " +
+    "but the scheduler does not launch jobs for them, so no producer will write " +
+    "their slice and it can only get older.\n\n" +
+    "Two things put a tenant here, and the Tenants tab says which: their Fantrax " +
+    "connection is broken or was never completed, or the account is parked. " +
+    "Either way they are excluded from this row's verdict for the same reason " +
+    "orphans are — nothing here could clear the red.\n\n" +
+    "Unlike an orphan, this is a person, and the action is theirs or yours " +
+    "rather than none: a reconnect, or reactivating the account. Until then " +
+    "their tab shows nothing new.",
   skipped:
     "The producer ran on these days and correctly found nothing to record — no " +
     "rostered player appeared in a game, so there was nothing to grade. Each " +
@@ -224,6 +235,21 @@ function artifactCard(a) {
     detail += `<div class="infra-detail muted">${n} orphaned tenant${
       n === 1 ? "" : "s"
     } <span data-help="orphan"></span></div>`;
+  }
+
+  // Counted apart from orphans, not folded in with them: an orphan needs no
+  // action at all, while a dormant tenant is somebody waiting on a reconnect.
+  // One label for both would file a person under "ignore this".
+  if (a.dormant_tenants) {
+    const n = a.dormant_tenants;
+    // "the scheduler skips" rather than "awaiting reconnect": a broken
+    // connection is only one of the two causes, and a parked tenant's
+    // connection is perfectly fine. Naming the cause the count cannot
+    // distinguish would send the operator to chase a reconnect from somebody
+    // who needs reactivating instead. The help bubble carries both.
+    detail += `<div class="infra-detail muted">${n} tenant${
+      n === 1 ? "" : "s"
+    } the scheduler skips <span data-help="dormant"></span></div>`;
   }
 
   if (a.error) {
