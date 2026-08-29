@@ -33,7 +33,9 @@ const ROUTES = {
 };
 const DEFAULT_ROUTE = "#lineup";
 
-const root = document.getElementById("view-root");
+// Reassigned by route(): each navigation swaps in a fresh node rather than
+// clearing this one. See the comment there for why.
+let root = document.getElementById("view-root");
 const loginScreen = document.getElementById("login-screen");
 const bootstrapScreen = document.getElementById("bootstrap-screen");
 const bootstrapPrompt = document.getElementById("bootstrap-prompt");
@@ -277,7 +279,26 @@ function route() {
   document.querySelectorAll("nav a").forEach((a) => {
     a.classList.toggle("active", a.getAttribute("href") === hash);
   });
-  root.innerHTML = "";
+  // Swap in a FRESH node instead of clearing this one, because every render
+  // function here is async and appends only AFTER its first await. Clearing
+  // in place does not cancel a render already in flight: it resumes later and
+  // appends into the same live root the new render is using, so two
+  // overlapping route() calls put two of every card on the page. Reproduced
+  // deterministically before this fix — Account x2, Fantrax x2, Passkeys x2.
+  //
+  // Replacing the node makes the stale render harmless without it having to
+  // know anything: it still holds the OLD element as its parameter, that
+  // element is no longer in the document, and its appends land in an orphan
+  // that nobody can see. The alternative — a generation token each renderer
+  // checks — is more explicit but puts the burden on all eleven of them, and
+  // a renderer added later that forgets the check fails silently.
+  //
+  // cloneNode(false) copies the id and every other attribute while taking no
+  // children, so the replacement is the same element to CSS and to
+  // getElementById.
+  const fresh = root.cloneNode(false);
+  root.replaceWith(fresh);
+  root = fresh;
   render(root);
 }
 

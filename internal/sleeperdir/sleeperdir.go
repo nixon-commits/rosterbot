@@ -73,6 +73,8 @@ func (d *Directory) LeaguesForUsername(_ context.Context, username, sport, seaso
 			Name:         l.Name,
 			Season:       l.Season,
 			TotalRosters: l.TotalRosters,
+			Status:       l.Status,
+			Avatar:       l.Avatar,
 			TeamID:       u.UserID,
 		})
 	}

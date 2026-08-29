@@ -2,10 +2,14 @@ package sleeper
 
 // League is a Sleeper fantasy league's static configuration.
 type League struct {
-	LeagueID         string         `json:"league_id"`
-	Name             string         `json:"name"`
-	Season           string         `json:"season"`
-	Status           string         `json:"status"` // pre_draft, drafting, in_season, complete
+	LeagueID string `json:"league_id"`
+	Name     string `json:"name"`
+	Season   string `json:"season"`
+	Status   string `json:"status"` // pre_draft, drafting, in_season, complete
+	// Avatar is an opaque id, not a URL: the image lives at
+	// https://sleepercdn.com/avatars/thumbs/<avatar>. Empty for a league that
+	// never set one, which is ordinary and not an error.
+	Avatar           string         `json:"avatar"`
 	TotalRosters     int            `json:"total_rosters"`
 	RosterPositions  []string       `json:"roster_positions"`
 	PreviousLeagueID string         `json:"previous_league_id"`

@@ -6,6 +6,7 @@
 // page renders a user's own email and a Fantrax error string, both of which
 // reach an attribute context.
 import { api, ApiError } from "./api.js";
+import { renderLeaguesSection } from "./leagues.js";
 import { renderPasskeysSection } from "./passkeys.js";
 import { el } from "./render.js";
 
@@ -76,6 +77,10 @@ export async function renderSettings(root) {
 
   root.append(accountCard(me));
   root.append(fantraxCard(me));
+  // Sleeper sits directly under Fantrax: both answer "which leagues am I in",
+  // and separating them by the auto-apply card would read as two unrelated
+  // features. The section manages its own refreshes, like passkeys below.
+  renderLeaguesSection(root);
   root.append(autoApplyCard(me));
   // Passkeys are account state, so they live here rather than on a tab of
   // their own (rosterbot-jxjq). The section manages its own refreshes.
