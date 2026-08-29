@@ -19,7 +19,17 @@ type Config struct {
 	// AutoApply decides whether the bot WRITES a lineup or only proposes one.
 	// True for the single-tenant env path; set from the tenant's profile
 	// otherwise, where it is false until a person turns it on.
-	AutoApply         bool
+	AutoApply bool
+
+	// HitterProjection / PitcherProjection are the tenant's per-role projection
+	// choices, copied from their profile by the tenant path (empty on the
+	// single-tenant env path and whenever the tenant never chose — downstream
+	// resolves empty to the deployment default). Base family names only; the
+	// optimize resolver treats anything it can't validate as empty, with a
+	// warning (rosterbot-5qvs).
+	HitterProjection  string
+	PitcherProjection string
+
 	Dates             []time.Time
 	ILSlots           int
 	MinorsSlots       int

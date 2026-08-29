@@ -75,10 +75,11 @@ func TestRun_AnnouncesGSTrackingDisabled(t *testing.T) {
 	}
 	var out bytes.Buffer
 	opts := withFakeDeps(Options{
-		Today:            today,
-		ProjectionSystem: "depthcharts",
-		GSFloorMarkers:   markers,
-		Out:              &out,
+		Today:          today,
+		HitterSystem:   "depthcharts",
+		PitcherSystem:  "depthcharts",
+		GSFloorMarkers: markers,
+		Out:            &out,
 	}, bat, pit, sched)
 
 	if _, err := Run(context.Background(), ft, cfg, opts); err != nil {

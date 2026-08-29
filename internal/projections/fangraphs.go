@@ -42,6 +42,21 @@ const (
 	ProjectionATCRoS         = "atc-ros"
 )
 
+// ValidBaseSystem reports whether system names one of the four projection
+// families a stored per-tenant preference may carry (rosterbot-5qvs). Base
+// names only, no -ros variants: an explicit RoS system skips the preseason
+// fallback tier, so a stored one would degrade worse than the default when a
+// RoS feed breaks (the ratc retirement, rosterbot-orz). Shared by the settings
+// API's write-time validation and the optimize resolver's run-time fallback so
+// the two contracts cannot drift.
+func ValidBaseSystem(system string) bool {
+	switch system {
+	case ProjectionSteamer, ProjectionDepthCharts, ProjectionBatX, ProjectionATC:
+		return true
+	}
+	return false
+}
+
 // fgProjectionType maps our flag names to FanGraphs API type parameter values.
 var fgProjectionType = map[string]string{
 	ProjectionSteamer:        "steamer",

@@ -154,6 +154,124 @@ func TestSetAutoApply_CannotChangeAnyoneElse(t *testing.T) {
 	}
 }
 
+// postPrefs sends a signed POST /v1/me/preferences with the given JSON body.
+func postPrefs(t *testing.T, h http.Handler, secret []byte, uid UserID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := signedReq(t, secret, http.MethodPost, "/v1/me/preferences", uid, 0)
+	r2 := httptest.NewRequest(http.MethodPost, "/v1/me/preferences", strings.NewReader(body))
+	r2.Header = r.Header
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r2)
+	return rec
+}
+
+// TestSetProjectionPrefs_PersistsPerRoleChoice: the settings page lets a user
+// pick the projection system their lineup runs use, per role, so the two
+// choices must land on the record independently (rosterbot-5qvs).
+func TestSetProjectionPrefs_PersistsPerRoleChoice(t *testing.T) {
+	h, users, secret := meFixture(t, &User{ID: "alice", Email: "a@e.test",
+		Role: RoleMember, Status: UserActive})
+
+	rec := postPrefs(t, h, secret, "alice",
+		`{"hitter_projection":"atc","pitcher_projection":"steamer"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body)
+	}
+	got, _, _ := users.GetUser(context.Background(), "alice")
+	if got.HitterProjection != "atc" || got.PitcherProjection != "steamer" {
+		t.Errorf("stored prefs = %q/%q, want atc/steamer",
+			got.HitterProjection, got.PitcherProjection)
+	}
+}
+
+// TestSetProjectionPrefs_RejectsUnknownSystem: write-time validation is the
+// contract that lets the run side treat a stored value as trustworthy. A name
+// the loaders don't know must never reach the record.
+func TestSetProjectionPrefs_RejectsUnknownSystem(t *testing.T) {
+	for _, bad := range []string{"zips", "depthcharts-ros"} {
+		h, users, secret := meFixture(t, &User{ID: "u", Email: bad + "@e.test",
+			Role: RoleMember, Status: UserActive})
+
+		rec := postPrefs(t, h, secret, "u", `{"hitter_projection":"`+bad+`"}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%q: status %d, want 400", bad, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "projection") {
+			t.Errorf("%q: error %s does not name the projection field", bad, rec.Body)
+		}
+		got, _, _ := users.GetUser(context.Background(), "u")
+		if got.HitterProjection != "" {
+			t.Errorf("%q reached the record", bad)
+		}
+	}
+}
+
+// TestSetProjectionPrefs_EmptyStringResetsToDefault: "" means "follow the
+// deployment default" (empty-means-default was the design choice, so future
+// default changes reach everyone who never chose). Absent means untouched —
+// the auto_apply pointer rule extended to these fields.
+func TestSetProjectionPrefs_EmptyStringResetsToDefault(t *testing.T) {
+	h, users, secret := meFixture(t, &User{ID: "alice", Email: "a@e.test",
+		Role: RoleMember, Status: UserActive,
+		HitterProjection: "atc", PitcherProjection: "steamer"})
+
+	rec := postPrefs(t, h, secret, "alice", `{"hitter_projection":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body)
+	}
+	got, _, _ := users.GetUser(context.Background(), "alice")
+	if got.HitterProjection != "" {
+		t.Errorf("hitter_projection = %q, want cleared", got.HitterProjection)
+	}
+	if got.PitcherProjection != "steamer" {
+		t.Errorf("pitcher_projection = %q; an absent field must stay untouched",
+			got.PitcherProjection)
+	}
+}
+
+// TestSetPreferences_AbsentFieldsLeavePrefsUntouched: a request changing only
+// auto_apply must not clear a projection choice — the same reason auto_apply
+// itself is a pointer in the body.
+func TestSetPreferences_AbsentFieldsLeavePrefsUntouched(t *testing.T) {
+	h, users, secret := meFixture(t, &User{ID: "alice", Email: "a@e.test",
+		Role: RoleMember, Status: UserActive, HitterProjection: "thebatx"})
+
+	rec := postPrefs(t, h, secret, "alice", `{"auto_apply":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body)
+	}
+	got, _, _ := users.GetUser(context.Background(), "alice")
+	if got.HitterProjection != "thebatx" || !got.AutoApply {
+		t.Errorf("got prefs %q auto_apply=%v; want thebatx/true",
+			got.HitterProjection, got.AutoApply)
+	}
+}
+
+// TestSetPreferences_EmptyBodyRejected pins the "no preference supplied"
+// refusal now that the body has three optional fields.
+func TestSetPreferences_EmptyBodyRejected(t *testing.T) {
+	h, _, secret := meFixture(t, &User{ID: "alice", Email: "a@e.test",
+		Role: RoleMember, Status: UserActive})
+	if rec := postPrefs(t, h, secret, "alice", `{}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("empty body: status %d, want 400", rec.Code)
+	}
+}
+
+// TestMe_CarriesProjectionPrefs: the settings page renders the dropdowns from
+// GET /v1/me, so a saved choice must round-trip or the UI shows Default
+// forever.
+func TestMe_CarriesProjectionPrefs(t *testing.T) {
+	h, _, secret := meFixture(t, &User{ID: "alice", Email: "a@e.test",
+		Role: RoleMember, Status: UserActive,
+		HitterProjection: "atc", PitcherProjection: "steamer"})
+
+	_, body := getMe(t, h, secret, "alice")
+	if body["hitter_projection"] != "atc" || body["pitcher_projection"] != "steamer" {
+		t.Errorf("me = %v/%v, want atc/steamer",
+			body["hitter_projection"], body["pitcher_projection"])
+	}
+}
+
 // TestSetAutoApply_PreservesTheRestOfTheProfile: PutUser stores a whole record,
 // so a handler that rebuilds one erases the proven team binding, the attested
 // email and the role.

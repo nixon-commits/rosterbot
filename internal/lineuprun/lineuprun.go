@@ -51,9 +51,14 @@ type Options struct {
 	NeedsSeasonLookup  bool
 	NeedsMatchupLookup bool
 
-	// ProjectionSystem selects the FanGraphs system (steamer, depthcharts,
-	// thebatx, atc, and their -ros variants).
-	ProjectionSystem string
+	// HitterSystem and PitcherSystem select the FanGraphs system per role
+	// (steamer, depthcharts, thebatx, atc, and their -ros variants). They split
+	// what used to be one ProjectionSystem field so a tenant can run each role
+	// on a different model (rosterbot-5qvs); shadow and the single --projections
+	// flag set both to the same value. The two loads run sequentially, which is
+	// what keeps SetProjectionSystem's package-global URL mutation safe.
+	HitterSystem  string
+	PitcherSystem string
 
 	// CheckRoster enables the IL/Minors slot-mismatch alert block.
 	CheckRoster bool
@@ -205,6 +210,17 @@ type LineupClient interface {
 	InvalidatePeriodRosterCache(period fantrax.DailyPeriod) error
 }
 
+// displayNameFor labels a (possibly split) pair of projection systems: the
+// one name when both roles use the same system — every pre-split output is
+// byte-identical through this path — and both, hitters first, when they
+// differ, so a run's output always says which model produced which half.
+func displayNameFor(hitSys, pitSys string) string {
+	if hitSys == pitSys {
+		return projDisplayName[hitSys]
+	}
+	return projDisplayName[hitSys] + " / " + projDisplayName[pitSys]
+}
+
 // projDisplayName maps projection system flag values to display-friendly names.
 var projDisplayName = map[string]string{
 	"steamer":         "Steamer",
@@ -235,8 +251,12 @@ func cacheTTL(noCache bool, d time.Duration) time.Duration {
 // that now happens in the ResolveDates phase, which returns a value
 // (rosterbot-6rv).
 func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options) (Result, error) {
-	if err := projections.SetProjectionSystem(opts.ProjectionSystem); err != nil {
-		return Result{}, err
+	// Fail-fast validation of both systems; the loaders re-set the package
+	// globals per call, so this is the last time order matters here.
+	for _, sys := range []string{opts.HitterSystem, opts.PitcherSystem} {
+		if err := projections.SetProjectionSystem(sys); err != nil {
+			return Result{}, err
+		}
 	}
 	// Resolve the five dependency seams before anything reads them; every nil
 	// field becomes its production implementation and nothing downstream needs
@@ -271,7 +291,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	}
 
 	// --- Load projections early to determine system for header ---
-	fgSrc, batLoadResult, err := opts.LoadBattingProjections(opts.ProjectionSystem, cacheDir, projTTL)
+	fgSrc, batLoadResult, err := opts.LoadBattingProjections(opts.HitterSystem, cacheDir, projTTL)
 	if err != nil {
 		msg := fmt.Sprintf("batting projections unavailable: %v", err)
 		sendOptimizeNotify(ctx, msg)
@@ -280,7 +300,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	if batLoadResult.NoData {
 		prog.Logf("WARNING: batting projections unavailable — running on schedule + recent stats only")
 	}
-	fgPitSrc, pitLoadResult, err := opts.LoadPitcherProjections(opts.ProjectionSystem, cacheDir, projTTL)
+	fgPitSrc, pitLoadResult, err := opts.LoadPitcherProjections(opts.PitcherSystem, cacheDir, projTTL)
 	if err != nil {
 		msg := fmt.Sprintf("pitching projections unavailable: %v", err)
 		sendOptimizeNotify(ctx, msg)
@@ -294,7 +314,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		PitchersNoData: pitLoadResult.NoData,
 	}
 
-	prog.Header(projDisplayName[batLoadResult.System], formatDates(dates), cfg.DryRun)
+	prog.Header(displayNameFor(batLoadResult.System, pitLoadResult.System), formatDates(dates), cfg.DryRun)
 
 	// Hoisted above the roster-alert block: CheckILStarters needs probables,
 	// and the alert has to run before the per-date optimize pass so an
@@ -347,7 +367,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 
 	// --- Load the date-invariant Fantrax inputs (six fetches + two period
 	// lookups, concurrent; see LoadInputs for the failure policy) ---
-	inputs, err := LoadInputs(ft, prog, projDisplayName[opts.ProjectionSystem])
+	inputs, err := LoadInputs(ft, prog, displayNameFor(opts.HitterSystem, opts.PitcherSystem))
 	if err != nil {
 		return result, err
 	}
@@ -359,14 +379,14 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	// --- Hitter projections (shared across dates) ---
 	prog.Start("Projections")
 	if batLoadResult.FellBack {
-		prog.Logf("WARNING: %s RoS projections unavailable — using %s preseason", projDisplayName[opts.ProjectionSystem], projDisplayName[opts.ProjectionSystem])
+		prog.Logf("WARNING: %s RoS projections unavailable — using %s preseason", projDisplayName[opts.HitterSystem], projDisplayName[opts.HitterSystem])
 	}
 	if batLoadResult.FromCSV {
 		prog.Logf("WARNING: API projections unavailable — using CSV file")
 	}
 	prog.Logf("fangraphs batting projections loaded (%s, %d players)", projDisplayName[batLoadResult.System], fgSrc.Len())
 	if pitLoadResult.FellBack {
-		prog.Logf("WARNING: %s RoS pitching projections unavailable — using %s preseason", projDisplayName[opts.ProjectionSystem], projDisplayName[opts.ProjectionSystem])
+		prog.Logf("WARNING: %s RoS pitching projections unavailable — using %s preseason", projDisplayName[opts.PitcherSystem], projDisplayName[opts.PitcherSystem])
 	}
 	if pitLoadResult.FromCSV {
 		prog.Logf("WARNING: API pitching projections unavailable — using CSV file")
@@ -391,7 +411,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		PeriodErr:      periodErr,
 		BlendMinGP:     cfg.BlendMinGP,
 		NoCache:        opts.NoCache,
-		SystemName:     projDisplayName[opts.ProjectionSystem],
+		SystemName:     displayNameFor(opts.HitterSystem, opts.PitcherSystem),
 	})
 	for _, line := range blend.Logs {
 		prog.Logf("%s", line)
@@ -622,7 +642,8 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		WriteSnapshots: opts.WriteSnapshots,
 		SnapshotStore:  opts.SnapshotStore,
 		SnapshotRoot:   opts.SnapshotRoot,
-		ProjSystem:     batLoadResult.System,
+		HitterSystem:   batLoadResult.System,
+		PitcherSystem:  pitLoadResult.System,
 		HittersNoData:  batLoadResult.NoData,
 		PitchersNoData: pitLoadResult.NoData,
 		PublishLineup:  opts.PublishLineupFlag,

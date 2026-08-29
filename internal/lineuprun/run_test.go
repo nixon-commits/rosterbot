@@ -202,9 +202,10 @@ func TestRun_SecondRunAppliesNothing(t *testing.T) {
 	}
 	newOpts := func(out *bytes.Buffer) Options {
 		return withFakeDeps(Options{
-			Today:            today,
-			ProjectionSystem: "depthcharts",
-			Out:              out,
+			Today:         today,
+			HitterSystem:  "depthcharts",
+			PitcherSystem: "depthcharts",
+			Out:           out,
 		}, bat, pit, sched)
 	}
 
@@ -262,6 +263,82 @@ func TestRun_SecondRunAppliesNothing(t *testing.T) {
 	}
 	if len(ft.applies) != 1 {
 		t.Fatalf("second run applied a lineup: ApplyLineup calls = %d, want still 1", len(ft.applies))
+	}
+}
+
+// TestRun_UsesPerRoleProjectionSystems pins the rosterbot-5qvs split: the
+// hitter and pitcher loaders each receive their own system, and the header
+// names both when they differ — one system silently serving both roles is the
+// regression this exists to catch.
+func TestRun_UsesPerRoleProjectionSystems(t *testing.T) {
+	today := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+
+	ft := &fakeLineupClient{
+		hitters: []fantrax.Player{
+			{ID: "h1", Name: "Hot Hitter", MLBTeam: "NYY", Positions: []string{"012"}, Status: "Active", RosterPosition: "014"},
+		},
+		pitchers: []fantrax.Player{
+			{ID: "p1", Name: "Steady Reliever", MLBTeam: "BOS", Positions: []string{"016"}, PosShortNames: "RP", Status: "Active", RosterPosition: "017"},
+		},
+		seasonStart: time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC),
+		seasonEnd:   time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC),
+		period:      155,
+	}
+	bat := projections.NewFanGraphsSourceFromEntries([]projections.SourceEntry{
+		{Name: "Hot Hitter", Team: "NYY", Proj: projections.Projection{G: 100, HR: 30}},
+	})
+	pit := projections.NewFanGraphsPitcherSourceFromEntries([]projections.PitcherSourceEntry{
+		{Name: "Steady Reliever", Team: "BOS", Proj: projections.PitcherProjection{G: 60, IP: 65, K: 70}},
+	})
+	sched := &fakeDateSchedule{
+		fakeSchedule: fakeSchedule{
+			playing: map[string]map[string]bool{
+				today.Format("2006-01-02"): {"NYY": true, "BOS": true},
+			},
+		},
+	}
+
+	var out bytes.Buffer
+	opts := withFakeDeps(Options{
+		Today:         today,
+		HitterSystem:  "atc",
+		PitcherSystem: "steamer",
+		Out:           &out,
+	}, bat, pit, sched)
+	var gotBat, gotPit string
+	origBat, origPit := opts.LoadBattingProjections, opts.LoadPitcherProjections
+	opts.LoadBattingProjections = func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
+		gotBat = system
+		return origBat(system, cacheDir, ttl)
+	}
+	opts.LoadPitcherProjections = func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
+		gotPit = system
+		return origPit(system, cacheDir, ttl)
+	}
+
+	cfg := &config.Config{LeagueID: "lg1", TeamID: "team1", DryRun: true,
+		Dates: []time.Time{today}}
+	if _, err := Run(context.Background(), ft, cfg, opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if gotBat != "atc" || gotPit != "steamer" {
+		t.Errorf("loaders received %q/%q, want atc/steamer", gotBat, gotPit)
+	}
+	// The run header names both systems, but it rides the progress channel
+	// (stderr), not Out — the naming itself is pinned by TestDisplayNameFor.
+	_ = out
+}
+
+// TestDisplayNameFor: a unified run keeps its pre-split label byte-identical
+// (the golden boards and every log line depend on that); a split run must say
+// which model produced which half, hitters first.
+func TestDisplayNameFor(t *testing.T) {
+	if got := displayNameFor("depthcharts", "depthcharts"); got != "DepthCharts" {
+		t.Errorf("unified = %q, want DepthCharts", got)
+	}
+	if got := displayNameFor("atc", "steamer"); got != "ATC / Steamer" {
+		t.Errorf("split = %q, want ATC / Steamer", got)
 	}
 }
 
@@ -333,10 +410,11 @@ func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
 	}
 	var out bytes.Buffer
 	opts := withFakeDeps(Options{
-		Today:            today,
-		ProjectionSystem: "depthcharts",
-		GSFloorMarkers:   markers,
-		Out:              &out,
+		Today:          today,
+		HitterSystem:   "depthcharts",
+		PitcherSystem:  "depthcharts",
+		GSFloorMarkers: markers,
+		Out:            &out,
 	}, bat, pit, sched)
 
 	if _, err := Run(context.Background(), ft, cfg, opts); err != nil {

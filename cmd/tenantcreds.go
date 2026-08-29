@@ -100,12 +100,19 @@ func tenantRunConfig(ctx context.Context, cfg *config.Config, uid lineupapi.User
 	}
 
 	cfg.AutoApply = false
+	cfg.HitterProjection, cfg.PitcherProjection = "", ""
 	u, ok, err := dir.GetUser(ctx, uid)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tenant %s: could not read the auto-apply preference (%v); "+
 			"proposing only\n", uid, err)
 	} else if ok {
 		cfg.AutoApply = u.AutoApply
+		// The projection choices ride the same read. On the error path above
+		// they stay empty, which downstream resolves to the deployment default
+		// — the safe direction for a preference that is decoration, not
+		// consent.
+		cfg.HitterProjection = u.HitterProjection
+		cfg.PitcherProjection = u.PitcherProjection
 	}
 	return nil
 }

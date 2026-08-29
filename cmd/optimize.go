@@ -117,11 +117,22 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("snapshot store: %w", err)
 	}
 
+	// Resolved after initApp, because the tenant path fills the cfg preference
+	// fields there. An explicitly typed --projections wins and sets both roles;
+	// otherwise each role follows the tenant's stored choice (rosterbot-5qvs).
+	hitterSys, pitcherSys, prefWarnings := resolveProjectionSystems(
+		cmd.Flags().Changed("projections"), projectionSystem,
+		cfg.HitterProjection, cfg.PitcherProjection)
+	for _, w := range prefWarnings {
+		warn("optimize: %s", w)
+	}
+
 	opts := lineuprun.Options{
 		Today:              today,
 		NeedsSeasonLookup:  needsSeasonLookup,
 		NeedsMatchupLookup: needsMatchupLookup,
-		ProjectionSystem:   projectionSystem,
+		HitterSystem:       hitterSys,
+		PitcherSystem:      pitcherSys,
 		CheckRoster:        checkRoster,
 		ShowPipeline:       showPipeline,
 		WriteSnapshots:     resolveWriteSnapshots(cfg.DryRun, snapshotFlag, archiveProjections, os.Getenv("BACKTEST_ARCHIVE")),
