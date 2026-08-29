@@ -207,8 +207,12 @@ person enrolls a passkey with it.
 The dashboard's admin **Tenants** tab mints the same invite and recovery links
 (`POST /v1/tenants/invite`, `POST /v1/tenants/{id}/recovery`) and carries the
 per-tenant management controls: park/reactivate (`POST /v1/tenants/{id}/status`
-— a parked tenant can't sign in and their scheduled jobs stop) and a
-lineup-writes kill switch (`POST /v1/tenants/{id}/auto-apply`), and permanent
+— a parked tenant can't sign in and their scheduled jobs stop), a
+lineup-writes kill switch (`POST /v1/tenants/{id}/auto-apply`), team binding
+(`POST /v1/tenants/{id}/team` — the twin of `user set-team` below, and the only
+control on this page that clears connect's `no_team` refusal; it *re*assigns
+nothing, since taking a second claim without releasing the first would leave
+the old team owned by nobody), and permanent
 removal (`DELETE /v1/tenants/{id}` — deletes the account, passkeys and Fantrax
 connection, and releases the email/team claims so both can be reused). Each
 row also shows a passkey count, so "invited but never registered" is visible
@@ -221,8 +225,8 @@ completes — an abandoned ceremony leaves it usable.
 
 `--team` is optional to the flag, but a user without one **cannot connect
 Fantrax** — `connect` refuses with `no_team`, because an empty team gives the
-ownership check nothing to prove against. Repair an existing record with
-`user set-team` below.
+ownership check nothing to prove against. Repair an existing record from the
+Tenants tab's **Set team** control, or with `user set-team` below.
 
 </details>
 

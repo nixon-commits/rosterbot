@@ -351,6 +351,19 @@ func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
 	if !strings.Contains(got, "gs floor check: 4/12 used, floor 10") {
 		t.Fatalf("Run never printed the floor coverage line; the phase is not wired in.\n%s", got)
 	}
+
+	// The disabled-path notice must be ABSENT here. Without this, hoisting that
+	// fmt.Fprintln out of its else — a plausible refactor or merge resolution —
+	// passes the whole package, and a production run with GS_TRACKING_ENABLED=true
+	// that genuinely suppressed starts announces "no cap, no floor, no floor
+	// alert this run" into CloudWatch and the dashboard's per-run output. An
+	// operator debugging a benched ace would read that and conclude the gate is
+	// off: the exact misdiagnosis rosterbot-8gmu exists to end, inverted, and
+	// stated with more confidence than the silence had.
+	if strings.Contains(got, "GS tracking disabled") {
+		t.Fatalf("the disabled-path notice printed on a run with tracking ENABLED; "+
+			"it is no longer pinned to the else branch.\n%s", got)
+	}
 	if !strings.Contains(got, "=== GS Floor Risk ===") {
 		t.Fatalf("a week four starts into a ten-start minimum did not raise the alert.\n%s", got)
 	}

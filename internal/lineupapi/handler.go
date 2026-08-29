@@ -134,6 +134,7 @@ type Config struct {
 //	POST   /v1/tenants/invite                    -> mint an enrollment link for a new tenant
 //	POST   /v1/tenants/{id}/status               -> park or reactivate a tenant
 //	POST   /v1/tenants/{id}/auto-apply           -> operator kill switch for auto-apply
+//	POST   /v1/tenants/{id}/team                 -> bind a Fantrax team to a tenant
 //	POST   /v1/tenants/{id}/recovery             -> mint a re-enrollment link for an existing tenant
 //	DELETE /v1/tenants/{id}                      -> delete a tenant, releasing its email/team claims
 //	POST   /v1/me/preferences                    -> update the caller's own auto_apply
@@ -178,6 +179,7 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("POST /v1/tenants/invite", cfg.handleTenantInvite)
 	mux.HandleFunc("POST /v1/tenants/{id}/status", cfg.handleSetTenantStatus)
 	mux.HandleFunc("POST /v1/tenants/{id}/auto-apply", cfg.handleSetTenantAutoApply)
+	mux.HandleFunc("POST /v1/tenants/{id}/team", cfg.handleSetTenantTeam)
 	mux.HandleFunc("POST /v1/tenants/{id}/recovery", cfg.handleTenantRecovery)
 	mux.HandleFunc("DELETE /v1/tenants/{id}", cfg.handleDeleteTenant)
 	mux.HandleFunc("POST /v1/me/preferences", cfg.handleSetPreferences)

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/pmurley/go-fantrax/auth_client"
@@ -249,9 +250,13 @@ func TestSessionLadder_FailedReLoginStopsAndDoesNotRetry(t *testing.T) {
 	t.Setenv("FANTRAX_PASSWORD", "tenant-pass")
 
 	conns := &recordingConns{conn: connFor(t, "alice", lineupapi.ConnVerified)}
+	feed := &memFeed{}
+	var log bytes.Buffer
 	lad := sessionLadder{
 		conns:  conns,
 		sealer: stubSealer{},
+		feed:   feed,
+		out:    &log,
 		probe:  func(string) error { return errors.New("fantrax API error WARNING_NOT_LOGGED_IN: x") },
 		mint: func(lineupapi.FantraxCreds) loginEvidence {
 			return loginEvidence{
@@ -283,6 +288,27 @@ func TestSessionLadder_FailedReLoginStopsAndDoesNotRetry(t *testing.T) {
 				"to authenticate", v, s)
 		}
 	}
+
+	// THE PERSON MUST BE TOLD. needs_reconnect makes AuthorizeRun refuse every
+	// later run, so this is the last moment anything runs for this tenant until
+	// they act -- and until rosterbot-zi4u nothing here wrote the feed at all.
+	// A session that died mid-week left the lineups silently unmanaged with the
+	// only record of why on a connection row nobody reads.
+	if len(feed.written) != 1 {
+		t.Fatalf("wrote %d feed entries, want exactly 1; the tenant is stopped and "+
+			"never told why", len(feed.written))
+	}
+	n := feed.written[0]
+	if n.UserID != "alice" {
+		t.Errorf("UserID = %q, want alice — a record that cannot say whose it is once "+
+			"read is unverifiable", n.UserID)
+	}
+	if n.Status != "failure" {
+		t.Errorf("Status = %q, want failure", n.Status)
+	}
+	if n.Message == lineupapi.ConnErrBadCredentials || n.Message == "" {
+		t.Errorf("Message = %q; a user needs an answer, not the raw class", n.Message)
+	}
 }
 
 // TestSessionLadder_OperatorActionableFailureDoesNotBlameTheTenant: a
@@ -291,9 +317,13 @@ func TestSessionLadder_FailedReLoginStopsAndDoesNotRetry(t *testing.T) {
 // run still stops -- we have no session -- but the record must not accuse them.
 func TestSessionLadder_OperatorActionableFailureDoesNotBlameTheTenant(t *testing.T) {
 	conns := &recordingConns{conn: connFor(t, "alice", lineupapi.ConnVerified)}
+	feed := &memFeed{}
+	var log bytes.Buffer
 	lad := sessionLadder{
 		conns:  conns,
 		sealer: stubSealer{},
+		feed:   feed,
+		out:    &log,
 		probe:  func(string) error { return errors.New("fantrax API error WARNING_NOT_LOGGED_IN: x") },
 		mint: func(lineupapi.FantraxCreds) loginEvidence {
 			return loginEvidence{Title: "Just a moment...", Matched: map[string]bool{"cloudflare": true}}
@@ -312,5 +342,85 @@ func TestSessionLadder_OperatorActionableFailureDoesNotBlameTheTenant(t *testing
 	}
 	if got := conns.put[0].LastError; got != lineupapi.ConnErrBotChallenge {
 		t.Errorf("LastError = %q, want %q", got, lineupapi.ConnErrBotChallenge)
+	}
+	if len(feed.written) != 0 {
+		t.Errorf("told the tenant about a failure they cannot act on: %+v", feed.written)
+	}
+
+	// THE CONSOLE IS THE OPERATOR CHANNEL ON THIS PATH, and the wording has to
+	// name the session refresh. An operator told "connect blocked" goes to the
+	// connect task and the dashboard connect flow and finds nothing happened
+	// there, because nothing did -- this fired inside a scheduled optimize.
+	got := log.String()
+	for _, want := range []string{"session re-login blocked", lineupapi.ConnErrBotChallenge, "alice"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("console record missing %q; operator sees:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "connect blocked") {
+		t.Errorf("console names the connect task for a scheduled session refresh:\n%s", got)
+	}
+	// A PUSH HERE WOULD BE LEVEL-TRIGGERED. stop leaves Status=ConnVerified on a
+	// bot challenge, so AuthorizeRun keeps granting and every one of the day's
+	// ~24 scheduled jobs re-runs this ladder. Pushing would restate the same
+	// standing condition on each -- the "30 pushes in 24 hours" failure -- while
+	// the operator is already told once per outage by opsalert.Streak off the
+	// non-zero exit this returns. Asserting the console line above is what makes
+	// re-adding a push visible: the push has no console artifact.
+	if !strings.Contains(got, "not pushed") {
+		t.Errorf("the console record does not state that no push was sent, so a "+
+			"reinstated level-triggered push would leave no trace:\n%s", got)
+	}
+}
+
+// TestSessionLadder_NotifyingIsSoft: the feed is a best-effort side channel.
+// The run is already stopping with a diagnosed class on the connection record,
+// and a notification store hiccup must not replace that outcome with a crash --
+// nor silently swallow itself, which is why recordConnectFailure prints.
+func TestSessionLadder_NotifyingIsSoft(t *testing.T) {
+	conns := &recordingConns{conn: connFor(t, "alice", lineupapi.ConnVerified)}
+	lad := sessionLadder{
+		conns:  conns,
+		sealer: stubSealer{},
+		feed:   &memFeed{err: errNotWritable},
+		out:    &bytes.Buffer{},
+		probe:  func(string) error { return errors.New("fantrax API error WARNING_NOT_LOGGED_IN: x") },
+		mint: func(lineupapi.FantraxCreds) loginEvidence {
+			return loginEvidence{
+				Matched: map[string]bool{"login_form": true, "form_error": true},
+				Texts:   map[string]string{"form_error": "Invalid username or password"},
+			}
+		},
+	}
+
+	if err := lad.refresh(context.Background(), "alice", tenantCfg()); err == nil {
+		t.Fatal("refresh accepted a failed re-login; the run must stop")
+	}
+	if len(conns.put) != 1 || conns.put[0].Status != lineupapi.ConnNeedsReconnect {
+		t.Errorf("an unwritable feed changed the recorded outcome: %+v", conns.put)
+	}
+}
+
+// TestSessionLadder_LiveSessionTellsNobody. This runs on EVERY scheduled job of
+// every tenant, so a notification on the healthy path would bury the one that
+// matters.
+func TestSessionLadder_LiveSessionTellsNobody(t *testing.T) {
+	feed := &memFeed{}
+	var log bytes.Buffer
+	lad := sessionLadder{
+		conns:  &recordingConns{conn: connFor(t, "alice", lineupapi.ConnVerified)},
+		sealer: stubSealer{},
+		feed:   feed,
+		out:    &log,
+		probe:  func(string) error { return nil },
+		mint:   func(lineupapi.FantraxCreds) loginEvidence { return loginEvidence{} },
+	}
+
+	if err := lad.refresh(context.Background(), "alice", tenantCfg()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if len(feed.written) != 0 || log.Len() != 0 {
+		t.Errorf("a healthy session notified somebody: feed=%+v console=%q",
+			feed.written, log.String())
 	}
 }

@@ -46,7 +46,30 @@ func recordConnectFailure(ctx context.Context, feed feedWriter, push func(string
 		return
 	}
 
+	recordTenantConnectFailure(ctx, feed, uid, class)
+}
+
+// recordTenantConnectFailure writes the tenant half only, for callers that have
+// already decided the failure is theirs to hear about.
+//
+// SPLIT OUT BECAUSE THE OPERATOR HALF IS NOT SHARED (rosterbot-zi4u). The push
+// above is edge-triggered: it fires once per user-initiated connect, because a
+// human pressed a button. The session ladder runs inside EVERY scheduled job of
+// every tenant, so routing it through the same operator push made the alert
+// level-triggered — a bot challenge that stands for a day would have restated
+// itself on all ~24 of that day's runs, the "30 pushes in 24 hours" failure
+// CLAUDE.md records for the stale-cache alert. The ladder therefore calls this
+// function, and reports its operator-actionable half on the console instead.
+func recordTenantConnectFailure(ctx context.Context, feed feedWriter,
+	uid lineupapi.UserID, class string) {
+
 	if feed == nil {
+		// Never silent. The feed is the ONLY channel a tenant-actionable failure
+		// has, so its absence has to be visible beside the failure itself rather
+		// than only wherever the store failed to open — otherwise a run that
+		// told nobody looks identical to one that told them.
+		fmt.Fprintf(os.Stderr, "warning: no activity feed for %s; the %s failure reaches "+
+			"nobody\n", uid, class)
 		return
 	}
 	now := time.Now().UTC()

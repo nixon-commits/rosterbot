@@ -3,6 +3,7 @@ package lineupapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -440,5 +441,195 @@ func TestTenantDelete_UnknownTenant404s(t *testing.T) {
 	h.ServeHTTP(rec, deleteReq(t, secret, "/v1/tenants/nobody", "admin1"))
 	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "no such user") {
 		t.Errorf("delete unknown tenant = %d %q, want a handler 404 naming the missing user", rec.Code, rec.Body)
+	}
+}
+
+// TestTenantSetTeam_AssignsAndClaims is the happy path: the operator binds a
+// Fantrax team to a tenant invited without one, and the binding must land in
+// the CLAIM INDEX, not merely on the profile — a profile-only write would leave
+// the team assignable to a second tenant, which is the one thing ErrTeamTaken
+// exists to prevent.
+func TestTenantSetTeam_AssignsAndClaims(t *testing.T) {
+	h, secret, users := adminFixture(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, secret, "/v1/tenants/bob/team", "admin1", `{"team_id":"team-7"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set team = %d, want 200: %s", rec.Code, rec.Body)
+	}
+
+	u, ok, err := users.GetUser(context.Background(), "bob")
+	if err != nil || !ok {
+		t.Fatalf("read bob: %v ok=%v", err, ok)
+	}
+	if u.TeamID != "team-7" {
+		t.Errorf("bob holds team %q, want team-7", u.TeamID)
+	}
+	// The claim index is the half a profile write would silently skip.
+	if err := users.ClaimTeam(context.Background(), "admin1", "team-7"); !errors.Is(err, ErrTeamTaken) {
+		t.Errorf("a second user claiming team-7 = %v, want ErrTeamTaken — the "+
+			"route wrote the profile without taking the claim", err)
+	}
+}
+
+// TestTenantSetTeam_RefusesReassignment pins cmd/user_set_team.go's setTeam
+// guard: ClaimTeam writes the new claim but never releases the old one, so a
+// move would leave the previous team recorded as this tenant's in the index
+// while the profile says otherwise — permanently unassignable, with nothing on
+// the page explaining why.
+func TestTenantSetTeam_RefusesReassignment(t *testing.T) {
+	h, secret, users := adminFixture(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, secret, "/v1/tenants/bob/team", "admin1", `{"team_id":"team-7"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first assign = %d, want 200: %s", rec.Code, rec.Body)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, secret, "/v1/tenants/bob/team", "admin1", `{"team_id":"team-9"}`))
+	if rec.Code != http.StatusConflict {
+		t.Errorf("reassign = %d, want 409: %s", rec.Code, rec.Body)
+	}
+
+	u, _, err := users.GetUser(context.Background(), "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.TeamID != "team-7" {
+		t.Errorf("bob holds team %q after a refused reassignment, want team-7 "+
+			"untouched", u.TeamID)
+	}
+
+	// Re-asserting the team a tenant already holds is not a reassignment and
+	// must stay a no-op success, so a double-click is not an error.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, secret, "/v1/tenants/bob/team", "admin1", `{"team_id":"team-7"}`))
+	if rec.Code != http.StatusOK {
+		t.Errorf("re-assert the same team = %d, want 200: %s", rec.Code, rec.Body)
+	}
+}
+
+// TestTenantSetTeam_TeamHeldByAnotherUser: the uniqueness claim is the whole
+// reason this route cannot just write the profile field.
+func TestTenantSetTeam_TeamHeldByAnotherUser(t *testing.T) {
+	h, secret, users := adminFixture(t)
+
+	if err := users.ClaimTeam(context.Background(), "admin1", "team-7"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, secret, "/v1/tenants/bob/team", "admin1", `{"team_id":"team-7"}`))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("claim a held team = %d, want 409: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "already claimed") {
+		t.Errorf("body %q does not name the taken team — the operator cannot "+
+			"tell this from the reassignment refusal otherwise", rec.Body)
+	}
+}
+
+// TestTenantSetTeam_RefusesEmptyTeam: an empty team is exactly the state
+// connect refuses as no_team, so writing one would be a control whose only
+// effect is recreating the wall it exists to clear.
+func TestTenantSetTeam_RefusesEmptyTeam(t *testing.T) {
+	h, secret := tenantsFixture(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, secret, "/v1/tenants/bob/team", "admin1", `{"team_id":""}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("empty team = %d, want 400: %s", rec.Code, rec.Body)
+	}
+}
+
+// TestTenantSetTeam_UnknownTenant404s — a handler 404, not a mux one: a bare
+// mux 404 would mean the route itself is absent.
+func TestTenantSetTeam_UnknownTenant404s(t *testing.T) {
+	h, secret := tenantsFixture(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, secret, "/v1/tenants/nobody/team", "admin1", `{"team_id":"team-7"}`))
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "no such user") {
+		t.Errorf("set team on unknown tenant = %d %q, want a handler 404 naming "+
+			"the missing user", rec.Code, rec.Body)
+	}
+}
+
+// TestTenantSetTeam_MemberForbidden mirrors TestTenantStatus_MemberForbidden:
+// the route inherits the adminOnlyRoutes /v1/tenants prefix, and only a test
+// proves the prefix actually reaches this path. Assigning teams is an admin
+// assertion — a member reaching it could point their own record at somebody
+// else's team.
+func TestTenantSetTeam_MemberForbidden(t *testing.T) {
+	h, secret := tenantsFixture(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, secret, "/v1/tenants/admin1/team", "bob", `{"team_id":"team-7"}`))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("member set team = %d, want 403", rec.Code)
+	}
+}
+
+// TestTenantsList_TeamIDMergesTheConnectionRecord pins the constraint
+// tenants.js's team control has to live with: TenantSummary.TeamID falls back
+// to the CONNECTION record's team when the profile carries none, while this
+// route writes the profile. So a present team_id is not evidence the route has
+// ever run for that tenant, and a UI that branched on it would label an
+// unassigned profile "Change team" — walking the operator past the one control
+// that repairs the tenant sitting at connect's no_team wall.
+//
+// Telling assignment from inheritance needs a second field on TenantSummary
+// (internal/lineupapi/tenants.go). Until that exists this test is what stops
+// the merge changing silently underneath the comment in tenants.js that
+// justifies the unconditional label.
+func TestTenantsList_TeamIDMergesTheConnectionRecord(t *testing.T) {
+	users := NewFileUserStore(t.TempDir())
+	for _, u := range []*User{
+		{ID: "admin1", Email: "op@e.test", Role: RoleAdmin, Status: UserActive},
+		{ID: "bob", Email: "bob@e.test", Role: RoleMember, Status: UserActive},
+	} {
+		if err := users.CreateUser(context.Background(), u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	secret := []byte("s")
+	h := Handler(Config{Users: users, Enrollments: users, SessionSecret: secret,
+		WebAuthn: testWebAuthn(t),
+		Connections: &memConnections{conn: &FantraxConnection{
+			UserID: "bob", TeamID: "team-9", Status: ConnVerified}}})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, signedReq(t, secret, http.MethodGet, "/v1/tenants", "admin1", 0))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list tenants = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	var listed TenantsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode tenants: %v (%s)", err, rec.Body)
+	}
+	var bob *TenantSummary
+	for i := range listed.Tenants {
+		if listed.Tenants[i].ID == "bob" {
+			bob = &listed.Tenants[i]
+		}
+	}
+	if bob == nil {
+		t.Fatal("bob missing from GET /v1/tenants")
+	}
+	if bob.TeamID != "team-9" {
+		t.Errorf("listed team_id = %q, want the connection's team-9 — if this "+
+			"merge is gone, tenants.js may label the control by team_id again",
+			bob.TeamID)
+	}
+
+	u, ok, err := users.GetUser(context.Background(), "bob")
+	if err != nil || !ok {
+		t.Fatalf("read bob: %v ok=%v", err, ok)
+	}
+	if u.TeamID != "" {
+		t.Errorf("bob's PROFILE team = %q, want empty — the whole hazard is that "+
+			"the listed value can come from somewhere this route never wrote",
+			u.TeamID)
 	}
 }
