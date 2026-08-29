@@ -322,7 +322,7 @@ func TestReportGSFloor_MarkerWriteFailureStillDelivers(t *testing.T) {
 	if len(h.sent) != 1 {
 		t.Fatalf("sent %d, want 1 — a marker failure must not suppress the alert", len(h.sent))
 	}
-	if !strings.Contains(h.out.String(), "next run will alert again") {
+	if !strings.Contains(h.out.String(), "a later run will alert again") {
 		t.Error("a marker write failure must say so, so the duplicate is explained rather than mysterious")
 	}
 }

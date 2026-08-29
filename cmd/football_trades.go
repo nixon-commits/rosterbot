@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/alertmarker"
 	"github.com/nixon-commits/rosterbot/internal/dynasty"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/notify"
@@ -91,9 +92,19 @@ func runFootballTrades(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Soft: a marker store we cannot build disables dedup, not the alert --
+	// same policy as optimize.go's IL-start/GS-floor markers. EXCEPTION:
+	// --relog reads the marker store AS ITS DATA SOURCE (the marker body is
+	// the only surviving grade-time fact for a pre-log trade), so a relog
+	// with no store to read from has nothing to backfill and must hard-fail
+	// rather than silently rebuild zero rows.
 	markers, err := statestore.FromEnv().FootballTradeMarkers()
 	if err != nil {
-		return fmt.Errorf("init football-trade markers: %w", err)
+		if footballTradesRelog {
+			return fmt.Errorf("init football-trade markers: %w (--relog reads the marker store as its data source and cannot proceed without one)", err)
+		}
+		warn("football-trades: init markers: %v (alert will repeat until resolved)", err)
+		markers = nil
 	}
 
 	now := time.Now().UTC()
@@ -165,11 +176,20 @@ type tradeRunResult struct {
 // alerting path.
 func gradeAndAlertTrades(ctx context.Context, in tradeRunInputs) tradeRunResult {
 	var res tradeRunResult
+
+	// One Marker over the whole poll. in.markers may be nil (the soft-degrade
+	// path in runFootballTrades) -- alertmarker.New(nil, ...) is a working
+	// configuration: no dedup, alert every run, never silence. Its logf
+	// delegates to this package's warn() with the same "football-trades: "
+	// prefix every other line here carries.
+	m := alertmarker.New(in.markers, alertmarker.WithLogf(func(format string, args ...any) {
+		warn("football-trades: "+format, args...)
+	}))
+
 	for _, txn := range in.trades {
-		// check: already alerted for this transaction_id?
-		if _, found, err := in.markers.Get(ctx, txn.TransactionID); err != nil {
-			warn("football-trades: marker read %s: %v (treating as unsent)", txn.TransactionID, err)
-		} else if found {
+		// check: already alerted for this transaction_id? A read failure
+		// reads as unsent and is logged by the Marker itself.
+		if m.Sent(ctx, txn.TransactionID) {
 			res.Skipped++
 			continue
 		}
@@ -186,18 +206,17 @@ func gradeAndAlertTrades(ctx context.Context, in tradeRunInputs) tradeRunResult 
 			continue // do not send, mark or log in a dry-run
 		}
 
-		if err := in.send(title, body); err != nil {
+		// check -> send -> mark, never claim-then-send (rosterbot-chs). A
+		// failed send returns its error with nothing marked, so the next
+		// poll retries; a marker-write failure after a successful send
+		// degrades to a duplicate alert next poll, never to silence.
+		if err := m.Send(txn.TransactionID, []byte(dynasty.TradeVerdictSummary(verdict)), func() error {
+			return in.send(title, body)
+		}); err != nil {
 			warn("football-trades: send failed for %s: %v", txn.TransactionID, err)
 			continue // do not mark: a failed send must retry, never go silent
 		}
 		res.Alerted++
-
-		// mark: check -> send -> mark, never claim-then-send (rosterbot-chs).
-		// A marker-write failure here degrades to a duplicate alert on the
-		// next poll, never to silence.
-		if err := in.markers.Publish(txn.TransactionID, []byte(dynasty.TradeVerdictSummary(verdict))); err != nil {
-			warn("football-trades: marker write %s: %v (a repeat poll will alert again)", txn.TransactionID, err)
-		}
 
 		// Logged only once the alert has actually gone out, so the log means
 		// exactly "what was reported" -- a send that failed will retry next

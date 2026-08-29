@@ -44,17 +44,6 @@ func NewClient() *Client {
 	return &Client{http: http.Client{Timeout: 10 * time.Second}}
 }
 
-// cached is the shared cache-or-fetch branch every public method below uses:
-// short-circuit straight to fetch when caching is disabled (CacheDir == ""),
-// otherwise read-through a FileCache at ttl keyed on key. Mirrors
-// internal/fantrax/cached.go's cached[T] helper.
-func cached[T any](c *Client, ttl time.Duration, key string, fetch func() (T, error)) (T, error) {
-	if c.CacheDir == "" {
-		return fetch()
-	}
-	return cache.New[T](c.CacheDir, ttl).Get(key, fetch)
-}
-
 func (c *Client) get(path string, out any) error {
 	resp, err := c.http.Get(baseURL + path)
 	if err != nil {
@@ -103,7 +92,7 @@ func checkKeyParts(parts ...string) error {
 
 // League fetches a league's static configuration.
 func (c *Client) League(leagueID string) (*League, error) {
-	return cached(c, RosterTTL, cache.Key("sleeper-league", leagueID), func() (*League, error) {
+	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-league", leagueID), RosterTTL, func() (*League, error) {
 		return c.fetchLeague(leagueID)
 	})
 }
@@ -118,7 +107,7 @@ func (c *Client) fetchLeague(leagueID string) (*League, error) {
 
 // Rosters fetches every team's roster in the league.
 func (c *Client) Rosters(leagueID string) ([]Roster, error) {
-	return cached(c, RosterTTL, cache.Key("sleeper-rosters", leagueID), func() ([]Roster, error) {
+	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-rosters", leagueID), RosterTTL, func() ([]Roster, error) {
 		return c.fetchRosters(leagueID)
 	})
 }
@@ -133,7 +122,7 @@ func (c *Client) fetchRosters(leagueID string) ([]Roster, error) {
 
 // Users fetches every league member.
 func (c *Client) Users(leagueID string) ([]User, error) {
-	return cached(c, RosterTTL, cache.Key("sleeper-users", leagueID), func() ([]User, error) {
+	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-users", leagueID), RosterTTL, func() ([]User, error) {
 		return c.fetchUsers(leagueID)
 	})
 }
@@ -149,7 +138,7 @@ func (c *Client) fetchUsers(leagueID string) ([]User, error) {
 // TradedPicks fetches every draft pick that has changed hands from its
 // original owner.
 func (c *Client) TradedPicks(leagueID string) ([]TradedPick, error) {
-	return cached(c, RosterTTL, cache.Key("sleeper-traded-picks", leagueID), func() ([]TradedPick, error) {
+	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-traded-picks", leagueID), RosterTTL, func() ([]TradedPick, error) {
 		return c.fetchTradedPicks(leagueID)
 	})
 }
@@ -165,7 +154,7 @@ func (c *Client) fetchTradedPicks(leagueID string) ([]TradedPick, error) {
 // Transactions fetches every transaction filed under the given week
 // ("round" in Sleeper's API — regular-season week number).
 func (c *Client) Transactions(leagueID string, week int) ([]Transaction, error) {
-	return cached(c, RosterTTL, cache.Key("sleeper-transactions", leagueID, strconv.Itoa(week)), func() ([]Transaction, error) {
+	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-transactions", leagueID, strconv.Itoa(week)), RosterTTL, func() ([]Transaction, error) {
 		return c.fetchTransactions(leagueID, week)
 	})
 }
@@ -180,7 +169,7 @@ func (c *Client) fetchTransactions(leagueID string, week int) ([]Transaction, er
 
 // State fetches the current NFL week/season.
 func (c *Client) State() (*NFLState, error) {
-	return cached(c, RosterTTL, cache.Key("sleeper-state"), func() (*NFLState, error) {
+	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-state"), RosterTTL, func() (*NFLState, error) {
 		return c.fetchState()
 	})
 }
@@ -197,7 +186,7 @@ func (c *Client) fetchState() (*NFLState, error) {
 // cached at PlayersTTL when CacheDir is set — this must never be called in a
 // loop; callers should fetch it once per run and pass the map along.
 func (c *Client) PlayersNFL() (map[string]Player, error) {
-	return cached(c, PlayersTTL, cache.Key("sleeper-players-nfl"), func() (map[string]Player, error) {
+	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-players-nfl"), PlayersTTL, func() (map[string]Player, error) {
 		return c.fetchPlayersNFL()
 	})
 }
@@ -224,7 +213,7 @@ func (c *Client) UserByName(username string) (*User, error) {
 	if err := checkKeyParts(username); err != nil {
 		return nil, err
 	}
-	return cached(c, RosterTTL, cache.Key("sleeper-user", username), func() (*User, error) {
+	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-user", username), RosterTTL, func() (*User, error) {
 		return c.fetchUserByName(username)
 	})
 }
@@ -247,7 +236,7 @@ func (c *Client) LeaguesForUser(userID, sport, season string) ([]League, error) 
 	if err := checkKeyParts(userID, sport, season); err != nil {
 		return nil, err
 	}
-	return cached(c, RosterTTL, cache.Key("sleeper-user-leagues", userID, sport, season),
+	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-user-leagues", userID, sport, season), RosterTTL,
 		func() ([]League, error) {
 			return c.fetchLeaguesForUser(userID, sport, season)
 		})

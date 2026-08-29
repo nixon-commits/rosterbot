@@ -265,6 +265,31 @@ var (
 	// Producer is empty because there genuinely is not one: any job that loads
 	// projections can be the run that first serves a stale copy.
 	StaleCacheAlerts = Artifact{Name: "Stale Cache Markers", S3Prefix: "alerts/stale-cache/", LocalDir: ".alerts/stale-cache", Durable: true}
+
+	// OpsAlertMarkers holds one dedup marker per alert the opsnotify Lambda
+	// has already sent — stopped-task failures, heartbeat Overdue, build
+	// drift, CIS alarms — so a repeat delivery of the same event stays quiet
+	// (rosterbot-chs). Same no-MaxAge, absent-from-All() shape as ILStarts: a
+	// marker exists only once something fired, so an age check would read the
+	// healthy case as stale. The CDK expires the prefix on a 30-day lifecycle
+	// rule (far past EventBridge's retry horizon).
+	//
+	// NOT PerTenant: the notifier is one deployment-wide Lambda, and where a
+	// tenant matters it is already inside the marker key (opsalert.MarkerKey
+	// carries the (command, tenant) pair).
+	//
+	// LocalDir is empty because there is no local twin — the notifier runs
+	// only as the deployed Lambda, and nothing constructs a file-backed store
+	// for this prefix.
+	//
+	// Declared here so the prefix has one authority. It used to be a literal
+	// in three places — opsnotify/marker.go, the CDK lifecycle rule, and the
+	// CDK IAM grant — with nothing catching a disagreement; the identical
+	// arrangement is what let the tenant-roster reader drift from its writer
+	// and blind alerting for three days (rosterbot-3vr). opsnotify now imports
+	// this constant; infra/ is its own Go module and cannot, so its two
+	// literals carry "must match" comments instead.
+	OpsAlertMarkers = Artifact{Name: "Ops-Alert Markers", S3Prefix: "opsalert/", Durable: true, Producer: "opsnotify"}
 )
 
 // All returns every artifact worth listing, in the order the status page shows

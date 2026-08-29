@@ -101,6 +101,10 @@ _Avoid_: value history, dynasty index, standings store.
 The one known discontinuity in the Team Value Store. `rosterbot-5z7` fixed the HKB namesake join, which had been resolving colliding normalized names by scrape order — so partitions `dt` ≤ 2026-08-13 carry namesake-corrupted values and cannot be restated. **All ten teams shifted, in both directions** (+1105 to −10), measured from the two surviving S3 object versions of that day's own partition. It reads exactly like a trade or waiver haul and nothing in the data distinguishes it, so a team-vs-team comparison straddling this date is comparing two measurement regimes. Full table and reasoning in `docs/adr/0002`'s 2026-08-14 amendment.
 _Avoid_: the HKB bug, the Garcia fix (it was never one team).
 
+**Alert Marker**:
+The durable dedup record behind a one-shot operational alert, and the discipline that governs it: check → send → mark (never claim-then-send), every marker-store failure degrading to a duplicate alert and never to silence, a nil store disabling dedup rather than the alert, and dry-run skipping both send and mark. The discipline lives once in `internal/alertmarker` (a stdlib-only leaf; `lineupapi.BlobStore` satisfies its `Store` structurally); what stays per-site is the key grammar — which facts identify "this alert" (player+date, season+period, cache key+episode, transaction id) — and the dry-run guard. Sites: the stale-cache, IL-start, GS-floor and football-trade alerts, plus the `opsnotify` Lambda's task/heartbeat/drift/alarm markers under `layout.OpsAlertMarkers`.
+_Avoid_: dedup flag, sent-file, alert cache (it is durable state, not a Cache — a marker is never TTL-evicted while its condition stands).
+
 ## Dynasty Football
 
 Sleeper (league/roster state, public read-only API, no key) + StatsGuy (dynasty valuations, `api.statsguyfantasy.com`, no key). Read-only throughout: Sleeper has no lineup-write endpoint, so the optimize-and-apply spine (Slot, Weekly Period, ApplyLineup, …) has no football counterpart — football's two commands are a value store and a trade monitor, not an optimizer.
