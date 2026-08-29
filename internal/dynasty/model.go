@@ -37,6 +37,12 @@ type TeamStanding struct {
 
 	RosteredCount int `json:"rosteredCount"`
 	MatchedCount  int `json:"matchedCount"`
+
+	// Unmatched names the rostered players behind a MatchedCount shortfall.
+	// Empty on a fully-matched team AND on a partition written before
+	// Coverage.Unmatched was persisted -- the two are told apart by the counts,
+	// never by this field alone.
+	Unmatched []string `json:"unmatched,omitempty"`
 }
 
 // BuildModel rolls the stored rows + coverage into the standings snapshot for
@@ -84,6 +90,7 @@ func BuildModel(rows []Row, coverage []Coverage, generatedAt time.Time) *Model {
 		if t, ok := byTeam[c.TeamID]; ok {
 			t.RosteredCount = c.RosteredCount
 			t.MatchedCount = c.MatchedCount
+			t.Unmatched = c.Unmatched
 		}
 	}
 

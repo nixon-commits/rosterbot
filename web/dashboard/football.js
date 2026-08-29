@@ -23,7 +23,7 @@
 // names and asset names from the NFL player dump, neither of them vetted. A
 // real league team is named "Zatch's mom Hawk Tua'd".
 import { api } from "./api.js";
-import { el, help } from "./render.js";
+import { el, help, unmatchedText, wireUnmatchedPopovers } from "./render.js";
 
 const FORMATS = [
   ["sf_dynasty", "SF Dynasty"],
@@ -185,9 +185,15 @@ function numCell(text, extraClass) {
   return td;
 }
 
-function coverageCell(matched, rostered) {
+function coverageCell(matched, rostered, unmatched) {
   const td = el("td", "num cov" + (matched < rostered ? " warn" : ""));
   td.textContent = `${matched}/${rostered}`;
+  // dataset, not title: a native tooltip is invisible on touch, so the names
+  // are handed to render.js's hover/focus panel instead. Property assignment,
+  // not attribute interpolation — these are Sleeper player-dump names, on the
+  // same footing as the team names above.
+  const text = unmatchedText(matched, rostered, unmatched);
+  if (text) td.dataset.unmatched = text;
   return td;
 }
 
@@ -242,13 +248,14 @@ function paintStandings(host, model, state) {
 
     tr.appendChild(numCell(fmt(t[sKey])));
     tr.appendChild(numCell(fmt(t[fKey]), "muted"));
-    tr.appendChild(coverageCell(t.matchedCount, t.rosteredCount));
+    tr.appendChild(coverageCell(t.matchedCount, t.rosteredCount, t.unmatched));
 
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
 
   host.replaceChildren(table);
+  wireUnmatchedPopovers(host);
 }
 
 // ---------------------------------------------------------------- trades

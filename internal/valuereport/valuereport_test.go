@@ -1,6 +1,7 @@
 package valuereport
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
@@ -66,5 +67,32 @@ func TestBuildModel_LatestSortedByTotalDesc(t *testing.T) {
 	// Coverage carried through: Beta on day 2 matched 8/10.
 	if m.Latest[1].MatchedCount != 8 || m.Latest[1].RosteredCount != 10 {
 		t.Fatalf("coverage not carried: %+v", m.Latest[1])
+	}
+}
+
+// The unmatched names are what the Matched column's tooltip shows, and they
+// reach the page only through LatestRow. A team that matched everyone carries
+// none -- so the tooltip logic reads the counts, not this field's emptiness.
+func TestBuildModel_LatestCarriesUnmatchedNames(t *testing.T) {
+	rows := fixtureRows()
+	for i := range rows {
+		if rows[i].Dt == "2026-07-13" && rows[i].TeamID == "t2" {
+			rows[i].Unmatched = []string{"Obscure Prospect", "Late Call-Up"}
+		}
+	}
+
+	m := BuildModel(rows)
+	byTeam := map[string]LatestRow{}
+	for _, l := range m.Latest {
+		byTeam[l.TeamID] = l
+	}
+
+	got := byTeam["t2"].Unmatched
+	want := []string{"Obscure Prospect", "Late Call-Up"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("t2 Unmatched = %v, want %v", got, want)
+	}
+	if u := byTeam["t1"].Unmatched; len(u) != 0 {
+		t.Errorf("t1 Unmatched = %v, want empty (fully matched)", u)
 	}
 }

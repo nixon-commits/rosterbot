@@ -36,7 +36,7 @@ func TestRow_DerivedTotals(t *testing.T) {
 
 func TestNDJSON_RoundTrip(t *testing.T) {
 	in := []Row{sampleRow(), {Dt: "2026-07-12", TeamID: "t2", TeamName: "Beta"}}
-	in[0].Unmatched = []string{"Some Unmatched Player"} // json:"-": must not survive the round trip
+	in[0].Unmatched = []string{"Some Unmatched Player"} // persisted: the dashboard's only "which players" answer
 	b, err := MarshalNDJSON(in)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -48,7 +48,8 @@ func TestNDJSON_RoundTrip(t *testing.T) {
 	if len(out) != 2 {
 		t.Fatalf("want 2 rows, got %d", len(out))
 	}
-	want := sampleRow() // Unmatched left nil: a re-read Row never inherits it
+	want := sampleRow()
+	want.Unmatched = []string{"Some Unmatched Player"} // must survive: a name dropped here is unrecoverable
 	if !reflect.DeepEqual(out[0], want) {
 		t.Errorf("row 0 round-trip mismatch:\n got %+v\nwant %+v", out[0], want)
 	}

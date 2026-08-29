@@ -305,6 +305,10 @@ tr.lead td { font-weight: 600; }
 td.over { color: var(--danger); }
 td.under { color: var(--success); }
 td.cov.warn { color: var(--danger); }
+/* The red already marks exactly the cells carrying an unmatched-player list, so
+   it doubles as the affordance; cursor and a focus ring say the cell is live. */
+td.cov[data-unmatched] { cursor: help; }
+td.cov[data-unmatched]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .muted { color: var(--muted); }
 .sub { font-size: .85rem; margin: var(--s2) 0; }
@@ -408,6 +412,29 @@ td.cov.warn { color: var(--danger); }
   letter-spacing: 0;
 }
 .help-pop::backdrop { background: rgba(0, 0, 0, .35); }
+
+/* .cov-pop trades .help-pop's UA viewport centering for a position beside its
+   cell (render.js sets left/top). margin:0 is load-bearing — the UA gives a
+   popover `margin: auto`, which is the centering, and it would fight the
+   coordinates. The backdrop is cleared because dimming the page behind a panel
+   that opens on HOVER would strobe the whole dashboard as the mouse crosses a
+   table; .help-pop keeps its dim, where a deliberate click earns it. */
+.cov-pop {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  max-width: min(20rem, calc(100vw - 2rem));
+  /* The list length is not bounded by anything: a StatsGuy or HKB outage
+     unmatches a whole roster, and 40 names would run off the screen with no way
+     to reach the end. render.js clamps the panel onto the viewport, so without
+     a cap the overflow is simply unreadable rather than scrolled. */
+  max-height: min(60vh, 22rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--s3) var(--s4);
+  font-size: .8125rem;
+}
+.cov-pop::backdrop { background: transparent; }
 
 @media (prefers-reduced-motion: no-preference) {
   .help-pop { transition: opacity .12s ease, overlay .12s allow-discrete, display .12s allow-discrete; }

@@ -59,12 +59,18 @@ type Row struct {
 	MatchedCount  int `json:"matched_count"`
 
 	// Unmatched lists the rostered player names that produced RosteredCount
-	// > MatchedCount in the run that built this Row — the operator-facing
-	// answer to "which players." json:"-" because it is a diagnostic for
-	// the run that computed it, not part of the durable schema: a Row
-	// read back from the store round-trips through encoding/json, which
-	// leaves this nil rather than replaying a stale run's unmatched list.
-	Unmatched []string `json:"-"`
+	// > MatchedCount — the answer to "which players." Persisted, and the
+	// staleness objection that once kept it out does not apply: it rides in
+	// the SAME Row as the two counts it explains, so a re-read carries the
+	// names of exactly the run whose numbers are being rendered. Same fact,
+	// finer grain.
+	//
+	// Nil is therefore ambiguous and must never be read as "everyone matched".
+	// This store is NoBackfill (docs/adr/0002), so every partition written
+	// before this field was persisted decodes to nil FOREVER while still
+	// carrying MatchedCount < RosteredCount; only the counts separate "nothing
+	// to record" from "not recorded". render.js's unmatchedText enforces that.
+	Unmatched []string `json:"unmatched,omitempty"`
 }
 
 // TotalValue is the team's whole-roster HKB value (all four leaves).
