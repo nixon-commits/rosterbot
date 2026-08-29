@@ -81,7 +81,22 @@ function tenantRow(t, root) {
   if (parked) who.append(el("span", "badge badge-failed", "parked"));
   tr.append(who);
 
-  tr.append(el("td", null, t.team_id || "—"));
+  // An unset team is not blank information: connect refuses a tenant whose
+  // record names no team (no_team), so this cell reads the same way the Passkey
+  // column's "None yet" does — invited, but not yet able to finish.
+  //
+  // Only the EMPTY case is claimed here. team_id is a merged field
+  // (internal/lineupapi/tenants.go falls back to the connection record's team
+  // when the profile has none) while POST /v1/tenants/{id}/team writes the
+  // profile, so a present value is not evidence this control has ever run and
+  // nothing here may render it as one.
+  const team = el("td");
+  if (t.team_id) {
+    team.append(el("span", "muted", t.team_id));
+  } else {
+    team.append(el("span", "badge badge-failed", "Not set"));
+  }
+  tr.append(team);
 
   // Zero passkeys is the "invited but never registered" signal; absent means
   // the credential store could not answer, which must not read as zero.
@@ -147,6 +162,37 @@ function actionsCell(t, root, parked) {
   });
   td.append(writesBtn);
 
+  // Team binding was CLI-only until rosterbot-yupr (`rosterbot user set-team`,
+  // prod env vars required), which is why all three pilot testers were left
+  // sitting at the no_team wall with no control on this page that could clear
+  // it.
+  //
+  // The label is unconditional. "Change team" off a present team_id would be a
+  // claim the wire cannot support: team_id merges the connection record's team
+  // over an empty profile one, so a tenant whose profile is still unassigned
+  // would read as already bound and the operator would walk past the one
+  // control that repairs them. Labelling both cases "Set team" understates a
+  // real reassignment, which the server refuses anyway.
+  const teamBtn = el("button", null, "Set team");
+  teamBtn.addEventListener("click", async () => {
+    const name = t.display_name || t.email || String(t.id);
+    const next = window.prompt(
+      `Fantrax team id for ${name}. This records which team to PROVE — ` +
+      `ownership is still proven at connect against Fantrax itself, so naming ` +
+      `the wrong one makes their next connect fail rather than granting it.`,
+      t.team_id || "");
+    if (next === null) return;
+    try {
+      // A cleared field is posted rather than swallowed: the server refuses it
+      // with the reason (an empty team is exactly what connect rejects), and a
+      // silent return would leave the operator staring at an unchanged row with
+      // no explanation. The reassignment refusal reaches them the same way.
+      await tenantSetTeam(t.id, next.trim());
+      rerender();
+    } catch (err) { fail(err); }
+  });
+  td.append(teamBtn);
+
   const recoverBtn = el("button", null, "Recovery link");
   recoverBtn.addEventListener("click", async () => {
     try {
@@ -176,6 +222,34 @@ function actionsCell(t, root, parked) {
   return td;
 }
 
+// tenantSetTeam POSTs the team binding.
+//
+// It is the one tenant call not on api.js's `api` object, and it belongs there
+// beside tenantSetStatus — it is written out here only because api.js was
+// outside the scope of the change that added this control. Fold it in and
+// delete this. It mirrors request()'s contract exactly: same-origin, JSON
+// body, and an ApiError carrying the server's own message, which is what puts
+// the reassignment refusal's release instructions in front of the operator.
+async function tenantSetTeam(id, teamID) {
+  const res = await fetch(`/v1/tenants/${encodeURIComponent(id)}/team`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ team_id: teamID }),
+  });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try {
+      const data = await res.json();
+      if (data.error) msg = data.error;
+    } catch {
+      // body wasn't JSON; keep statusText
+    }
+    throw new ApiError(res.status, msg);
+  }
+  return res.json();
+}
+
 // inviteCard is the admin's minting form — the dashboard twin of `rosterbot
 // invite`. Email is required; team can be attached later via connect.
 function inviteCard(root) {
@@ -195,7 +269,9 @@ function inviteCard(root) {
   name.placeholder = "display name";
   const team = el("input");
   team.type = "text";
-  team.placeholder = "Fantrax team id (optional)";
+  // Named for its consequence, not its optionality: every pilot tester was
+  // invited with this box empty and hit connect's no_team wall.
+  team.placeholder = "Fantrax team id (optional — without it they cannot connect yet)";
   const submit = el("button", "primary", "Mint invite link");
   const status = el("p", "muted small");
   form.append(email, name, team, submit, status);

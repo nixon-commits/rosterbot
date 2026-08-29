@@ -523,6 +523,30 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 			DryRun: cfg.DryRun,
 			Out:    out,
 		})
+	} else {
+		// The disabled path owes the reader a line, on the same reasoning as
+		// the "gs floor check:" and "il-start check:" coverage lines above it:
+		// three things are dropped here — the weekly CAP (applyGSGate no-ops on
+		// a nil budget), the rosterbot-dpm FLOOR, and the rosterbot-cs9p floor
+		// ALERT — and without a notice the result is byte-indistinguishable
+		// from a healthy run. Worse, it is indistinguishable from the fail-open
+		// cascade, which drops the same three for a genuinely broken reason and
+		// at least says "GS budget: unavailable — limit disabled": the env gate
+		// used to log LESS than the failure mode it mimics, and the 2026-08-29
+		// audit read it as a live cascade regression.
+		//
+		// It goes to out rather than prog.Logf because Logf is verbose-only —
+		// a notice invisible on the plain `optimize --dry-run` that produced
+		// the misreading would be the same silence under another name.
+		//
+		// "unset or not truthy" rather than the "not set" this wording is
+		// otherwise byte-shared with cmd/gs_check.go for: config.envBool
+		// returns its fallback on an UNPARSEABLE value as well as an empty one,
+		// discarding the ParseBool error, so `GS_TRACKING_ENABLED=yes` lands
+		// here too. Naming the wrong cause would send an operator to echo a var
+		// that is already set and back to guessing — a smaller copy of the
+		// misdiagnosis this line exists to end.
+		fmt.Fprintln(out, "  gs budget check: GS tracking disabled (GS_TRACKING_ENABLED unset or not truthy) — no cap, no floor, no floor alert this run")
 	}
 
 	// Build name/slot lookup maps for display.

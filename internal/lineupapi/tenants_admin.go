@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -94,6 +95,106 @@ func (cfg Config) handleSetTenantStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": u.ID, "status": u.Status})
+}
+
+// ErrTeamRequired and ErrTeamReassignment are the two refusals SetTeam adds on
+// top of the store's own ErrTeamTaken.
+//
+// ErrTeamReassignment is the load-bearing one. UserStore.ClaimTeam writes the
+// new team's claim and updates the profile but never RELEASES the old team's
+// claim, so moving a tenant between teams would leave the previous team
+// recorded as theirs in the index while their profile says otherwise —
+// permanently unassignable to anybody, with nothing on the Tenants page
+// explaining why. Refusing keeps that impossible without pushing a release
+// path into ClaimTeam, whose other implementation (ddbuser) would need the
+// same change and whose only other caller is connect. It is the same trap
+// UserStore.DeleteUser exists to avoid by releasing both claims.
+var (
+	ErrTeamRequired     = errors.New("lineupapi: a fantrax team id is required")
+	ErrTeamReassignment = errors.New("lineupapi: user already holds a different fantrax team")
+)
+
+// SetTeam binds teamID to id, refusing every case that would leave the team
+// claim index inconsistent.
+//
+// This is the single home of that rule, shared by POST /v1/tenants/{id}/team.
+// cmd/user_set_team.go's setTeam is a second copy of it that predates this one
+// and should be deleted in favour of this function — two copies of a guard
+// whose whole job is keeping an index consistent is exactly the divergence the
+// guard exists to prevent.
+//
+// Assignment is an ADMIN ASSERTION, not a grant: it records which team to
+// prove, and connect still proves it against Fantrax's own MyTeamIDs. Naming
+// the wrong team confers nothing — it makes that tenant's next connect fail
+// with team_not_owned.
+func SetTeam(ctx context.Context, users UserStore, id UserID, teamID string) error {
+	// An empty team is precisely the state connect refuses as no_team, so
+	// writing one would be a control whose only effect is recreating the wall
+	// it exists to clear.
+	if teamID == "" {
+		return ErrTeamRequired
+	}
+	u, ok, err := users.GetUser(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errNoSuchUser
+	}
+	if u.TeamID != "" && u.TeamID != teamID {
+		return fmt.Errorf("%w: %s holds %s", ErrTeamReassignment, id, u.TeamID)
+	}
+	// ClaimTeam, never a PutUser of the field: a profile-only write would leave
+	// the team unclaimed in the index and assignable to a second tenant, which
+	// is the one thing ErrTeamTaken exists to prevent. Re-claiming a team the
+	// user already holds is idempotent, so a double-click is a no-op.
+	return users.ClaimTeam(ctx, id, teamID)
+}
+
+// handleSetTenantTeam binds a Fantrax team to a tenant — the dashboard twin of
+// `rosterbot user set-team`, and the last management action that was CLI-only
+// (rosterbot-yupr). Every pilot tester was invited with the invite form's
+// optional team field skipped, aiming each of them at connect's no_team wall
+// that nothing on this page could clear.
+func (cfg Config) handleSetTenantTeam(w http.ResponseWriter, r *http.Request) {
+	if cfg.Users == nil {
+		writeErr(w, http.StatusNotImplemented, "user directory not configured")
+		return
+	}
+	id := UserID(r.PathValue("id"))
+
+	var body struct {
+		TeamID string `json:"team_id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "malformed request")
+		return
+	}
+
+	err := SetTeam(r.Context(), cfg.Users, id, body.TeamID)
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrTeamRequired):
+		writeErr(w, http.StatusBadRequest, "a fantrax team id is required (an empty team is what connect refuses as no_team)")
+		return
+	case errors.Is(err, errNoSuchUser):
+		writeErr(w, http.StatusNotFound, "no such user")
+		return
+	case errors.Is(err, ErrTeamReassignment):
+		// Spelled out rather than shortened: the operator's next move is to
+		// release the old claim deliberately, and a bare "conflict" would send
+		// them looking for the wrong problem.
+		writeErr(w, http.StatusConflict, err.Error()+" — reassigning would orphan that claim. "+
+			"Release it deliberately (delete and re-invite) before reassigning")
+		return
+	case errors.Is(err, ErrTeamTaken):
+		writeErr(w, http.StatusConflict, "fantrax team already claimed")
+		return
+	default:
+		writeErr(w, http.StatusBadGateway, "could not set tenant team")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "team_id": body.TeamID})
 }
 
 // handleSetTenantAutoApply is the operator's kill switch for one tenant's

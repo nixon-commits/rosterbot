@@ -72,9 +72,33 @@ func openEnrollmentStore(ctx context.Context) (lineupapi.UserStore, lineupapi.En
 	return s, s, nil
 }
 
+// enrollmentBackend names the store an invite will be minted against, read from
+// the same two environment variables openEnrollmentStore branches on.
+//
+// The branch is otherwise invisible: a link minted against local files looks
+// identical on the terminal, and in the message the admin then sends, to a
+// production one — and only fails when the invitee clicks it days later. It is
+// derived rather than reported by openEnrollmentStore so the dry run, which
+// deliberately constructs no store, can print it too.
+func enrollmentBackend() string {
+	if statestore.Bucket() == "" {
+		return fmt.Sprintf("local files in %s (STATE_BUCKET unset — links minted here "+
+			"do not work in production)", inviteLocalDir)
+	}
+	if table := os.Getenv("IDENTITY_TABLE"); table != "" {
+		return fmt.Sprintf("DynamoDB table %s", table)
+	}
+	return "DynamoDB — but IDENTITY_TABLE is unset, so this will fail"
+}
+
 func runInvite(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	out := cmd.OutOrStdout()
+
+	// Printed FIRST, before anything is created and on the dry run too, because
+	// it is the one fact the rest of the output cannot imply: the token, the
+	// user id and the expiry look identical whichever store they came from.
+	fmt.Fprintf(out, "backend %s\n", enrollmentBackend())
 
 	// A dry run answers "who would this create, and is the email free?" without
 	// consuming a user id or leaving a live token behind. It is also what lets

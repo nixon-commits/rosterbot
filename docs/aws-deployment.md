@@ -118,7 +118,7 @@ spec `docs/superpowers/specs/2026-06-15-aws-migration-design.md` for rationale.
 
   Redeem the returned link on the origin the RP config currently names.
 - **SSM Parameter Store** (`/rosterbot/*`, SecureString) — all secrets, injected as task env.
-- **CodeBuild** — on push to `main`, builds + pushes the image to ECR, then runs **`cdk deploy --all -c enableBuild=true`** so infrastructure changes (schedules, task defs, IAM, Lambda) ship on merge — not just the image — before publishing the dashboard (reading the deploy's own outputs, see above) and launching the `projection-site` task (`ecs:RunTask` via `taskDef.GrantRun`, reusing `TaskSg` + public subnets) so it re-renders immediately with the new image. Before the `cdk deploy` step existed, a PR touching `infra/` merged green but its infra change sat undeployed until someone ran `cdk deploy` by hand (this is what left the `Archive` schedule inert for ~25h); deploying first also means a broken infra change now fails the build before the dashboard/projection-site steps run, rather than shipping around it. The `--all` is mandatory too, and for a blunter reason: the app has held more than one stack since `InfraCertStack` (the us-east-1 rosterbot.dev certificate), and cdk refuses a bare `cdk deploy` on a multi-stack app — it exits 1, so every push to `main` fails at this step until the flag is there. Nothing local catches that; `go build`/`go vet`/`go test`/`make build-modules`/`make check-pins` are all green and a developer running `cdk deploy --all` by hand sees it work, so it surfaces only in CodeBuild after merge (`infra/buildspec_test.go` now pins it). The `enableBuild=true` is mandatory — without it the deploy would delete the CodeBuild project running it. cdk works through the bootstrap roles, so the build role is granted only `sts:AssumeRole` on `cdk-hnb659fds-*`. The build host ships Go 1.20 + no cdk CLI, so the `install` phase adds Go 1.25 (`GOTOOLCHAIN=auto` upgrades further if a go.mod requires it) and the pinned cdk CLI. Gated by `enableBuild`.
+- **CodeBuild** — on push to `main`, builds + pushes the image to ECR, then runs **`cdk deploy --all -c enableBuild=true`** so infrastructure changes (schedules, task defs, IAM, Lambda) ship on merge — not just the image — before publishing the dashboard (reading the deploy's own outputs, see above) and launching the `projection-site` task (`ecs:RunTask` via `taskDef.GrantRun`, reusing `TaskSg` + public subnets) so it re-renders immediately with the new image. Before the `cdk deploy` step existed, a PR touching `infra/` merged green but its infra change sat undeployed until someone ran `cdk deploy` by hand (this is what left the `Archive` schedule inert for ~25h); deploying first also means a broken infra change now fails the build before the dashboard/projection-site steps run, rather than shipping around it. The `--all` is mandatory too, and for a blunter reason: the app has held more than one stack since `InfraCertStack` (the us-east-1 rosterbot.dev certificate), and cdk refuses a bare `cdk deploy` on a multi-stack app — it exits 1, so every push to `main` fails at this step until the flag is there. Nothing local catches that; `go build`/`go vet`/`go test`/`make build-modules`/`make check-pins` are all green and a developer running `cdk deploy --all` by hand sees it work, so it surfaces only in CodeBuild after merge (`infra/buildspec_test.go` now pins it). The `enableBuild=true` is mandatory — without it the deploy would delete the CodeBuild project running it. cdk works through the bootstrap roles, so the build role is granted only `sts:AssumeRole` on `cdk-hnb659fds-*`. The build host ships Go 1.20 + no cdk CLI, so the `install` phase adds Go 1.25 (`GOTOOLCHAIN=auto` upgrades further if a go.mod requires it) and the pinned cdk CLI. Gated by `enableBuild`. Because this fires on `main` only, **a `cdk deploy` run from a feature branch is undone by the next merge to `main`** — see the warning under *Common operations* before deploying from a branch.
 - **Ops notifications** — three EventBridge rules target one Lambda (`OpsNotify`, built from `opsnotify/`), which reads `PUSHOVER_USER_KEY` / `PUSHOVER_API_TOKEN` from SSM and posts to the personal ops channel at priority 0.
   - `BuildNotifyRule` matches the `Build` project's `CodeBuild Build State Change` events for `SUCCEEDED` / `FAILED` / `STOPPED`. This catches every failure phase (install/pre_build/build/deploy) — a buildspec curl would miss install/pre_build failures since `post_build` never runs then. Created only under `-c enableBuild=true`; the first build that introduces the rule won't notify itself, every subsequent build does.
   - `TaskFailRule` matches `ECS Task State Change` for any task in the cluster reaching `STOPPED` (rosterbot-naz). Whether that stop was a *failure* is decided in Go, not by the event pattern — see `internal/opsalert`. The Lambda derives a failure streak from the run ledger and pushes only on transitions: first failure, third consecutive, and recovery. A stopped task with no ledger record at all never reached the entrypoint's final write (OOM, image-pull, SIGKILL) and always alerts.
@@ -157,13 +157,86 @@ that does not name the real cause.
 
 ## Common operations
 
+> ### ⚠️ A `cdk deploy` from a feature branch is TEMPORARY — the next push to `main` reverts it
+>
+> **Mechanism.** The CodeBuild webhook fires on a push to `main` and nothing else —
+> `FilterGroup_InEventOf(EventAction_PUSH).AndBranchIs(jsii.String("main"))`
+> (`infra/infra.go:1066-1068`) — and that build runs `cdk deploy --all` from **main's** `infra/`.
+> Within any stack main also declares, CloudFormation deletes the resources your branch added,
+> because main's template does not declare them. Correct behaviour: main is the source of truth.
+> The problem is that it is invisible, and that it is triggered by someone else's unrelated merge.
+>
+> **The inverse hazard, for a branch that adds a whole STACK.** `--all` deploys the stacks in
+> *main's* app, so a stack that exists only on your branch is not in that set and is never
+> touched — it is not reverted, it **survives as an orphan**, drifting and billing, with nothing
+> in this repo that lists it. Do not read the paragraph above as "main cleans up after me": it
+> cleans up inside stacks it knows about, and knows nothing about the rest. The app already holds
+> two stacks (`InfraStack`, `InfraCertStack`), so this is a reachable shape, not a hypothetical.
+> If you deployed a branch-only stack, `cdk destroy <StackName>` it yourself before you move on.
+>
+> **Observed.** 2026-08-18 (rosterbot-jloe.2/.3): four Route 53 alias records for
+> `dash`/`recaps.rosterbot.dev` were deployed from a branch and verified live — HTTP 200, valid
+> TLS, requests in the CloudFront access log at 14:45:41Z. At **14:45:58Z, 17 seconds later**, a
+> build for an unrelated main commit (`ecee15d`) deployed main's infra and deleted all four. Both
+> hostnames went NXDOMAIN. Nothing was wrong with either deploy. This is not a window you can
+> outrun by being quick.
+>
+> **What it costs you if you forget.** The failure is silent and inverted: a thing you verified
+> stops working later, for a reason unconnected to anything you did. Someone debugging that
+> without knowing this behaviour will reasonably suspect DNS propagation, the registrar, or their
+> own CDK — none of which are involved. So: **"I deployed it and verified it live" is not evidence
+> that a change is deployed.**
+>
+> **What to do instead.**
+>
+> - **To preview a change:** `cdk diff --all -c enableBuild=true`. The context flag is not
+>   optional. `diff` synthesizes the same template `deploy` would, and the `Build` project exists
+>   only inside the `enableBuild` branch (`infra/infra.go:1060`), so omitting it makes the diff
+>   report the CodeBuild project running CI as being destroyed — observed, and it buries whatever
+>   you were actually trying to read.
+> - **To ship a change:** merge it to `main`. That build is the only one that deploys durably.
+>   Nothing else does.
+> - **To verify something live from a branch:** deploy **with the context flag**, check it
+>   *immediately*, and treat the result as a dry run that expires at the next merge to `main` —
+>   then re-verify after your branch lands, because that is a different deploy.
+>   ```bash
+>   cd infra && cdk deploy --all -c enableBuild=true --require-approval never
+>   ```
+>   **`-c enableBuild=true` is not optional here, and leaving it off is worse than the hazard this
+>   whole box is about.** The `Build` project and its webhook exist only inside that context branch
+>   (`infra/infra.go:1060-1189`), so a deploy without it *deletes CI*. There is then no build on
+>   the next push to `main` — the merge that this box promises will revert your branch state never
+>   runs, your branch state becomes permanent, and every subsequent merge silently deploys nothing
+>   until someone notices and re-deploys by hand. **Nothing goes red**, and the one check written
+>   for exactly this failure is removed by the same deploy: `BuildDriftRule` and the Lambda's
+>   `BUILD_PROJECT` env var both live under `if buildProject != nil` (`infra/infra.go:1645-1677`),
+>   so they go when the project does. Even were the rule left standing, `handleDrift` logs
+>   `check disabled` on an unset `BUILD_PROJECT` and returns nil (`opsnotify/drift.go:177-180`) —
+>   blindness is deliberately never a finding there, so it cannot report its own removal.
+> - **To find out what is actually deployed right now** (rather than what you last deployed):
+>   ```bash
+>   aws codebuild list-builds-for-project --project-name <BuildProject> --region us-west-1
+>   aws codebuild batch-get-builds --region us-west-1 --ids <id> \
+>     --query 'builds[].[buildStatus,resolvedSourceVersion,initiator]'
+>   ```
+>   `resolvedSourceVersion` names the commit whose `infra/` is live.
+>
+> There is **deliberately no gate** stopping a branch deploy — no ancestor check, no refusal
+> (`grep -rn is-ancestor infra/ buildspec.yml` returns nothing, by design). Branch deploys are how
+> infra changes get verified before merge, so the fix for this hazard is this warning rather than
+> a block. Tracked as **rosterbot-d5ne**.
+
 ```bash
 cd infra
 export JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1
 
-cdk diff --all                              # preview changes
-cdk deploy --all --require-approval never    # apply (schedules stay disabled)
+# -c enableBuild=true on BOTH: the Build project running CI exists only under that context flag,
+# so a deploy without it deletes CI and a diff without it reports CI as being destroyed.
+cdk diff   --all -c enableBuild=true                              # preview changes
+cdk deploy --all -c enableBuild=true --require-approval never     # apply
 ```
+
+From a feature branch, that `deploy` is temporary — see the warning above.
 
 Run a job by hand (networking IDs from the default VPC; substitute the cluster name from
 `cdk deploy` outputs):
@@ -187,8 +260,11 @@ fetch before the first `cdk deploy`:
 cd lambda && go mod tidy                                   # resolve aws-lambda-go + sdk
 cd ../infra && go get github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2@latest && go mod tidy
 aws ssm put-parameter --name /rosterbot/ROSTERBOT_API_TOKEN --type SecureString --value '<token>' --overwrite
-cdk deploy --all --require-approval never                  # grab LineupApiUrl from the outputs
+cdk deploy --all -c enableBuild=true --require-approval never   # grab LineupApiUrl from the outputs
 ```
+
+Run that from `main`: without `-c enableBuild=true` it deletes the CodeBuild project, and from a
+branch it is reverted by the next merge — see the warning under *Common operations*.
 
 GoFunction bundles the Lambda with local Go (cross-compiles to ARM64), so Docker
 isn't required on the synth host as long as Go is installed.
@@ -238,6 +314,7 @@ CodeBuild's GitHub webhook source needs a one-time source credential:
    ```bash
    cd infra && cdk deploy --all -c enableBuild=true --require-approval never
    ```
+   Run this from `main`; from a branch it is reverted by the next merge (see *Common operations*).
 3. Push a commit to `main`; confirm a build appears in CodeBuild and a new image lands in ECR
    (`aws ecr describe-images --repository-name rosterbot --region us-west-1`).
 
@@ -251,6 +328,7 @@ hand-run on Fargate and verified (compare their Pushover output to the GHA twins
    ```bash
    cd infra && cdk deploy --all -c schedulesEnabled=true -c enableBuild=true --require-approval never
    ```
+   From `main` — a branch deploy of this is reverted by the next merge (see *Common operations*).
    ```bash
    git rm .github/workflows/lineup.yml .github/workflows/prospects.yml \
           .github/workflows/gs-check.yml .github/workflows/transactions.yml \
@@ -263,10 +341,13 @@ hand-run on Fargate and verified (compare their Pushover output to the GHA twins
 
 > Post-cutover, schedules are **ENABLED by default** — a plain `cdk deploy --all` keeps the 8 jobs
 > running. To pause everything, deploy with `-c schedulesEnabled=false` (explicit kill switch).
-> CodeBuild stays absent unless `-c enableBuild=true`.
+> `enableBuild` is the opposite polarity and reads as a trap now that CodeBuild is live: it
+> defaults **off**, so a deploy omitting `-c enableBuild=true` does not leave CI absent, it
+> **deletes** it. Always pass it.
 
 ## Cost control while idle
 
 `cd infra && cdk destroy --all` tears down everything except the state bucket (RETAIN) and ECR. The
-SSM params and state survive, so a later `cdk deploy --all` brings it back. Destroy to stop the few
-dollars/month between experiments.
+SSM params and state survive, so a later `cdk deploy --all -c enableBuild=true` brings it back
+(without the flag it comes back without CI). Destroy to stop the few dollars/month between
+experiments, and do the restore from `main` — see the warning under *Common operations*.
