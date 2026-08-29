@@ -1095,16 +1095,46 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// webhook source requires a one-time source credential (GitHub OAuth/PAT) to
 	// exist in the account first. Until then the stack deploys without it.
 	if v, ok := stack.Node().TryGetContext(jsii.String("enableBuild")).(string); ok && v == "true" {
+		// S3 cache for the build's Go caches (GOCACHE/GOMODCACHE — the paths
+		// live in buildspec.yml's cache: block, pinned to these by
+		// TestBuildspec_GoCacheDirsArePinnedAndCached). Without it, `cdk synth`
+		// recompiles the aws-cdk-go bindings plus both bundled lambda modules
+		// from scratch on every push — measured 130s of build 290's 380s total
+		// (2026-08-29), the single largest segment of the build. Local caching
+		// is not a substitute here: it is best-effort on on-demand hosts, which
+		// is exactly the "works on recycled hosts, cold on fresh ones" variance
+		// the build already shows.
+		//
+		// 30-day expiry, not keep-forever: a build cache is regenerable by
+		// definition, and an unexpiring prefix is the same slow leak the state
+		// bucket's lifecycle rules exist to stop (563 GB vs ~1 GB live,
+		// measured 2026-08-18). CodeBuild rewrites the cache object on every
+		// build, so expiry can only ever collect a cache no build has touched
+		// in a month — which is a cache worth losing.
+		buildCache := awss3.NewBucket(stack, jsii.String("BuildCache"), &awss3.BucketProps{
+			RemovalPolicy:     awscdk.RemovalPolicy_DESTROY,
+			AutoDeleteObjects: jsii.Bool(true),
+			LifecycleRules: &[]*awss3.LifecycleRule{{
+				Id:         jsii.String("ExpireBuildCache"),
+				Expiration: awscdk.Duration_Days(jsii.Number(30)),
+			}},
+		})
 		project := awscodebuild.NewProject(stack, jsii.String("Build"), &awscodebuild.ProjectProps{
 			Source: awscodebuild.Source_GitHub(&awscodebuild.GitHubSourceProps{
 				Owner:   jsii.String(ghOwner),
 				Repo:    jsii.String(ghRepo),
 				Webhook: jsii.Bool(true),
+				// Shallow: nothing in the build reads git history. TAG comes
+				// from CODEBUILD_RESOLVED_SOURCE_VERSION, the Go builds run
+				// -buildvcs=false, and the buildspec invokes no git command —
+				// while an unset depth clones the full history on every push.
+				CloneDepth: jsii.Number(1),
 				WebhookFilters: &[]awscodebuild.FilterGroup{
 					awscodebuild.FilterGroup_InEventOf(awscodebuild.EventAction_PUSH).
 						AndBranchIs(jsii.String("main")),
 				},
 			}),
+			Cache: awscodebuild.Cache_Bucket(buildCache, &awscodebuild.BucketCacheOptions{}),
 			Environment: &awscodebuild.BuildEnvironment{
 				// ARM build host so the image matches the Graviton task definition.
 				//

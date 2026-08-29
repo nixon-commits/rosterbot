@@ -14,6 +14,15 @@ env:
     # Go is selected via runtime-versions below, not downloaded here. Match the cdk
     # library version the infra module builds against.
     CDK_VERSION: "2.1128.1"
+    # Pinned explicitly rather than inherited from the image's goenv, so the
+    # cache: paths: block at the bottom names the directories Go actually
+    # writes. These carry the compiled aws-cdk-go bindings + module downloads
+    # across builds via the project's S3 cache (infra.go's BuildCache bucket);
+    # a path mismatch has no error anywhere — cdk synth just goes back to
+    # 130s of cold compile (measured, build 290).
+    # TestBuildspec_GoCacheDirsArePinnedAndCached pins the agreement.
+    GOCACHE: "/root/.cache/go-build"
+    GOMODCACHE: "/root/go/pkg/mod"
 phases:
   install:
     # Pin every image-provided runtime this build actually uses. Without this,
@@ -73,9 +82,15 @@ phases:
       # cdk-outputs.json — so CodeBuild names the dashboard sync as the failing
       # command for an error that happened in cdk deploy 90 seconds earlier
       # (rosterbot-ill).
+      # --method=direct: skip changeset creation. The default
+      # create-changeset-then-execute pays ~26s per stack per build (measured,
+      # build 290) for a preview nothing reads — --require-approval is never
+      # and no human inspects a CI deploy before it lands. Direct UpdateStack
+      # still rolls back on failure; only the unread preview is dropped.
+      # TestBuildspec_DeploysWithoutAChangeset pins it.
       - |
         set -e
-        cd infra && cdk deploy --all -c enableBuild=true --require-approval never --outputs-file ../cdk-outputs.json
+        cd infra && cdk deploy --all -c enableBuild=true --require-approval never --method=direct --outputs-file ../cdk-outputs.json
         cd ..
       # Publish the static dashboard on every build, including the first build
       # that created its bucket and distribution above.
@@ -126,3 +141,11 @@ phases:
         else
           echo "CLUSTER not set (project env not yet deployed via cdk); skipping projection-site render"
         fi
+# Saved to / restored from the Build project's S3 cache bucket (infra.go's
+# BuildCache). Each entry must cover the matching env: variables: pin above —
+# the cache restores only what is named here, and a divergence is invisible:
+# the build is merely slow again, never red.
+cache:
+  paths:
+    - "/root/.cache/go-build/**/*"
+    - "/root/go/pkg/mod/**/*"
