@@ -192,6 +192,19 @@ type ArtifactStatus struct {
 	// even though it is not a fault.
 	OrphanTenants int `json:"orphan_tenants,omitempty"`
 
+	// DormantTenants counts user= segments belonging to tenants who still
+	// exist but whom the fan-out deliberately never launches: lambda/dispatch
+	// skips any tenant whose Fantrax connection is not Usable(), so an invited
+	// member who never completed connect has no producer either. Their slice
+	// cannot refresh, so judging it left the row permanently red for a person
+	// who has done nothing wrong (rosterbot-5lkj).
+	//
+	// Counted apart from OrphanTenants rather than folded in, because the two
+	// prompt different actions. An orphan needs none — the account is gone. A
+	// dormant tenant is a person waiting on a reconnect, and collapsing them
+	// would file that person under a label meaning "ignore this".
+	DormantTenants int `json:"dormant_tenants,omitempty"`
+
 	Error string `json:"error,omitempty"`
 }
 
@@ -350,17 +363,29 @@ func recoveryFor(ctx context.Context, list *prefixCache, a layout.Artifact) reco
 // MaxAge by a producer that will never run again — a red row no action could
 // ever clear, which is precisely what the LostGaps rule below refuses to create.
 //
+// It carries a second set for the same reason reached by another route
+// (rosterbot-5lkj): a tenant who still EXISTS but whose Fantrax connection is
+// not Usable() is one lambda/dispatch refuses to launch, so nothing will write
+// their slice either. Judging existence answered the wrong question — the one
+// that matters is whether a producer is expected to run — and the row went red
+// for a real member whose only fault was not having reconnected yet.
+//
 // The zero value judges everyone, and that asymmetry is the whole safety
-// property. The live tenant list arrives over the network; a nil store, a failed
-// read or an empty answer must fall back to judging every segment, because a
-// filter that narrowed on a blind read would drop a REAL tenant whose producer
-// had died — the rosterbot-ys8 blindness this page exists to catch. A false
-// alarm costs attention; a missing one costs the outage. Same direction, and the
-// same reasoning, as the recovery zero value above.
-type tenantFilter struct{ known map[string]bool }
+// property — with one deliberate exception, stated here because the rule that
+// follows is otherwise read as absolute: a PARKED tenant is marked dormant even
+// with no connection store wired at all. Parking is knowable from the user
+// record alone, so treating it as unknown would leave local `serve` judging a
+// tenant the scheduler demonstrably skips. Every CONNECTION-derived exemption
+// does obey the rule. Both sets arrive over the network; a nil store, a failed read or an
+// empty answer must fall back to judging every segment, because a filter that
+// narrowed on a blind read would drop a REAL tenant whose producer had died —
+// the rosterbot-ys8 blindness this page exists to catch. A false alarm costs
+// attention; a missing one costs the outage. Same direction, and the same
+// reasoning, as the recovery zero value above.
+type tenantFilter struct{ known, dormant map[string]bool }
 
-// live reports whether this tenant's slice should carry a health signal. An
-// unknown live set answers yes to everything.
+// live reports whether this tenant still exists. An unknown live set answers yes
+// to everything.
 func (f tenantFilter) live(uid string) bool {
 	if len(f.known) == 0 {
 		return true
@@ -368,21 +393,77 @@ func (f tenantFilter) live(uid string) bool {
 	return f.known[uid]
 }
 
-// split partitions a listing's tenants into the ones worth judging and a count
-// of the orphans left over.
-func (f tenantFilter) split(all map[string]TenantListing) (live map[string]TenantListing, orphans int) {
+// split partitions a listing's tenants into the ones worth judging, plus counts
+// of the two kinds of segment that carry no health signal.
+//
+// A segment is counted once. Orphan is tested first, so a tenant who is both
+// deleted and unlaunchable lands there: the counts exist to prompt actions, and
+// there is nobody to chase for a reconnect once the account is gone.
+func (f tenantFilter) split(all map[string]TenantListing) (judged map[string]TenantListing, orphans, dormant int) {
 	if len(f.known) == 0 {
-		return all, 0
+		return all, 0, 0
 	}
-	live = make(map[string]TenantListing, len(all))
+	judged = make(map[string]TenantListing, len(all))
 	for uid, t := range all {
-		if f.live(uid) {
-			live[uid] = t
-			continue
+		switch {
+		case !f.live(uid):
+			orphans++
+		case f.dormant[uid]:
+			dormant++
+		default:
+			judged[uid] = t
 		}
-		orphans++
 	}
-	return live, orphans
+	return judged, orphans, dormant
+}
+
+// SchedulerSkips reports whether the fan-out will decline to launch a scheduled
+// job for this tenant. hasConn is GetConnection's found flag; conn may be nil.
+//
+// Exported, and living here rather than in lambda/dispatch, because it is the
+// ONE definition two packages need and neither can own: lambda/ is a separate
+// module that imports this one, so the dependency runs only that way. The Infra
+// page must exempt exactly the tenants the fan-out skips — a tenant nothing
+// runs for has no producer, so judging their frozen slice against MaxAge yields
+// a red row no action can clear (rosterbot-5lkj, and rosterbot-1oai before it).
+//
+// It exists because the two sides HAD drifted while looking identical. The
+// launch gate is a conjunction — ListActive, which filters on Status, and then
+// Usable() — and the first implementation of the Infra half read only the
+// connection call. That left `parked AND ConnVerified` judged, which is not a
+// corner case: the Tenants tab's park action writes u.Status alone and never
+// touches the connection record, so parking a tester reintroduced the exact
+// permanent red this exemption removes. Restating a two-part predicate in two
+// packages is what made a half-copy possible.
+//
+// Be precise about what this guarantees, because the honest claim is narrower
+// than "one definition": lambda/dispatch does NOT call this function. It still
+// expresses the gate inline, as ListActive plus its own Usable() check, since
+// the status half is a server-side store filter there rather than a per-user
+// test. What binds the two is lambda/dispatch's contract test, which drives the
+// real dispatcher against this predicate across the whole matrix. One function
+// PLUS that test is the mechanism; the function alone would not be.
+//
+// Deliberately NOT a blindness test. A caller who could not READ the connection
+// must not reach this: dispatch launches anyway (its task's AuthorizeRun is the
+// authority and fails loudly) and the Infra page judges anyway (excusing on a
+// blind read would blank its ability to report a real outage). Those two
+// fail-open directions are opposite and both correct, so folding them in here
+// would force one of them to be wrong. This answers only the question it can:
+// given what the stores actually said, does the scheduler run for this tenant?
+func SchedulerSkips(u *User, conn *FantraxConnection, hasConn bool) bool {
+	// The empty id is dispatch's own third refusal, and it belongs here for the
+	// same reason the status half does: leaving it out is a half-copy, which is
+	// the failure this function exists to end. It cannot currently reach an
+	// Infra row — PrefixFor("") is the un-segmented legacy path, so such a
+	// tenant never produces a user= segment to judge — but "the two predicates
+	// agree except on a case that happens to be unreachable" is an invariant
+	// that holds by luck, and the contract test's whole claim is that they
+	// agree across the matrix.
+	if u == nil || u.ID == "" || u.Status != UserActive {
+		return true
+	}
+	return !hasConn || !conn.Usable()
 }
 
 // liveTenants reads the tenant directory the Infra page judges against.
@@ -394,6 +475,12 @@ func (f tenantFilter) split(all map[string]TenantListing) (live map[string]Tenan
 // asked here ("does this tenant still exist?"), which is the same reason
 // GET /v1/tenants lists through it.
 //
+// Dormancy is then read from the SAME ConnectionStore lambda/dispatch gates the
+// launch on, through the same Usable() call. Restating it from a status field
+// would be a second definition of "will a job run for this tenant", and a second
+// definition drifts from the one that actually decides with nothing to catch it:
+// the symptom is a row that is red or green for a reason no code states.
+//
 // Every failure returns the zero filter, which judges everyone.
 func (cfg Config) liveTenants(ctx context.Context) tenantFilter {
 	if cfg.Users == nil {
@@ -404,10 +491,36 @@ func (cfg Config) liveTenants(ctx context.Context) tenantFilter {
 		return tenantFilter{}
 	}
 	known := make(map[string]bool, len(users))
+	dormant := make(map[string]bool)
 	for _, u := range users {
-		known[string(u.ID)] = true
+		uid := string(u.ID)
+		known[uid] = true
+
+		// The connection half is consulted only when a store can actually
+		// answer it. With no store wired (local `serve`) or a read that failed,
+		// the tenant is handed to the predicate as connected, so that ONLY the
+		// status half can mark them dormant: not knowing must never exempt, or
+		// a DynamoDB blip silently excuses every tenant at once and blanks this
+		// page's ability to report a real outage — indistinguishable from
+		// health. Dispatch is permissive on the same read in its own terms — it
+		// launches anyway — so the two are less opposed than each erring toward
+		// doing its own job regardless, which is why SchedulerSkips declines to
+		// answer that case at all.
+		//
+		// Parking needs no store at all, and that asymmetry is load-bearing:
+		// gating it behind a connection read would leave the nil-store case
+		// judging a tenant the scheduler demonstrably skips.
+		conn, hasConn := &FantraxConnection{Status: ConnVerified}, true
+		if cfg.Connections != nil {
+			if c, found, cerr := cfg.Connections.GetConnection(ctx, u.ID); cerr == nil {
+				conn, hasConn = c, found
+			}
+		}
+		if SchedulerSkips(u, conn, hasConn) {
+			dormant[uid] = true
+		}
 	}
-	return tenantFilter{known: known}
+	return tenantFilter{known: known, dormant: dormant}
 }
 
 // buildStatus lists every artifact and judges it. A listing failure is confined
@@ -458,26 +571,27 @@ func buildStatusFor(ctx context.Context, lister InfraLister, artifacts []layout.
 		}
 		row.Health = artifactHealth(a, l, now)
 
-		// Orphans are split off BEFORE any judgement so both the health loop
-		// and the gap scan below see the same tenant set. Filtering one and not
-		// the other would leave a deleted tenant able to redden the row through
-		// whichever path was missed.
-		tenants, orphans := filter.split(l.Tenants)
-		row.OrphanTenants = orphans
+		// Orphans and dormant tenants are split off BEFORE any judgement so
+		// both the health loop and the gap scan below see the same tenant set.
+		// Filtering one and not the other would leave an exempt tenant able to
+		// redden the row through whichever path was missed.
+		tenants, orphans, dormant := filter.split(l.Tenants)
+		row.OrphanTenants, row.DormantTenants = orphans, dormant
 
 		// For a per-tenant artifact the aggregate above answers the wrong
 		// question. Re-judge each tenant on its own slice and let the worst one
 		// set the row, naming it — otherwise the busiest tenant's freshness
 		// speaks for everybody.
 		//
-		// The verdict is rebuilt from the live segments rather than only
-		// worsened from the aggregate, because the aggregate mixes live and
-		// orphan objects and can speak for neither. It never loses a real
+		// The verdict is rebuilt from the judged segments rather than only
+		// worsened from the aggregate, because the aggregate mixes judged and
+		// exempt objects and can speak for neither. It never loses a real
 		// finding: LastModified is the max over every object, so it can only be
 		// FRESHER than the best tenant, never staler — any staleness it would
 		// have reported is reported by the loop below. What it does fix is a
-		// prefix whose only writer has since been deleted, where the aggregate
-		// is entirely orphan data and would otherwise pin the row red forever.
+		// prefix whose only writers have since been deleted or gone dormant,
+		// where the aggregate is entirely exempt data and would otherwise pin
+		// the row red forever.
 		if a.PerTenant && len(l.Tenants) > 0 {
 			row.Health = artifactHealth(a, PrefixListing{Objects: l.Objects}, now)
 			row.Tenants = len(tenants)
@@ -517,7 +631,28 @@ func buildStatusFor(ctx context.Context, lister InfraLister, artifacts []layout.
 
 			row.Skipped = l.SkippedDays
 
-			if a.PerTenant && len(tenants) > 0 {
+			// Gated on l.Tenants, NOT on the judged `tenants`, and the
+			// difference is the whole correctness of the all-exempt case. The
+			// health block above uses the aggregate condition; using the
+			// narrower one here meant that when EVERY segment was exempt this
+			// fell through to the else, which reads row.Gaps as computed from
+			// the unioned partitions at the top — i.e. the exempt tenants' own
+			// missing days. Health rebuilt to ok and then a NoBackfill
+			// artifact was escalated back to HealthGap off holes belonging to
+			// tenants no job runs for: a permanently red row with a "gone for
+			// good" banner and no action able to clear it, which is precisely
+			// what this exemption exists to prevent.
+			//
+			// One broken connection now suffices to reach that state — the
+			// operator's own, on a password rotation — where orphaning every
+			// tenant would have required deleting the deployment, which is why
+			// it survived the orphan work unnoticed.
+			//
+			// Entering with an empty judged set is correct and not a no-op:
+			// the resets below clear the union, and the loop then contributes
+			// nothing, so an all-exempt prefix reports no gaps rather than
+			// somebody else's.
+			if a.PerTenant && len(l.Tenants) > 0 {
 				row.Gaps = nil
 				row.Skipped = nil
 				// Qualifying a gap with the tenant id is only worth its cost
