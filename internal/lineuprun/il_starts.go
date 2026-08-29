@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/alertmarker"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/roster"
 )
@@ -22,19 +23,15 @@ type ilStartSchedule interface {
 	ProbableStarters(date time.Time) (map[string]string, error)
 }
 
-// ilStartMarkers is the dedup seam. lineupapi.BlobStore satisfies it; a nil
-// value disables dedup, which is the correct local-dev behavior (alert every
-// run rather than stay quiet about something there is no record of).
-type ilStartMarkers interface {
-	Get(ctx context.Context, key string) ([]byte, bool, error)
-	Publish(key string, data []byte) error
-}
-
 type ilStartInputs struct {
-	Roster  []fantrax.Player
-	Sched   ilStartSchedule
-	Today   time.Time
-	Markers ilStartMarkers
+	Roster []fantrax.Player
+	Sched  ilStartSchedule
+	Today  time.Time
+	// Markers is the dedup seam, the check->send->mark discipline owned by
+	// internal/alertmarker. lineupapi.BlobStore satisfies it structurally; a
+	// nil value disables dedup, which is the correct local-dev behavior (alert
+	// every run rather than stay quiet about something there is no record of).
+	Markers alertmarker.Store
 	// Notify returns an error so a failed send can be left unmarked. The
 	// void Emit.Notify seam cannot express that, and check -> send -> mark
 	// is only sound if "sent" is actually known.
@@ -99,6 +96,9 @@ func reportILStarts(in ilStartInputs) {
 
 	fmt.Fprintln(in.Out, "\n=== IL Players With An Announced Start ===")
 	ctx := context.Background()
+	m := alertmarker.New(in.Markers, alertmarker.WithLogf(func(format string, args ...any) {
+		fmt.Fprintf(in.Out, "  il-start check: "+format+"\n", args...)
+	}))
 	for _, s := range found {
 		key := ilStartMarkerKey(s)
 		msg := ilStartMessage(s)
@@ -109,27 +109,13 @@ func reportILStarts(in ilStartInputs) {
 			continue // neither send nor mark: marking here would mute a real alert later
 		}
 
-		// check
-		if in.Markers != nil {
-			if _, already, err := in.Markers.Get(ctx, key); err != nil {
-				fmt.Fprintf(in.Out, "  il-start check: marker read %s: %v (treating as unsent)\n", key, err)
-			} else if already {
-				continue
-			}
-		}
-
-		// send
-		if err := in.Notify(msg); err != nil {
+		// check -> send -> mark, never claim-then-send (rosterbot-chs). A
+		// marker-read failure is logged and treated as unsent (send anyway); a
+		// marker-write failure degrades to a duplicate alert next hour, never
+		// to silence. A failed send returns its error with nothing marked, so
+		// the next run retries.
+		if _, err := m.SendOnce(ctx, key, []byte(msg), func() error { return in.Notify(msg) }); err != nil {
 			fmt.Fprintf(in.Out, "  il-start check: send failed for %s: %v\n", key, err)
-			continue // do not mark: a failed send must retry, never go silent
-		}
-
-		// mark — never claim-then-send (rosterbot-chs). A marker-write failure
-		// degrades to a duplicate alert next hour, never to silence.
-		if in.Markers != nil {
-			if err := in.Markers.Publish(key, []byte(msg)); err != nil {
-				fmt.Fprintf(in.Out, "  il-start check: marker write %s: %v (next run will alert again)\n", key, err)
-			}
 		}
 	}
 	fmt.Fprintln(in.Out)

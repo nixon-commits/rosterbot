@@ -133,19 +133,19 @@ func (c *Client) seasonYear() int {
 }
 
 // cached is the single cache-plumbing seam for every method on *Client that
-// reads a cacheable upstream value at a fixed tier. It owns the one policy the
-// call sites used to each re-type by hand: short-circuit to a live fetch when
-// caching is off (empty cacheDir — the --no-cache flag, and how tests stay
-// hermetic), otherwise read-through a FileCache at the tier's TTL. Callers name
-// only their key, their tier, and their fetch. Methods with a multi-value
-// public signature (GetGSLimits, GetSeasonDateRange) run cached over a single
-// struct value and unwrap it at the call site — the same shape the hand-written
+// reads a cacheable upstream value at a fixed tier. Callers name only their
+// key, their tier, and their fetch. Methods with a multi-value public
+// signature (GetGSLimits, GetSeasonDateRange) run cached over a single struct
+// value and unwrap it at the call site — the same shape the hand-written
 // branches used.
+//
+// The read-through policy itself — short-circuit to a live fetch when caching
+// is off (empty cacheDir — the --no-cache flag, and how tests stay hermetic),
+// otherwise read-through a FileCache at the tier's TTL — is not restated here.
+// Its single home is internal/cache (cache.GetOrFetch), shared with sleeper's
+// call sites.
 func cached[T any](c *Client, key string, tier cacheTier, fetch func() (T, error)) (T, error) {
-	if c.cacheDir == "" {
-		return fetch()
-	}
-	return cache.New[T](c.cacheDir, tier.duration()).Get(key, fetch)
+	return cache.GetOrFetch(c.cacheDir, key, tier.duration(), fetch)
 }
 
 // periodCacheKey is the single answer to "where does this per-period snapshot
@@ -180,7 +180,7 @@ func cachedForPeriod[T any](c *Client, prefix, teamID string, period DailyPeriod
 		return fetch()
 	}
 	key, tier := c.periodCacheKey(prefix, teamID, period)
-	return cache.New[T](c.cacheDir, tier.duration()).Get(key, fetch)
+	return cache.GetOrFetch(c.cacheDir, key, tier.duration(), fetch)
 }
 
 // cachedForSeason is cached() for a key whose tier is fixed but whose period
@@ -192,5 +192,5 @@ func cachedForSeason[T any](c *Client, prefix, teamID string, period int, tier c
 		return fetch()
 	}
 	key := seasonScopedKey(prefix, teamID, c.seasonYear(), period)
-	return cache.New[T](c.cacheDir, tier.duration()).Get(key, fetch)
+	return cache.GetOrFetch(c.cacheDir, key, tier.duration(), fetch)
 }

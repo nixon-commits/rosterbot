@@ -3,31 +3,28 @@ package main
 import (
 	"context"
 	"log"
+
+	"github.com/nixon-commits/rosterbot/internal/alertmarker"
+	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 )
 
 // markerPrefix is where one-shot alert markers live under STATE_BUCKET.
 //
-// Its own prefix, not notifications/ — that one is the user-facing activity feed
-// the dashboard serves on GET /v1/notifications, and salting it with dedup
-// bookkeeping would put internal state in front of a reader. The CDK expires
-// this prefix on a lifecycle rule, so it does not grow without bound.
-const markerPrefix = "opsalert/"
+// Its authority is layout.OpsAlertMarkers.S3Prefix — this Lambda imports the
+// table directly, but the CDK lifecycle rule and IAM grant in infra/ cannot
+// (infra/ is its own Go module with no compiler link here), so those two
+// restate the same string as literals behind "must match" comments instead
+// (the same arrangement as layout.TenantRoster, rosterbot-3vr).
+var markerPrefix = layout.OpsAlertMarkers.S3Prefix
 
-// markerStore records which alerts have already been sent, so a second delivery
-// of the same event stays quiet.
-//
-// The ordering is deliberately check → send → mark, not claim → send. A claim
-// taken before sending has to be released when the send fails, and a failed
-// release leaves a permanent suppression — trading the bug this fixes (a
-// duplicate alert) for a strictly worse one (a missing alert). Marking only
-// after a confirmed send keeps the alert path at-least-once and makes
-// deduplication best-effort, which is the correct way round for a channel whose
-// entire job is to not stay quiet.
-//
-// The residual race — two deliveries in flight simultaneously, both reading
-// "unmarked" before either marks — is left unhandled. EventBridge's duplicate
-// deliveries and Lambda's async-invoke retries are separated by seconds to
-// minutes, and closing it would require the conditional-write dance above.
+// markerStore records which alerts have already been sent, so a second
+// delivery of the same event stays quiet. The check → send → mark discipline
+// itself now lives in internal/alertmarker (rosterbot-chs); this type is a
+// thin delegate that keeps this package's existing entry points
+// (token/sent/record/send1/sendOnce) and their nil-safety, wired with this
+// Lambda's own logger and key sanitization. See internal/alertmarker for the
+// discipline: why it's check-then-send-then-mark, and why every marker-store
+// failure degrades to a duplicate alert rather than silence.
 type markerStore struct{ blob blobAPI }
 
 // blobAPI is the slice of s3blob.Blob this needs, named so tests can substitute
@@ -37,24 +34,40 @@ type blobAPI interface {
 	Put(ctx context.Context, key string, data []byte) error
 }
 
+// blobStoreAdapter satisfies alertmarker.Store over a blobAPI.
+type blobStoreAdapter struct{ blob blobAPI }
+
+func (a blobStoreAdapter) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	return a.blob.Get(ctx, key)
+}
+
+// Publish deliberately outlives the event ctx — alertmarker.Store carries no
+// context parameter, matching the old record()'s best-effort semantics: a
+// marker write must not be aborted by the invocation's own deadline, since a
+// failure here only ever costs a duplicate alert, never a fatal one.
+func (a blobStoreAdapter) Publish(key string, data []byte) error {
+	return a.blob.Put(context.Background(), key, data)
+}
+
+// alertMarker builds the internal/alertmarker.Marker this delegates to, wired
+// with this Lambda's log.Printf-compatible logger and logSafe key
+// sanitization. Built on demand rather than cached on the struct, so
+// markerStore stays constructible as a plain {blob: ...} literal — the seam
+// marker_test.go's blobAPI fakes drive.
+func (m *markerStore) alertMarker() *alertmarker.Marker {
+	if m == nil {
+		return nil
+	}
+	return alertmarker.New(blobStoreAdapter{blob: m.blob},
+		alertmarker.WithLogf(log.Printf),
+		alertmarker.WithKeyDisplay(logSafe),
+	)
+}
+
 // token returns the body recorded by the last alert under key, and whether a
 // marker exists at all.
-//
-// A read error reports "no marker": the failure mode of a broken marker store
-// must be a duplicate alert, never a swallowed one.
 func (m *markerStore) token(ctx context.Context, key string) (string, bool) {
-	if m == nil {
-		return "", false
-	}
-	data, found, err := m.blob.Get(ctx, key)
-	if err != nil {
-		log.Printf("marker read %s: %v (treating as unsent)", logSafe(key), err)
-		return "", false
-	}
-	if !found {
-		return "", false
-	}
-	return string(data), true
+	return m.alertMarker().Token(ctx, key)
 }
 
 // sent reports whether this alert has already gone out. Existence is the whole
@@ -62,20 +75,15 @@ func (m *markerStore) token(ctx context.Context, key string) (string, bool) {
 // heartbeat needs the token instead, because its key names a job that outlives
 // any single run.
 func (m *markerStore) sent(ctx context.Context, key string) bool {
-	_, found := m.token(ctx, key)
-	return found
+	return m.alertMarker().Sent(ctx, key)
 }
 
-// record marks the alert as sent. Best-effort: a write failure costs a duplicate
-// on the next delivery, which is the same outcome as having no marker at all,
-// so it must not fail the invocation and trigger an async-invoke retry.
-func (m *markerStore) record(ctx context.Context, key, note string) {
-	if m == nil {
-		return
-	}
-	if err := m.blob.Put(ctx, key, []byte(note)); err != nil {
-		log.Printf("marker write %s: %v (a repeat delivery will alert again)", logSafe(key), err)
-	}
+// record marks the alert as sent. Best-effort: a write failure costs a
+// duplicate on the next delivery, which is the same outcome as having no
+// marker at all, so it must not fail the invocation and trigger an
+// async-invoke retry.
+func (m *markerStore) record(key, note string) {
+	m.alertMarker().Record(key, []byte(note))
 }
 
 // alert is one Pushover together with the identity that makes it at-most-once.
@@ -90,14 +98,13 @@ type alert struct {
 	title, body string
 }
 
-// send delivers the alert and records its marker. It does NOT itself check
-// whether the marker already exists — each caller decides that, because "already
-// alerted" means something different on the two paths.
-//
-// The ordering is check → send → mark, never claim → send. A claim taken before
-// sending has to be released when the send fails, and a failed release leaves a
-// permanent suppression: trading the bug this fixes (a duplicate alert) for a
-// strictly worse one (a missing alert).
+// send1 delivers the alert and records its marker: check → send → mark, never
+// claim → send. A failed send returns its error with nothing marked, so the
+// next delivery retries. It does NOT itself check whether the marker already
+// exists — each caller decides that, because "already alerted" means
+// something different on the two paths. The empty-title "stay quiet" skip
+// stays at this layer: internal/alertmarker deliberately leaves skip-logging
+// and key grammar to call sites.
 func send1(ctx context.Context, m *markerStore, a alert) error {
 	if a.title == "" {
 		return nil
@@ -105,7 +112,7 @@ func send1(ctx context.Context, m *markerStore, a alert) error {
 	if err := sendOrLog(a.title, a.body); err != nil {
 		return err
 	}
-	m.record(ctx, a.key, a.note)
+	m.record(a.key, a.note)
 	return nil
 }
 

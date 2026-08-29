@@ -293,6 +293,29 @@ func TestAppendFootballTradeLog_ReportsRowsActuallyAdded(t *testing.T) {
 	}
 }
 
+// A nil markers store is the soft-degrade path when statestore fails to
+// construct one (runFootballTrades warns and passes nil rather than
+// hard-failing the whole run). alertmarker treats nil as "no dedup" -- every
+// trade must still send, on every run, since there is no marker store left to
+// even check against.
+func TestGradeAndAlertTrades_NilMarkersStoreStillSendsEveryAlert(t *testing.T) {
+	in, sent := tradeAlertFixture(t)
+	in.markers = nil
+
+	res := gradeAndAlertTrades(context.Background(), in)
+	if len(*sent) != 1 || res.Alerted != 1 || res.Skipped != 0 {
+		t.Fatalf("first run: sent=%d alerted=%d skipped=%d, want 1/1/0", len(*sent), res.Alerted, res.Skipped)
+	}
+
+	// A second run against the same nil store must send again -- nothing was
+	// ever recorded to dedup against, so "no store" must never read as
+	// "already alerted".
+	res2 := gradeAndAlertTrades(context.Background(), in)
+	if len(*sent) != 2 || res2.Alerted != 1 || res2.Skipped != 0 {
+		t.Fatalf("second run: sent=%d alerted=%d skipped=%d, want 2/1/0", len(*sent), res2.Alerted, res2.Skipped)
+	}
+}
+
 // The alert title must name the actual reason. The zero-total Incomplete branch
 // added for four-format grading carries NO unpriced assets, so the old blanket
 // "too many unpriced assets" would send the operator hunting for one that does

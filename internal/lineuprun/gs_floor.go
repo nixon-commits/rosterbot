@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/alertmarker"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 )
@@ -179,17 +180,6 @@ func evaluateGSFloor(b *optimizer.GSBudget) gsFloorFinding {
 	return f
 }
 
-// gsFloorMarkers is the dedup seam, identical in shape and in policy to
-// ilStartMarkers: lineupapi.BlobStore satisfies it, and a nil value disables
-// dedup rather than the alert. In-process state cannot serve here — every
-// scheduled run is a fresh container, so without a durable marker each hourly
-// run would re-announce the same standing shortfall, which is the flood the
-// stale-cache marker exists to stop one artifact over.
-type gsFloorMarkers interface {
-	Get(ctx context.Context, key string) ([]byte, bool, error)
-	Publish(key string, data []byte) error
-}
-
 type gsFloorInputs struct {
 	Budget *optimizer.GSBudget
 	// Period and Season together identify the matchup week for the marker key.
@@ -200,7 +190,15 @@ type gsFloorInputs struct {
 	Period fantrax.WeeklyPeriod
 	Season int
 
-	Markers gsFloorMarkers
+	// Markers is the dedup seam, identical in shape and policy to
+	// ilStartInputs.Markers: the check->send->mark discipline owned by
+	// internal/alertmarker. lineupapi.BlobStore satisfies it structurally, and
+	// a nil value disables dedup rather than the alert. In-process state
+	// cannot serve here — every scheduled run is a fresh container, so without
+	// a durable marker each hourly run would re-announce the same standing
+	// shortfall, which is the flood the stale-cache marker exists to stop one
+	// artifact over.
+	Markers alertmarker.Store
 	// Notify returns an error so a failed send is left unmarked, the same
 	// contract reportILStarts needs: check -> send -> mark is only sound when
 	// "sent" is actually known.
@@ -271,28 +269,17 @@ func reportGSFloor(in gsFloorInputs) {
 
 	key := gsFloorMarkerKey(in.Season, in.Period)
 	ctx := context.Background()
+	m := alertmarker.New(in.Markers, alertmarker.WithLogf(func(format string, args ...any) {
+		fmt.Fprintf(in.Out, "  gs floor check: "+format+"\n", args...)
+	}))
 
-	// check
-	if in.Markers != nil {
-		if _, already, err := in.Markers.Get(ctx, key); err != nil {
-			fmt.Fprintf(in.Out, "  gs floor check: marker read %s: %v (treating as unsent)\n", key, err)
-		} else if already {
-			return
-		}
-	}
-
-	// send
-	if err := in.Notify(msg); err != nil {
+	// check -> send -> mark, never claim-then-send (rosterbot-chs). A
+	// marker-read failure is logged and treated as unsent (send anyway); a
+	// marker-write failure degrades to a duplicate alert next hour, never to
+	// silence. A failed send returns its error with nothing marked, so the
+	// next run retries.
+	if _, err := m.SendOnce(ctx, key, []byte(msg), func() error { return in.Notify(msg) }); err != nil {
 		fmt.Fprintf(in.Out, "  gs floor check: send failed for %s: %v\n", key, err)
-		return // do not mark: a failed send must retry, never go silent
-	}
-
-	// mark — never claim-then-send (rosterbot-chs). A marker-write failure
-	// degrades to a duplicate alert next hour, never to silence.
-	if in.Markers != nil {
-		if err := in.Markers.Publish(key, []byte(msg)); err != nil {
-			fmt.Fprintf(in.Out, "  gs floor check: marker write %s: %v (next run will alert again)\n", key, err)
-		}
 	}
 }
 

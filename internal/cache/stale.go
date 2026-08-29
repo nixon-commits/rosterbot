@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/alertmarker"
 )
 
 // StaleAlertAfter is how old a served-stale copy must be before serving it is
@@ -15,18 +16,17 @@ import (
 // fetch would have returned, and paging on it reports a non-event.
 var StaleAlertAfter = 24 * time.Hour
 
-// StaleMarkerStore is the dedup seam for the stale-cache alert. It is declared
-// here — rather than imported — so this package stays a stdlib-only leaf;
-// lineupapi.BlobStore satisfies it and cmd wires one in.
+// StaleMarkerStore is the dedup seam for the stale-cache alert. The interface
+// now lives in internal/alertmarker — itself a stdlib-only leaf — so this
+// package's transitive dependencies stay stdlib-only and cmd/root.go's wiring
+// is unchanged: lineupapi.BlobStore still satisfies it structurally.
 //
 // A nil store disables dedup, which is the correct local-dev behavior: alert
 // every run rather than stay quiet about something there is no record of. It
-// is the same seam, and the same nil-means-noisy rule, as lineuprun's
-// ilStartMarkers.
-type StaleMarkerStore interface {
-	Get(ctx context.Context, key string) ([]byte, bool, error)
-	Publish(key string, data []byte) error
-}
+// is the same seam, and the same nil-means-noisy rule, as lineuprun's IL-start
+// and GS-floor alerts — all three now type their marker field as
+// alertmarker.Store.
+type StaleMarkerStore = alertmarker.Store
 
 // StaleMarkers, when set, deduplicates the stale-cache alert ACROSS PROCESSES.
 // In-process state would do nothing here: every scheduled run is a fresh
@@ -44,6 +44,16 @@ func staleMarkerKey(cacheKey string) string { return "stale-" + cacheKey }
 // copy being served. It changes the moment a fresh fetch lands, so a later
 // outage is a new episode and alerts again on its own.
 func episodeID(fetchedAt time.Time) string { return fetchedAt.UTC().Format(time.RFC3339) }
+
+// staleMarker builds a *Marker over the current StaleMarkers store, routing
+// its degrade warnings to stderr with the same "warning: stale-alert " prefix
+// the hand-written version used. Built fresh per call rather than cached,
+// since StaleMarkers is a package var callers (and tests) can swap.
+func staleMarker() *alertmarker.Marker {
+	return alertmarker.New(StaleMarkers, alertmarker.WithLogf(func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, "warning: stale-alert "+format+"\n", args...)
+	}))
+}
 
 // reportStale decides whether this degraded read is worth a push, and sends it.
 //
@@ -65,55 +75,38 @@ func reportStale(key string, fetchedAt time.Time, age time.Duration, cause error
 		return
 	}
 
-	episode := episodeID(fetchedAt)
 	marker := staleMarkerKey(key)
+	episode := []byte(episodeID(fetchedAt))
 
-	// check
-	if StaleMarkers != nil {
-		body, found, err := StaleMarkers.Get(context.Background(), marker)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: stale-alert marker read %s: %v (treating as unsent)\n", marker, err)
-		} else if found && strings.TrimSpace(string(body)) == episode {
-			return // already reported this episode
-		}
-	}
-
-	// send
-	Notify("⚠️ Stale cache", fmt.Sprintf("Serving stale %s — %s old (%v)", key, roundAge(age), cause))
-
-	// mark
-	if StaleMarkers != nil {
-		if err := StaleMarkers.Publish(marker, []byte(episode)); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: stale-alert marker write %s: %v (next run will alert again)\n", marker, err)
-		}
-	}
+	_, _ = staleMarker().SendOnChange(context.Background(), marker, episode, func() error {
+		Notify("⚠️ Stale cache", fmt.Sprintf("Serving stale %s — %s old (%v)", key, roundAge(age), cause))
+		return nil
+	})
 }
 
 // reportRecovery closes out a standing stale alert once a fresh fetch lands.
 // It reports nothing when no alert is standing, so a blip that never paged
 // anyone never announces its own recovery either.
 func reportRecovery(key string) {
-	if Notify == nil || StaleMarkers == nil {
+	if Notify == nil {
 		return
 	}
 	marker := staleMarkerKey(key)
-	body, found, err := StaleMarkers.Get(context.Background(), marker)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: stale-alert marker read %s: %v\n", marker, err)
-		return
-	}
-	if !found || strings.TrimSpace(string(body)) == "" {
+	m := staleMarker()
+
+	// A read failure reads as "no standing alert" via Token — the same skip
+	// outcome as the old log-and-return.
+	tok, found := m.Token(context.Background(), marker)
+	if !found || tok == "" {
 		return
 	}
 
-	Notify("✅ Cache fresh again", fmt.Sprintf("%s refreshed; serving live data", key))
-
-	// Clear by writing an empty body rather than deleting: the seam is
-	// Get+Publish only, and an empty marker reads as "no standing alert"
-	// identically to an absent one.
-	if err := StaleMarkers.Publish(marker, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: stale-alert marker clear %s: %v (may re-announce recovery)\n", marker, err)
-	}
+	// Send delivers the recovery notice first and clears the marker (an empty
+	// body) only after, so a failed send never masks the standing alert.
+	_ = m.Send(marker, nil, func() error {
+		Notify("✅ Cache fresh again", fmt.Sprintf("%s refreshed; serving live data", key))
+		return nil
+	})
 }
 
 // roundAge renders a duration at the coarsest unit that still says something

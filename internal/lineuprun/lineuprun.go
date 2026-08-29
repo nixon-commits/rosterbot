@@ -16,6 +16,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/alertmarker"
 	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
@@ -95,17 +96,20 @@ type Options struct {
 	Publisher lineupapi.Publisher
 
 	// ILStartMarkers dedups the IL-start alert, one marker per (player, start
-	// date). Selected by the caller like Publisher, so this package still reads
-	// no environment. Nil disables dedup rather than the alert: with no record
+	// date), via the check->send->mark discipline in internal/alertmarker.
+	// Selected by the caller like Publisher, so this package still reads no
+	// environment; lineupapi.BlobStore satisfies alertmarker.Store
+	// structurally. Nil disables dedup rather than the alert: with no record
 	// of what was sent, repeating is the safe direction — a duplicate push is
 	// recoverable, a silently dropped one is the failure this alert exists for.
-	ILStartMarkers ilStartMarkers
+	ILStartMarkers alertmarker.Store
 
 	// GSFloorMarkers dedups the proactive GS-floor alert, one marker per
-	// (season, weekly period). Nil disables dedup rather than the alert, the
-	// same direction ILStartMarkers chooses and for the same reason: with no
-	// record of what was sent, repeating is recoverable and going quiet is not.
-	GSFloorMarkers gsFloorMarkers
+	// (season, weekly period), through the same internal/alertmarker seam.
+	// Nil disables dedup rather than the alert, the same direction
+	// ILStartMarkers chooses and for the same reason: with no record of what
+	// was sent, repeating is recoverable and going quiet is not.
+	GSFloorMarkers alertmarker.Store
 
 	// The five dependency seams. Each nil field is resolved to its production
 	// implementation by withDefaults, called once at the top of Run — the

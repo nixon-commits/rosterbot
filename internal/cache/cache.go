@@ -42,6 +42,60 @@ func New[T any](dir string, ttl time.Duration) *FileCache[T] {
 	return &FileCache[T]{store: storeForDir(dir), ttl: ttl}
 }
 
+// NewWithStore creates a FileCache over an explicit Store, pinning it: the
+// process-wide default installed by SetDefaultStore does not apply. This is
+// the constructor tests reach for — TTL/envelope behavior against a MemStore,
+// hermetic and t.Parallel-safe, where SetDefaultStore is process-global and
+// cannot be. Before it existed, tests outside this package aged entries by
+// hand-editing envelope JSON on disk, which spread the envelope layout to
+// every test that needed it.
+func NewWithStore[T any](store Store, ttl time.Duration) *FileCache[T] {
+	return &FileCache[T]{store: store, ttl: ttl}
+}
+
+// GetOrFetch is the read-through policy every cached client method shares: an
+// empty dir means caching is off for THIS CALLER (--no-cache, hermetic tests)
+// and the fetch runs directly — deliberately even when SetDefaultStore has
+// installed a process-wide store, because "this caller opted out" and "this
+// process has an S3-backed cache" are different facts and the opt-out wins.
+// Otherwise it reads through a FileCache at ttl.
+//
+// fantrax's cached()/cachedForPeriod()/cachedForSeason() and sleeper's call
+// sites all come through here; the branch used to be restated per package
+// (sleeper's copy carried a comment admitting it mirrored fantrax's).
+func GetOrFetch[T any](dir, key string, ttl time.Duration, fetch func() (T, error)) (T, error) {
+	if dir == "" {
+		return fetch()
+	}
+	return New[T](dir, ttl).Get(key, fetch)
+}
+
+// SetFetchedAt rewrites the stored fetched_at for one entry through the Store
+// seam, leaving the payload bytes untouched, and reports whether the entry
+// existed. Test support (see cachetest): it is how a test ages or freshens an
+// entry without learning the envelope layout — the field name and its JSON
+// framing stay this package's alone.
+func SetFetchedAt(s Store, key string, fetchedAt time.Time) (bool, error) {
+	raw, found, err := s.Get(key)
+	if err != nil || !found {
+		return false, err
+	}
+	var env map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return false, fmt.Errorf("corrupt cache entry %s: %w", key, err)
+	}
+	stamp, err := json.Marshal(fetchedAt)
+	if err != nil {
+		return false, err
+	}
+	env["fetched_at"] = stamp
+	out, err := json.Marshal(env)
+	if err != nil {
+		return false, err
+	}
+	return true, s.Put(key, out)
+}
+
 // Get returns cached data if fresh, otherwise calls fetch, caches the result, and returns it.
 // Cache I/O errors are non-fatal: they log to stderr and fall through to fetch.
 func (c *FileCache[T]) Get(key string, fetch func() (T, error)) (T, error) {

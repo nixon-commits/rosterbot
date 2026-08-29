@@ -98,7 +98,9 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			// count — but they are also refreshed on every alert, and an
 			// expiry during an outage longer than 30 days costs exactly one
 			// repeat push.
-			Id:         jsii.String("ExpireOpsAlertMarkers"),
+			Id: jsii.String("ExpireOpsAlertMarkers"),
+			// must match layout.OpsAlertMarkers.S3Prefix (infra/ is its own module
+			// and cannot import the table)
 			Prefix:     jsii.String("opsalert/"),
 			Expiration: awscdk.Duration_Days(jsii.Number(30)),
 		}, {
@@ -1022,6 +1024,8 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// place the notifier writes anything; scoping it here keeps the "a notifier
 	// cannot mutate the bot's state" property intact while letting it remember
 	// which alerts it has already sent (rosterbot-chs, rosterbot-ys8).
+	// must match layout.OpsAlertMarkers.S3Prefix (infra/ is its own module and
+	// cannot import the table)
 	stateBucket.GrantReadWrite(opsNotifyFn, jsii.String("opsalert/*"))
 
 	// Every scheduled job failure (rosterbot-naz). The pattern deliberately

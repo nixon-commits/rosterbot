@@ -1,13 +1,11 @@
 package fantrax
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/cache/cachetest"
 )
 
 // fullSeasonSpan is the widest an MLB season gets — 2026 runs 2026-03-25 through
@@ -152,7 +150,9 @@ func TestGetTeamPitcherStarts_RefetchesVolatilePeriodsOnly(t *testing.T) {
 	}
 
 	// Age every cached entry past todayTTL but far short of PastPeriodTTL.
-	ageCacheEntries(t, cacheDir, time.Hour)
+	if n := cachetest.AgeEntries(t, cacheDir, time.Hour); n == 0 {
+		t.Fatal("AgeEntries aged 0 entries — the cold run wrote nothing to age")
+	}
 
 	fetched = nil
 	if _, err := c.GetTeamPitcherStarts("4", start, end, seasonStart, cacheDir, PastPeriodTTL); err != nil {
@@ -199,41 +199,4 @@ func samePeriods(got, want []DailyPeriod) bool {
 		}
 	}
 	return true
-}
-
-// ageCacheEntries rewrites every cache envelope's fetched_at to `age` ago,
-// simulating a later run without sleeping or faking the clock.
-func ageCacheEntries(t *testing.T, dir string, age time.Duration) {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read cache dir: %v", err)
-	}
-	stamp := time.Now().Add(-age)
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		p := filepath.Join(dir, e.Name())
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatalf("read %s: %v", e.Name(), err)
-		}
-		var env map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &env); err != nil {
-			t.Fatalf("unmarshal %s: %v", e.Name(), err)
-		}
-		b, err := json.Marshal(stamp)
-		if err != nil {
-			t.Fatalf("marshal stamp: %v", err)
-		}
-		env["fetched_at"] = b
-		out, err := json.Marshal(env)
-		if err != nil {
-			t.Fatalf("marshal %s: %v", e.Name(), err)
-		}
-		if err := os.WriteFile(p, out, 0o644); err != nil {
-			t.Fatalf("write %s: %v", e.Name(), err)
-		}
-	}
 }

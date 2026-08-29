@@ -86,6 +86,13 @@ func storeForDir(dir string) Store {
 	return fsStore{root: dir}
 }
 
+// NewFileStore returns the default filesystem adapter rooted at dir — the
+// historical <dir>/<key>.json layout New resolves via storeForDir. Exported so
+// test support (cachetest) and anything else that must address an on-disk
+// cache dir through the Store seam can construct one without restating the
+// layout.
+func NewFileStore(dir string) Store { return fsStore{root: dir} }
+
 // MemStore is an in-memory Store for hermetic tests in this and other packages.
 type MemStore struct {
 	mu sync.Mutex

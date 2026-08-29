@@ -301,3 +301,48 @@ func TestGSFloorAlerts_LayoutChoicesArePinned(t *testing.T) {
 		t.Errorf("Producer = %q, want Lineup — the alert fires from the hourly optimize run", a.Producer)
 	}
 }
+
+// The opsnotify marker prefix's layout choices, pinned like its four marker
+// siblings' — every choice here is an exclusion, the kind that fails silently
+// when it stops holding.
+func TestOpsAlertMarkers_LayoutChoicesArePinned(t *testing.T) {
+	a := OpsAlertMarkers
+
+	// The prefix is the whole point of the declaration: opsnotify/marker.go
+	// reads it from here, while the CDK's lifecycle rule and IAM grant restate
+	// it as literals behind "must match" comments (infra/ is its own Go module
+	// and cannot import this table). Changing it therefore means changing
+	// infra/infra.go in the same commit.
+	if a.S3Prefix != "opsalert/" {
+		t.Errorf("S3Prefix = %q, want opsalert/ — the CDK lifecycle rule and IAM grant restate this literal", a.S3Prefix)
+	}
+	for _, other := range []Artifact{ILStarts, GSFloorAlerts, StaleCacheAlerts, FootballTrades, Notification} {
+		if a.S3Prefix == other.S3Prefix {
+			t.Errorf("shares a prefix with %s; one marker family would overwrite the other", other.Name)
+		}
+	}
+
+	// No local twin: the notifier runs only as the deployed Lambda, so a
+	// LocalDir here would name a directory nothing ever writes.
+	if a.LocalDir != "" {
+		t.Errorf("LocalDir = %q, want empty — no file-backed store exists for this prefix", a.LocalDir)
+	}
+
+	// NOT PerTenant: one deployment-wide notifier, with the tenant already
+	// inside the marker key where it matters (opsalert.MarkerKey).
+	if a.PerTenant {
+		t.Error("PerTenant: the notifier is deployment-wide; tenancy lives in the marker key itself")
+	}
+
+	// No MaxAge and absent from All(): a marker exists only once an alert has
+	// fired, so a healthy stretch writes nothing and an age check would read
+	// that silence as staleness.
+	if a.MaxAge != 0 {
+		t.Errorf("MaxAge = %v, want 0 — no markers is the healthy case, not a stale one", a.MaxAge)
+	}
+	for _, listed := range All() {
+		if listed.S3Prefix == a.S3Prefix {
+			t.Error("in All(): the status page would show a healthy deployment as missing")
+		}
+	}
+}
