@@ -76,6 +76,65 @@ func TestBuildspec_DeploysWithoutAChangeset(t *testing.T) {
 	}
 }
 
+// Node is installed by an install-phase command from a cached dist tarball —
+// never via runtime-versions.
+//
+// CodeBuild installs runtime-versions during DOWNLOAD_SOURCE, BEFORE the S3
+// cache is restored (measured, build 295: `n $NODE_22_VERSION` ran 18:03:36,
+// "Downloading S3 cache" 18:04:10) — so a runtime-versions nodejs pin
+// re-downloads Node from nodejs.org on every fresh host, ~33-45s, and no
+// cache path can ever help it. The install phase runs after the restore,
+// which is what makes the tarball cache (NODE_DIST_CACHE) work at all.
+// Reintroducing a nodejs: runtime pin would not break anything visibly — the
+// build would just quietly pay the download again forever.
+func TestBuildspec_NodeInstallsAfterTheCacheRestore(t *testing.T) {
+	raw, err := os.ReadFile("../buildspec.yml")
+	if err != nil {
+		t.Fatalf("read buildspec: %v", err)
+	}
+	lines := strings.Split(string(raw), "\n")
+
+	cacheDir := ""
+	installs := false
+	for i, line := range lines {
+		code, _, _ := strings.Cut(line, "#")
+		trimmed := strings.TrimSpace(code)
+		if strings.HasPrefix(trimmed, "nodejs:") {
+			t.Errorf("buildspec.yml:%d selects nodejs via runtime-versions:\n\t%s\n"+
+				"runtime-versions install runs before the S3 cache restore (measured, build 295), "+
+				"so this download can never hit the cache; install Node from $NODE_DIST_CACHE in the "+
+				"install phase instead", i+1, strings.TrimSpace(line))
+		}
+		if val, ok := strings.CutPrefix(trimmed, "NODE_DIST_CACHE:"); ok {
+			cacheDir = strings.Trim(strings.TrimSpace(val), `"`)
+		}
+		if strings.Contains(code, "NODE_22_VERSION") && strings.Contains(code, "NODE_DIST_CACHE") {
+			installs = true
+		}
+	}
+	if cacheDir == "" {
+		t.Fatal("buildspec.yml does not pin NODE_DIST_CACHE under env: variables:; " +
+			"the install-phase Node step and the cache: paths: block both key off it")
+	}
+	if !installs {
+		t.Error("no install command references both NODE_DIST_CACHE and NODE_22_VERSION; " +
+			"Node must be installed from the cached tarball at the image's own pinned version")
+	}
+	want := cacheDir + "/**/*"
+	covered := false
+	for _, line := range lines {
+		code, _, _ := strings.Cut(line, "#")
+		if strings.Contains(code, want) {
+			covered = true
+			break
+		}
+	}
+	if !covered {
+		t.Errorf("NODE_DIST_CACHE points at %s but no cache: paths: entry covers it (want %q); "+
+			"without coverage every fresh host re-downloads Node from nodejs.org", cacheDir, want)
+	}
+}
+
 // The Go cache dirs are pinned as env vars AND covered by the buildspec cache
 // block, and the two must agree.
 //
