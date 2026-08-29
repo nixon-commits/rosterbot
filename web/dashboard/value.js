@@ -8,7 +8,7 @@
 // from raw player/roster data.
 import { api } from "./api.js";
 import { lineChart, themeColors } from "./chart.js";
-import { escapeHtml, help } from "./render.js";
+import { escapeHtml, help, unmatchedTitle } from "./render.js";
 
 // Keys + formulas mirror the template's METRICS table exactly, against
 // valuereport.Model's SeriesRow JSON tags (h_mlb/h_min/p_mlb/p_min).
@@ -237,9 +237,14 @@ function paintChart(el, model, state) {
 
 // ---- Standings ---------------------------------------------------------
 
-function coverageCell(matched, rostered) {
+function coverageCell(matched, rostered, unmatched) {
   const warn = matched < rostered ? " warn" : "";
-  return `<td class="num cov${warn}">${matched}/${rostered}</td>`;
+  // This row is string-built, so the names go through escapeHtml on the way
+  // into the attribute — they are Fantrax-supplied, same as the team name and
+  // logo URL beside them, and escapeHtml escapes quotes.
+  const title = unmatchedTitle(matched, rostered, unmatched);
+  const attr = title ? ` title="${escapeHtml(title)}"` : "";
+  return `<td class="num cov${warn}"${attr}>${matched}/${rostered}</td>`;
 }
 
 function paintStandings(el, model) {
@@ -259,7 +264,7 @@ function paintStandings(el, model) {
       <td class="num">${fmt(r.minors)}</td>
       <td class="num">${fmt(r.hitter)}</td>
       <td class="num">${fmt(r.pitcher)}</td>
-      ${coverageCell(r.matched, r.rostered)}
+      ${coverageCell(r.matched, r.rostered, r.unmatched)}
     </tr>`;
   }).join("");
 

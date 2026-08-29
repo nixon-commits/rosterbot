@@ -1,6 +1,7 @@
 package dynasty
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -79,5 +80,45 @@ func TestBuildModel_AllFourFormatsCarried(t *testing.T) {
 	if team.StartersSFDynasty != 100 || team.StartersNonSFDynasty != 200 ||
 		team.StartersSFRedraft != 300 || team.StartersNonSFRedraft != 400 {
 		t.Errorf("not all four formats carried: %+v", team)
+	}
+}
+
+// The unmatched names are the only answer to "which players" the Matched
+// column can give, and they survive the store round-trip only because
+// Coverage.Unmatched is a persisted field. A revert to json:"-" is otherwise
+// completely silent: the counts keep rendering and the tooltip just empties.
+func TestBuildModel_CarriesUnmatchedNames(t *testing.T) {
+	rows := []Row{{Dt: "2026-08-11", TeamID: "1", TeamName: "A", AssetType: "player", IsStarter: true, ValueSFDynasty: 10}}
+	coverage := []Coverage{{
+		Dt: "2026-08-11", TeamID: "1", TeamName: "A",
+		RosteredCount: 3, MatchedCount: 1,
+		Unmatched: []string{"Kalel Mullings", "Bhayshul Tuten"},
+	}}
+
+	m := BuildModel(rows, coverage, time.Now())
+	if len(m.Teams) != 1 {
+		t.Fatalf("teams = %d, want 1", len(m.Teams))
+	}
+	got := m.Teams[0].Unmatched
+	if len(got) != 2 || got[0] != "Kalel Mullings" || got[1] != "Bhayshul Tuten" {
+		t.Errorf("Unmatched = %v, want the two names from Coverage", got)
+	}
+}
+
+// Coverage is read back out of coverage.ndjson, so the names reach the
+// dashboard only if they survive encoding/json in both directions.
+func TestCoverage_UnmatchedSurvivesTheStoreRoundTrip(t *testing.T) {
+	in := Coverage{Dt: "2026-08-11", TeamID: "1", RosteredCount: 2, MatchedCount: 1, Unmatched: []string{"Jaydon Blue"}}
+
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out Coverage
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(out.Unmatched) != 1 || out.Unmatched[0] != "Jaydon Blue" {
+		t.Errorf("Unmatched = %v after round trip, want [Jaydon Blue]; is the field still json:\"-\"?", out.Unmatched)
 	}
 }

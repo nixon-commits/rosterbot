@@ -104,8 +104,15 @@ func TestWriteCoverageThenReadAllCoverage_RoundTrip(t *testing.T) {
 	if got[0].RosteredCount != 35 || got[0].MatchedCount != 33 {
 		t.Errorf("got[0] = %+v, round-trip mismatch", got[0])
 	}
-	// Unmatched must NOT round-trip -- it is a diagnostic, not durable schema.
-	if got[0].Unmatched != nil {
-		t.Errorf("Unmatched = %v, want nil after round-trip (json:\"-\")", got[0].Unmatched)
+	// Unmatched MUST round-trip: it is the only answer the dashboard's Matched
+	// column can give to "which players", and BuildModel reads the store rather
+	// than the live join, so a name dropped here is a name nobody can recover.
+	if len(got[0].Unmatched) != 1 || got[0].Unmatched[0] != "X" {
+		t.Errorf("Unmatched = %v, want [X] after round-trip", got[0].Unmatched)
+	}
+	// A team that matched everyone stays empty, so an empty list is only
+	// meaningful read against the counts -- see Coverage.Unmatched's comment.
+	if len(got[1].Unmatched) != 0 {
+		t.Errorf("Unmatched = %v on a fully-matched team, want empty", got[1].Unmatched)
 	}
 }

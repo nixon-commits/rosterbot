@@ -23,11 +23,19 @@ type Coverage struct {
 	TeamName      string `json:"team_name"`
 	RosteredCount int    `json:"rostered_count"`
 	MatchedCount  int    `json:"matched_count"`
-	// Unmatched lists rostered player names with no StatsGuy value in the run
-	// that built this Coverage. json:"-" because it is a diagnostic for the
-	// run that computed it, not part of the durable schema -- same discipline
-	// as teamvalue.Row.Unmatched.
-	Unmatched []string `json:"-"`
+	// Unmatched lists rostered player names with no StatsGuy value -- the
+	// answer to "which players" that RosteredCount > MatchedCount otherwise
+	// only implies. Persisted, unlike the run-scoped diagnostics this field
+	// was modelled on: it rides in the SAME partition object as the two counts
+	// it explains, so it is exactly as stale as the numbers rendered beside it
+	// on the dashboard. Same fact, finer grain.
+	//
+	// Nil is therefore ambiguous on its own and must never be read as "nobody
+	// went unmatched". A partition written before this field was persisted
+	// decodes to nil while still carrying MatchedCount < RosteredCount; only
+	// the counts distinguish "nothing to record" from "not recorded". See
+	// render.js's unmatchedTitle, which is where that rule is enforced.
+	Unmatched []string `json:"unmatched,omitempty"`
 }
 
 // TeamNames maps each roster to its display name: user.Metadata.TeamName,

@@ -304,7 +304,9 @@ tr.lead { background: color-mix(in srgb, var(--success) 12%, transparent); }
 tr.lead td { font-weight: 600; }
 td.over { color: var(--danger); }
 td.under { color: var(--success); }
-td.cov.warn { color: var(--danger); }
+/* cursor: help is the only affordance a native title tooltip gets, and the red
+   already marks exactly the cells that carry an unmatched-player list. */
+td.cov.warn { color: var(--danger); cursor: help; }
 
 .muted { color: var(--muted); }
 .sub { font-size: .85rem; margin: var(--s2) 0; }

@@ -56,6 +56,13 @@ type LatestRow struct {
 	Pitcher       int    `json:"pitcher"`
 	MatchedCount  int    `json:"matched"`
 	RosteredCount int    `json:"rostered"`
+
+	// Unmatched names the rostered players behind a MatchedCount shortfall.
+	// Empty on a fully-matched team AND on a partition written before
+	// teamvalue.Row.Unmatched was persisted -- told apart by the counts, never
+	// by this field alone. That second case is permanent here: the Team Value
+	// Store is NoBackfill, so those days can never be re-derived.
+	Unmatched []string `json:"unmatched,omitempty"`
 }
 
 // palette is a categorical color set (stable, colorblind-conscious ordering).
@@ -123,6 +130,7 @@ func BuildModel(rows []teamvalue.Row) *Model {
 			Total: r.TotalValue(), MLB: r.MLBValue(), Minors: r.MinorsValue(),
 			Hitter: r.HitterValue(), Pitcher: r.PitcherValue(),
 			MatchedCount: r.MatchedCount, RosteredCount: r.RosteredCount,
+			Unmatched: r.Unmatched,
 		})
 	}
 	sort.Slice(latest, func(i, j int) bool {

@@ -36,6 +36,34 @@ export function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+// ---- Join coverage ---------------------------------------------------------
+
+// unmatchedTitle builds the tooltip for a "32/38" coverage cell: the names of
+// the rostered players that did not join to a value. Returns "" when the cell
+// has nothing to say, so a caller can skip setting a title at all.
+//
+// Shared by football.js and value.js because the three cases below are one
+// rule, and the third is easy to get wrong in a way nothing would report. An
+// EMPTY name list does not mean everyone matched — a partition written before
+// the stores began persisting the names decodes to no list while still
+// carrying a shortfall in its counts. Only the counts separate "nothing to
+// record" from "not recorded", and saying "no unmatched players" directly
+// beside a cell reading 32/38 would contradict itself on screen. For baseball
+// that case is permanent: the Team Value Store is NoBackfill, so those days
+// can never be re-derived.
+//
+// Names are newline-separated rather than run together with commas: the ask is
+// a list, and a native tooltip renders \n as a line break.
+export function unmatchedTitle(matched, rostered, names) {
+  const missing = rostered - matched;
+  if (!(missing > 0)) return "";
+  const list = Array.isArray(names) ? names.filter(Boolean) : [];
+  if (list.length === 0) {
+    return `${missing} unmatched — names not recorded for this run.`;
+  }
+  return `Unmatched (${list.length}):\n${list.join("\n")}`;
+}
+
 // ---- Help bubbles ----------------------------------------------------------
 // The dashboard carries a lot of load-bearing explanation: why a verdict was
 // withheld, why a total is a floor, why a gap can never be refilled. All of it
