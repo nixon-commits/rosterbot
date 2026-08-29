@@ -146,6 +146,9 @@ func dispatch(ctx context.Context, raw json.RawMessage) error {
 	case driftDetailType:
 		return handleDrift(ctx)
 
+	case alarmDetailType:
+		return handleAlarm(ctx, env.Detail)
+
 	default:
 		log.Printf("ignoring unhandled detail-type %q", env.DetailType)
 		return nil

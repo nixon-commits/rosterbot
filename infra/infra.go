@@ -1043,6 +1043,43 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		},
 	})
 
+	// --- CIS CloudTrail alarms (replaces the disabled Security Hub) ---
+	//
+	// See cloudtrail.go for why these fourteen controls are built directly
+	// rather than through Security Hub. addCISTrailAlarms creates every alarm
+	// and returns only the names of the ones that should page, so the
+	// deploy-driven majority record a breach in CloudWatch without waking
+	// anyone.
+	if pagingAlarms := addCISTrailAlarms(stack); len(pagingAlarms) > 0 {
+		names := make([]interface{}, 0, len(pagingAlarms))
+		for _, n := range pagingAlarms {
+			names = append(names, n)
+		}
+		// Filtering by alarm NAME in the event pattern, rather than delivering
+		// all fourteen and discarding in Go, is what keeps a `cdk deploy` from
+		// costing a Lambda invocation per tripped alarm. The names come from
+		// cisAlarm.alarmName so the rule and the alarms cannot drift apart.
+		awsevents.NewRule(stack, jsii.String("CisAlarmRule"), &awsevents.RuleProps{
+			EventPattern: &awsevents.EventPattern{
+				Source:     jsii.Strings("aws.cloudwatch"),
+				DetailType: jsii.Strings("CloudWatch Alarm State Change"),
+				Detail: &map[string]interface{}{
+					"alarmName": names,
+					// ALARM only. Forwarding OK transitions would pair every
+					// alert with a recovery notice for something that has no
+					// recovery: these fire on an event that already happened,
+					// so "back to normal" reports nothing.
+					"state": map[string]interface{}{
+						"value": []interface{}{"ALARM"},
+					},
+				},
+			},
+			Targets: &[]awsevents.IRuleTarget{
+				awseventstargets.NewLambdaFunction(opsNotifyFn, &awseventstargets.LambdaFunctionProps{}),
+			},
+		})
+	}
+
 	// One declaration of the repository coordinates, consumed by the webhook
 	// source below and by the drift check's GITHUB_REPO in Phase 4. A checker
 	// that restated them could drift from the thing it is checking.
