@@ -44,3 +44,83 @@ func TestBuildspec_NamesStacksExplicitly(t *testing.T) {
 			"down until fixed.", i+1, strings.TrimSpace(line))
 	}
 }
+
+// The CI deploy skips changeset creation.
+//
+// `cdk deploy` defaults to create-changeset-then-execute, and nothing in this
+// pipeline ever reads the changeset: --require-approval is never, and no human
+// reviews a CI deploy before it lands. The creation step alone measured ~26s
+// per stack per build (build 290, 2026-08-29) — paid even when the deploy ends
+// in "(no changes)". --method=direct issues the plain UpdateStack call, which
+// still rolls back on failure; only the unread preview is dropped.
+func TestBuildspec_DeploysWithoutAChangeset(t *testing.T) {
+	raw, err := os.ReadFile("../buildspec.yml")
+	if err != nil {
+		t.Fatalf("read buildspec: %v", err)
+	}
+	deploys := 0
+	for i, line := range strings.Split(string(raw), "\n") {
+		code, _, _ := strings.Cut(line, "#")
+		if !strings.Contains(code, "cdk deploy") {
+			continue
+		}
+		deploys++
+		if !strings.Contains(code, "--method=direct") {
+			t.Errorf("buildspec.yml:%d deploys via the default changeset method:\n\t%s\n"+
+				"nothing consumes the changeset in CI, and creating it costs ~26s per stack "+
+				"on every push to main. Add --method=direct.", i+1, strings.TrimSpace(line))
+		}
+	}
+	if deploys == 0 {
+		t.Fatal("buildspec.yml contains no `cdk deploy` line; this test is asserting against nothing")
+	}
+}
+
+// The Go cache dirs are pinned as env vars AND covered by the buildspec cache
+// block, and the two must agree.
+//
+// `cdk synth` recompiles the aws-cdk-go bindings plus both bundled lambda
+// modules on every build — 130s of the 380s total on build 290, all of it
+// GOCACHE-cold work. The S3 cache (see infra.go's Build project) restores
+// whatever the cache: paths: block names, so the caching only works if the
+// directories Go actually writes are the directories the block lists. Pinning
+// the dirs via env vars (rather than trusting the image's defaults) is what
+// makes that agreement checkable: this test extracts each pinned path and
+// requires a cache entry covering it. A mismatch has no other signal — the
+// build is merely slow again, never red.
+func TestBuildspec_GoCacheDirsArePinnedAndCached(t *testing.T) {
+	raw, err := os.ReadFile("../buildspec.yml")
+	if err != nil {
+		t.Fatalf("read buildspec: %v", err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	dirs := map[string]string{}
+	for _, name := range []string{"GOCACHE", "GOMODCACHE"} {
+		for _, line := range lines {
+			code, _, _ := strings.Cut(line, "#")
+			if val, ok := strings.CutPrefix(strings.TrimSpace(code), name+":"); ok {
+				dirs[name] = strings.Trim(strings.TrimSpace(val), `"`)
+			}
+		}
+		if dirs[name] == "" {
+			t.Errorf("buildspec.yml does not pin %s under env: variables:; "+
+				"without the pin the cache: paths: block is guessing at the image default, "+
+				"and a wrong guess makes every build GOCACHE-cold with no error anywhere", name)
+		}
+	}
+	for name, dir := range dirs {
+		want := dir + "/**/*"
+		covered := false
+		for _, line := range lines {
+			code, _, _ := strings.Cut(line, "#")
+			if strings.Contains(code, want) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("%s points at %s but no cache: paths: entry covers it (want %q); "+
+				"the S3 cache restores only what the block names, so this dir is rebuilt from scratch every build", name, dir, want)
+		}
+	}
+}

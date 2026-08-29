@@ -86,7 +86,13 @@ var (
 func infraTemplate(t *testing.T) (assertions.Template, map[string]any) {
 	t.Helper()
 	infraOnce.Do(func() {
-		app := awscdk.NewApp(nil)
+		// enableBuild mirrors the real deploy: the buildspec always passes
+		// `-c enableBuild=true`, so the deployed stack always carries the
+		// CodeBuild project. Synthesizing without it would leave that project
+		// untestable — the codebuild_test.go pins need it in this template.
+		app := awscdk.NewApp(&awscdk.AppProps{
+			Context: &map[string]interface{}{"enableBuild": "true"},
+		})
 		// An imported certificate is a literal ARN, so it needs no
 		// cross-region machinery — the real cert arrives as a token from
 		// InfraCertStack, but nothing asserted here depends on which.
