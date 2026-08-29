@@ -12,7 +12,7 @@ import (
 
 // SleeperLeague is one discovered league in this API's own wire shape.
 //
-// Deliberately not internal/sleeper's League type. Re-declaring five fields is
+// Deliberately not internal/sleeper's League type. Re-declaring seven fields is
 // cheaper than importing the client here: this package's tests are hermetic and
 // network-free, and an import that drags in an HTTP client is how that stops
 // being true by accident.
@@ -21,6 +21,21 @@ type SleeperLeague struct {
 	Name         string `json:"name"`
 	Season       string `json:"season"`
 	TotalRosters int    `json:"total_rosters"`
+
+	// Status is Sleeper's own lifecycle value: pre_draft, drafting, in_season,
+	// complete. It is here because it is DOCUMENTED, which settings.type — the
+	// field a "Redraft"/"Dynasty" label would have to come from — is not: the
+	// Sleeper docs render settings as an empty object, and this account's own
+	// leagues carry a type value the conventional 0/1/2 mapping does not cover.
+	// A format word derived from it would render confidently for every league
+	// while being unverifiable for some, so none is served.
+	Status string `json:"status,omitempty"`
+
+	// Avatar is the league's avatar id, resolved by a client against
+	// https://sleepercdn.com/avatars/thumbs/<avatar>. Empty is ordinary — a
+	// league need not have one — so clients must carry a fallback rather than
+	// render a broken image.
+	Avatar string `json:"avatar,omitempty"`
 
 	// TeamID is the resolved Sleeper user id — the value that identifies which
 	// roster in this league is theirs. Returned here so the client can store a

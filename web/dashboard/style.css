@@ -1312,3 +1312,59 @@ pre {
 .tenant-actions button.danger:hover {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
+
+/* Sleeper league connector (leagues.js).
+   .league-row is shared by the connected list (a div) and the picker (a label,
+   so the whole row is a click target for its checkbox). */
+.league-list { margin: 0.6rem 0; }
+.league-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.55rem 0;
+  border-top: 1px solid var(--border);
+}
+.league-row:first-child { border-top: none; }
+.league-pick { cursor: pointer; }
+.league-pick input[type="checkbox"] { width: 1.05rem; height: 1.05rem; flex: none; }
+/* A connected league's box is checked and disabled: it states a fact rather
+   than offering a control, so it should not read as interactive. */
+.league-pick input[type="checkbox"]:disabled { cursor: default; }
+
+.league-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  flex: none;
+  object-fit: cover;
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+}
+.league-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* flex: 1 with min-width: 0 so a long league name ellipsises instead of
+   pushing the Remove button off the row. */
+.league-text { flex: 1 1 auto; min-width: 0; }
+.league-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.league-picker { margin-top: 0.6rem; }
+.league-lookup { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.league-lookup input { flex: 1 1 14rem; }
+.league-lookup p { flex: 1 1 100%; margin: 0.2rem 0 0; }
+
+.league-back {
+  background: none;
+  border: none;
+  padding: 0.2rem 0;
+  color: var(--accent);
+  font: inherit;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.league-picker > button.primary { margin-top: 0.7rem; }

@@ -74,6 +74,23 @@ export const api = {
   tenantDelete: (id) => request("DELETE", `/v1/tenants/${encodeURIComponent(id)}`),
   connect: (username, password) => request("POST", "/v1/connect", { username, password }),
 
+  // Leagues. The caller's own list spans platforms; the three mutating calls
+  // are Sleeper-only server-side (a Fantrax membership is established by the
+  // invite and proven against Fantrax, never asserted by its owner).
+  memberships: () => request("GET", "/v1/memberships"),
+  // One league per call — there is deliberately no batch body. A multi-select
+  // fires N of these in sequence, and each response carries the caller's FULL
+  // membership list, so the last 200 is truth.
+  addMembership: (league) => request("POST", "/v1/memberships", league),
+  deleteMembership: (platform, leagueID) =>
+    request("DELETE",
+      `/v1/memberships/${encodeURIComponent(platform)}/${encodeURIComponent(leagueID)}`),
+  // Discovery, proxied server-side so no client learns Sleeper's API shape.
+  // sport and season are omitted on purpose: the server defaults to nfl and to
+  // the season a date falls in, which is not the calendar year before March.
+  sleeperLeagues: (username) =>
+    request("GET", `/v1/sleeper/leagues?username=${encodeURIComponent(username)}`),
+
   authRegisterBegin: (enrollToken) =>
     request("POST", "/v1/auth/register/begin", enrollToken ? { token: enrollToken } : undefined),
   authRegisterFinish: (attestation, enrollToken) =>
