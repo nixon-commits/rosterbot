@@ -76,6 +76,15 @@ phases:
           curl -fsSL "https://nodejs.org/dist/v${NODE_22_VERSION}/node-v${NODE_22_VERSION}-linux-arm64.tar.xz" -o "$TARBALL.tmp"
           mv "$TARBALL.tmp" "$TARBALL"
         fi
+        # Remove the image's npm/corepack trees BEFORE extracting. tar
+        # overwrites the files the tarball ships but does not delete files the
+        # image's older npm had that v22's does not, and the mixed tree
+        # crashes npm on load: "Class extends value undefined is not a
+        # constructor or null" (build 296 -- it failed the pipeline at
+        # INSTALL while `node --version` passed right before, node being a
+        # single cleanly-overwritten binary). The tarball provides both trees
+        # fresh, and aws-cdk is installed after this, so nothing is lost.
+        rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
         tar -xJf "$TARBALL" -C /usr/local --strip-components=1
       # cdk's app command is `go run infra.go`; the golang runtime above provides Go.
       # The cdk CLI is not on the image, so install it here.
