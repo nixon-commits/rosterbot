@@ -120,6 +120,26 @@ func TestBuildspec_NodeInstallsAfterTheCacheRestore(t *testing.T) {
 		t.Error("no install command references both NODE_DIST_CACHE and NODE_22_VERSION; " +
 			"Node must be installed from the cached tarball at the image's own pinned version")
 	}
+	// The image's npm tree must be removed before the tarball is extracted.
+	// tar overwrites the files the new Node ships but does not delete the
+	// files the image's pre-existing npm had that the new one does not, and
+	// the mixed tree crashes npm on load ("Class extends value undefined is
+	// not a constructor or null" — build 296, the failure that took the
+	// deploy pipeline down at INSTALL). node itself is a single binary and
+	// survives the overwrite, which is why `node --version` passing right
+	// before the crash proves nothing about npm.
+	cleans := false
+	for _, line := range lines {
+		code, _, _ := strings.Cut(line, "#")
+		if strings.Contains(code, "rm -rf") && strings.Contains(code, "/usr/local/lib/node_modules/npm") {
+			cleans = true
+			break
+		}
+	}
+	if !cleans {
+		t.Error("the install phase does not `rm -rf /usr/local/lib/node_modules/npm` before extracting the Node tarball; " +
+			"tar over the image's npm leaves a mixed tree that crashes npm on load (build 296)")
+	}
 	want := cacheDir + "/**/*"
 	covered := false
 	for _, line := range lines {
