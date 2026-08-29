@@ -23,6 +23,10 @@ env:
     # TestBuildspec_GoCacheDirsArePinnedAndCached pins the agreement.
     GOCACHE: "/root/.cache/go-build"
     GOMODCACHE: "/root/go/pkg/mod"
+    # Where the Node dist tarball is cached between builds (see the install
+    # phase and the cache: paths: block; TestBuildspec_NodeInstallsAfterTheCacheRestore
+    # pins all three together).
+    NODE_DIST_CACHE: "/root/.cache/node-dist"
 phases:
   install:
     # Pin every image-provided runtime this build actually uses. Without this,
@@ -30,8 +34,17 @@ phases:
     # EOL -- that is how the cdk CLI ended up running on end-of-life Node 18 and
     # warning on every build (rosterbot-2no). node runs the aws-cdk CLI below;
     # python3 parses cdk-outputs.json in post_build.
+    #
+    # nodejs is DELIBERATELY absent here, though the build needs Node 22+.
+    # runtime-versions installs run during DOWNLOAD_SOURCE, BEFORE the S3
+    # cache restore (measured, build 295: `n` ran at 18:03:36, "Downloading
+    # S3 cache" at 18:04:10) -- so a nodejs pin here re-downloads Node from
+    # nodejs.org on every fresh host, ~33-45s, and no cache path can ever
+    # help it. Node is installed by the first install command below instead,
+    # which runs after the restore and can therefore hit $NODE_DIST_CACHE.
+    # The image's EOL default Node is never invoked: nothing runs node before
+    # that command replaces it.
     runtime-versions:
-      nodejs: "22"
       # Quoted: YAML would read a bare 3.10 as the float 3.1 and select the wrong
       # runtime. 3.12 happens to survive unquoted; the next edit might not.
       python: "3.12"
@@ -39,12 +52,35 @@ phases:
       # + opsnotify/ GoFunctions with this host go, and both require go 1.26.1 --
       # 1.26 satisfies every module the host builds (infra too) without a toolchain
       # auto-download. The AL2023 image exposes golang 1.20-1.26 (see infra.go), so
-      # pin it like nodejs/python instead of inheriting a default that shifts on EOL.
+      # pin it like python instead of inheriting a default that shifts on EOL.
       golang: "1.26"
     commands:
+      # Install Node from the cached dist tarball -- the post-cache-restore twin
+      # of the runtime-versions pin this replaces (see the comment above).
+      # $NODE_22_VERSION is the image's own exact pin for its "22" runtime (an
+      # image ENV, present whether or not runtime-versions selects nodejs), so
+      # this tracks the same version the pin would have installed, and the :?
+      # guard fails the build loudly if an image update ever drops the var.
+      # linux-arm64 matches the Graviton build host (infra.go BuildImage); if
+      # the compute ever changes, curl -f 404s loudly here. The .tmp+mv keeps a
+      # truncated download from poisoning the cache: curl -f exits nonzero on
+      # error, set -e stops before the mv, and the next build re-fetches.
+      # Caching the ~30MB tarball rather than the ~190MB unpacked tree keeps
+      # the per-build cache upload tax near zero.
+      - |
+        set -eu
+        : "${NODE_22_VERSION:?image no longer exports NODE_22_VERSION -- see the runtime-versions comment}"
+        TARBALL="$NODE_DIST_CACHE/node-v${NODE_22_VERSION}-linux-arm64.tar.xz"
+        if [ ! -f "$TARBALL" ]; then
+          mkdir -p "$NODE_DIST_CACHE"
+          curl -fsSL "https://nodejs.org/dist/v${NODE_22_VERSION}/node-v${NODE_22_VERSION}-linux-arm64.tar.xz" -o "$TARBALL.tmp"
+          mv "$TARBALL.tmp" "$TARBALL"
+        fi
+        tar -xJf "$TARBALL" -C /usr/local --strip-components=1
       # cdk's app command is `go run infra.go`; the golang runtime above provides Go.
       # The cdk CLI is not on the image, so install it here.
       - go version
+      - node --version
       - npm install -g "aws-cdk@${CDK_VERSION}"
       - cdk --version
   pre_build:
@@ -149,3 +185,4 @@ cache:
   paths:
     - "/root/.cache/go-build/**/*"
     - "/root/go/pkg/mod/**/*"
+    - "/root/.cache/node-dist/**/*"
