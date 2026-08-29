@@ -34,7 +34,7 @@ type Coverage struct {
 	// went unmatched". A partition written before this field was persisted
 	// decodes to nil while still carrying MatchedCount < RosteredCount; only
 	// the counts distinguish "nothing to record" from "not recorded". See
-	// render.js's unmatchedTitle, which is where that rule is enforced.
+	// render.js's unmatchedText, which is where that rule is enforced.
 	Unmatched []string `json:"unmatched,omitempty"`
 }
 

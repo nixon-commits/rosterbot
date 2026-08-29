@@ -69,7 +69,7 @@ type Row struct {
 	// This store is NoBackfill (docs/adr/0002), so every partition written
 	// before this field was persisted decodes to nil FOREVER while still
 	// carrying MatchedCount < RosteredCount; only the counts separate "nothing
-	// to record" from "not recorded". render.js's unmatchedTitle enforces that.
+	// to record" from "not recorded". render.js's unmatchedText enforces that.
 	Unmatched []string `json:"unmatched,omitempty"`
 }
 

@@ -8,7 +8,7 @@
 // from raw player/roster data.
 import { api } from "./api.js";
 import { lineChart, themeColors } from "./chart.js";
-import { escapeHtml, help, unmatchedTitle } from "./render.js";
+import { escapeHtml, help, unmatchedText, wireUnmatchedPopovers } from "./render.js";
 
 // Keys + formulas mirror the template's METRICS table exactly, against
 // valuereport.Model's SeriesRow JSON tags (h_mlb/h_min/p_mlb/p_min).
@@ -239,11 +239,13 @@ function paintChart(el, model, state) {
 
 function coverageCell(matched, rostered, unmatched) {
   const warn = matched < rostered ? " warn" : "";
-  // This row is string-built, so the names go through escapeHtml on the way
-  // into the attribute — they are Fantrax-supplied, same as the team name and
-  // logo URL beside them, and escapeHtml escapes quotes.
-  const title = unmatchedTitle(matched, rostered, unmatched);
-  const attr = title ? ` title="${escapeHtml(title)}"` : "";
+  // data-unmatched, not title: a native tooltip is invisible on touch, so
+  // render.js's hover/focus panel reads the names back off the cell. This row
+  // is string-built, so they go through escapeHtml on the way into the
+  // attribute — they are Fantrax-supplied, same as the team name and logo URL
+  // beside them, and escapeHtml escapes quotes.
+  const text = unmatchedText(matched, rostered, unmatched);
+  const attr = text ? ` data-unmatched="${escapeHtml(text)}"` : "";
   return `<td class="num cov${warn}"${attr}>${matched}/${rostered}</td>`;
 }
 
@@ -281,6 +283,8 @@ function paintStandings(el, model) {
   // image icon (parity with the deleted template's onerror fallback), wired
   // via addEventListener rather than an inline handler so no data ever needs
   // to round-trip through an HTML attribute string.
+  wireUnmatchedPopovers(el.standings);
+
   el.standings.querySelectorAll("img.logo").forEach((img) => {
     img.addEventListener("error", () => {
       const span = document.createElement("span");

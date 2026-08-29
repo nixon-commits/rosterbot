@@ -38,7 +38,7 @@ export function escapeHtml(value) {
 
 // ---- Join coverage ---------------------------------------------------------
 
-// unmatchedTitle builds the tooltip for a "32/38" coverage cell: the names of
+// unmatchedText builds the hover text for a "32/38" coverage cell: the names of
 // the rostered players that did not join to a value. Returns "" when the cell
 // has nothing to say, so a caller can skip setting a title at all.
 //
@@ -53,8 +53,8 @@ export function escapeHtml(value) {
 // can never be re-derived.
 //
 // Names are newline-separated rather than run together with commas: the ask is
-// a list, and a native tooltip renders \n as a line break.
-export function unmatchedTitle(matched, rostered, names) {
+// a list, and .help-pop is set white-space: pre-line, which keeps the breaks.
+export function unmatchedText(matched, rostered, names) {
   const missing = rostered - matched;
   if (!(missing > 0)) return "";
   const list = Array.isArray(names) ? names.filter(Boolean) : [];
@@ -62,6 +62,120 @@ export function unmatchedTitle(matched, rostered, names) {
     return `${missing} unmatched — names not recorded for this run.`;
   }
   return `Unmatched (${list.length}):\n${list.join("\n")}`;
+}
+
+// One popover element is shared by every coverage cell on the page, its text
+// replaced on each show. A hidden panel per cell would mean a dozen-plus dead
+// nodes per table, all rebuilt on every format toggle.
+//
+// It is a real popover rather than an absolutely-positioned div because
+// .table-wrap is overflow-x:auto, which CLIPS a positioned descendant. The top
+// layer sits outside that entirely, and popover=auto adds tap-outside dismissal
+// (verified with a real click; a synthetic one does not trigger UA light
+// dismiss, so it cannot be asserted in a test that fakes the event). That
+// dismissal is what makes this work on touch at all — the native title it
+// replaced is never shown on a touch device. Keyboard users are covered by the
+// blur handler rather than by Esc, which this harness could not exercise.
+let covPop = null;
+
+function covPopover() {
+  if (covPop) return covPop;
+  covPop = document.createElement("div");
+  covPop.id = "cov-pop";
+  // .help-pop for the skin (including white-space: pre-line, which is what
+  // renders the name list); .cov-pop to swap the UA's viewport centering for
+  // positioning against the cell.
+  covPop.className = "help-pop cov-pop";
+  covPop.setAttribute("popover", "auto");
+  covPop.setAttribute("role", "note");
+  document.body.appendChild(covPop);
+  return covPop;
+}
+
+// placeCovPopover pins the panel under its cell, flipping above when it would
+// run off the bottom and clamping to the viewport horizontally.
+//
+// It must run while the popover is SHOWN — a hidden one is display:none and
+// measures zero — so the caller unhides it invisibly first. Doing the whole
+// show/measure/place/reveal synchronously is what keeps the browser from
+// painting a frame at the pre-placement position.
+function placeCovPopover(pop, anchor) {
+  const gap = 8;
+  const a = anchor.getBoundingClientRect();
+  const p = pop.getBoundingClientRect();
+
+  let left = a.left + a.width / 2 - p.width / 2;
+  left = Math.max(gap, Math.min(left, window.innerWidth - p.width - gap));
+
+  let top = a.bottom + gap;
+  if (top + p.height > window.innerHeight - gap) top = a.top - p.height - gap;
+  top = Math.max(gap, top);
+
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.top = `${Math.round(top)}px`;
+}
+
+// wireUnmatchedPopovers attaches the hover/focus panel to every [data-unmatched]
+// cell under root. Called after each paint: the listeners die with the nodes
+// they were bound to, so a re-render simply re-wires.
+//
+// Focus is not a nicety alongside hover, it is the half that makes this work at
+// all off a mouse — a tap focuses the cell, which is the only way a touch device
+// ever sees this content. Hence tabindex on the cell.
+export function wireUnmatchedPopovers(root) {
+  // A re-render can strip the cell a still-open panel was pointing at.
+  hideCovPopover();
+
+  for (const cell of root.querySelectorAll("[data-unmatched]")) {
+    const text = cell.dataset.unmatched;
+    if (!text) continue;
+
+    cell.tabIndex = 0;
+    let timer = null;
+
+    const show = () => {
+      const pop = covPopover();
+      pop.textContent = text;
+      pop.dataset.owner = cellKey(cell);
+      cell.setAttribute("aria-describedby", pop.id);
+      // Measure and place before the panel is ever painted.
+      pop.style.visibility = "hidden";
+      if (!pop.matches(":popover-open")) pop.showPopover();
+      placeCovPopover(pop, cell);
+      pop.style.visibility = "";
+    };
+
+    const hide = () => {
+      clearTimeout(timer);
+      cell.removeAttribute("aria-describedby");
+      // Only close the panel this cell actually owns: a mouseleave arriving
+      // after a neighbour has already opened its own would otherwise shut it.
+      if (covPop && covPop.dataset.owner === cellKey(cell)) hideCovPopover();
+    };
+
+    // A short delay keeps a mouse crossing the table from strobing a panel over
+    // every warned cell on the way past. Focus opens immediately — that one is
+    // deliberate, not accidental.
+    cell.addEventListener("mouseenter", () => {
+      clearTimeout(timer);
+      timer = setTimeout(show, 140);
+    });
+    cell.addEventListener("mouseleave", hide);
+    cell.addEventListener("focus", show);
+    cell.addEventListener("blur", hide);
+  }
+}
+
+// cellKey identifies which cell owns the shared panel. The row's first cell is
+// the team name, which is unique per table and survives a re-render.
+function cellKey(cell) {
+  const row = cell.closest("tr");
+  return (row?.cells?.[0]?.textContent || "") + "|" + cell.textContent;
+}
+
+function hideCovPopover() {
+  if (covPop && covPop.matches(":popover-open")) covPop.hidePopover();
+  if (covPop) delete covPop.dataset.owner;
 }
 
 // ---- Help bubbles ----------------------------------------------------------
