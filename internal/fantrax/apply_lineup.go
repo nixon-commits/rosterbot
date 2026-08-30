@@ -65,6 +65,7 @@ func applyLineupWithLockedPlayerRetry(
 	reserve []string,
 ) error {
 	nameToID := buildNameToID(rawRoster)
+	origFieldMap := auth_client.BuildFieldMapFromRoster(rawRoster)
 	excluded := make(map[string]bool)
 
 	const maxAttempts = 2
@@ -101,6 +102,26 @@ func applyLineupWithLockedPlayerRetry(
 			if names := parseLockedPlayerNames(msg); len(names) > 0 {
 				added := excludeByName(names, nameToID, excluded)
 				log.Printf("fantrax: locked players (%v) — retrying without %d player(s)", names, added)
+
+				// Excluding a bench move leaves its slot occupied, so a
+				// promotion that needed that slot has nowhere to land — the
+				// retry payload would be unrealizable and Fantrax refuses it
+				// whole (2026-08-29: Cavalli's bench excluded, Gage Jump's
+				// promotion into his still-held P slot rejected hourly all
+				// evening). Drop such promotions alongside the exclusion.
+				var dropped []PlayerSlot
+				active, dropped = dropStrandedActivations(origFieldMap, active, reserve, excluded)
+				for _, ps := range dropped {
+					log.Printf("fantrax: dropping activation %s → %s — the slot it needs is held by a locked player", ps.PlayerID, ps.PosID)
+				}
+
+				// With nothing effective left, a retry can only be a no-op
+				// POST — and a benign answer to a no-op would report success
+				// for changes that never landed (the rosterbot-48z masking
+				// shape). Skip the POST and fail honestly instead.
+				if !hasEffectiveChanges(active, reserve, excluded) {
+					return fmt.Errorf("not retrying: every intended change depends on a player already locked in this period (%v)", names)
+				}
 				continue
 			}
 		}
@@ -241,6 +262,60 @@ func buildFieldMapWithMods(
 		fieldMap[id] = pos
 	}
 	return fieldMap
+}
+
+// dropStrandedActivations removes promotions that depended on a bench move a
+// locked-player exclusion just cancelled: for each excluded player who was to
+// be benched OUT of an active slot, that slot stays occupied, so one pending
+// promotion into the same slot type is dropped with it. Slot changes between
+// already-active players are kept — they need no freed slot. One promotion is
+// dropped per stranded slot, matching capacity one-for-one; a chain the
+// heuristic cannot see (a multi-step slot rotation) still fails the retry and
+// surfaces as the honest rejection it always did.
+func dropStrandedActivations(
+	orig map[string]auth_client.RosterPosition,
+	active []PlayerSlot,
+	reserve []string,
+	excluded map[string]bool,
+) (kept []PlayerSlot, dropped []PlayerSlot) {
+	stranded := make(map[string]int)
+	for _, id := range reserve {
+		if !excluded[id] {
+			continue
+		}
+		if pos := orig[id]; pos.StID == auth_client.StatusActive && pos.PosID != "" {
+			stranded[pos.PosID]++
+		}
+	}
+	if len(stranded) == 0 {
+		return active, nil
+	}
+	for _, ps := range active {
+		isPromotion := orig[ps.PlayerID].StID != auth_client.StatusActive
+		if isPromotion && stranded[ps.PosID] > 0 {
+			stranded[ps.PosID]--
+			dropped = append(dropped, ps)
+			continue
+		}
+		kept = append(kept, ps)
+	}
+	return kept, dropped
+}
+
+// hasEffectiveChanges reports whether any intended move survives the
+// exclusions — i.e. whether a retry POST would carry any modification at all.
+func hasEffectiveChanges(active []PlayerSlot, reserve []string, excluded map[string]bool) bool {
+	for _, ps := range active {
+		if !excluded[ps.PlayerID] {
+			return true
+		}
+	}
+	for _, id := range reserve {
+		if !excluded[id] {
+			return true
+		}
+	}
+	return false
 }
 
 // excludeByName looks up each name in nameToID and adds the corresponding

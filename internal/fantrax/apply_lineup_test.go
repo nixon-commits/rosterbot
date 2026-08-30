@@ -212,8 +212,16 @@ func TestApplyLineupAttempt_LockedPlayerRetry_Apr26EmersonCampbell(t *testing.T)
 }
 
 func TestApplyLineupAttempt_LockedPersistsAfterRetry_DoesNotCrash(t *testing.T) {
-	roster := fakeRoster(struct{ id, name string }{"04pkr", "Nico Hoerner"})
-	active := []PlayerSlot{{PlayerID: "04pkr", PosID: "003"}}
+	// A second, unlocked change keeps the retry payload non-empty, so the
+	// persistent-lock path (the retry POST itself failing again) is reachable.
+	roster := fakeRoster(
+		struct{ id, name string }{"04pkr", "Nico Hoerner"},
+		struct{ id, name string }{"other", "Other Hitter"},
+	)
+	active := []PlayerSlot{
+		{PlayerID: "04pkr", PosID: "003"},
+		{PlayerID: "other", PosID: "008"},
+	}
 
 	var attempts int
 	executor := func(_ map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
@@ -578,9 +586,91 @@ func TestParseLockedPlayerNames_Deterministic(t *testing.T) {
 	}
 }
 
-// Bench-list moves are also excluded on retry.
-func TestApplyLineupAttempt_LockedReservedPlayer_DroppedFromRetry(t *testing.T) {
+// When every intended change involves a locked player, there is nothing left
+// to retry: a no-op retry POST can only come back benign, which would report
+// success for changes that never landed (the rosterbot-48z masking shape).
+// The function must skip the POST and return an honest error instead.
+func TestApplyLineupAttempt_AllChangesLocked_NoRetryPost(t *testing.T) {
 	roster := fakeRoster(struct{ id, name string }{"04pkr", "Nico Hoerner"})
+
+	var attempts int
+	executor := func(_ map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
+		attempts++
+		return errResp(lockedErrSingle), nil
+	}
+
+	err := applyLineupWithLockedPlayerRetry(executor, nil, roster, nil, []string{"04pkr"})
+	if err == nil {
+		t.Fatal("expected an error — the only intended change involves a locked player")
+	}
+	if !strings.Contains(err.Error(), "locked") {
+		t.Errorf("error should say the changes depend on locked players, got: %v", err)
+	}
+	if attempts != 1 {
+		t.Errorf("a retry with no effective changes must not be posted; got %d attempts", attempts)
+	}
+}
+
+// lockedErrCavalli is the 2026-08-29 rejection shape, naming Cade Cavalli.
+const lockedErrCavalli = `roster change rejected: You cannot make those changes because the following players are already locked in this period:<br/><br/><span class="defaultLink"><a class="hand " onclick="showPlayerProfileNew('cav', '***'); stopBubble(event)">Cade Cavalli</a> <span title='Starting Pitcher'>SP</span> - <span title='Washington Nationals'>WSH</span></span><br/>`
+
+// fakeRosterRows builds a TeamRosterResponse from explicit rows, so tests can
+// place players in active slots (fakeRoster seeds everyone as Reserve).
+func fakeRosterRows(rows ...models.PlayerRow) *models.TeamRosterResponse {
+	r := &models.TeamRosterResponse{}
+	r.Responses = append(r.Responses, struct {
+		Data models.TeamRosterResponseData `json:"data"`
+	}{
+		Data: models.TeamRosterResponseData{
+			Tables: []models.RosterTable{{Rows: rows}},
+		},
+	})
+	return r
+}
+
+// The 2026-08-29 incident, second act: the optimizer benched Cade Cavalli
+// (locked) to free the P slot for Gage Jump. Excluding Cavalli from the retry
+// leaves Jump's promotion pointing at a slot that is still occupied — a
+// payload Fantrax can never accept (it answered with an unresolvable confirm
+// prompt, and the hourly run repeated the rejection all evening). A promotion
+// whose slot was to be freed by an excluded bench move must be dropped with
+// it; with nothing effective left, the retry must not be posted at all.
+func TestApplyLineupAttempt_RetryDropsActivationStrandedByLockedBench(t *testing.T) {
+	roster := fakeRosterRows(
+		models.PlayerRow{Scorer: models.Player{ScorerID: "cav", Name: "Cade Cavalli"}, StatusID: auth_client.StatusActive, PosID: "017"},
+		models.PlayerRow{Scorer: models.Player{ScorerID: "jump", Name: "Gage Jump"}, StatusID: auth_client.StatusReserve},
+	)
+	active := []PlayerSlot{{PlayerID: "jump", PosID: "017"}}
+	reserve := []string{"cav"}
+
+	var attempts int
+	executor := func(_ map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
+		attempts++
+		return errResp(lockedErrCavalli), nil
+	}
+
+	err := applyLineupWithLockedPlayerRetry(executor, nil, roster, active, reserve)
+	if err == nil {
+		t.Fatal("expected an error — every intended change depends on the locked player's slot")
+	}
+	if !strings.Contains(err.Error(), "locked") {
+		t.Errorf("error should say the changes depend on locked players, got: %v", err)
+	}
+	if attempts != 1 {
+		t.Errorf("the stranded promotion must be dropped and the empty retry not posted; got %d attempts", attempts)
+	}
+}
+
+// A change that does not depend on the locked player's slot still lands on the
+// retry: only the stranded promotion is dropped alongside the exclusion.
+func TestApplyLineupAttempt_RetryKeepsChangesIndependentOfTheLockedSlot(t *testing.T) {
+	roster := fakeRosterRows(
+		models.PlayerRow{Scorer: models.Player{ScorerID: "cav", Name: "Cade Cavalli"}, StatusID: auth_client.StatusActive, PosID: "017"},
+		models.PlayerRow{Scorer: models.Player{ScorerID: "jump", Name: "Gage Jump"}, StatusID: auth_client.StatusReserve},
+		models.PlayerRow{Scorer: models.Player{ScorerID: "oth", Name: "Slumping Bat"}, StatusID: auth_client.StatusActive, PosID: "012"},
+	)
+	active := []PlayerSlot{{PlayerID: "jump", PosID: "017"}}
+	reserve := []string{"cav", "oth"}
 
 	var attempts []map[string]auth_client.RosterPosition
 	executor := func(fm map[string]auth_client.RosterPosition) (*models.RosterChangeResponse, error) {
@@ -590,22 +680,31 @@ func TestApplyLineupAttempt_LockedReservedPlayer_DroppedFromRetry(t *testing.T) 
 		}
 		attempts = append(attempts, snap)
 		if len(attempts) == 1 {
-			return errResp(lockedErrSingle), nil
+			return errResp(lockedErrCavalli), nil
 		}
 		return successResp(), nil
 	}
-
-	if err := applyLineupWithLockedPlayerRetry(executor, nil, roster, nil, []string{"04pkr"}); err != nil {
-		t.Fatalf("expected success after retry, got: %v", err)
+	fetch := func() (*models.TeamRosterResponse, error) {
+		return fakeRosterRows(
+			models.PlayerRow{Scorer: models.Player{ScorerID: "cav", Name: "Cade Cavalli"}, StatusID: auth_client.StatusActive, PosID: "017"},
+			models.PlayerRow{Scorer: models.Player{ScorerID: "jump", Name: "Gage Jump"}, StatusID: auth_client.StatusReserve},
+			models.PlayerRow{Scorer: models.Player{ScorerID: "oth", Name: "Slumping Bat"}, StatusID: auth_client.StatusReserve},
+		), nil
 	}
 
-	// First attempt staged a Reserve move (unchanged StID since seed roster
-	// is already Reserve — but PosID would clear). Just confirm the second
-	// attempt left Hoerner in original Reserve state with no PosID change.
+	if err := applyLineupWithLockedPlayerRetry(executor, fetch, roster, active, reserve); err != nil {
+		t.Fatalf("the bench of an unrelated player should still land, got: %v", err)
+	}
 	if len(attempts) != 2 {
 		t.Fatalf("expected 2 attempts, got %d", len(attempts))
 	}
-	if attempts[1]["04pkr"].StID != auth_client.StatusReserve {
-		t.Errorf("attempt[1] Hoerner StID=%q, want Reserve", attempts[1]["04pkr"].StID)
+	if got := attempts[1]["cav"].StID; got != auth_client.StatusActive {
+		t.Errorf("retry must leave the locked player untouched, cav StID=%q", got)
+	}
+	if got := attempts[1]["jump"].StID; got != auth_client.StatusReserve {
+		t.Errorf("retry must drop the stranded promotion, jump StID=%q", got)
+	}
+	if got := attempts[1]["oth"].StID; got != auth_client.StatusReserve {
+		t.Errorf("retry must keep the independent bench move, oth StID=%q", got)
 	}
 }

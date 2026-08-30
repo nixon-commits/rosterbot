@@ -479,6 +479,58 @@ func TestEmit_ApplyFailureNotifiesAndContinuesToTheNextDate(t *testing.T) {
 	}
 }
 
+// The apply-failure alert is deduplicated per (apply date, failure text)
+// through the alertmarker discipline: the 2026-08-29 Cavalli lock produced an
+// identical Pushover from every hourly run for the rest of the day. The same
+// standing failure alerts once; a success clears the episode, so a NEW failure
+// on the same date alerts again.
+func TestEmit_ApplyFailureAlertIsDedupedPerEpisode(t *testing.T) {
+	h := newEmitHarness()
+	h.ft.applyErr = errors.New("roster change rejected: locked")
+	markers := newFakeMarkers()
+	var alerts []string
+	in := h.inputs([]dateResult{movingResult()}, false)
+	in.ApplyFailMarkers = markers
+	in.NotifyAlert = func(m string) error { alerts = append(alerts, m); return nil }
+
+	Emit(h.ft, in)
+	Emit(h.ft, in) // the same standing failure, next hourly run
+	if len(alerts) != 1 {
+		t.Fatalf("the same standing failure must alert once, got %d alerts: %v", len(alerts), alerts)
+	}
+	if !strings.Contains(alerts[0], "apply failed — roster change rejected: locked") {
+		t.Errorf("alert does not report the cause: %q", alerts[0])
+	}
+
+	h.ft.applyErr = nil
+	Emit(h.ft, in) // a successful apply ends the episode
+
+	h.ft.applyErr = errors.New("roster change rejected: locked")
+	Emit(h.ft, in) // a fresh failure after a success is a new episode
+	if len(alerts) != 2 {
+		t.Fatalf("a failure after an intervening success is a new episode, got %d alerts: %v", len(alerts), alerts)
+	}
+}
+
+// A marker-store failure degrades to a duplicate alert, never to silence — the
+// alertmarker contract, pinned here against the apply path specifically.
+func TestEmit_ApplyFailureAlertMarkerFailureStillAlerts(t *testing.T) {
+	h := newEmitHarness()
+	h.ft.applyErr = errors.New("roster change rejected: locked")
+	markers := newFakeMarkers()
+	markers.getErr = errors.New("s3 unreachable")
+	var alerts []string
+	in := h.inputs([]dateResult{movingResult()}, false)
+	in.ApplyFailMarkers = markers
+	in.NotifyAlert = func(m string) error { alerts = append(alerts, m); return nil }
+
+	Emit(h.ft, in)
+	Emit(h.ft, in)
+	if len(alerts) != 2 {
+		t.Fatalf("an unreachable marker store must cost duplicates, not silence: %d alerts", len(alerts))
+	}
+}
+
 // A future date whose period could not be resolved is skipped rather than
 // applied against period 0 — which Fantrax would interpret as some other day.
 func TestEmit_UnresolvedPeriodOnAFutureDateIsSkipped(t *testing.T) {

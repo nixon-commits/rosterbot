@@ -116,6 +116,14 @@ type Options struct {
 	// was sent, repeating is recoverable and going quiet is not.
 	GSFloorMarkers alertmarker.Store
 
+	// ApplyFailMarkers dedups the lineup apply-failure alert, one marker per
+	// apply date with the failure text as the episode token, through the same
+	// internal/alertmarker seam. Nil disables dedup rather than the alert,
+	// like its two siblings above. Without it the alert is level-triggered:
+	// the 2026-08-29 Cavalli lock paged the operator from every hourly run
+	// for the rest of the day.
+	ApplyFailMarkers alertmarker.Store
+
 	// The five dependency seams. Each nil field is resolved to its production
 	// implementation by withDefaults, called once at the top of Run — the
 	// nil-means-default idiom Out already uses, extended from "where output
@@ -658,6 +666,16 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		Notify: func(message string) {
 			sendOptimizeNotify(ctx, message)
 		},
+		// The same Configured guard as the IL-start and GS-floor notifiers: an
+		// unconfigured dispatcher no-ops Send with a nil error, and marking on
+		// that would mute the apply-failure alert with nothing recorded.
+		NotifyAlert: func(message string) error {
+			if !notify.Configured() {
+				return fmt.Errorf("notify dispatcher not configured")
+			}
+			return notify.Send(ctx, notify.Event{Kind: "lineup", Title: "Fantrax Lineup", Message: message})
+		},
+		ApplyFailMarkers: opts.ApplyFailMarkers,
 	})
 
 	return result, nil

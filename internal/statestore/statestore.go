@@ -83,6 +83,7 @@ var (
 	footballTradeLogArtifact = of(layout.FootballTradeLog)
 	ilStartsArtifact         = of(layout.ILStarts)
 	gsFloorArtifact          = of(layout.GSFloorAlerts)
+	lineupApplyArtifact      = of(layout.LineupApplyAlerts)
 	staleCacheArtifact       = of(layout.StaleCacheAlerts)
 	archiveArtifact          = of(layout.Archive)
 	backtestArtifact         = of(layout.Backtest)
@@ -448,6 +449,14 @@ func (s *Selector) ILStartMarkers() (lineupapi.BlobStore, error) {
 // next season's week 21 find this season's marker and stay silent.
 func (s *Selector) GSFloorMarkers() (lineupapi.BlobStore, error) {
 	return blobStore(s, gsFloorArtifact, "")
+}
+
+// ApplyFailMarkers is one dedup marker per apply DATE for the lineup
+// apply-failure alert, with the failure text as the episode token: the same
+// rejection every hour is one episode, a different error — or a failure after
+// an intervening success — is a new one.
+func (s *Selector) ApplyFailMarkers() (lineupapi.BlobStore, error) {
+	return blobStore(s, lineupApplyArtifact, "")
 }
 
 // StaleCacheMarkers is one dedup marker per cache key for the stale-cache
