@@ -63,6 +63,41 @@ func TestTenantRunConfig_LowersAutoApplyToTheTenantsConsent(t *testing.T) {
 	}
 }
 
+// TestTenantRunConfig_CopiesProjectionPrefs: the per-role projection choice
+// rides the same GetUser read as auto_apply into the config, and a failed read
+// leaves both empty — which downstream means "deployment default", the safe
+// direction (rosterbot-5qvs).
+func TestTenantRunConfig_CopiesProjectionPrefs(t *testing.T) {
+	uid := lineupapi.UserID("tenant-1")
+	verified := func() stubConns {
+		return stubConns{conn: connFor(t, uid, lineupapi.ConnVerified)}
+	}
+
+	cases := []struct {
+		name             string
+		dir              stubDirectory
+		wantHit, wantPit string
+	}{
+		{"tenant chose per-role systems", stubDirectory{stubConns: verified(),
+			user: &lineupapi.User{ID: uid, HitterProjection: "atc", PitcherProjection: "steamer"}},
+			"atc", "steamer"},
+		{"tenant never chose", stubDirectory{stubConns: verified(),
+			user: &lineupapi.User{ID: uid}}, "", ""},
+		{"profile read fails", stubDirectory{stubConns: verified(),
+			userErr: errors.New("dynamo down")}, "", ""},
+	}
+	for _, c := range cases {
+		cfg := envConfig()
+		if err := tenantRunConfig(context.Background(), cfg, uid, c.dir, stubOpener{}); err != nil {
+			t.Fatalf("%s: tenantRunConfig: %v", c.name, err)
+		}
+		if cfg.HitterProjection != c.wantHit || cfg.PitcherProjection != c.wantPit {
+			t.Errorf("%s: prefs = %q/%q, want %q/%q", c.name,
+				cfg.HitterProjection, cfg.PitcherProjection, c.wantHit, c.wantPit)
+		}
+	}
+}
+
 // TestTenantRunConfig_RefusalDoesNotReachTheConsentRead: a tenant who may not
 // run at all must fail before the consent question is even asked, with the
 // config left unusable (applyTenantCredentials' clearing contract).

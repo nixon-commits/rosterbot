@@ -179,8 +179,15 @@ type SnapshotPlayer struct {
 
 // Snapshot is the serialized per-date snapshot file format.
 type Snapshot struct {
-	Date             string           `json:"date"`
-	ProjectionSystem string           `json:"projection_system"`
+	Date string `json:"date"`
+	// ProjectionSystem is the pre-split unified field, kept populated whenever
+	// hitters and pitchers ran on the same system (every pre-rosterbot-5qvs
+	// file, and most runs after) and omitted when they differ — one field
+	// naming the hitter system would be lying about half the file. Nothing
+	// reads it back; it and the per-role pair below are the audit trail.
+	ProjectionSystem string           `json:"projection_system,omitempty"`
+	HitterSystem     string           `json:"hitter_system,omitempty"`
+	PitcherSystem    string           `json:"pitcher_system,omitempty"`
 	GeneratedAt      time.Time        `json:"generated_at"`
 	Hitters          []SnapshotPlayer `json:"hitters"`
 	Pitchers         []SnapshotPlayer `json:"pitchers"`

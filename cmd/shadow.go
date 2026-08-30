@@ -95,7 +95,8 @@ func runShadow(cmd *cobra.Command, args []string) error {
 		opts := lineuprun.Options{
 			Today:             today,
 			NeedsSeasonLookup: needsSeasonLookup,
-			ProjectionSystem:  sys,
+			HitterSystem:      sys,
+			PitcherSystem:     sys,
 			CheckRoster:       false, // roster-alert noise is irrelevant to a capture run
 			SnapshotStore:     snapStore,
 			SnapshotRoot:      systemSnapshotDir(shadowSnapshotRoot, sys),

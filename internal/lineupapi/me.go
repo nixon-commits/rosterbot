@@ -2,8 +2,10 @@ package lineupapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
+	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/wiretime"
 )
 
@@ -19,9 +21,16 @@ type MeResponse struct {
 	Role        Role       `json:"role"`
 	Status      UserStatus `json:"status"`
 
-	// AutoApply is the only field here a user may change, and the only one that
-	// decides whether the bot writes to their roster.
+	// AutoApply decides whether the bot writes to their roster — the
+	// consequential preference. The projection choices below are the only other
+	// user-writable fields, and they are harmless by comparison: the worst a
+	// wrong value can do is pick a model that grades worse.
 	AutoApply bool `json:"auto_apply"`
+
+	// HitterProjection / PitcherProjection mirror User's fields: base family
+	// names only, empty = follow the deployment default.
+	HitterProjection  string `json:"hitter_projection,omitempty"`
+	PitcherProjection string `json:"pitcher_projection,omitempty"`
 
 	// TeamID is DISPLAYED, never submitted. It is proven at connect time
 	// against Fantrax's own MyTeamIDs, so a value typed by a user would mean
@@ -81,6 +90,7 @@ func (cfg Config) handleMe(w http.ResponseWriter, r *http.Request) {
 	resp := MeResponse{
 		ID: u.ID, DisplayName: u.DisplayName, Email: u.Email,
 		Role: u.Role, Status: u.Status, AutoApply: u.AutoApply, TeamID: u.TeamID,
+		HitterProjection: u.HitterProjection, PitcherProjection: u.PitcherProjection,
 	}
 	// The connection is optional and its absence is ordinary — a user who has
 	// not connected Fantrax yet is the normal state on day one.
@@ -101,11 +111,11 @@ func (cfg Config) handleMe(w http.ResponseWriter, r *http.Request) {
 
 // handleSetPreferences updates the caller's own preferences.
 //
-// AUTO_APPLY IS THE ONLY WRITABLE FIELD, and that is deliberate rather than a
-// starting point. Everything else on a profile is either attested by an admin
-// (email), proven against Fantrax (team), or a security control (role, status,
-// token_version) — a settings page that could set those would be a privilege
-// escalation with a friendly label.
+// THE WRITABLE FIELDS ARE auto_apply AND THE TWO PROJECTION CHOICES, and that
+// is deliberate rather than a starting point. Everything else on a profile is
+// either attested by an admin (email), proven against Fantrax (team), or a
+// security control (role, status, token_version) — a settings page that could
+// set those would be a privilege escalation with a friendly label.
 //
 // THE SUBJECT COMES FROM THE SESSION, NEVER THE BODY. A user_id field in the
 // request is ignored, because the one control that decides whether the bot
@@ -121,19 +131,32 @@ func (cfg Config) handleSetPreferences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A pointer so "field absent" is distinguishable from "set to false".
-	// Without that, a request changing some future preference would silently
-	// switch auto_apply off.
+	// Pointers so "field absent" is distinguishable from "set to the zero
+	// value". Without that, a request changing one preference would silently
+	// reset the others — auto_apply off, projection choices back to default.
 	var body struct {
-		AutoApply *bool `json:"auto_apply"`
+		AutoApply         *bool   `json:"auto_apply"`
+		HitterProjection  *string `json:"hitter_projection"`
+		PitcherProjection *string `json:"pitcher_projection"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "malformed request")
 		return
 	}
-	if body.AutoApply == nil {
+	if body.AutoApply == nil && body.HitterProjection == nil && body.PitcherProjection == nil {
 		writeErr(w, http.StatusBadRequest, "no preference supplied")
 		return
+	}
+	// "" is valid on purpose: it means "follow the deployment default" and is
+	// how a user resets a choice. ValidBaseSystem is the write-time contract
+	// the run side relies on — base family names only, shared with the
+	// optimize resolver so the two cannot drift.
+	for _, p := range []*string{body.HitterProjection, body.PitcherProjection} {
+		if p != nil && *p != "" && !projections.ValidBaseSystem(*p) {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf(
+				"unknown projection system %q (valid: steamer, depthcharts, thebatx, atc)", *p))
+			return
+		}
 	}
 
 	// Read-modify-write: PutUser stores a whole record, so building a fresh one
@@ -147,10 +170,22 @@ func (cfg Config) handleSetPreferences(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such user")
 		return
 	}
-	u.AutoApply = *body.AutoApply
+	if body.AutoApply != nil {
+		u.AutoApply = *body.AutoApply
+	}
+	if body.HitterProjection != nil {
+		u.HitterProjection = *body.HitterProjection
+	}
+	if body.PitcherProjection != nil {
+		u.PitcherProjection = *body.PitcherProjection
+	}
 	if err := cfg.Users.PutUser(r.Context(), u); err != nil {
 		writeErr(w, http.StatusBadGateway, "could not save preferences")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"auto_apply": u.AutoApply})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"auto_apply":         u.AutoApply,
+		"hitter_projection":  u.HitterProjection,
+		"pitcher_projection": u.PitcherProjection,
+	})
 }

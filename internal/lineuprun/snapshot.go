@@ -36,8 +36,8 @@ type dateResult struct {
 // (no reconstruction). snapshotRoot names the partition WITHIN st — "snapshots"
 // for a normal optimize run, or a per-system shadow-capture partition (see
 // Options.SnapshotRoot).
-func writeProjectionSnapshot(dr dateResult, projSystem string, slotName map[string]string, hittersNoData, pitchersNoData bool, st backtest.SnapshotStore, snapshotRoot string) error {
-	return backtest.WriteSnapshot(st, snapshotRoot, buildSnapshot(dr, projSystem, slotName, hittersNoData, pitchersNoData))
+func writeProjectionSnapshot(dr dateResult, hitSys, pitSys string, slotName map[string]string, hittersNoData, pitchersNoData bool, st backtest.SnapshotStore, snapshotRoot string) error {
+	return backtest.WriteSnapshot(st, snapshotRoot, buildSnapshot(dr, hitSys, pitSys, slotName, hittersNoData, pitchersNoData))
 }
 
 // buildSnapshot is the pure mapping from a day's optimizer results to the
@@ -46,10 +46,18 @@ func writeProjectionSnapshot(dr dateResult, projSystem string, slotName map[stri
 // started the player — so future analysis can slice projection error along any
 // of those dimensions. slotName maps a player's RosterPosition (slot pos ID) to
 // its display name; benched players (no active slot) get an empty Slot.
-func buildSnapshot(dr dateResult, projSystem string, slotName map[string]string, hittersNoData, pitchersNoData bool) backtest.Snapshot {
+func buildSnapshot(dr dateResult, hitSys, pitSys string, slotName map[string]string, hittersNoData, pitchersNoData bool) backtest.Snapshot {
+	// The unified field survives only when it can be truthful — see the
+	// Snapshot doc for why a split run omits it.
+	unified := ""
+	if hitSys == pitSys {
+		unified = hitSys
+	}
 	snap := backtest.Snapshot{
 		Date:             dr.date.Format("2006-01-02"),
-		ProjectionSystem: projSystem,
+		ProjectionSystem: unified,
+		HitterSystem:     hitSys,
+		PitcherSystem:    pitSys,
 		GeneratedAt:      time.Now().UTC(),
 		HittersNoData:    hittersNoData,
 		PitchersNoData:   pitchersNoData,

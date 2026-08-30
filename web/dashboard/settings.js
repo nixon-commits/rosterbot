@@ -82,6 +82,7 @@ export async function renderSettings(root) {
   // features. The section manages its own refreshes, like passkeys below.
   renderLeaguesSection(root);
   root.append(autoApplyCard(me));
+  root.append(projectionCard(me));
   // Passkeys are account state, so they live here rather than on a tab of
   // their own (rosterbot-jxjq). The section manages its own refreshes.
   renderPasskeysSection(root);
@@ -255,6 +256,90 @@ function autoApplyCard(me) {
     }
   });
   return c;
+}
+
+// PROJECTION_CHOICES: value "" is "follow the deployment default" — stored as
+// empty on purpose (rosterbot-5qvs), so anyone who never chose tracks a future
+// default change instead of being pinned to whatever it was the day they
+// saved. The names are the base families; the run applies the rest-of-season
+// variant itself in season.
+const PROJECTION_CHOICES = [
+  ["", "Default (Depth Charts)"],
+  ["steamer", "Steamer"],
+  ["depthcharts", "Depth Charts"],
+  ["thebatx", "THE BAT X"],
+  ["atc", "ATC"],
+];
+
+// projectionCard: which model values players in this user's lineup runs, per
+// role. Harmless to flip (unlike auto-apply it can't touch a roster), so it
+// follows the page's autosave-on-change pattern, reverting visibly on failure.
+function projectionCard(me) {
+  const c = card("Projection model");
+  c.append(el("p", "muted",
+    "Which projection system rosterbot uses to value your players — hitters " +
+    "and pitchers can use different models. In season, the rest-of-season " +
+    "version of the model is used automatically. Changes take effect from " +
+    "the next hourly run."));
+
+  c.append(projectionRow("Hitters", "hitter_projection", me.hitter_projection));
+  c.append(projectionRow("Pitchers", "pitcher_projection", me.pitcher_projection));
+
+  const hint = el("p", "muted small");
+  const link = el("a", null, "the Projections tab");
+  link.href = "#projections";
+  hint.append("See how each model has been grading on ", link, ".");
+  c.append(hint);
+  return c;
+}
+
+function projectionRow(label, field, current) {
+  const row = el("label", "projection-row");
+  row.append(el("span", null, label));
+  // Each row owns its status line: with one shared element, two quick saves
+  // race and a Pitchers failure can replace a Hitters "Saved." with an error
+  // that names neither control.
+  const status = el("span", "muted small");
+
+  const sel = el("select");
+  for (const [value, name] of PROJECTION_CHOICES) {
+    const opt = el("option", null, name);
+    opt.value = value;
+    sel.append(opt);
+  }
+  // A stored value this build doesn't know (a newer system) would silently
+  // snap the control to "Default" and then SAVE that on the next change —
+  // surface it as an extra option instead of misrepresenting the record.
+  let saved = current || "";
+  if (saved && !PROJECTION_CHOICES.some(([v]) => v === saved)) {
+    const opt = el("option", null, saved);
+    opt.value = saved;
+    sel.append(opt);
+  }
+  sel.value = saved;
+
+  sel.addEventListener("change", async () => {
+    const want = sel.value;
+    sel.disabled = true;
+    status.className = "muted small";
+    status.textContent = "Saving…";
+    try {
+      await api.setPreferences({ [field]: want });
+      saved = want;
+      status.textContent = "Saved.";
+    } catch {
+      // Same rule as the auto-apply toggle: a control showing a state it
+      // failed to save is worse than one that fails visibly.
+      sel.value = saved;
+      status.className = "error";
+      status.textContent = "Could not save that. Your setting is unchanged.";
+    } finally {
+      sel.disabled = false;
+    }
+  });
+
+  row.append(sel, status);
+  return row;
 }
 
 function errorCard(err) {

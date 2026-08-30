@@ -48,7 +48,7 @@ func TestBuildSnapshot_MapsRichFields(t *testing.T) {
 		},
 	}
 
-	snap := buildSnapshot(dr, "depthcharts", slotName, false, false)
+	snap := buildSnapshot(dr, "depthcharts", "depthcharts", slotName, false, false)
 
 	if snap.Date != "2026-05-29" {
 		t.Errorf("Date = %q, want 2026-05-29", snap.Date)
@@ -81,13 +81,41 @@ func TestBuildSnapshot_MapsRichFields(t *testing.T) {
 	}
 }
 
+// TestBuildSnapshot_RecordsPerRoleSystems: with the rosterbot-5qvs split a
+// day's hitters and pitchers can come from different models, so the snapshot
+// names both. The legacy unified field is kept when the two agree — every
+// pre-split file and reader sees no change — and omitted when they differ,
+// because a single field that names the hitter system would be lying about
+// half the file. Nothing reads it back (verified); it is the audit trail.
+func TestBuildSnapshot_RecordsPerRoleSystems(t *testing.T) {
+	dr := dateResult{date: time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)}
+
+	snap := buildSnapshot(dr, "atc-ros", "steamer-ros", nil, false, false)
+	if snap.HitterSystem != "atc-ros" || snap.PitcherSystem != "steamer-ros" {
+		t.Errorf("systems = %q/%q, want atc-ros/steamer-ros",
+			snap.HitterSystem, snap.PitcherSystem)
+	}
+	if snap.ProjectionSystem != "" {
+		t.Errorf("split run: ProjectionSystem = %q, want omitted", snap.ProjectionSystem)
+	}
+
+	snap = buildSnapshot(dr, "depthcharts-ros", "depthcharts-ros", nil, false, false)
+	if snap.ProjectionSystem != "depthcharts-ros" {
+		t.Errorf("unified run: ProjectionSystem = %q, want depthcharts-ros", snap.ProjectionSystem)
+	}
+	if snap.HitterSystem != "depthcharts-ros" || snap.PitcherSystem != "depthcharts-ros" {
+		t.Errorf("unified run systems = %q/%q, want both depthcharts-ros",
+			snap.HitterSystem, snap.PitcherSystem)
+	}
+}
+
 // TestBuildSnapshot_SetsNoDataFlags verifies the two load-result availability
 // flags pass straight through onto the serialized snapshot, independently per
 // role, so a later backtest run can tell a data outage from a real projection.
 func TestBuildSnapshot_SetsNoDataFlags(t *testing.T) {
 	dr := dateResult{date: time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)}
 
-	snap := buildSnapshot(dr, "atc-ros", nil, true, false)
+	snap := buildSnapshot(dr, "atc-ros", "atc-ros", nil, true, false)
 	if !snap.HittersNoData {
 		t.Error("HittersNoData = false, want true")
 	}
@@ -95,7 +123,7 @@ func TestBuildSnapshot_SetsNoDataFlags(t *testing.T) {
 		t.Error("PitchersNoData = true, want false")
 	}
 
-	snap = buildSnapshot(dr, "atc-ros", nil, false, true)
+	snap = buildSnapshot(dr, "atc-ros", "atc-ros", nil, false, true)
 	if snap.HittersNoData {
 		t.Error("HittersNoData = true, want false")
 	}
@@ -143,7 +171,7 @@ func TestBuildSnapshot_RecordsStatusAndGSCap(t *testing.T) {
 		},
 	}
 
-	snap := buildSnapshot(dr, "depthcharts-ros", nil, false, false)
+	snap := buildSnapshot(dr, "depthcharts-ros", "depthcharts-ros", nil, false, false)
 
 	if snap.GSLimit != 12 {
 		t.Errorf("GSLimit = %d, want 12", snap.GSLimit)
@@ -176,7 +204,7 @@ func TestBuildSnapshot_NoGateLeavesCapUnset(t *testing.T) {
 		},
 	}
 
-	if snap := buildSnapshot(dr, "depthcharts-ros", nil, false, false); snap.GSLimit != 0 {
+	if snap := buildSnapshot(dr, "depthcharts-ros", "depthcharts-ros", nil, false, false); snap.GSLimit != 0 {
 		t.Errorf("GSLimit = %d, want 0 when no budget was in force", snap.GSLimit)
 	}
 }

@@ -260,6 +260,14 @@ the old team would stay recorded as theirs and become unassignable to anyone.
 New accounts are members with `auto_apply` **off**. Full flow, recovery from a
 lost device, and the troubleshooting table: **[docs/user-registration.md](docs/user-registration.md)**.
 
+The settings page also lets each user pick the **projection model** their
+lineup runs use — hitters and pitchers independently, from Steamer / Depth
+Charts / THE BAT X / ATC (`POST /v1/me/preferences`, fields
+`hitter_projection` / `pitcher_projection`). Unset means "follow the
+deployment default" (Depth Charts); in season the rest-of-season variant is
+applied automatically, and an explicitly typed `--projections` flag still
+overrides both roles for that run.
+
 </details>
 
 <details>

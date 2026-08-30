@@ -104,6 +104,15 @@ type User struct {
 	// (rosterbot-z3b, -sza, -48z) reaches only tenants who opted in.
 	AutoApply bool `json:"auto_apply"`
 
+	// HitterProjection and PitcherProjection name the FanGraphs projection
+	// system this tenant's lineup runs use for each role — base family names
+	// only ("steamer", "depthcharts", "thebatx", "atc"); run time resolves
+	// RoS-first exactly like the deployment default does. Empty means "follow
+	// the deployment default", which is what every record written before these
+	// fields existed decodes to (rosterbot-5qvs).
+	HitterProjection  string `json:"hitter_projection,omitempty"`
+	PitcherProjection string `json:"pitcher_projection,omitempty"`
+
 	// TeamID is the Fantrax team this user manages. It is set at connect time
 	// from the invite and proven against TeamRosterResponse.MyTeamIDs; it is
 	// never typed by the user, and the store enforces one claimant per team.
