@@ -79,6 +79,36 @@ func TestOptimizePitcherLineup_RPPreferredOverNonStartingSP(t *testing.T) {
 	}
 }
 
+// A locked active pitcher with NO game still occupies his slot, and Fantrax
+// will not release it: the 2026-08-29 incident's second half. Cade Cavalli
+// started, was flagged injured mid-game (zero value, no game), and his P slot
+// must be subtracted from the available pool — otherwise the optimizer
+// double-books it with a promotion Fantrax can never accept.
+func TestOptimizePitcherLineup_LockedNoGamePitcherKeepsHisSlotOccupied(t *testing.T) {
+	roster := []fantrax.Player{
+		{ID: "p1", Name: "Spent Starter", MLBTeam: "WSH", Positions: []string{auth_client.PosSP}, PosShortNames: "SP",
+			Status: "Active", RosterPosition: auth_client.PosP, IsInjured: true, Locked: true},
+		{ID: "p2", Name: "Fresh Arm", MLBTeam: "ATH", Positions: []string{auth_client.PosSP}, PosShortNames: "SP", Status: "Reserve"},
+	}
+	playing := map[string]bool{"WSH": true, "ATH": true}
+	probables := map[string]string{"someone else": "ATH"}
+	src := &stubPitcherSource{data: map[string]*projections.PitcherProjection{
+		"spent starter": {G: 30, GS: 30, IP: 180, K: 200, W: 15},
+		"fresh arm":     {G: 30, GS: 30, IP: 160, K: 170, W: 10},
+	}}
+	scoring := fantrax.ScoringWeights{"K": 1.0, "W": 5.0, "IP": 1.0}
+	slots := makeSlots("P") // one P slot, held by the locked starter
+
+	result := OptimizePitcherLineup(roster, playing, probables, src, scoring, slots, nil)
+
+	if len(result.ToActivate) != 0 {
+		t.Errorf("no slot is free — the only P slot is held by a locked pitcher; got activations %v", result.ToActivate)
+	}
+	if len(result.ToBench) != 0 {
+		t.Errorf("a locked pitcher must never be benched; got %v", result.ToBench)
+	}
+}
+
 func TestOptimizePitcherLineup_SPStartedWhenProbable(t *testing.T) {
 	roster := []fantrax.Player{
 		{ID: "p1", Name: "Ace Pitcher", MLBTeam: "NYY", Positions: []string{auth_client.PosSP}, Status: "Reserve"},

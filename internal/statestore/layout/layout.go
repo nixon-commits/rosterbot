@@ -251,6 +251,21 @@ var (
 	// marker each is the correct number — the same split ILStarts makes.
 	GSFloorAlerts = Artifact{Name: "GS Floor Markers", S3Prefix: "alerts/gs-floor/", LocalDir: ".alerts/gs-floor", Durable: true, Producer: "Lineup", PerTenant: true}
 
+	// LineupApplyAlerts holds one dedup marker per apply DATE for the "lineup
+	// apply failed" alert, with the failure text as the episode token
+	// (alertmarker.SendOnChange): the same rejection every hour is one
+	// episode, a different error — or a failure after an intervening success —
+	// is a new one. Before this marker the alert was level-triggered: the
+	// 2026-08-29 Cavalli lock produced an identical Pushover from every hourly
+	// run for the rest of the day (the same flood shape the stale-cache marker
+	// exists to stop, rosterbot-chs). Same no-MaxAge, absent-from-All() shape
+	// as ILStarts: a marker exists only once an apply has failed, so an age
+	// check would read the healthy case as stale.
+	//
+	// PerTenant like ILStarts and GSFloorAlerts: an apply failure is one
+	// tenant's roster refusing one tenant's moves.
+	LineupApplyAlerts = Artifact{Name: "Lineup Apply Markers", S3Prefix: "alerts/lineup-apply/", LocalDir: ".alerts/lineup-apply", Durable: true, Producer: "Lineup", PerTenant: true}
+
 	// StaleCacheAlerts holds one dedup marker per cache key for the "serving a
 	// stale copy" alert, so a standing upstream outage reports itself once
 	// rather than once per key per run. Same no-MaxAge, absent-from-All()

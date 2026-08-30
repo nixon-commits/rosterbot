@@ -112,6 +112,13 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		gsFloorMarkers = nil
 	}
 
+	// Same soft policy again for the apply-failure alert's dedup markers.
+	applyFailMarkers, err := statestore.FromEnv().ApplyFailMarkers()
+	if err != nil {
+		warn("optimize: init apply-failure markers: %v (alert will repeat until resolved)", err)
+		applyFailMarkers = nil
+	}
+
 	snapStore, err := statestore.FromEnv().SnapshotStore()
 	if err != nil {
 		return fmt.Errorf("snapshot store: %w", err)
@@ -142,6 +149,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		Publisher:          pub,
 		ILStartMarkers:     ilMarkers,
 		GSFloorMarkers:     gsFloorMarkers,
+		ApplyFailMarkers:   applyFailMarkers,
 		Out:                os.Stdout,
 		NoCache:            noCache,
 		Verbose:            verbose,

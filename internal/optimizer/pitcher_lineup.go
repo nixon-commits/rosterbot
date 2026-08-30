@@ -114,8 +114,17 @@ func OptimizePitcherLineup(
 		}
 	}
 
-	// Partition locked active players: they keep their current slot.
-	availableSlots, lockedAssign := partitionLockedSlots(generic, slots, currentAssign)
+	// Partition locked active players: they keep their current slot. Over ALL
+	// scored pitchers, not just `generic` (those with games): a locked active
+	// pitcher with no game — flagged injured after starting today's game —
+	// still occupies a slot Fantrax will not release, and omitting him leaves
+	// that slot in the available pool for the optimizer to double-book with a
+	// promotion Fantrax can never accept (2026-08-29, Cade Cavalli).
+	forPartition := make([]ScoredPlayer, len(scored))
+	for i, sp := range scored {
+		forPartition[i] = ScoredPlayer{Player: sp.Player}
+	}
+	availableSlots, lockedAssign := partitionLockedSlots(forPartition, slots, currentAssign)
 
 	// Exclude locked players from optimizer candidates.
 	var unlocked []ScoredPlayer

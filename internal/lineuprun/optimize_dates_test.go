@@ -266,12 +266,21 @@ func TestOptimizeDates_UpstreamFailuresBecomeWarningsNotErrors(t *testing.T) {
 // A locked team's healthy players are flagged so the optimizer leaves them
 // alone; minors and injured players are not, since they were never movable and
 // flagging them would misreport why.
-func TestOptimizeDates_LocksOnlyHealthyPlayersOnLockedTeams(t *testing.T) {
+// The lock must cover ACTIVE players regardless of health: Fantrax refuses to
+// move a player out of an active slot once his team's game has started, and an
+// injury icon does not release the slot. On 2026-08-29 Cade Cavalli started,
+// was flagged injured during the game, and a health exemption here let the
+// optimizer propose benching him — a move Fantrax rejected on every hourly run
+// for the rest of the day. Reserve injured/minors players stay unmarked: they
+// cannot be moved into an active slot anyway, and 🔒 would misreport why.
+func TestOptimizeDates_LockedTeamLocksActivesEvenWhenHurt(t *testing.T) {
 	in := optimizeInputs()
 	in.HitterRoster = []fantrax.Player{
-		{ID: "h1", Name: "Playing Guy", MLBTeam: "NYY", Status: "Active", Positions: []string{"012"}},
-		{ID: "h2", Name: "Hurt Guy", MLBTeam: "NYY", Status: "Active", Positions: []string{"012"}, IsInjured: true},
-		{ID: "h3", Name: "Farm Guy", MLBTeam: "NYY", Status: "Active", Positions: []string{"012"}, InMinors: true},
+		{ID: "h1", Name: "Playing Guy", MLBTeam: "NYY", Status: "Active", RosterPosition: "012", Positions: []string{"012"}},
+		{ID: "h2", Name: "Hurt Active Guy", MLBTeam: "NYY", Status: "Active", RosterPosition: "012", Positions: []string{"012"}, IsInjured: true},
+		{ID: "h3", Name: "Hurt Reserve Guy", MLBTeam: "NYY", Status: "Reserve", Positions: []string{"012"}, IsInjured: true},
+		{ID: "h4", Name: "Farm Reserve Guy", MLBTeam: "NYY", Status: "Reserve", Positions: []string{"012"}, InMinors: true},
+		{ID: "h5", Name: "Healthy Reserve Guy", MLBTeam: "NYY", Status: "Reserve", Positions: []string{"012"}},
 	}
 	sched := healthyDateSchedule()
 	sched.locked["2026-07-25"] = map[string]bool{"NYY": true}
@@ -283,10 +292,16 @@ func TestOptimizeDates_LocksOnlyHealthyPlayersOnLockedTeams(t *testing.T) {
 		locked[sp.Player.ID] = sp.Player.Locked
 	}
 	if !locked["h1"] {
-		t.Error("a healthy player on a locked team should be locked")
+		t.Error("a healthy active player on a locked team should be locked")
 	}
-	if locked["h2"] || locked["h3"] {
-		t.Errorf("injured/minors players must not be marked locked: %v", locked)
+	if !locked["h2"] {
+		t.Error("an injured ACTIVE player on a locked team is still locked — Fantrax will not release his slot (2026-08-29 Cavalli incident)")
+	}
+	if locked["h3"] || locked["h4"] {
+		t.Errorf("injured/minors RESERVE players must not be marked locked: %v", locked)
+	}
+	if !locked["h5"] {
+		t.Error("a healthy reserve player on a locked team should be locked (cannot be activated once the game starts)")
 	}
 }
 

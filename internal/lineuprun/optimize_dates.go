@@ -223,13 +223,28 @@ func optimizeOneDate(ft dateRosterClient, sched dateScheduleClient, in OptimizeI
 	return dr
 }
 
-// markLocked flags every healthy, non-minors player whose MLB team's game has
-// started. Minors and injured players are skipped: they cannot be moved into an
+// markLocked flags players whose MLB team's game has started.
+//
+// ACTIVE players are locked regardless of health: Fantrax refuses to move a
+// player out of an active slot once his team's game has started, and an injury
+// icon does not release the slot. A health exemption here is exactly the
+// 2026-08-29 incident — Cade Cavalli started, was flagged injured mid-game,
+// and the optimizer proposed benching him (zero value, exempt from the lock);
+// Fantrax rejected that payload on every hourly run for the rest of the day.
+//
+// RESERVE minors and injured players are skipped: they cannot be moved into an
 // active slot anyway, and marking them locked would misreport why.
 func markLocked(roster []fantrax.Player, lockedTeams map[string]bool) {
 	for i := range roster {
-		if lockedTeams[roster[i].MLBTeam] && !roster[i].InMinors && !roster[i].IsInjured {
-			roster[i].Locked = true
+		p := &roster[i]
+		if !lockedTeams[p.MLBTeam] {
+			continue
+		}
+		// Status alone, not Status+RosterPosition: the optimizers' bench
+		// predicate is Status=="Active" alone, so anything benchable must be
+		// lockable or the exemption reopens through the gap.
+		if p.Status == "Active" || (!p.InMinors && !p.IsInjured) {
+			p.Locked = true
 		}
 	}
 }

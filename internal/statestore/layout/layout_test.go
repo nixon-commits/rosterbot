@@ -302,6 +302,45 @@ func TestGSFloorAlerts_LayoutChoicesArePinned(t *testing.T) {
 	}
 }
 
+func TestLineupApplyAlerts_LayoutChoicesArePinned(t *testing.T) {
+	a := LineupApplyAlerts
+
+	if a.S3Prefix != "alerts/lineup-apply/" {
+		t.Errorf("S3Prefix = %q, want alerts/lineup-apply/", a.S3Prefix)
+	}
+	for _, other := range []Artifact{ILStarts, GSFloorAlerts, StaleCacheAlerts} {
+		if a.S3Prefix == other.S3Prefix {
+			t.Errorf("shares a prefix with %s; one marker family would overwrite the other", other.Name)
+		}
+	}
+	if a.LocalDir != ".alerts/lineup-apply" {
+		t.Errorf("LocalDir = %q, want .alerts/lineup-apply", a.LocalDir)
+	}
+
+	// No MaxAge and absent from All(): a marker exists only once an apply has
+	// failed, so a season of clean applies writes nothing — an age check would
+	// read the healthy case as stale.
+	if a.MaxAge != 0 {
+		t.Errorf("MaxAge = %v, want 0 — a roster whose applies all land is normal, not stale", a.MaxAge)
+	}
+	for _, in := range All() {
+		if in.S3Prefix == a.S3Prefix {
+			t.Error("LineupApplyAlerts is in All(); the Infra page would gap-scan a series that is " +
+				"legitimately empty for most of the season")
+		}
+	}
+
+	// PerTenant like ILStarts: an apply failure is one tenant's roster
+	// refusing one tenant's moves, so one marker per tenant is the correct
+	// number.
+	if !a.PerTenant {
+		t.Error("PerTenant = false: one tenant's apply-failure alert would dedup away another's")
+	}
+	if a.Producer != "Lineup" {
+		t.Errorf("Producer = %q, want Lineup — the alert fires from the hourly optimize run", a.Producer)
+	}
+}
+
 // The opsnotify marker prefix's layout choices, pinned like its four marker
 // siblings' — every choice here is an exclusion, the kind that fails silently
 // when it stops holding.

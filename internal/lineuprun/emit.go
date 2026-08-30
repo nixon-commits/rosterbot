@@ -1,11 +1,13 @@
 package lineuprun
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/alertmarker"
 	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
@@ -70,6 +72,22 @@ type EmitInputs struct {
 	// phase's tests never reach the network; Run passes a closure over the
 	// configured credentials.
 	Notify func(message string)
+
+	// NotifyAlert is the error-returning sibling Notify cannot be: the
+	// apply-failure alert participates in check→send→mark (see
+	// notifyApplyFailure), and that discipline is only sound when "sent" is
+	// actually known — the same contract ilStartInputs.Notify and
+	// gsFloorInputs.Notify carry. Nil falls back to Notify with no send
+	// confirmation, the legacy shape.
+	NotifyAlert func(message string) error
+
+	// ApplyFailMarkers dedups the apply-failure alert, one marker per apply
+	// date with the failure text as the episode token, through the same
+	// internal/alertmarker seam as the IL-start and GS-floor alerts. Nil
+	// disables dedup and NOT the alert — the correct local-dev default, and
+	// why every failure below stays a warning: an unreachable marker store
+	// must cost a duplicate page, never a silent one.
+	ApplyFailMarkers alertmarker.Store
 }
 
 // Emit is the tail of the run: archive snapshots, publish today's read-only
@@ -420,11 +438,14 @@ func applyLineupFor(ft emitClient, in EmitInputs, dr dateResult, auth applyAutho
 	// Sequential — the Fantrax apply API is not concurrent-safe.
 	fmt.Fprintf(in.Out, "\nApplying lineup for %s (period %d)...\n", dateKey, dr.period)
 	if err := ft.ApplyLineup(dr.period, plan.Activate, plan.Bench); err != nil {
+		// The console line stays unconditional — the diagnostic record must be
+		// complete even when the push is suppressed (the stale-cache rule).
 		fmt.Fprintf(in.Out, "  ⚠ apply lineup failed for %s: %v\n", dateKey, err)
-		in.Notify(fmt.Sprintf("⚠ %s: apply failed — %v", dr.date.Format("Mon Jan 2"), err))
+		notifyApplyFailure(in, dr, err)
 		return
 	}
 	fmt.Fprintln(in.Out, "Lineup applied successfully.")
+	clearApplyFailure(in, dr)
 	// A failed invalidation cannot be recovered from here — the apply has
 	// already landed and is not undoable — so it is printed rather than acted
 	// on. What it costs is the next run within the 15-minute todayTTL reading
@@ -437,6 +458,59 @@ func applyLineupFor(ft emitClient, in EmitInputs, dr dateResult, auth applyAutho
 	}
 
 	in.Notify(applySummary(dr, *plan, in.SlotName))
+}
+
+// applyFailMarker builds the marker over the injected store, routing degrade
+// warnings to the run output so a broken store is visible in the log.
+func applyFailMarker(in EmitInputs) *alertmarker.Marker {
+	return alertmarker.New(in.ApplyFailMarkers, alertmarker.WithLogf(func(format string, args ...any) {
+		fmt.Fprintf(in.Out, "  apply alert: "+format+"\n", args...)
+	}))
+}
+
+// notifyApplyFailure pushes the apply-failure alert through check → send →
+// mark, one alert per (apply date, failure text). SendOnChange rather than
+// SendOnce because the date key outlives its episodes: the same rejection
+// every hour is one episode (the 2026-08-29 Cavalli lock paged the operator
+// from five consecutive hourly runs before this existed), while a different
+// error — or a failure after clearApplyFailure ended the last episode — is a
+// new one and alerts again.
+func notifyApplyFailure(in EmitInputs, dr dateResult, applyErr error) {
+	msg := fmt.Sprintf("⚠ %s: apply failed — %v", dr.date.Format("Mon Jan 2"), applyErr)
+	send := in.NotifyAlert
+	if send == nil {
+		// Legacy shape: no send confirmation. Run always wires NotifyAlert;
+		// this keeps an un-migrated caller alerting rather than panicking.
+		send = func(m string) error {
+			in.Notify(m)
+			return nil
+		}
+	}
+
+	dateKey := dr.date.Format("2006-01-02")
+	m := applyFailMarker(in)
+	sent, err := m.SendOnChange(context.Background(), dateKey, []byte(msg), func() error { return send(msg) })
+	if err != nil {
+		// Nothing was marked, so the next run retries — a failed send must
+		// retry, never go silent.
+		fmt.Fprintf(in.Out, "  apply alert: send failed for %s: %v\n", dateKey, err)
+		return
+	}
+	if !sent {
+		fmt.Fprintf(in.Out, "  apply alert: already sent for %s — not re-notifying\n", dateKey)
+	}
+}
+
+// clearApplyFailure ends a standing apply-failure episode after a successful
+// apply, by writing an empty token (the seam has no Delete — the stale-cache
+// pattern). Only writes when a non-empty token stands, so the routine
+// successful apply costs one marker read and no write.
+func clearApplyFailure(in EmitInputs, dr dateResult) {
+	m := applyFailMarker(in)
+	dateKey := dr.date.Format("2006-01-02")
+	if tok, found := m.Token(context.Background(), dateKey); found && tok != "" {
+		m.Record(dateKey, nil)
+	}
 }
 
 // applySummary is the Pushover body for a successful apply: what changed, worth
