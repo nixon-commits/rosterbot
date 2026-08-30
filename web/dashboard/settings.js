@@ -282,21 +282,24 @@ function projectionCard(me) {
     "version of the model is used automatically. Changes take effect from " +
     "the next hourly run."));
 
-  const status = el("p", "muted small");
-  c.append(projectionRow("Hitters", "hitter_projection", me.hitter_projection, status));
-  c.append(projectionRow("Pitchers", "pitcher_projection", me.pitcher_projection, status));
+  c.append(projectionRow("Hitters", "hitter_projection", me.hitter_projection));
+  c.append(projectionRow("Pitchers", "pitcher_projection", me.pitcher_projection));
 
   const hint = el("p", "muted small");
   const link = el("a", null, "the Projections tab");
   link.href = "#projections";
   hint.append("See how each model has been grading on ", link, ".");
-  c.append(hint, status);
+  c.append(hint);
   return c;
 }
 
-function projectionRow(label, field, current, status) {
+function projectionRow(label, field, current) {
   const row = el("label", "projection-row");
   row.append(el("span", null, label));
+  // Each row owns its status line: with one shared element, two quick saves
+  // race and a Pitchers failure can replace a Hitters "Saved." with an error
+  // that names neither control.
+  const status = el("span", "muted small");
 
   const sel = el("select");
   for (const [value, name] of PROJECTION_CHOICES) {
@@ -335,7 +338,7 @@ function projectionRow(label, field, current, status) {
     }
   });
 
-  row.append(sel);
+  row.append(sel, status);
   return row;
 }
 
