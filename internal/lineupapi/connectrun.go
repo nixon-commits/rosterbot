@@ -55,11 +55,13 @@ func applyConnectOutcome(r *Run, lr *ConnectRun) {
 // the alternative is a wrong chip or none.
 //
 // KEYED ON THE CALLER, WHICH IS THE SAME KEY THE ROWS ARE (Config.tenantView
-// resolves the TenantView from CallerFrom(ctx).UserID too). If a cross-tenant
-// runs view ever lands — rosterbot-nejq wants the operator to watch a tester's
-// runs — these two keys come apart and the operator silently gets no chip on
-// rows that have one. It fails closed rather than showing another tenant's
-// outcome, but whoever adds that view must re-key this read with it.
+// resolves the TenantView from CallerFrom(ctx).UserID too). The cross-tenant
+// runs view rosterbot-nejq asked for did land, and it re-keyed the read rather
+// than reusing this function: handleTenants resolves each row's ledger by uid
+// and stamps it with THAT tenant's ConnectRun, taken from the connection read
+// the Fantrax column already makes — see tenants.go's runSummary. Calling this
+// from there would have put the OPERATOR's verdict on every tester's row, and
+// would have cost a second GetConnection per tenant to do it.
 func (cfg Config) lastConnectRun(ctx context.Context, runs []Run) *ConnectRun {
 	if cfg.Connections == nil {
 		return nil

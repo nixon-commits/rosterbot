@@ -6,7 +6,7 @@
 // every column here is user- or Fantrax-supplied (display name, email, a
 // connection error string).
 import { api, ApiError } from "./api.js";
-import { el } from "./render.js";
+import { el, relativeTime } from "./render.js";
 
 const CONN_TONE = {
   verified: ["Connected", "badge-ok"],
@@ -55,9 +55,19 @@ export async function renderTenants(root, minted) {
     `${tenants.length} tenant${tenants.length === 1 ? "" : "s"}. ` +
     `rosterbot may change the lineup for ${writable} of them.`));
 
+  // The page-level half of the run column's honesty. A row's "?" says this
+  // tenant's ledger could not be read; every row saying "?" because the whole
+  // enrichment ran out of budget is a different problem with a different
+  // response, and the two are indistinguishable without this line.
+  if (data.runs_budget_expired) {
+    c.append(el("p", "muted small",
+      "Run summaries timed out for this page load, so some rows show \"?\" for " +
+      "that reason rather than because their ledger is broken. Reload to retry."));
+  }
+
   const table = el("table", "data-table");
   const head = el("tr");
-  for (const h of ["Tenant", "Team", "Passkey", "Fantrax", "Lineup writes", "Needs attention from", "Actions"]) {
+  for (const h of ["Tenant", "Team", "Passkey", "Fantrax", "Lineup writes", "Runs", "Needs attention from", "Actions"]) {
     head.append(el("th", null, h));
   }
   table.append(el("thead").appendChild(head).parentNode);
@@ -126,9 +136,60 @@ function tenantRow(t, root) {
     t.auto_apply ? "On" : "Propose only"));
   tr.append(apply);
 
+  tr.append(runsCell(t));
   tr.append(el("td", null, attentionFrom(t)));
   tr.append(actionsCell(t, root, parked));
   return tr;
+}
+
+// The Runs cell. Four states, and the difference between the first two is the
+// whole reason the wire field is a nullable object: absent means the ledger
+// could not be read, window === 0 means it read fine and this tenant has never
+// run. Rendering a read failure as "never run" would send the operator to
+// re-invite somebody whose jobs are running — the same trap the Passkey column
+// above documents.
+function runsCell(t) {
+  const td = el("td");
+  const r = t.runs;
+  if (!r) {
+    td.append(el("span", "muted", "?"));
+    return td;
+  }
+  if (!r.window) {
+    td.append(el("span", "badge badge-info", "Never run"));
+    return td;
+  }
+
+  if (r.last_failure) {
+    // A connect run whose own verdict is "failed" exits 0 on purpose
+    // (rosterbot-jg92), so it is labelled by the verdict rather than by the
+    // exit status — otherwise this cell reads "OK" on a broken connection.
+    const f = r.last_failure;
+    const failedConnect = f.connect && f.connect.verdict === "failed";
+    td.append(el("span", "badge badge-failed",
+      failedConnect ? "connect failed" : `${f.command || "job"} failed`));
+    td.append(el("div", "muted small", relativeTime(f.started_at)));
+  } else if (r.last && r.last.status === "RUNNING") {
+    // The age matters: a task killed hard never writes its terminal record, so
+    // a tenant can sit at RUNNING forever. Without the timestamp that reads as
+    // healthy activity.
+    td.append(el("span", "badge badge-running", "Running"));
+    td.append(el("div", "muted small", relativeTime(r.last.started_at)));
+  } else {
+    td.append(el("span", "badge badge-ok", "OK"));
+    if (r.last) {
+      td.append(el("div", "muted small",
+        `${r.last.command || "job"} ${relativeTime(r.last.started_at)}`));
+    }
+  }
+
+  // Always stated, including the zero case, and always with the span it covers:
+  // a bare green badge would read as a claim about this tenant's whole history
+  // when 25 records is about a day and a half of an hourly job.
+  const since = r.since ? ` since ${relativeTime(r.since)}` : "";
+  td.append(el("div", "muted small",
+    `${r.failures} of last ${r.window} failed${since}`));
+  return td;
 }
 
 function actionsCell(t, root, parked) {
@@ -337,7 +398,18 @@ function mintedLinkCard(minted) {
 function attentionFrom(t) {
   if (t.status === "parked") return "Nobody — parked";
   if (!t.conn_status) return "Nobody yet — has not connected";
-  if (t.conn_status === "verified") return "—";
+  // A verified connection with failing jobs used to read "—": the column named
+  // for what needs attention was silent about the only failure this page can
+  // now see (rosterbot-nejq). The tenant can do nothing about a failed job
+  // whatever caused it, so the answer is the operator either way.
+  //
+  // It is INSIDE the verified branch on purpose, not above it. Placed earlier
+  // it would also outrank needs_reconnect, and a tenant with any failed record
+  // in the window would be told the operator is at fault — suppressing the one
+  // actionable instruction on the page for exactly the person who must act.
+  if (t.conn_status === "verified") {
+    return t.runs && t.runs.last_failure ? "You (not the tenant) — a job is failing" : "—";
+  }
   if (OPERATOR_ACTIONABLE.has(t.conn_error)) return "You (not the tenant)";
   // Above needs_reconnect and separate from it: Fantrax accepted the sign-in
   // and a later step broke, so the tenant has nothing to fix. Without this the

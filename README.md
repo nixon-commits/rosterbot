@@ -218,6 +218,20 @@ connection, and releases the email/team claims so both can be reused). Each
 row also shows a passkey count, so "invited but never registered" is visible
 at a glance.
 
+Each row carries a bounded **run summary** as well — that tenant's last run,
+their last failure, and how many of their last 25 ledger records failed —
+resolved through the same per-tenant view `GET /v1/runs` serves. It is on this
+route rather than as a `?tenant=` parameter on `/v1/runs` because the admin gate
+is a path allowlist: a query string reaches no gate at all, so that version
+would let any member read any tenant's ledger and per-run output. Read the cell
+carefully in three places. An empty summary ("Never run") means the ledger read
+fine and holds nothing; a missing one (`?`) means it could not be read, and is
+never shown as zero. The failure count is deliberately paired with the span it
+covers, because 25 records is roughly a day and a half of the hourly lineup job
+— a weekly job's failure ages out of it. And a `connect` run that fails for a
+reason only the tenant can fix exits 0 on purpose, so it is labelled by the
+connect task's own verdict rather than by its exit status.
+
 The token is printed **once** and is not recoverable: only its SHA-256 is
 stored, so a leak of the identity table yields no usable links. The link is
 single-use, scoped to one user, and redeemed only when a registration actually
