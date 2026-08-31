@@ -771,11 +771,20 @@ func (f *FileInfraStore) ListPrefix(ctx context.Context, prefix string) (PrefixL
 
 	err := filepath.WalkDir(full, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // unreadable entry: skip, don't fail the whole listing
+			// Skip the entry; returning it aborts WalkDir and the check below
+			// blanks the whole /v1/infra listing for one bad entry, which is
+			// the opposite of what the Infra page is for. Open question, NOT
+			// settled here: the skip silently makes Objects/Bytes floors
+			// without setting PrefixListing.Truncated — see rosterbot-xi3p.
+			return nil //nolint:nilerr // deliberate skip; the silent-floor question is rosterbot-xi3p
 		}
 		rel, relErr := filepath.Rel(full, path)
 		if relErr != nil {
-			return nil
+			// WalkDir only yields paths under full, so Rel should not fail;
+			// this is the inert branch, not a swallowed diagnosis. If it ever
+			// does fire it drops the entry silently — same open question as
+			// above, rosterbot-xi3p.
+			return nil //nolint:nilerr // deliberate skip; the silent-floor question is rosterbot-xi3p
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
@@ -799,7 +808,10 @@ func (f *FileInfraStore) ListPrefix(ctx context.Context, prefix string) (PrefixL
 		}
 		info, statErr := d.Info()
 		if statErr != nil {
-			return nil
+			// The entry vanished between readdir and stat. Skipping costs this
+			// object's contribution to Objects/Bytes below, which is exactly
+			// the un-marked floor rosterbot-xi3p is open on.
+			return nil //nolint:nilerr // deliberate skip; the silent-floor question is rosterbot-xi3p
 		}
 		out.Objects++
 		out.Bytes += info.Size()

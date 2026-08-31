@@ -21,10 +21,12 @@ linters:
   # standard = errcheck, govet, ineffassign, staticcheck, unused.
   default: standard
 
-  # Everything below reported ZERO issues against the codebase when the gate
-  # was introduced, except usetesting/copyloopvar (10 trivial modernizations,
-  # all fixed in the same commit). They are enabled because they cost nothing
-  # today and catch a real bug class later — not because they found something.
+  # Most of the list below reported ZERO issues against the codebase when the
+  # gate was introduced, except usetesting/copyloopvar (10 trivial
+  # modernizations, all fixed in the same commit). They are enabled because
+  # they cost nothing today and catch a real bug class later — not because they
+  # found something. nilerr and nolintlint are the exceptions and were added
+  # later with a known cost — see the note under the list.
   enable:
     - bodyclose      # HTTP response bodies that are never closed
     - copyloopvar    # loop-variable copies made redundant by Go 1.22
@@ -32,10 +34,44 @@ linters:
     - errorlint      # == on errors instead of errors.Is/As; missing %w
     - makezero       # make([]T, n) then append — silently prepends n zeros
     - misspell       # common misspellings in comments and strings
+    - nilerr         # returns a nil error on a branch guarded by err != nil
+    - nolintlint     # //nolint directives that are malformed, bare or stale
     - unconvert      # redundant type conversions
     - usetesting     # os.Chdir/os.Setenv in tests where t.Chdir/t.Setenv exist
 
+  # nilerr detects "degrade to silence" specifically, not soft-fails generally.
+  #
+  # Measured 2026-08-31 with golangci-lint v2.13.1 against a scratchpad copy of
+  # this config: the whole root module yields 6 findings, lambda/, opsnotify/
+  # and infra/ yield 0 each. A separate probe module measured the rule: nilerr
+  # fires only where a function whose last result is `error` returns a nil error
+  # on a branch guarded by `err != nil` AND the checked value is not used inside
+  # that branch. A soft-fail that prints or interpolates the error it caught is
+  # therefore exempt. Do not read that as "every soft-fail here is free" — most
+  # of this tree's print-then-continue sites are invisible to nilerr because
+  # they never return nil at all, which is a different reason.
+  #
+  # The exclusion is SSA-value based, not syntactic, so an error reached through
+  # a STRUCT FIELD is flagged even when the block prints it: the field is
+  # re-loaded and reads as unused. cmd/version_check.go's two annotations are
+  # exactly that case and document code that already degrades to noise.
+  #
+  # nolintlint is bundled because nilerr alone forces a DECISION at each silent
+  # swallow, not a written reason — `//nolint:nilerr` with no explanation would
+  # pass. require-explanation makes the reason mandatory, and the unused-
+  # directive check (allow-unused defaults to false) makes a stale or misplaced
+  # directive fail the build, which is the only thing that keeps the annotations
+  # load-bearing rather than decorative. Measured cost of bundling it: exactly
+  # one annotation (internal/archive/archive.go's existing bare errcheck
+  # directive gained a reason).
+
   settings:
+    nolintlint:
+      # A directive with no reason is a decision nobody recorded, and a stale
+      # one is a comment that looks like a guard.
+      require-explanation: true
+      require-specific: true
+
     errcheck:
       # These have no recoverable failure mode at the call site, and requiring
       # `_ =` on 148 of them buys nothing while making the report-rendering
