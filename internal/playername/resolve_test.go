@@ -20,6 +20,14 @@ func TestResolveMLBAMIDs_BridgesNicknames(t *testing.T) {
 				]
 			}`))
 		default:
+			// An explicitly EMPTY season index, rather than a 404 that fails the
+			// build by accident: these tests exist to exercise the SEARCH
+			// fallback and must say which path they are on.
+			if strings.HasPrefix(r.URL.Path, "/api/v1/sports/") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"people":[]}`))
+				return
+			}
 			http.NotFound(w, r)
 		}
 	}))
@@ -27,7 +35,8 @@ func TestResolveMLBAMIDs_BridgesNicknames(t *testing.T) {
 
 	old := mlbBaseURL
 	mlbBaseURL = srv.URL
-	defer func() { mlbBaseURL = old }()
+	resetSeasonIndexMemo()
+	defer func() { mlbBaseURL = old; resetSeasonIndexMemo() }()
 
 	rp, err := ResolveMLBAMIDsNoCache([]string{"Leo De Vries", "Leodalis De Vries"})
 	if err != nil {
@@ -64,6 +73,14 @@ func TestResolveMLBAMIDs_DeduplicatesNames(t *testing.T) {
 				]
 			}`))
 		default:
+			// An explicitly EMPTY season index, rather than a 404 that fails the
+			// build by accident: these tests exist to exercise the SEARCH
+			// fallback and must say which path they are on.
+			if strings.HasPrefix(r.URL.Path, "/api/v1/sports/") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"people":[]}`))
+				return
+			}
 			http.NotFound(w, r)
 		}
 	}))
@@ -71,7 +88,8 @@ func TestResolveMLBAMIDs_DeduplicatesNames(t *testing.T) {
 
 	old := mlbBaseURL
 	mlbBaseURL = srv.URL
-	defer func() { mlbBaseURL = old }()
+	resetSeasonIndexMemo()
+	defer func() { mlbBaseURL = old; resetSeasonIndexMemo() }()
 
 	// Same name twice — should only search once after dedup.
 	_, err := ResolveMLBAMIDsNoCache([]string{"Mike Trout", "mike trout"})
@@ -100,6 +118,14 @@ func twoNamesakeServer(t *testing.T, activeFirst bool) *httptest.Server {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"people":[` + order + `]}`))
 		default:
+			// An explicitly EMPTY season index, rather than a 404 that fails the
+			// build by accident: these tests exist to exercise the SEARCH
+			// fallback and must say which path they are on.
+			if strings.HasPrefix(r.URL.Path, "/api/v1/sports/") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"people":[]}`))
+				return
+			}
 			http.NotFound(w, r)
 		}
 	}))
@@ -115,9 +141,11 @@ func TestResolveMLBAMIDs_PrefersActivePlayerOverRetiredNamesake(t *testing.T) {
 		srv := twoNamesakeServer(t, activeFirst)
 		old := mlbBaseURL
 		mlbBaseURL = srv.URL
+		resetSeasonIndexMemo()
 
 		rp, err := ResolveMLBAMIDsNoCache([]string{"Jose Altuve"})
 		mlbBaseURL = old
+		resetSeasonIndexMemo()
 		srv.Close()
 		if err != nil {
 			t.Fatalf("activeFirst=%v: %v", activeFirst, err)
@@ -147,6 +175,14 @@ func flakySearchServer(t *testing.T, failN int) (*httptest.Server, *int) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"people":[{"id":100,"fullName":"Mike Trout","firstName":"Mike","lastName":"Trout","active":true}]}`))
 		default:
+			// An explicitly EMPTY season index, rather than a 404 that fails the
+			// build by accident: these tests exist to exercise the SEARCH
+			// fallback and must say which path they are on.
+			if strings.HasPrefix(r.URL.Path, "/api/v1/sports/") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"people":[]}`))
+				return
+			}
 			http.NotFound(w, r)
 		}
 	}))
@@ -160,7 +196,8 @@ func TestResolveMLBAMIDs_RetriesTransientSearchFailure(t *testing.T) {
 	defer srv.Close()
 	old, oldBackoff := mlbBaseURL, searchRetryBackoff
 	mlbBaseURL, searchRetryBackoff = srv.URL, time.Millisecond
-	defer func() { mlbBaseURL, searchRetryBackoff = old, oldBackoff }()
+	resetSeasonIndexMemo()
+	defer func() { mlbBaseURL, searchRetryBackoff = old, oldBackoff; resetSeasonIndexMemo() }()
 
 	rp, err := ResolveMLBAMIDsNoCache([]string{"Mike Trout"})
 	if err != nil {
@@ -183,7 +220,8 @@ func TestResolveMLBAMIDs_DoesNotCacheDegradedResult(t *testing.T) {
 	defer srv.Close()
 	old, oldBackoff := mlbBaseURL, searchRetryBackoff
 	mlbBaseURL, searchRetryBackoff = srv.URL, time.Millisecond
-	defer func() { mlbBaseURL, searchRetryBackoff = old, oldBackoff }()
+	resetSeasonIndexMemo()
+	defer func() { mlbBaseURL, searchRetryBackoff = old, oldBackoff; resetSeasonIndexMemo() }()
 
 	dir := t.TempDir()
 	if _, err := ResolveMLBAMIDs([]string{"Mike Trout"}, dir); err != nil {
@@ -207,7 +245,8 @@ func TestResolveMLBAMIDs_CachesCleanResult(t *testing.T) {
 	defer srv.Close()
 	old := mlbBaseURL
 	mlbBaseURL = srv.URL
-	defer func() { mlbBaseURL = old }()
+	resetSeasonIndexMemo()
+	defer func() { mlbBaseURL = old; resetSeasonIndexMemo() }()
 
 	dir := t.TempDir()
 	if _, err := ResolveMLBAMIDs([]string{"Mike Trout"}, dir); err != nil {
@@ -260,13 +299,22 @@ func TestResolveMLBAMIDs_RetriesMissesWithNormalizedName(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"people":[` + strings.Join(out, ",") + `]}`))
 		default:
+			// An explicitly EMPTY season index, rather than a 404 that fails the
+			// build by accident: these tests exist to exercise the SEARCH
+			// fallback and must say which path they are on.
+			if strings.HasPrefix(r.URL.Path, "/api/v1/sports/") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"people":[]}`))
+				return
+			}
 			http.NotFound(w, r)
 		}
 	}))
 	defer srv.Close()
 	old := mlbBaseURL
 	mlbBaseURL = srv.URL
-	defer func() { mlbBaseURL = old }()
+	resetSeasonIndexMemo()
+	defer func() { mlbBaseURL = old; resetSeasonIndexMemo() }()
 
 	rp, err := ResolveMLBAMIDsNoCache([]string{"A.J. Blubaugh", "Ha-Seong Kim"})
 	if err != nil {
