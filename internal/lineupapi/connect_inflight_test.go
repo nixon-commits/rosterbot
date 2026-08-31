@@ -59,3 +59,57 @@ func TestConnect_StalePendingDoesNotBlockAReconnect(t *testing.T) {
 		t.Error("the retry after a stale pending never launched a verification task")
 	}
 }
+
+// TestConnect_ThrottlesRetriesAfterAnInterruptedCheck.
+//
+// ConnInterrupted deliberately does not block resubmission the way ConnPending
+// does — the tenant is told to try again and there is no task in flight to wait
+// for. But every submission drives a full chromedp login against their real
+// Fantrax account, and "try again" during a Fantrax outage is an invitation to
+// hold the button down. Repeated logins are the documented trigger for Fantrax
+// lockout and Cloudflare bot-blocking (rosterbot-ch0s).
+func TestConnect_ThrottlesRetriesAfterAnInterruptedCheck(t *testing.T) {
+	h, conns, jobs, _ := connectFixture(t, "team-7")
+	conns.conn = &FantraxConnection{
+		UserID: "alice", Status: ConnInterrupted,
+		LastError:       ConnErrVerificationInterrupted,
+		CredsCiphertext: []byte("sealed:original"),
+		UpdatedAt:       time.Now().UTC(),
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, testSecret, "/v1/connect", "alice",
+		`{"username":"u2","password":"p2"}`))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("immediate retry after an interrupted check = %d, want 409: %s", rec.Code, rec.Body)
+	}
+	if jobs.launched {
+		t.Error("launched another headless login inside the cooldown")
+	}
+}
+
+// TestConnect_AnInterruptedCheckIsRetryableOnceTheCooldownPasses is the other
+// half, and the one that keeps the tenant-facing copy honest: it says "try
+// again in a minute", so a minute later it must work. A guard with no expiry
+// would strand a tenant whose only remedy is to retry.
+func TestConnect_AnInterruptedCheckIsRetryableOnceTheCooldownPasses(t *testing.T) {
+	h, conns, jobs, _ := connectFixture(t, "team-7")
+	conns.conn = &FantraxConnection{
+		UserID: "alice", Status: ConnInterrupted,
+		LastError:       ConnErrVerificationInterrupted,
+		CredsCiphertext: []byte("sealed:original"),
+		UpdatedAt:       time.Now().UTC().Add(-connectInterruptedCooldown - time.Second),
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, testSecret, "/v1/connect", "alice",
+		`{"username":"u2","password":"p2"}`))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("retry after the cooldown = %d, want 202: %s", rec.Code, rec.Body)
+	}
+	if !jobs.launched {
+		t.Error("the retry never launched a verification task")
+	}
+}

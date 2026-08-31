@@ -41,6 +41,9 @@ const CONNECTION_COPY = {
   verified: ["Connected", "badge-ok"],
   pending: ["Checking your credentials…", "badge-info"],
   needs_reconnect: ["Not connected — your saved credentials no longer work", "badge-failed"],
+  // badge-info, not badge-failed: nothing on the tenant's side failed. Fantrax
+  // accepted the sign-in and a step after it did not finish (rosterbot-ch0s).
+  interrupted: ["Not connected — the last check did not finish", "badge-info"],
 };
 
 // FAILURE_COPY translates a ConnErr class into something actionable. The
@@ -64,6 +67,10 @@ const FAILURE_COPY = {
     "no Fantrax team assigned, and only an admin can assign one — re-entering " +
     "your password won't change this.",
   team_claimed: "That Fantrax team is already claimed by another account.",
+  verification_interrupted:
+    "Your Fantrax sign-in worked — your password is not the problem. Something " +
+    "after it did not finish, so the connection is not confirmed yet. Try " +
+    "connecting again in a minute.",
 };
 
 export async function renderSettings(root) {

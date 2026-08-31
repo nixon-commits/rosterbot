@@ -37,21 +37,79 @@ type loginEvidence struct {
 	// timeout, and classifying on the error alone is what produced the single
 	// undifferentiated class in the first place.
 	Err error
+
+	// PersistErr and IdentityErr are the two failures that can happen AFTER
+	// Fantrax has already accepted the sign-in. Separating them from Err is the
+	// whole of rosterbot-ch0s: an error recorded in Err is "we never got a
+	// session", and one recorded here is "we got a session and something later
+	// broke", which are opposite answers to "are these credentials good?".
+	//
+	// PersistErr: the cookie was in hand and could not be written to the local
+	// cache file. See defaultBrowserLogin for why this cannot yet be observed
+	// in production.
+	//
+	// IdentityErr: auth_client.NewClient failed with a proven cookie installed.
+	// NewClient returns a non-nil client only when Login() succeeded and
+	// Login() only returns nil once UserInfo.UserID is non-empty (verified in
+	// the pinned fork, auth_client/fantrax_client.go), so a non-nil value here
+	// means Fantrax issued a cookie and then failed to answer who it belongs
+	// to — an outage, not a rejection.
+	PersistErr  error
+	IdentityErr error
 }
 
 func (e loginEvidence) has(probe string) bool { return e.Matched[probe] }
 
 func (e loginEvidence) text(probe string) string { return e.Texts[probe] }
 
-// loginVerdict is a class plus who can act on it.
+// loginProof is Fantrax's own statement that a username and password were
+// accepted: the FX_RM cookie it issued.
+//
+// It is a type rather than a bare string for the reason teamProof is one — the
+// non-demoting failure route must be unreachable without evidence, and an
+// ordering rule that lives only in statement order is one revert away from
+// being gone with every test still green. classifyLogin is its only
+// constructor. Go cannot stop an in-package literal from forging loginProof{},
+// so the zero value is inert and connectRun.fail refuses it.
+type loginProof struct{ fxrm string }
+
+// failureRoute is what a connect failure DOES, derived from its class rather
+// than chosen at the call site.
+//
+// Deriving it is the point: cmd/connect.go and cmd/session_ladder.go are two
+// independent writers of a tenant's connection status (the second is why the
+// 2026-08-26 attempt at this bead only half-fixed it), and a route each of them
+// picked for itself is a route they can disagree about.
+type failureRoute int
+
+const (
+	// routeTenant: the credentials themselves are implicated. Record
+	// needs_reconnect, tell the tenant, exit 0 — a login that legitimately
+	// failed is a RESULT, not a task crash.
+	routeTenant failureRoute = iota
+
+	// routeOperator: only the operator can act. The tenant's status must be
+	// left alone and the task must exit non-zero so the ledger pages.
+	routeOperator
+
+	// routePostAuth: Fantrax accepted the sign-in and something after it did
+	// not finish. Neither of the above: the tenant is told (it is their
+	// connection that is unconfirmed) AND the operator is paged via the
+	// non-zero exit (only they can fix a Fantrax outage), and the status says
+	// interrupted rather than blaming a working password.
+	routePostAuth
+)
+
+// loginVerdict is a class plus what to do about it.
 type loginVerdict struct {
 	class string
-
-	// operatorActionable routes the failure. A tenant-actionable failure is
-	// recorded against their connection and shown to them; an operator-
-	// actionable one must not touch their connection status at all.
-	operatorActionable bool
+	route failureRoute
 }
+
+// operatorActionable reports whether this failure must not touch the tenant's
+// connection status. Kept as an accessor so callers read the routing decision
+// from one place rather than re-deriving it from the class.
+func (v loginVerdict) operatorActionable() bool { return v.route == routeOperator }
 
 // cloudflareTitles are substrings Cloudflare's interstitials put in
 // document.title. Matched case-insensitively.
@@ -79,18 +137,23 @@ var cloudflareTitles = []string{
 //  4. Bad credentials only on POSITIVE evidence — still on the form AND the
 //     form said something. Absence of a cookie is not evidence of a wrong
 //     password; that inference is the bug this function replaces.
-//  5. Everything else stays ambiguous on purpose.
-func classifyLogin(e loginEvidence) loginVerdict {
+//  5. A named post-auth failure — Fantrax issued a cookie and a step after it
+//     broke. Below the form probe on purpose; see the branch's own comment.
+//  6. Everything else stays ambiguous on purpose.
+//
+// It returns the proof alongside the verdict so a caller cannot record a
+// post-auth failure without holding the evidence for it.
+func classifyLogin(e loginEvidence) (loginProof, loginVerdict) {
 	if e.FXRM != "" && e.Info != nil && e.Info.UserID != "" {
-		return loginVerdict{}
+		return loginProof{fxrm: e.FXRM}, loginVerdict{}
 	}
 
 	if e.has("cloudflare") || matchesAny(e.Title, cloudflareTitles) {
-		return verdictFor(lineupapi.ConnErrBotChallenge)
+		return loginProof{}, verdictFor(lineupapi.ConnErrBotChallenge)
 	}
 
 	if e.has("otp") {
-		return verdictFor(lineupapi.ConnErrTwoFactor)
+		return loginProof{}, verdictFor(lineupapi.ConnErrTwoFactor)
 	}
 
 	// The form is still on screen and told us why. This is the path that makes
@@ -98,28 +161,60 @@ func classifyLogin(e loginEvidence) loginVerdict {
 	// present but no identity — describes a session that half-worked, not a
 	// password Fantrax refused.
 	if e.has("login_form") && (e.text("form_error") != "" || e.text("error_text") != "") {
-		return verdictFor(lineupapi.ConnErrBadCredentials)
+		return loginProof{}, verdictFor(lineupapi.ConnErrBadCredentials)
 	}
 
-	// A session that yielded no identity. Retained from the original rule: it
-	// is rare and strange, but a cookie without an account behind it is not a
-	// usable connection.
+	// FANTRAX SAID YES AND SOMETHING AFTER IT SAID NO (rosterbot-ch0s).
+	//
+	// The condition requires BOTH a cookie and a named post-auth failure, and
+	// requiring both is what keeps this safe. A bare `e.FXRM != ""` test would
+	// be tempting — Fantrax is not supposed to issue FX_RM to a rejected
+	// password — but nobody has measured that, and the fork records the
+	// opposite risk in the same breath: LoginWithBrowser's own comment says "a
+	// rejected password reaches this line too" immediately before it reads the
+	// cookie jar. If FX_RM does linger there on a rejection, a bare test would
+	// classify every wrong password as retryable, tell the tenant their
+	// password is fine, never demote them, and invite unbounded retries — the
+	// documented trigger for Fantrax lockout and Cloudflare bot-blocking. The
+	// narrow condition fires only on the two failures we can actually name, so
+	// it also does not need to outrank the form-error probe above it.
+	if e.FXRM != "" && (e.IdentityErr != nil || e.PersistErr != nil) {
+		return loginProof{fxrm: e.FXRM}, verdictFor(lineupapi.ConnErrVerificationInterrupted)
+	}
+
+	// A session that yielded no identity AND no error explaining why. Retained
+	// from the original rule: it is rare and strange, but a cookie without an
+	// account behind it is not a usable connection. The branch above takes
+	// every case where we know what broke.
 	if e.FXRM != "" {
-		return verdictFor(lineupapi.ConnErrBadCredentials)
+		return loginProof{}, verdictFor(lineupapi.ConnErrBadCredentials)
 	}
 
-	return verdictFor(lineupapi.ConnErrLoginChallengeOrTimeout)
+	return loginProof{}, verdictFor(lineupapi.ConnErrLoginChallengeOrTimeout)
+}
+
+// routeFor is the single definition of what each failure class does, so the
+// connect task, the session ladder and any future ops surface cannot disagree
+// about it.
+func routeFor(class string) failureRoute {
+	switch class {
+	case lineupapi.ConnErrBotChallenge:
+		return routeOperator
+	case lineupapi.ConnErrVerificationInterrupted:
+		return routePostAuth
+	default:
+		return routeTenant
+	}
 }
 
 // operatorActionableClass reports whether a class describes something only the
-// operator can fix. It is the single definition of that split, so the routing
-// in runConnect and any future ops surface cannot disagree about it.
+// operator can fix.
 func operatorActionableClass(class string) bool {
-	return class == lineupapi.ConnErrBotChallenge
+	return routeFor(class) == routeOperator
 }
 
 func verdictFor(class string) loginVerdict {
-	return loginVerdict{class: class, operatorActionable: operatorActionableClass(class)}
+	return loginVerdict{class: class, route: routeFor(class)}
 }
 
 func matchesAny(s string, needles []string) bool {

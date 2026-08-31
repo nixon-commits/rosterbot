@@ -12,6 +12,7 @@ const CONN_TONE = {
   verified: ["Connected", "badge-ok"],
   pending: ["Pending", "badge-info"],
   needs_reconnect: ["Needs reconnect", "badge-failed"],
+  interrupted: ["Interrupted", "badge-info"],
 };
 
 // WHO CAN ACT ON THIS — the failure taxonomy from crq.14, applied at the point
@@ -338,6 +339,13 @@ function attentionFrom(t) {
   if (!t.conn_status) return "Nobody yet — has not connected";
   if (t.conn_status === "verified") return "—";
   if (OPERATOR_ACTIONABLE.has(t.conn_error)) return "You (not the tenant)";
+  // Above needs_reconnect and separate from it: Fantrax accepted the sign-in
+  // and a later step broke, so the tenant has nothing to fix. Without this the
+  // row fell through to "—" and read as healthy on the one screen the operator
+  // uses to find what is failing (rosterbot-ch0s).
+  if (t.conn_status === "interrupted") {
+    return "You (not the tenant) — the check did not finish";
+  }
   if (t.conn_status === "needs_reconnect") return "The tenant — they must reconnect";
   return "—";
 }

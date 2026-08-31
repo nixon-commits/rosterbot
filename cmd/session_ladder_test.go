@@ -424,3 +424,68 @@ func TestSessionLadder_LiveSessionTellsNobody(t *testing.T) {
 			feed.written, log.String())
 	}
 }
+
+// TestSessionLadder_PostAuthFailureLeavesTheTenantAlone is the ladder's half of
+// rosterbot-ch0s.
+//
+// The connect task was only ONE of the two live writers of a tenant's
+// connection status; sessionLadder.stop is the other, and it runs inside every
+// scheduled job of every tenant. Without a third route here, a Fantrax 5xx
+// during an ordinary hourly run still demoted the tenant to needs_reconnect —
+// the exact bug — while the shared failure copy told them their password was
+// fine and to try again in a minute, a retry AuthorizeRun would then refuse.
+//
+// Leaving the status VERIFIED (rather than writing interrupted, as connect
+// does) is the deliberate difference: nothing here needs the tenant to act, so
+// the next scheduled run simply tries again.
+func TestSessionLadder_PostAuthFailureLeavesTheTenantAlone(t *testing.T) {
+	conns := &recordingConns{conn: connFor(t, "alice", lineupapi.ConnVerified)}
+	feed := &memFeed{}
+	var log bytes.Buffer
+	lad := sessionLadder{
+		conns:  conns,
+		sealer: stubSealer{},
+		feed:   feed,
+		out:    &log,
+		probe:  func(string) error { return errors.New("fantrax API error WARNING_NOT_LOGGED_IN: x") },
+		mint: func(lineupapi.FantraxCreds) loginEvidence {
+			return loginEvidence{FXRM: "fx-1", IdentityErr: errors.New("fantrax API error 503")}
+		},
+	}
+
+	err := lad.refresh(context.Background(), "alice", tenantCfg())
+
+	if err == nil {
+		t.Fatal("refresh continued with no usable session")
+	}
+	if len(conns.put) != 1 {
+		t.Fatalf("wrote the record %d times; want 1", len(conns.put))
+	}
+	got := conns.put[0]
+	if got.Status == lineupapi.ConnNeedsReconnect {
+		t.Errorf("Status = needs_reconnect: fantrax issued the cookie, so it had already "+
+			"accepted the credentials this demotes (%s)", got.LastError)
+	}
+	if got.Status != lineupapi.ConnVerified {
+		t.Errorf("Status = %q, want it left at %q so the next scheduled run retries",
+			got.Status, lineupapi.ConnVerified)
+	}
+	if got.LastError != lineupapi.ConnErrVerificationInterrupted {
+		t.Errorf("LastError = %q, want %q", got.LastError, lineupapi.ConnErrVerificationInterrupted)
+	}
+	// NO FEED ENTRY, unlike the tenant-actionable branch. That branch writes
+	// exactly one per break because needs_reconnect stops every later run; this
+	// one leaves the runs going, so a feed entry would restate a standing
+	// Fantrax outage on all ~24 of the day's runs. The operator hears about it
+	// once per outage via the non-zero exit and opsalert.Streak.
+	if len(feed.written) != 0 {
+		t.Errorf("wrote %d feed entries; a level-triggered channel here restates the "+
+			"same outage every run: %+v", len(feed.written), feed.written)
+	}
+	line := log.String()
+	for _, want := range []string{"alice", lineupapi.ConnErrVerificationInterrupted, "not pushed"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("console record missing %q; the operator sees:\n%s", want, line)
+		}
+	}
+}

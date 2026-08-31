@@ -30,6 +30,23 @@ const (
 	// bot-blocking, so an hourly retry would lock the user out of their own
 	// account using credentials they handed us.
 	ConnNeedsReconnect ConnStatus = "needs_reconnect"
+
+	// ConnInterrupted: Fantrax ACCEPTED the sign-in and a step after it did not
+	// complete. The credentials are not implicated at all.
+	//
+	// It is not ConnNeedsReconnect because nothing about the password is in
+	// question — telling someone to re-enter working credentials is the exact
+	// failure ConnErrBotChallenge already exists to avoid, arriving by a
+	// different route (rosterbot-ch0s). It is not ConnPending either: pending
+	// means a verification is RUNNING, and settings.js renders it as "Checking
+	// your credentials…" with no bound, so a failure parked there is a spinner
+	// that never resolves.
+	//
+	// Usable() stays false, so AuthorizeRun and the tenant fan-out refuse it
+	// with no edit: the connection genuinely was not confirmed. What differs is
+	// what the tenant is told and what they are asked to do — retry, not
+	// re-enter.
+	ConnInterrupted ConnStatus = "interrupted"
 )
 
 // Connect failure classes. These are CLASSES, not messages: they are shown to
@@ -91,6 +108,30 @@ const (
 
 	// ConnErrTeamClaimed — another tenant already holds that team.
 	ConnErrTeamClaimed = "team_claimed"
+
+	// ConnErrVerificationInterrupted — the sign-in reached Fantrax and worked,
+	// and a step AFTER it did not finish: the identity call, the ownership
+	// lookup, the team claim, or sealing the session.
+	//
+	// It exists because those failures used to be laundered into a verdict
+	// about the tenant's password. A Fantrax 5xx inside the identity call
+	// landed on ConnErrBadCredentials — the harshest class in this vocabulary —
+	// and a blip fetching MyTeamIDs landed on ConnErrLoginChallengeOrTimeout;
+	// both then wrote ConnNeedsReconnect, telling someone whose credentials
+	// Fantrax had just accepted that those credentials no longer work
+	// (rosterbot-ch0s, audit 2026-08-17).
+	//
+	// THE EVIDENCE IS FANTRAX'S OWN: an FX_RM cookie. Fantrax issues one only
+	// once it has accepted a sign-in, so holding one is Fantrax stating the
+	// credentials are fine. Nothing here is inferred from the shape of an
+	// error, which is the guess ConnErrLoginChallengeOrTimeout's comment above
+	// forbids.
+	//
+	// The remedy is to retry, not to re-enter a password, which is why this is
+	// the one tenant-facing class whose connect task exits NON-ZERO: only the
+	// operator can act on a Fantrax outage, and the run ledger is where they
+	// hear about it.
+	ConnErrVerificationInterrupted = "verification_interrupted"
 )
 
 // ErrNoConnection reports that a tenant has never connected Fantrax.

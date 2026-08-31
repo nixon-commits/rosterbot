@@ -171,20 +171,43 @@ async function applyRole() {
 // — the credentials are fine and nothing the user does helps — so telling them
 // to reconnect would waste their time and mislead them, which is the specific
 // failure the taxonomy exists to prevent.
+//
+// "interrupted" DOES fire, with its own wording (rosterbot-ch0s). It is not
+// Usable(), so AuthorizeRun refuses every run and the fan-out skips the tenant
+// — the bot has stopped managing their team just as surely as needs_reconnect
+// — and a status this banner did not know about would have silently returned
+// early, which is the same discover-it-late failure the comment above names.
+//
+// "pending" is excluded on purpose and is the one non-Usable status that is:
+// a verification is RUNNING, it is time-boxed by connectInFlightWindow, and the
+// settings page already says so. A red banner during every normal connect would
+// train people to ignore this one.
+const BANNER_COPY = {
+  needs_reconnect: [
+    "rosterbot is not connected to your Fantrax account, so it is not managing your team. ",
+    "Reconnect in Settings",
+  ],
+  interrupted: [
+    "rosterbot could not finish checking your Fantrax connection, so it is not " +
+      "managing your team. Your password is not the problem. ",
+    "Try again in Settings",
+  ],
+};
+
 function showConnectionBanner(me) {
   const host = document.getElementById("status-line");
   if (!host || !me.fantrax) return;
   const conn = me.fantrax;
-  if (conn.status !== "needs_reconnect") return;
+  const copy = BANNER_COPY[conn.status];
+  if (!copy) return;
   if (conn.last_error === "bot_challenge") return;
 
   const b = document.createElement("div");
   b.className = "banner bad";
-  b.append(document.createTextNode(
-    "rosterbot is not connected to your Fantrax account, so it is not managing your team. "));
+  b.append(document.createTextNode(copy[0]));
   const a = document.createElement("a");
   a.href = "#settings";
-  a.textContent = "Reconnect in Settings";
+  a.textContent = copy[1];
   b.append(a);
   host.prepend(b);
 }
