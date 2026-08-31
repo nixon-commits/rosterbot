@@ -108,6 +108,30 @@ type Run struct {
 	StartedAt string `json:"started_at"`          // RFC3339 UTC
 	EndedAt   string `json:"ended_at,omitempty"`  // empty while RUNNING
 	Trigger   string `json:"trigger"`             // schedule | manual
+
+	// Connect is what the CONNECT TASK concluded on this row, joined at read
+	// time from the tenant's connection record (see connectrun.go). Nothing in
+	// the run ledger writes it, so stored ledger objects are unchanged.
+	//
+	// Status above is the task's EXIT STATUS, and a connect that fails for a
+	// reason only the tenant can fix exits 0 on purpose so opsalert does not
+	// page the operator — which is why a broken connection reads SUCCESS here
+	// (rosterbot-jg92). This field carries the other half.
+	//
+	// NIL MEANS "WE CANNOT ATTRIBUTE A CONNECTION OUTCOME TO THIS RUN" — not a
+	// connect row, no session caller, no connection store, or the record's
+	// stamp names a different run. It is never to be read as success.
+	Connect *RunConnect `json:"connect,omitempty"`
+}
+
+// RunConnect is the connect task's own verdict on a run, as served on Run.
+//
+// Verdict is the ONLY thing a renderer may colour on. The tenant's live
+// ConnStatus is deliberately absent: on the operator-actionable route connect
+// leaves it untouched, so it can read "verified" on a run that failed.
+type RunConnect struct {
+	Verdict   string `json:"verdict"`              // verified | failed
+	LastError string `json:"last_error,omitempty"` // a ConnErr* class, for the label
 }
 
 // RunDetail is a Run plus its captured log tail (GET /v1/runs/{id}). The stored

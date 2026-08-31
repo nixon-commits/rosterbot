@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -68,14 +69,6 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	conn, ok, err := store.GetConnection(ctx, uid)
-	if err != nil {
-		return err
-	}
-	if !ok || len(conn.CredsCiphertext) == 0 {
-		return fmt.Errorf("connect: %w", lineupapi.ErrNoConnection)
-	}
-
 	// The tenant's own activity feed. Composed from the environment, which the
 	// launcher set to THIS tenant, so the store is already theirs. Soft: a feed
 	// that cannot be opened must not stop connect recording the outcome.
@@ -86,41 +79,242 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		feed = nil
 	}
 
-	// fail records the outcome and returns nil: a connect that legitimately
-	// could not authenticate is a RESULT, not a task crash. Exiting non-zero
-	// would make the run ledger show a failed job and page the operator for
-	// something only the user can fix.
-	//
-	// The exception is a class only the OPERATOR can act on. There, both halves
-	// invert: the tenant's status must be left alone (marking needs_reconnect
-	// would tell someone their working credentials are dead and ask them to
-	// re-enter them), and the task must exit non-zero precisely so the ledger
-	// records a failure and opsalert pages. This is the same split runConnect
-	// already draws for a KMS decrypt failure below.
-	fail := func(class string) error {
-		// Tell whoever can act. Tenant-actionable failures go to that user's
-		// feed and NOT to the operator, which is the whole point: becoming the
-		// help desk for problems users can fix themselves is what this routing
-		// exists to prevent (rosterbot-crq.14).
-		recordConnectFailure(ctx, feed, notifyOperator, uid, class)
+	return connectTenant(ctx, uid, connectDeps{
+		conns:  store,
+		opener: opener,
+		sealer: sealer,
+		login:  fantraxLogin,
+		teams:  myTeamIDs,
+		feed:   feed,
+		push:   notifyOperator,
+		out:    out,
+		now:    time.Now,
+	})
+}
 
-		conn.LastError = class
-		if operatorActionableClass(class) {
-			if err := store.PutConnection(ctx, conn); err != nil {
-				return err
-			}
-			return fmt.Errorf("connect: %s for %s (operator action required; "+
-				"tenant credentials not implicated)", class, uid)
+// connectStore is the slice of the identity store this task needs. An
+// interface rather than *ddbuser.Store for the reason tenantDirectory is one:
+// every decision below is about what gets WRITTEN to a tenant's record, and
+// none of it is assertable against DynamoDB.
+type connectStore interface {
+	GetConnection(ctx context.Context, uid lineupapi.UserID) (*lineupapi.FantraxConnection, bool, error)
+	PutConnection(ctx context.Context, c *lineupapi.FantraxConnection) error
+	ClaimTeam(ctx context.Context, id lineupapi.UserID, teamID string) error
+	GetUser(ctx context.Context, id lineupapi.UserID) (*lineupapi.User, bool, error)
+}
+
+// connectDeps is everything connectTenant talks to. runConnect is the wiring
+// adapter over it — the cmd/optimize.go-over-lineuprun.Run shape.
+//
+// The split exists because the rule this task encodes ("do not blame a tenant's
+// credentials for a failure that happened after Fantrax accepted them") is a
+// property of the CALL SITE, not of any helper. The previous attempt at
+// rosterbot-ch0s tested the helper, so reverting the call site to its buggy
+// one-liner left every new test green.
+type connectDeps struct {
+	conns  connectStore
+	opener lineupapi.Opener
+	sealer lineupapi.Sealer
+
+	// login and teams are the two Fantrax round trips, seams because Chrome and
+	// a real account are not available to a unit test.
+	login func(lineupapi.FantraxCreds) loginEvidence
+	teams func() ([]string, error)
+
+	feed feedWriter
+	push func(string)
+	out  io.Writer
+	now  func() time.Time
+}
+
+// connectRun is one tenant's connect attempt, bound to the record it will
+// write.
+type connectRun struct {
+	connectDeps
+	ctx  context.Context
+	uid  lineupapi.UserID
+	conn *lineupapi.FantraxConnection
+}
+
+func (c connectRun) w() io.Writer {
+	if c.out != nil {
+		return c.out
+	}
+	return os.Stdout
+}
+
+// record is the ONLY way this task writes a connection record.
+//
+// It stamps the run in the SAME write that sets the outcome, so the two cannot
+// come apart. That is what lets GET /v1/runs say what a specific connect row
+// concluded rather than showing the ledger's exit status, which reads SUCCESS
+// on every tenant-actionable failure by design (rosterbot-jg92).
+//
+// THE VERDICT IS A PARAMETER, NOT conn.Status. On the operator-actionable route
+// fail() deliberately leaves Status alone, so a re-verify of an already-
+// verified tenant would carry "verified" into a run that failed and paged —
+// this bead's own bug, mirrored. Only the call site knows which route it is on.
+//
+// The run id is read here rather than passed in: a parameter is something a
+// call site can forget, and runConnect itself needs DynamoDB, KMS and a
+// headless browser, so no test can drive its call sites.
+//
+// With no RUN_ID (a hand-run task) it leaves any existing stamp ALONE rather
+// than clearing it. The older stamp still states truly what THAT run concluded,
+// and the read side matches on id, so it can never be shown against this one.
+func (c connectRun) record(verdict string) error {
+	if id := os.Getenv("RUN_ID"); id != "" {
+		c.conn.LastConnectRun = &lineupapi.ConnectRun{
+			RunID:     id,
+			Verdict:   verdict,
+			LastError: c.conn.LastError,
 		}
-		conn.Status = lineupapi.ConnNeedsReconnect
-		if err := store.PutConnection(ctx, conn); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "connect failed for %s: %s\n", uid, class)
-		return nil
+	}
+	return c.conns.PutConnection(c.ctx, c.conn)
+}
+
+// connectVerdict is a failure class plus whatever the route it implies needs.
+//
+// It replaced a bare `class string` so that reverting a call site to
+// `fail(lineupapi.ConnErrLoginChallengeOrTimeout)` stops compiling. Be precise
+// about what that buys and what it does not: it closes the bare-literal revert,
+// NOT the choice of a wrong class — fail(tenantFault(...)) still compiles
+// anywhere. The guard against choosing the demoting route after a proven login
+// is provenRun below, which has no general-purpose demote, plus fail's runtime
+// refusal of a post-auth verdict with no proof.
+type connectVerdict struct {
+	class string
+
+	// proof, stage and cause are carried by the post-auth route only.
+	proof loginProof
+	stage string
+	cause error
+}
+
+// tenantFault is a verdict about the tenant's own credentials or team.
+func tenantFault(class string) connectVerdict { return connectVerdict{class: class} }
+
+// postAuth is a verdict about a step that ran AFTER Fantrax accepted the
+// sign-in. Its class is fixed rather than a parameter: there is exactly one,
+// and a caller that could pass a class here could pass a demoting one.
+func postAuth(p loginProof, stage string, cause error) connectVerdict {
+	if cause == nil {
+		// Degrade to noise. A stage with no error attached still has to say
+		// something, or the ledger's log_tail quotes "<nil>".
+		cause = errors.New("no underlying error was recorded")
+	}
+	return connectVerdict{
+		class: lineupapi.ConnErrVerificationInterrupted,
+		proof: p, stage: stage, cause: cause,
+	}
+}
+
+// classified turns a login verdict into a connect verdict, carrying the proof
+// through when the class is a post-auth one. It is the mapping the classify
+// call site would otherwise have to improvise, and improvising it is how the
+// identity-failure case ends up back on the demoting route.
+func classified(p loginProof, v loginVerdict, ev loginEvidence) connectVerdict {
+	if routeFor(v.class) != routePostAuth {
+		return tenantFault(v.class)
+	}
+	if ev.IdentityErr != nil {
+		return postAuth(p, "the Fantrax identity check", ev.IdentityErr)
+	}
+	return postAuth(p, "the session cookie cache write", ev.PersistErr)
+}
+
+// fail records the outcome of a failed connect on one of three routes.
+//
+// routeTenant returns nil: a connect that legitimately could not authenticate
+// is a RESULT, not a task crash. Exiting non-zero would make the run ledger
+// show a failed job and page the operator for something only the user can fix.
+//
+// routeOperator inverts both halves. The tenant's status is left alone (marking
+// needs_reconnect would tell someone their working credentials are dead and ask
+// them to re-enter them), and the task exits non-zero precisely so the ledger
+// records a failure and opsalert pages.
+//
+// routePostAuth is neither, and is the whole of rosterbot-ch0s. The tenant IS
+// told — it is their connection that is unconfirmed and only they can retry it
+// — and the operator IS paged, because a Fantrax outage or a KMS blip is theirs
+// to fix. The status says interrupted, which is not usable but does not accuse
+// a password Fantrax has just accepted.
+//
+// EVERY ROUTE WRITES. The 2026-08-26 attempt at this bead added a post-login
+// path that wrote nothing at all, leaving the record at ConnPending and the
+// dashboard rendering "Checking your credentials…" forever. Not demoting is not
+// the same as saying nothing.
+func (c connectRun) fail(v connectVerdict) error {
+	route := routeFor(v.class)
+
+	// Refused BEFORE anything is written or anyone is told. Go cannot stop an
+	// in-package literal from forging loginProof{}, so the one route that must
+	// never be reachable without evidence refuses the inert value here — the
+	// same shape as markVerified's refusals below.
+	if route == routePostAuth && v.proof.fxrm == "" {
+		return fmt.Errorf("connect: refusing to record %s for %s without proof that "+
+			"Fantrax accepted the sign-in", v.class, c.uid)
 	}
 
-	plain, err := opener.Open(ctx, uid, conn.CredsCiphertext)
+	// Tell whoever can act, before the write, so a store that rejects the
+	// update still tells the person the connect stopped. Tenant-actionable
+	// failures go to that user's feed and NOT to the operator, which is the
+	// whole point: becoming the help desk for problems users can fix themselves
+	// is what this routing exists to prevent (rosterbot-crq.14).
+	recordConnectFailure(c.ctx, c.feed, c.push, c.uid, v.class)
+
+	c.conn.LastError = v.class
+	switch route {
+	case routeOperator:
+		if err := c.record(lineupapi.ConnectVerdictFailed); err != nil {
+			return err
+		}
+		return fmt.Errorf("connect: %s for %s (operator action required; "+
+			"tenant credentials not implicated)", v.class, c.uid)
+
+	case routePostAuth:
+		c.conn.Status = lineupapi.ConnInterrupted
+		if err := c.record(lineupapi.ConnectVerdictFailed); err != nil {
+			return err
+		}
+		// Printed as well as returned, and they are not redundant. This line is
+		// the diagnostic record inside log_tail's 50 lines; the RETURNED error
+		// is what opsalert quotes, because cmd/root.go prints it last and
+		// opsalert takes the last non-empty line.
+		fmt.Fprintf(c.w(), "connect: fantrax accepted the sign-in for %s and %s did not "+
+			"finish; recorded %s, the credentials are not implicated\n",
+			c.uid, v.stage, v.class)
+		return fmt.Errorf("connect: %s failed after a proven Fantrax login for %s: %w",
+			v.stage, c.uid, v.cause)
+
+	default:
+		c.conn.Status = lineupapi.ConnNeedsReconnect
+		if err := c.record(lineupapi.ConnectVerdictFailed); err != nil {
+			return err
+		}
+		fmt.Fprintf(c.w(), "connect failed for %s: %s\n", c.uid, v.class)
+		return nil
+	}
+}
+
+// connectTenant verifies one tenant's credentials and records the outcome.
+func connectTenant(ctx context.Context, uid lineupapi.UserID, d connectDeps) error {
+	// Fail safe: nothing downstream should be able to authenticate as this
+	// tenant after connect returns. fantraxLogin installs FANTRAX_COOKIES for
+	// the identity and ownership calls; this is where it comes back out, the
+	// same shape as sessionLadder.stop's clear.
+	defer setFantraxEnv("", "", "")
+
+	conn, ok, err := d.conns.GetConnection(ctx, uid)
+	if err != nil {
+		return err
+	}
+	if !ok || len(conn.CredsCiphertext) == 0 {
+		return fmt.Errorf("connect: %w", lineupapi.ErrNoConnection)
+	}
+	c := connectRun{connectDeps: d, ctx: ctx, uid: uid, conn: conn}
+
+	plain, err := d.opener.Open(ctx, uid, conn.CredsCiphertext)
 	if err != nil {
 		// A decrypt failure is infrastructure, not a user error — wrong key,
 		// missing grant, or a ciphertext sealed for a different tenant. It must
@@ -133,32 +327,84 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("connect: malformed credential blob")
 	}
 
-	ev := fantraxLogin(creds)
-	if v := classifyLogin(ev); v.class != "" {
+	ev := d.login(creds)
+	if ev.PersistErr != nil {
+		// Noise, not a failure. The durable hand-off to the next run is the
+		// KMS-sealed FX_RM, not this file, so a cache that could not be written
+		// costs the next run one extra login and nothing else.
+		fmt.Fprintf(c.w(), "note: the Fantrax cookie cache could not be written (%v); "+
+			"the sealed session is unaffected\n", ev.PersistErr)
+	}
+	proof, v := classifyLogin(ev)
+	if v.class != "" {
 		// Printed on EVERY failure, including the ambiguous one, and especially
 		// the ambiguous one. The selector probes behind this are a hypothesis
 		// about markup we do not control, so the only way the classification
 		// gets better is if a real failed attempt leaves behind what the page
 		// actually looked like. A class that was guessed and never checked is
 		// worth no more than the class it replaced.
-		printLoginEvidence(out, ev)
-		return fail(v.class)
+		printLoginEvidence(c.w(), ev)
+		return c.fail(classified(proof, v, ev))
 	}
-	fxrm, info := ev.FXRM, ev.Info
+	return c.proven(proof).finish(ev.Info)
+}
+
+// provenRun is a connect attempt past the point where Fantrax accepted the
+// credentials.
+//
+// It is a separate type because of what it does NOT have: there is no general
+// "demote this tenant" method on it. The two ways to fail from here are
+// interrupted (never touches the credentials verdict) and ownershipFault, which
+// accepts only the three classes that genuinely describe the tenant's team.
+// Anything else is refused at runtime rather than quietly demoting somebody
+// whose password Fantrax has just accepted.
+type provenRun struct {
+	run   connectRun
+	proof loginProof
+}
+
+func (c connectRun) proven(p loginProof) provenRun { return provenRun{run: c, proof: p} }
+
+// interrupted records a step that failed after the login worked.
+func (p provenRun) interrupted(stage string, cause error) error {
+	return p.run.fail(postAuth(p.proof, stage, cause))
+}
+
+// ownershipFault records the one kind of post-login failure that IS about the
+// tenant: Fantrax says these credentials do not control the team they were
+// invited for, no team is assigned, or another account holds it. Those demote,
+// and should — re-connecting with the right account is the remedy.
+func (p provenRun) ownershipFault(class string) error {
+	switch class {
+	case lineupapi.ConnErrTeamNotOwned, lineupapi.ConnErrNoTeam, lineupapi.ConnErrTeamClaimed:
+	default:
+		return fmt.Errorf("connect: refusing to blame %s's credentials for %s, which is "+
+			"not an ownership failure", p.run.uid, class)
+	}
+	return p.run.fail(tenantFault(class))
+}
+
+// finish runs everything downstream of a proven login.
+func (p provenRun) finish(info *fantraxUserInfo) error {
+	c := p.run
 
 	// OWNERSHIP IS PROVEN, NOT ASSERTED. The invite carries the team an admin
 	// BELIEVES this person manages; MyTeamIDs is Fantrax stating which teams
 	// these credentials actually control.
-	owned, err := myTeamIDs()
+	owned, err := c.teams()
 	if err != nil {
-		return fail(lineupapi.ConnErrLoginChallengeOrTimeout)
+		// THE BEAD'S HEADLINE SITE. This used to record
+		// login_challenge_or_timeout and needs_reconnect: a network blip
+		// fetching MyTeamIDs told the tenant that credentials Fantrax had just
+		// accepted no longer work.
+		return p.interrupted("the Fantrax team-ownership lookup", err)
 	}
-	proof, class := proveTeam(conn.TeamID, owned)
+	proof, class := proveTeam(c.conn.TeamID, owned)
 	if class != "" {
 		if class == lineupapi.ConnErrTeamNotOwned {
-			fmt.Fprintf(out, "credentials control %v, not %s\n", owned, conn.TeamID)
+			fmt.Fprintf(c.w(), "credentials control %v, not %s\n", owned, c.conn.TeamID)
 		}
-		return fail(class)
+		return p.ownershipFault(class)
 	}
 	// Claimed from the PROOF, not from conn.TeamID. They hold the same value
 	// here, but reading it off the proof means a future edit that drops
@@ -166,32 +412,57 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	// which is exactly how the previous `if conn.TeamID != ""` guards managed to
 	// look deliberate at both sites while nothing rejected an empty team at
 	// either.
-	if err := store.ClaimTeam(ctx, uid, proof.teamID); err != nil {
-		return fail(lineupapi.ConnErrTeamClaimed)
+	if err := c.conns.ClaimTeam(c.ctx, c.uid, proof.teamID); err != nil {
+		// THREE OUTCOMES, NOT ONE. ClaimTeam returns ErrTeamTaken for a real
+		// conflict, ErrUserConflict when the profile it must update is missing
+		// or moved, and a raw store error otherwise. Collapsing them told a
+		// tenant "that team is already claimed by another account" for a
+		// DynamoDB blip.
+		switch {
+		case errors.Is(err, lineupapi.ErrTeamTaken):
+			return p.ownershipFault(lineupapi.ConnErrTeamClaimed)
+		case errors.Is(err, lineupapi.ErrUserConflict):
+			// Our bug, not a transient: a claim that succeeded against a
+			// profile that is not there. Retrying cannot help, so it must not
+			// be dressed as something that can.
+			return fmt.Errorf("connect: claimed team %s for %s but its profile could "+
+				"not be updated: %w", proof.teamID, c.uid, err)
+		default:
+			return p.interrupted("the team claim", err)
+		}
 	}
 
 	// The email is CORROBORATION, not a gate. A manager may legitimately use a
 	// different address with Fantrax than the one the admin was given, so a
 	// mismatch is recorded for a human to look at rather than failing a
 	// connection that is otherwise proven.
-	if u, ok, _ := store.GetUser(ctx, uid); ok && u.Email != "" &&
+	if u, ok, _ := c.conns.GetUser(c.ctx, c.uid); ok && u.Email != "" &&
 		!strings.EqualFold(u.Email, info.Email) {
-		fmt.Fprintf(out, "note: fantrax email %q differs from the invited address %q\n",
+		fmt.Fprintf(c.w(), "note: fantrax email %q differs from the invited address %q\n",
 			info.Email, u.Email)
 	}
 
-	sealed, err := sealer.Seal(ctx, uid, []byte(fxrm))
+	// Sealed from the PROOF rather than from the evidence, for the reason the
+	// team is claimed from its own proof: the session that gets stored is the
+	// one Fantrax confirmed, or none.
+	sealed, err := c.sealer.Seal(c.ctx, c.uid, []byte(p.proof.fxrm))
 	if err != nil {
+		// Was a bare `return err`, which left the record at ConnPending and the
+		// tenant's settings page saying "Checking your credentials…" with
+		// nothing ever to resolve it.
+		return p.interrupted("sealing the Fantrax session", err)
+	}
+	if err := markVerified(c.conn, proof, sealed, info, c.now()); err != nil {
 		return err
 	}
-	if err := markVerified(conn, proof, sealed, info, time.Now()); err != nil {
-		return err
-	}
-	if err := store.PutConnection(ctx, conn); err != nil {
+	// Kept as a raw error deliberately: the store itself is unwritable, so
+	// there is nothing to write the outcome ONTO and the non-zero exit is the
+	// only honest channel left.
+	if err := c.record(lineupapi.ConnectVerdictVerified); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(out, "connected %s: fantrax user %s, team %s\n", uid, info.UserID, conn.TeamID)
+	fmt.Fprintf(c.w(), "connected %s: fantrax user %s, team %s\n", c.uid, info.UserID, c.conn.TeamID)
 	return nil
 }
 
@@ -217,18 +488,35 @@ func fantraxLogin(creds lineupapi.FantraxCreds) loginEvidence {
 	}()
 
 	ev := runBrowserLogin()
-	if ev.Err != nil || ev.FXRM == "" {
+	// A PROVEN COOKIE MEANS PROCEED, even if something after the login failed.
+	// This used to also bail on `ev.Err != nil`, which conflated "no session"
+	// with "a session plus a later problem" — and the later problem is the one
+	// this whole path exists to tell apart. The durable hand-off to the next
+	// run is the KMS-sealed FX_RM, not the local cache file.
+	if ev.FXRM == "" {
 		return ev
 	}
 
-	client, err := auth_client.NewClient(os.Getenv("FANTRAX_LEAGUE_ID"), false)
+	// INSTALLING THE COOKIE IS LOAD-BEARING, NOT HYGIENE. auth_client.GetCookies
+	// consults FANTRAX_COOKIES first, then its cache file, and then FALLS BACK
+	// TO A FULL SECOND HEADLESS LOGIN. Without this line, both NewClient calls
+	// in this flow depend on a cache file that may not have been written — and
+	// repeated logins are precisely what credentials.go names as the trigger
+	// for Fantrax lockout and Cloudflare bot-blocking. connectTenant clears it
+	// again on the way out; the session ladder already does the same thing a
+	// few lines after its own mint.
+	_ = os.Setenv("FANTRAX_COOKIES", fantraxCookieHeader(ev.FXRM))
+
+	info, err := fantraxIdentity(os.Getenv("FANTRAX_LEAGUE_ID"))
 	if err != nil {
-		ev.Err = err
+		// NOT ev.Err. Fantrax has already issued a cookie, so this is an outage
+		// between us and Fantrax, not a verdict on the password — recording it
+		// as a browser failure is how a 5xx here became "Fantrax rejected that
+		// username or password" (rosterbot-ch0s).
+		ev.IdentityErr = err
 		return ev
 	}
-	if client.UserInfo != nil {
-		ev.Info = &fantraxUserInfo{UserID: client.UserInfo.UserID, Email: client.UserInfo.Email}
-	}
+	ev.Info = info
 	return ev
 }
 
@@ -239,9 +527,57 @@ func fantraxLogin(creds lineupapi.FantraxCreds) loginEvidence {
 // Chrome in the path.
 var runBrowserLogin = defaultBrowserLogin
 
+// browserLoginFn is the fork call itself, split out so the triple-to-evidence
+// mapping in defaultBrowserLogin is testable without Chrome.
+var browserLoginFn = auth_client.LoginWithBrowser
+
+// fantraxIdentity asks Fantrax who the installed session belongs to.
+//
+// A seam for the same reason: this round trip is the one the bead's second
+// named case fails in, and asserting what a failure here does requires being
+// able to make it fail.
+var fantraxIdentity = defaultFantraxIdentity
+
+func defaultFantraxIdentity(leagueID string) (*fantraxUserInfo, error) {
+	client, err := auth_client.NewClient(leagueID, false)
+	if err != nil {
+		return nil, err
+	}
+	if client.UserInfo == nil {
+		// Unreachable against the pinned fork — NewClient returns a non-nil
+		// client only once Login() has assigned UserInfo and checked its UserID
+		// — but an error is the honest reading if that ever changes. Leaving
+		// Info nil with no error would silently reclassify a Fantrax change as
+		// a rejected password.
+		return nil, fmt.Errorf("fantrax returned no user info for league %s", leagueID)
+	}
+	return &fantraxUserInfo{UserID: client.UserInfo.UserID, Email: client.UserInfo.Email}, nil
+}
+
+// mkdirCacheDir creates the directory the fork writes its cookie cache into.
+//
+// A seam because auth_client.CacheDir is a const relative to the working
+// directory, so a test cannot redirect it. BELT AND BRACES, not the fix: the
+// 2026-08-17 incident's proximate cause was that this directory did not exist
+// when the fork called os.Create, and internal/statesync/statesync.go already
+// MkdirAlls the local sync directories for exactly that reason. This mirrors
+// internal/fantrax/client.go, which has done the same before every auth_client
+// call since long before that incident — connect was the one path that did not.
+var mkdirCacheDir = func() error { return os.MkdirAll(auth_client.CacheDir, 0o755) }
+
 func defaultBrowserLogin() loginEvidence {
-	cookies, outcome, err := auth_client.LoginWithBrowser(auth_client.CacheFile, auth_client.DefaultLoginProbes)
-	ev := loginEvidence{Err: err}
+	if err := mkdirCacheDir(); err != nil {
+		// Noise, not a verdict, and deliberately not an early return. We have
+		// no proof of anything yet, so failing here would classify a broken
+		// local filesystem as a login failure and demote the tenant — the exact
+		// mis-blame this bead is about. Let the login run; the fork's own
+		// os.Create error then arrives with whatever evidence there is.
+		fmt.Fprintf(os.Stderr, "warning: could not create %s (%v); the Fantrax cookie "+
+			"cache write will fail\n", auth_client.CacheDir, err)
+	}
+
+	cookies, outcome, err := browserLoginFn(auth_client.CacheFile, auth_client.DefaultLoginProbes)
+	ev := loginEvidence{}
 	// The outcome is read even when err is non-nil, because that is the case
 	// that most needs describing: a login challenge makes the form never
 	// render, which surfaces as a timeout, and the evidence is the only thing
@@ -260,6 +596,24 @@ func defaultBrowserLogin() loginEvidence {
 			ev.FXRM = c.Value
 		}
 	}
+	// WHICH FIELD THE ERROR LANDS IN IS THE DECISION. A cookie in hand means
+	// Fantrax accepted the sign-in and the failure came after it; no cookie
+	// means we never got a session and the existing evidence probes decide why.
+	//
+	// HONEST LIMIT: against the pinned fork this cannot yet fire in production.
+	// LoginWithBrowser returns `nil, outcome, err` on all three of its
+	// post-persistence error paths (os.Create, json.Marshal, f.Write), so the
+	// cookie it proved it had is discarded before we see it — which is why the
+	// filed 2026-08-17 incident classified as a challenge/timeout. This is the
+	// seam the evidence will arrive at once the fork stops discarding it; it is
+	// NOT a claim that the filed incident is fixed end to end.
+	if err != nil {
+		if ev.FXRM != "" {
+			ev.PersistErr = err
+		} else {
+			ev.Err = err
+		}
+	}
 	return ev
 }
 
@@ -272,6 +626,16 @@ func printLoginEvidence(out io.Writer, ev loginEvidence) {
 	fmt.Fprintf(out, "login evidence: url=%q title=%q\n", ev.FinalURL, ev.Title)
 	if ev.Err != nil {
 		fmt.Fprintf(out, "login evidence: browser error: %v\n", ev.Err)
+	}
+	// Printed separately from Err because the distinction is the whole point:
+	// these two only exist when Fantrax had already issued a cookie.
+	if ev.PersistErr != nil {
+		fmt.Fprintf(out, "login evidence: cookie cache write error (after a proven "+
+			"login): %v\n", ev.PersistErr)
+	}
+	if ev.IdentityErr != nil {
+		fmt.Fprintf(out, "login evidence: identity check error (after a proven "+
+			"login): %v\n", ev.IdentityErr)
 	}
 	matched := make([]string, 0, len(ev.Matched))
 	for name, ok := range ev.Matched {

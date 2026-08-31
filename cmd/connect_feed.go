@@ -114,6 +114,10 @@ func connectFailureMessage(class string) string {
 		return "No Fantrax team is assigned to your account yet — ask the admin to set one."
 	case lineupapi.ConnErrTeamClaimed:
 		return "That Fantrax team is already claimed by another account."
+	case lineupapi.ConnErrVerificationInterrupted:
+		return "Your Fantrax sign-in worked — your password is not the problem. " +
+			"Something after it did not finish, so the connection is not confirmed yet. " +
+			"Try connecting again in a minute."
 	default:
 		return "The Fantrax sign-in did not complete and Fantrax did not say why. " +
 			"Trying again in Settings sometimes works."

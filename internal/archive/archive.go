@@ -131,7 +131,7 @@ func Get(ctx context.Context, url string) ([]byte, error) {
 			return b, readErr
 		} else {
 			// Non-200: drain body so the connection can be reused, then decide.
-			io.Copy(io.Discard, resp.Body) //nolint:errcheck
+			io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining is best-effort; the status below is the diagnosis and a drain failure cannot change it
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
 			if resp.StatusCode < 500 {

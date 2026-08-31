@@ -105,6 +105,7 @@ func TestConnectFeed_EveryClassIsRoutedSomewhere(t *testing.T) {
 		lineupapi.ConnErrTeamNotOwned,
 		lineupapi.ConnErrNoTeam,
 		lineupapi.ConnErrTeamClaimed,
+		lineupapi.ConnErrVerificationInterrupted,
 	} {
 		feed := &memFeed{}
 		pushed := 0

@@ -14,6 +14,17 @@ import (
 // does not lock the tenant out of retrying.
 const connectInFlightWindow = 10 * time.Minute
 
+// connectInterruptedCooldown throttles retries after a ConnInterrupted result.
+//
+// ConnInterrupted deliberately does NOT block resubmission the way ConnPending
+// does — the tenant is told to try again, and there is no task in flight to
+// wait for. But "try again" against a Fantrax outage is an invitation to hold
+// the button down, and every submission drives a full chromedp login, which is
+// the documented trigger for Fantrax lockout and Cloudflare bot-blocking. One
+// minute is what the tenant-facing copy already promises, in both
+// connectFailureMessage and settings.js's FAILURE_COPY.
+const connectInterruptedCooldown = time.Minute
+
 // handleConnect accepts a tenant's Fantrax credentials, seals them, and launches
 // the task that verifies them.
 //
@@ -63,10 +74,16 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// crashed leaves the record pending forever, and refusing past the window
 	// would lock the tenant out of retrying. A store read failure proceeds —
 	// the Put below hits the same store and fails loudly.
-	if cur, ok, gerr := cfg.Connections.GetConnection(r.Context(), caller.UserID); gerr == nil && ok &&
-		cur.Status == ConnPending && time.Since(cur.UpdatedAt) < connectInFlightWindow {
-		writeErr(w, http.StatusConflict, "a verification is already running; wait for it to finish")
-		return
+	if cur, ok, gerr := cfg.Connections.GetConnection(r.Context(), caller.UserID); gerr == nil && ok {
+		if cur.Status == ConnPending && time.Since(cur.UpdatedAt) < connectInFlightWindow {
+			writeErr(w, http.StatusConflict, "a verification is already running; wait for it to finish")
+			return
+		}
+		if cur.Status == ConnInterrupted && time.Since(cur.UpdatedAt) < connectInterruptedCooldown {
+			writeErr(w, http.StatusConflict,
+				"the last check reached Fantrax but did not finish; try again in a minute")
+			return
+		}
 	}
 
 	plain, err := json.Marshal(FantraxCreds{Username: body.Username, Password: body.Password})

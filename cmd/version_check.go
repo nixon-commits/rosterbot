@@ -63,6 +63,10 @@ type probe struct {
 func versionCheckResultLine(pinned probe, control *probe) (string, error) {
 	switch {
 	case pinned.err != nil:
+		// An unreachable Fantrax cannot prove the pin stale, so failing here
+		// would page for someone else's outage. The error rides into the
+		// returned line, so this degrades to noise rather than to silence.
+		//nolint:nilerr // deliberate soft-fail; see the doc comment above on what a non-nil error costs
 		return fmt.Sprintf("⚠ version probe inconclusive: %v (pinned %s unverified; not failing the run)",
 			pinned.err, auth_client.APIVersion), nil
 	case pinned.status == fantrax.VersionStale:
@@ -83,6 +87,7 @@ func versionCheckResultLine(pinned probe, control *probe) (string, error) {
 		// Transport failure on the control alone. The gate answered the pinned
 		// probe a moment ago, so this is a blip, not a broken mechanism —
 		// warning only, on the same rule that keeps a Fantrax outage silent.
+		//nolint:nilerr // deliberate soft-fail; only PROBE_BLIND below is worth failing on
 		return okLine + fmt.Sprintf("\n⚠ control probe inconclusive: %v (probe self-check skipped)", control.err), nil
 	case control.status == fantrax.VersionStale:
 		return okLine + fmt.Sprintf(" · control %s correctly rejected", fantrax.ControlVersion), nil

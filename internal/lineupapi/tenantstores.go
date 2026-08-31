@@ -66,7 +66,36 @@ func (cfg Config) tenantView(ctx context.Context) (TenantView, bool) {
 			Reports:       cfg.Reports,
 		}, true
 	}
-	v, err := cfg.Tenants.For(ctx, CallerFrom(ctx).UserID)
+	return cfg.tenantViewOf(ctx, CallerFrom(ctx).UserID)
+}
+
+// tenantViewOf resolves an ARBITRARY tenant's stores. It is the one function in
+// this package that can read data belonging to somebody other than the caller.
+//
+// uid IS NOT TAKEN FROM THE REQUEST, and must never be. isAdminOnlyPath matches
+// on r.URL.Path alone (authz.go), so a `?tenant=` query parameter reaches no
+// gate at all — the naive cross-tenant read compiles, passes every existing
+// authz test, and lets any member read any tenant's ledger. The caller must
+// already have established that the requester may read this tenant's data;
+// today the only such caller is handleTenants' run summary, gated as a unit by
+// the "/v1/tenants" entry in adminOnlyRoutes.
+// TestTenantViewOf_CallersAreAnAllowlist and TestNoRequestValueBecomesATenantID
+// enforce both halves structurally.
+//
+// IT HAS NO FLAT-CONFIG FALLBACK, deliberately, and that asymmetry with
+// tenantView above is the correctness of this function. A nil Tenants provider
+// means tenancy is not configured, so the flat stores belong to whoever the
+// process booted as — one ledger, one lineup, one feed. tenantView may serve
+// those to the caller, because in that shape the caller IS that tenant. Serving
+// them for an arbitrary uid would label one process-wide ledger as N different
+// tenants' history, which is exactly the mis-attribution this type was created
+// to remove (see the doc on TenantView). `rosterbot serve` is that shape today:
+// cmd/serve.go sets a real Runs store and no Tenants provider.
+func (cfg Config) tenantViewOf(ctx context.Context, uid UserID) (TenantView, bool) {
+	if cfg.Tenants == nil {
+		return TenantView{}, false
+	}
+	v, err := cfg.Tenants.For(ctx, uid)
 	if err != nil {
 		return TenantView{}, false
 	}

@@ -424,3 +424,121 @@ func TestSessionLadder_LiveSessionTellsNobody(t *testing.T) {
 			feed.written, log.String())
 	}
 }
+
+// TestSessionLadder_PostAuthFailureLeavesTheTenantAlone is the ladder's half of
+// rosterbot-ch0s.
+//
+// The connect task was only ONE of the two live writers of a tenant's
+// connection status; sessionLadder.stop is the other, and it runs inside every
+// scheduled job of every tenant. Without a third route here, a Fantrax 5xx
+// during an ordinary hourly run still demoted the tenant to needs_reconnect —
+// the exact bug — while the shared failure copy told them their password was
+// fine and to try again in a minute, a retry AuthorizeRun would then refuse.
+//
+// Leaving the status VERIFIED (rather than writing interrupted, as connect
+// does) is the deliberate difference: nothing here needs the tenant to act, so
+// the next scheduled run simply tries again.
+func TestSessionLadder_PostAuthFailureLeavesTheTenantAlone(t *testing.T) {
+	conns := &recordingConns{conn: connFor(t, "alice", lineupapi.ConnVerified)}
+	feed := &memFeed{}
+	var log bytes.Buffer
+	lad := sessionLadder{
+		conns:  conns,
+		sealer: stubSealer{},
+		feed:   feed,
+		out:    &log,
+		probe:  func(string) error { return errors.New("fantrax API error WARNING_NOT_LOGGED_IN: x") },
+		mint: func(lineupapi.FantraxCreds) loginEvidence {
+			return loginEvidence{FXRM: "fx-1", IdentityErr: errors.New("fantrax API error 503")}
+		},
+	}
+
+	err := lad.refresh(context.Background(), "alice", tenantCfg())
+
+	if err == nil {
+		t.Fatal("refresh continued with no usable session")
+	}
+	if len(conns.put) != 1 {
+		t.Fatalf("wrote the record %d times; want 1", len(conns.put))
+	}
+	got := conns.put[0]
+	if got.Status == lineupapi.ConnNeedsReconnect {
+		t.Errorf("Status = needs_reconnect: fantrax issued the cookie, so it had already "+
+			"accepted the credentials this demotes (%s)", got.LastError)
+	}
+	if got.Status != lineupapi.ConnVerified {
+		t.Errorf("Status = %q, want it left at %q so the next scheduled run retries",
+			got.Status, lineupapi.ConnVerified)
+	}
+	if got.LastError != lineupapi.ConnErrVerificationInterrupted {
+		t.Errorf("LastError = %q, want %q", got.LastError, lineupapi.ConnErrVerificationInterrupted)
+	}
+	// NO FEED ENTRY, unlike the tenant-actionable branch. That branch writes
+	// exactly one per break because needs_reconnect stops every later run; this
+	// one leaves the runs going, so a feed entry would restate a standing
+	// Fantrax outage on all ~24 of the day's runs. The operator hears about it
+	// once per outage via the non-zero exit and opsalert.Streak.
+	if len(feed.written) != 0 {
+		t.Errorf("wrote %d feed entries; a level-triggered channel here restates the "+
+			"same outage every run: %+v", len(feed.written), feed.written)
+	}
+	line := log.String()
+	for _, want := range []string{"alice", lineupapi.ConnErrVerificationInterrupted, "not pushed"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("console record missing %q; the operator sees:\n%s", want, line)
+		}
+	}
+}
+
+// TestSessionLadderStop_DoesNotClaimTheConnectRow turns cmd/session_ladder.go's
+// prose into a checked rule.
+//
+// stop() reads the connection record and Puts the whole struct back, so it
+// PRESERVES the connect stamp while replacing Status/LastError. That is what
+// makes rosterbot-jg92's design safe: this is an ordinary scheduled run, not a
+// connect, and a re-login failure inside `optimize` must not re-label a connect
+// row that succeeded. The paired verdict (rather than a bare run id beside a
+// mutable Status) is what makes the misattribution structurally impossible.
+func TestSessionLadderStop_DoesNotClaimTheConnectRow(t *testing.T) {
+	t.Setenv("RUN_ID", "optimize-run-7")
+
+	conn := connFor(t, "alice", lineupapi.ConnVerified)
+	stamp := lineupapi.ConnectRun{
+		RunID: "connect-run-1", Verdict: lineupapi.ConnectVerdictVerified,
+	}
+	conn.LastConnectRun = &stamp
+	conns := &recordingConns{conn: conn}
+	var log bytes.Buffer
+	lad := sessionLadder{
+		conns:  conns,
+		sealer: stubSealer{},
+		feed:   &memFeed{},
+		out:    &log,
+		probe:  func(string) error { return errors.New("fantrax API error WARNING_NOT_LOGGED_IN: x") },
+		mint: func(lineupapi.FantraxCreds) loginEvidence {
+			return loginEvidence{
+				Matched: map[string]bool{"login_form": true, "form_error": true},
+				Texts:   map[string]string{"form_error": "Invalid username or password"},
+			}
+		},
+	}
+
+	if err := lad.refresh(context.Background(), "alice", tenantCfg()); err == nil {
+		t.Fatal("refresh accepted a failed re-login")
+	}
+	if len(conns.put) != 1 {
+		t.Fatalf("wrote the record %d times; want 1", len(conns.put))
+	}
+	got := conns.put[0]
+	if got.LastConnectRun == nil {
+		t.Fatal("the ladder dropped the connect stamp; the connect row loses its verdict for good")
+	}
+	if *got.LastConnectRun != stamp {
+		t.Fatalf("stamp = %+v, want the untouched %+v — an optimize run must not take blame "+
+			"on a connect row", *got.LastConnectRun, stamp)
+	}
+	if got.Status != lineupapi.ConnNeedsReconnect || got.LastError != lineupapi.ConnErrBadCredentials {
+		t.Fatalf("the ladder's own outcome did not land: status %q error %q",
+			got.Status, got.LastError)
+	}
+}

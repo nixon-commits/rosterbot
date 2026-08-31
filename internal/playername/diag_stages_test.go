@@ -88,7 +88,7 @@ func TestDiagStages(t *testing.T) {
 		}
 		t.Logf("   STAGE2 List[%d:%d] requested %d ids -> returned %d people", i, end, end-i, len(people))
 		for _, p := range people {
-			indexPerson(rp, p, map[string]bool{})
+			indexPerson(rp, p, map[string]nameClaim{})
 		}
 	}
 	t.Logf("STAGE 2 (People.List): %d errors -> %d indexed players, %d name variants",
@@ -106,7 +106,7 @@ func TestDiagStages(t *testing.T) {
 		} else {
 			rp2 := &ResolvedPlayers{ByName: map[string]int{}, ByID: map[int]string{}}
 			for _, p := range people {
-				indexPerson(rp2, p, map[string]bool{})
+				indexPerson(rp2, p, map[string]nameClaim{})
 			}
 			t.Logf("   STAGE2b List (NO WithFields) requested %d -> returned %d people, indexed %d, variants %d",
 				end, len(people), len(rp2.ByID), len(rp2.ByName))

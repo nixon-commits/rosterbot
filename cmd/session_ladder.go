@@ -152,7 +152,7 @@ func (l sessionLadder) refresh(ctx context.Context, uid lineupapi.UserID, cfg *c
 	_ = os.Unsetenv("FANTRAX_COOKIES")
 
 	ev := l.mint(lineupapi.FantraxCreds{Username: cfg.Username, Password: cfg.Password})
-	if v := classifyLogin(ev); v.class != "" {
+	if _, v := classifyLogin(ev); v.class != "" {
 		printLoginEvidence(l.errw(), ev)
 		return l.stop(ctx, conn, uid, v)
 	}
@@ -180,13 +180,14 @@ func (l sessionLadder) refresh(ctx context.Context, uid lineupapi.UserID, cfg *c
 
 // stop records a failed re-login and halts the run.
 //
-// It splits on who can act, exactly as the connect task does. A tenant-
-// actionable failure sets needs_reconnect, which is what makes AuthorizeRun
-// refuse every later run without any retry bookkeeping. An operator-actionable
-// one — a Cloudflare block — must NOT: the tenant's credentials are not
-// implicated, and telling them to re-enter a working password would be both
-// wrong and useless. Either way this run stops, because either way there is no
-// session.
+// It splits on who can act, exactly as the connect task does, over the same
+// three routes. A tenant-actionable failure sets needs_reconnect, which is what
+// makes AuthorizeRun refuse every later run without any retry bookkeeping. An
+// operator-actionable one — a Cloudflare block — must NOT: the tenant's
+// credentials are not implicated, and telling them to re-enter a working
+// password would be both wrong and useless. A post-auth one — Fantrax took the
+// login and a later step broke — must not either, and for the same reason.
+// Every route stops THIS run, because either way there is no session.
 func (l sessionLadder) stop(ctx context.Context, conn *lineupapi.FantraxConnection,
 	uid lineupapi.UserID, v loginVerdict) error {
 
@@ -217,19 +218,43 @@ func (l sessionLadder) stop(ctx context.Context, conn *lineupapi.FantraxConnecti
 	//
 	// Either half runs BEFORE the write, like connect's fail(), so a store that
 	// rejects the update still tells the person the run stopped.
-	if v.operatorActionable {
+	switch v.route {
+	case routeOperator:
 		// Names the session refresh, not "connect": an operator sent to the
 		// connect task and the dashboard connect flow finds that nothing
 		// happened there, because nothing did.
 		fmt.Fprintf(l.errw(), "tenant %s: session re-login blocked by %s — operator action "+
 			"required, the tenant's credentials are not implicated (not pushed; the run's "+
 			"non-zero exit alerts once per outage via the run ledger)\n", uid, v.class)
-	} else {
+
+	case routePostAuth:
+		// THE LADDER'S THIRD ROUTE (rosterbot-ch0s). Fantrax accepted the
+		// sign-in and a step after it did not finish, so the credentials are
+		// not implicated and the status must not move — which here also means
+		// leaving it VERIFIED, so the next scheduled run simply tries again.
+		// Writing interrupted (as connect does) would be wrong in the other
+		// direction: AuthorizeRun would then refuse every later run for a
+		// tenant who has nothing to fix, and nothing would ever retry.
+		//
+		// Reported on the console and NOT to the tenant's feed, unlike the
+		// tenant-actionable branch below. That branch writes exactly one entry
+		// per break because needs_reconnect stops every later run; this one
+		// leaves the runs going, so a feed entry here would restate a standing
+		// Fantrax outage on all ~24 of the day's runs — the level-triggered
+		// flood the operator half of this function already avoids. The operator
+		// hears about it once per outage through the non-zero exit and
+		// opsalert.Streak, and they are the only ones who can act anyway.
+		fmt.Fprintf(l.errw(), "tenant %s: fantrax accepted the re-login and %s did not "+
+			"finish; leaving the connection alone so the next run retries (not pushed; "+
+			"the run's non-zero exit alerts once per outage via the run ledger)\n",
+			uid, v.class)
+
+	default:
 		recordTenantConnectFailure(ctx, l.tenantFeed(uid), uid, v.class)
 	}
 
 	conn.LastError = v.class
-	if !v.operatorActionable {
+	if v.route == routeTenant {
 		conn.Status = lineupapi.ConnNeedsReconnect
 	}
 	if err := l.conns.PutConnection(ctx, conn); err != nil {
@@ -241,9 +266,13 @@ func (l sessionLadder) stop(ctx context.Context, conn *lineupapi.FantraxConnecti
 	// after this point.
 	setFantraxEnv("", "", "")
 
-	if v.operatorActionable {
+	switch v.route {
+	case routeOperator:
 		return fmt.Errorf("tenant %s: re-login blocked by %s (operator action required; "+
 			"tenant credentials not implicated)", uid, v.class)
+	case routePostAuth:
+		return fmt.Errorf("tenant %s: re-login reached fantrax and %s (operator action "+
+			"required; tenant credentials not implicated, the next run retries)", uid, v.class)
 	}
 	return fmt.Errorf("tenant %s: re-login failed (%s); the tenant must reconnect and no "+
 		"further run will be attempted until they do", uid, v.class)

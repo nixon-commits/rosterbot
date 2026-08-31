@@ -109,12 +109,21 @@ func TestClassifyLogin(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := classifyLogin(tc.ev)
+			proof, got := classifyLogin(tc.ev)
 			if got.class != tc.wantClass {
 				t.Errorf("class = %q, want %q", got.class, tc.wantClass)
 			}
-			if got.operatorActionable != tc.wantOperator {
-				t.Errorf("operatorActionable = %v, want %v", got.operatorActionable, tc.wantOperator)
+			if got.operatorActionable() != tc.wantOperator {
+				t.Errorf("operatorActionable = %v, want %v", got.operatorActionable(), tc.wantOperator)
+			}
+			// A proof is Fantrax's own statement that the credentials were
+			// accepted, so it must exist for a success and for the post-auth
+			// class, and must NOT exist for anything that blames the tenant —
+			// connectRun.fail refuses a post-auth verdict without one.
+			wantProof := tc.wantClass == "" ||
+				tc.wantClass == lineupapi.ConnErrVerificationInterrupted
+			if (proof.fxrm != "") != wantProof {
+				t.Errorf("proof = %q, want a proof: %v", proof.fxrm, wantProof)
 			}
 		})
 	}
@@ -134,7 +143,7 @@ func TestClassifyLogin_SuccessNeedsBothHalves(t *testing.T) {
 		{"identity with an empty user id", loginEvidence{FXRM: "c", Info: &fantraxUserInfo{}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyLogin(tc.ev); got.class == "" {
+			if _, got := classifyLogin(tc.ev); got.class == "" {
 				t.Fatalf("classified as success with %+v", tc.ev)
 			}
 		})
@@ -156,6 +165,7 @@ func TestOperatorActionableFailuresDoNotBlameTheUser(t *testing.T) {
 		lineupapi.ConnErrBadCredentials,
 		lineupapi.ConnErrTwoFactor,
 		lineupapi.ConnErrLoginChallengeOrTimeout,
+		lineupapi.ConnErrVerificationInterrupted,
 	}
 	for _, class := range tenantFacing {
 		if operatorActionableClass(class) {

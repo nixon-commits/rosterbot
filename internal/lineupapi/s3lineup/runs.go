@@ -3,6 +3,7 @@ package s3lineup
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -95,6 +96,23 @@ func flatKeys(ctx context.Context, blob *s3blob.Blob, prefix string, limit int) 
 // prefix (via flatKeys) and decodes each into T. Records whose object cannot
 // be read or decoded are skipped rather than failing the listing — one
 // malformed record must not blank the dashboard's run list or activity feed.
+//
+// BUT A TOTAL READ FAILURE IS NOT AN EMPTY LEDGER, and the difference is the
+// whole reason this returns an error at all. Skipping every record turns
+// "listed N keys and could not read one of them" into (nil, nil), which every
+// caller is then entitled to read as "this tenant has never run": the admin
+// tenants page renders a green "Never run" badge and attributes the row to
+// nobody, and GET /v1/runs serves an empty list with a 200. That is the
+// degrade-to-silence shape this repo keeps being bitten by — the same reason
+// PrefixListing.Truncated exists rather than letting a short listing pass as a
+// complete one.
+//
+// So: zero keys listed is an empty ledger and stays (nil, nil); keys listed
+// with SOME readable is the partial case the skip rule is for; keys listed
+// with NONE readable is a failure and says so. Cancellation is reported the
+// moment it is seen rather than spending the rest of the loop skipping keys
+// whose reads cannot possibly succeed — the caller's deadline expiring is
+// exactly when a summary is most likely to be believed.
 func readNewest[T any](ctx context.Context, blob *s3blob.Blob, limit int) ([]T, error) {
 	keys, err := flatKeys(ctx, blob, "", limit)
 	if err != nil {
@@ -102,15 +120,28 @@ func readNewest[T any](ctx context.Context, blob *s3blob.Blob, limit int) ([]T, 
 	}
 
 	var out []T
+	var lastErr error
 	for _, k := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("run ledger: read cut short after %d of %d records: %w",
+				len(out), len(keys), err)
+		}
 		data, found, err := blob.Get(ctx, k)
-		if err != nil || !found {
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if !found {
 			continue
 		}
 		var v T
 		if json.Unmarshal(data, &v) == nil {
 			out = append(out, v)
 		}
+	}
+	if len(out) == 0 && len(keys) > 0 && lastErr != nil {
+		return nil, fmt.Errorf("run ledger: none of the %d listed records could be read: %w",
+			len(keys), lastErr)
 	}
 	return out, nil
 }

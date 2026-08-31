@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -69,7 +70,7 @@ func ResolveMLBAMIDs(names []string, cacheDir string) (*ResolvedPlayers, error) 
 	// answer served for 7 days, with no signal that anything had happened.
 	var degraded *ResolvedPlayers
 	rp, err := fc.Get(key, func() (*ResolvedPlayers, error) {
-		out, ferr := fetchAndResolve(names)
+		out, ferr := fetchAndResolve(names, cacheDir)
 		if errors.Is(ferr, errDegraded) {
 			degraded = out
 			return nil, ferr
@@ -107,17 +108,17 @@ func namesHash(names []string) string {
 
 // ResolveMLBAMIDsNoCache always fetches fresh (for testing or forced refresh).
 func ResolveMLBAMIDsNoCache(names []string) (*ResolvedPlayers, error) {
-	return fetchAndResolve(names)
+	return fetchAndResolve(names, "")
 }
 
-func fetchAndResolve(names []string) (*ResolvedPlayers, error) {
+func fetchAndResolve(names []string, cacheDir string) (*ResolvedPlayers, error) {
 	rp := &ResolvedPlayers{
 		ByName: make(map[string]int),
 		ByID:   make(map[int]string),
 	}
-	// claimed[key] reports whether the player currently holding that name key
-	// is active — see claimName.
-	claimed := make(map[string]bool)
+	// claimed[key] records the standing of the player currently holding that
+	// name key — see claimName.
+	claimed := make(map[string]nameClaim)
 
 	client := mlb.NewClient(
 		mlb.WithBaseURL(mlbBaseURL),
@@ -126,15 +127,53 @@ func fetchAndResolve(names []string) (*ResolvedPlayers, error) {
 	)
 	ctx := context.Background()
 
-	// Deduplicate names for search.
+	// The bulk season index is the PRIMARY path; the people-search below is the
+	// fallback for everything it cannot answer. An index outage is deliberately
+	// NOT folded into errDegraded: every name it fails to answer falls through
+	// to the search and is resolved exactly as well as it is today, so the cost
+	// is speed, not correctness, and suppressing the 7-day cache write
+	// (see ResolveMLBAMIDs) would turn a slow run into a slow week.
+	// loadSeasonIndex prints the failure unconditionally.
+	ix, _ := loadSeasonIndex(ctx, client, seasonNow(), cacheDir)
+
+	// Deduplicate names, then let the index answer what it can.
 	seen := make(map[string]bool)
-	var searchNames []string
+	var deduped []string
 	for _, name := range names {
 		norm := Normalize(name)
 		if !seen[norm] {
 			seen[norm] = true
-			searchNames = append(searchNames, name)
+			deduped = append(deduped, name)
 		}
+	}
+
+	var searchNames []string
+	var answered, contested int
+	for _, name := range deduped {
+		id, full, res := ix.find(name)
+		if res != findFound {
+			if res == findContested {
+				contested++
+			}
+			searchNames = append(searchNames, name)
+			continue
+		}
+		answered++
+		indexClaim(rp, claimed, ix, id, full)
+	}
+
+	// The line describes the REQUEST, not just the build. A build line alone
+	// cannot distinguish "the index worked" from "the index was present and
+	// answered nothing" — a fields-mask change collapsing the variants, a season
+	// rollover, a Normalize change all leave a healthy build line while every
+	// name silently falls through to the search. Unconditional, including the
+	// all-zero case, on the `il-start check:` / `mlb recency coverage:`
+	// precedent: this path's normal output is silence.
+	fmt.Fprintf(os.Stderr, "mlb id index: %d name(s) asked, %d answered by index, %d declined as contested, %d left to search\n",
+		len(deduped), answered, contested, len(searchNames))
+
+	if len(searchNames) == 0 {
+		return rp, nil
 	}
 
 	// Pass 1: the names exactly as the source spelled them.
@@ -230,7 +269,7 @@ func searchIDs(ctx context.Context, client *mlb.Client, searchNames []string) ([
 
 // hydrate bulk-fetches full person details for ids and indexes every name
 // variant, so legal and common spellings both resolve.
-func hydrate(ctx context.Context, client *mlb.Client, ids []int, rp *ResolvedPlayers, claimed map[string]bool) {
+func hydrate(ctx context.Context, client *mlb.Client, ids []int, rp *ResolvedPlayers, claimed map[string]nameClaim) {
 	const peopleBatchSize = 500
 	for i := 0; i < len(ids); i += peopleBatchSize {
 		end := i + peopleBatchSize
@@ -276,13 +315,51 @@ func searchWithRetry(ctx context.Context, client *mlb.Client, batch []string) ([
 	return nil, lastErr
 }
 
+// nameClaim records the standing of the player currently holding a name key.
+//
+// active drives the namesake rule in claimName. fromIndex marks a key the
+// season index answered, and it is what keeps the index's answer from being
+// overwritten by an incidental search collision: the index is consulted only
+// for names the caller ASKED about and answers only uncontested keys, whereas
+// hydrate indexes every person any search batch happened to return, so a
+// collision there is a byproduct rather than an answer.
+//
+// Without it the composition silently reintroduces rosterbot-bms: the zero
+// value of the old map[string]bool reads as "the incumbent is inactive", so ANY
+// search-hydrated namesake would overwrite an index answer — an active one
+// through claimName's standing branch, and a RETIRED one through the lower-ID
+// tie-break, retired namesakes usually carrying the lower ID (501447 < 514888
+// is the bead's own example).
+type nameClaim struct {
+	active    bool
+	fromIndex bool
+}
+
+// indexClaim projects one index-resolved player into the result under every
+// variant key the index holds solely for him, and pins those keys.
+//
+// It writes only MATCHED players, never the whole index. ResolvedPlayers is
+// serialised into the per-name-set `mlb-player-ids-<sha8>` cache entry, and
+// recap-site performs ~186 resolutions per build; dumping ~6,900 keys into each
+// would turn a handful of small files into hundreds of megabytes, on Fargate in
+// the S3 cache/ prefix.
+func indexClaim(rp *ResolvedPlayers, claimed map[string]nameClaim, ix seasonIndex, id int, full string) {
+	rp.ByID[id] = full
+	for _, k := range ix.variantKeys(id) {
+		rp.ByName[k] = id
+		// active is asserted, not inferred: measured live 2026-08-31, 0 of the
+		// 5,890 dump rows report active:false. Season membership IS the
+		// active filter.
+		claimed[k] = nameClaim{active: true, fromIndex: true}
+	}
+}
+
 // indexPerson adds all name variants for a player to the resolved maps.
 //
-// claimed tracks, per name key, whether the player currently holding it is
-// active; it is what makes a namesake collision resolve deterministically
-// instead of last-write-wins. Pass a fresh map alongside a fresh
-// ResolvedPlayers.
-func indexPerson(rp *ResolvedPlayers, p models.Person, claimed map[string]bool) {
+// claimed tracks, per name key, the standing of the player currently holding
+// it; it is what makes a namesake collision resolve deterministically instead
+// of last-write-wins. Pass a fresh map alongside a fresh ResolvedPlayers.
+func indexPerson(rp *ResolvedPlayers, p models.Person, claimed map[string]nameClaim) {
 	rp.ByID[p.ID] = p.FullName
 
 	fullNorm := Normalize(p.FullName)
@@ -322,18 +399,27 @@ func indexPerson(rp *ResolvedPlayers, p models.Person, claimed map[string]bool) 
 // Two ACTIVE namesakes are genuinely ambiguous from a name alone (MLB has had
 // two active Will Smiths), and this only guarantees the same answer every run,
 // not the right one.
-func claimName(rp *ResolvedPlayers, claimed map[string]bool, key string, p models.Person) {
+//
+// A key the season index already answered is never overwritten. The index only
+// answers uncontested keys for names the caller actually asked about, and every
+// player in it is in this season at an affiliated level; a person reaching
+// hydrate merely shares a variant spelling with him and was very often not
+// asked for at all, having ridden along in some other name's search batch.
+func claimName(rp *ResolvedPlayers, claimed map[string]nameClaim, key string, p models.Person) {
+	if claimed[key].fromIndex {
+		return
+	}
 	active := p.Active != nil && *p.Active
 	prevID, exists := rp.ByName[key]
 	if !exists {
 		rp.ByName[key] = p.ID
-		claimed[key] = active
+		claimed[key] = nameClaim{active: active}
 		return
 	}
-	if claimed[key] != active {
+	if claimed[key].active != active {
 		if active {
 			rp.ByName[key] = p.ID
-			claimed[key] = true
+			claimed[key] = nameClaim{active: true}
 		}
 		return
 	}

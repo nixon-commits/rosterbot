@@ -30,6 +30,23 @@ const (
 	// bot-blocking, so an hourly retry would lock the user out of their own
 	// account using credentials they handed us.
 	ConnNeedsReconnect ConnStatus = "needs_reconnect"
+
+	// ConnInterrupted: Fantrax ACCEPTED the sign-in and a step after it did not
+	// complete. The credentials are not implicated at all.
+	//
+	// It is not ConnNeedsReconnect because nothing about the password is in
+	// question — telling someone to re-enter working credentials is the exact
+	// failure ConnErrBotChallenge already exists to avoid, arriving by a
+	// different route (rosterbot-ch0s). It is not ConnPending either: pending
+	// means a verification is RUNNING, and settings.js renders it as "Checking
+	// your credentials…" with no bound, so a failure parked there is a spinner
+	// that never resolves.
+	//
+	// Usable() stays false, so AuthorizeRun and the tenant fan-out refuse it
+	// with no edit: the connection genuinely was not confirmed. What differs is
+	// what the tenant is told and what they are asked to do — retry, not
+	// re-enter.
+	ConnInterrupted ConnStatus = "interrupted"
 )
 
 // Connect failure classes. These are CLASSES, not messages: they are shown to
@@ -91,7 +108,60 @@ const (
 
 	// ConnErrTeamClaimed — another tenant already holds that team.
 	ConnErrTeamClaimed = "team_claimed"
+
+	// ConnErrVerificationInterrupted — the sign-in reached Fantrax and worked,
+	// and a step AFTER it did not finish: the identity call, the ownership
+	// lookup, the team claim, or sealing the session.
+	//
+	// It exists because those failures used to be laundered into a verdict
+	// about the tenant's password. A Fantrax 5xx inside the identity call
+	// landed on ConnErrBadCredentials — the harshest class in this vocabulary —
+	// and a blip fetching MyTeamIDs landed on ConnErrLoginChallengeOrTimeout;
+	// both then wrote ConnNeedsReconnect, telling someone whose credentials
+	// Fantrax had just accepted that those credentials no longer work
+	// (rosterbot-ch0s, audit 2026-08-17).
+	//
+	// THE EVIDENCE IS FANTRAX'S OWN: an FX_RM cookie. Fantrax issues one only
+	// once it has accepted a sign-in, so holding one is Fantrax stating the
+	// credentials are fine. Nothing here is inferred from the shape of an
+	// error, which is the guess ConnErrLoginChallengeOrTimeout's comment above
+	// forbids.
+	//
+	// The remedy is to retry, not to re-enter a password, which is why this is
+	// the one tenant-facing class whose connect task exits NON-ZERO: only the
+	// operator can act on a Fantrax outage, and the run ledger is where they
+	// hear about it.
+	ConnErrVerificationInterrupted = "verification_interrupted"
 )
+
+// What a single connect RUN concluded. Two values only, and deliberately not
+// the ConnStatus vocabulary above: a status describes the tenant NOW, a verdict
+// describes what one run decided, and conflating them is rosterbot-jg92.
+const (
+	ConnectVerdictVerified = "verified"
+	ConnectVerdictFailed   = "failed"
+)
+
+// ConnectRun is the connect run that last wrote this record, together with the
+// verdict IT reached — COPIED beside the run id, not referenced.
+//
+// THE COPY IS THE WHOLE DESIGN. Status and LastError on FantraxConnection are
+// CURRENT state and are also written by cmd/session_ladder.go's mid-job
+// re-login, which is not a connect at all. A bare run id beside them would let
+// the ladder's outcome be rendered on a connect row that succeeded —
+// rosterbot-jg92's own bug, one writer over. Because the verdict travels with
+// the id, a later writer that changes Status cannot re-attribute itself.
+//
+// Verdict is STAMPED EXPLICITLY by the writer, never derived from Status.
+// Deriving it would reintroduce the bug mirrored: on the operator-actionable
+// route (a Cloudflare block) cmd/connect.go deliberately leaves Status alone,
+// so a re-verify of an already-verified tenant would carry Status "verified"
+// into a run that failed and paged. LastError rides along for the label only.
+type ConnectRun struct {
+	RunID     string `json:"run_id"`
+	Verdict   string `json:"verdict"` // ConnectVerdictVerified | ConnectVerdictFailed
+	LastError string `json:"last_error,omitempty"`
+}
 
 // ErrNoConnection reports that a tenant has never connected Fantrax.
 var ErrNoConnection = errors.New("lineupapi: no fantrax connection for user")
@@ -116,6 +186,19 @@ type FantraxConnection struct {
 
 	Status    ConnStatus `json:"status"`
 	LastError string     `json:"last_error,omitempty"`
+
+	// LastConnectRun attributes the two fields above to the connect run that
+	// produced them, so GET /v1/runs can say what a specific row concluded
+	// instead of showing the ledger's exit status alone (rosterbot-jg92).
+	//
+	// Only the connect task writes it. cmd/session_ladder.go reads this record
+	// and Puts the whole struct back, so it PRESERVES the stamp while replacing
+	// Status/LastError — which is correct: an ordinary scheduled run must not
+	// take credit or blame on a connect row.
+	//
+	// Nil on every record written before this field existed, and nil is read as
+	// "we cannot attribute an outcome", never as success.
+	LastConnectRun *ConnectRun `json:"last_connect_run,omitempty"`
 
 	LastVerifiedAt time.Time `json:"last_verified_at,omitempty"`
 	UpdatedAt      time.Time `json:"updated_at"`
