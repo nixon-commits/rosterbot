@@ -94,7 +94,25 @@ function fantraxCard(me) {
   const badge = el("span", "badge " + tone, label);
   c.append(badge);
 
-  if (conn && conn.last_error) {
+  // A last_error on a VERIFIED connection is not something the tenant can act
+  // on, and telling them otherwise is actively harmful. cmd/session_ladder.go's
+  // stop() writes conn.LastError on all three of its routes but only moves the
+  // status on the tenant-actionable one, so both the operator route
+  // (bot_challenge) and the post-auth route (verification_interrupted, added by
+  // rosterbot-ch0s) leave a verified connection carrying a class. Rendering
+  // FAILURE_COPY there put a red "Try connecting again in a minute" under a
+  // green "Connected" badge — and that retry is a fresh chromedp login, which
+  // is the documented Fantrax lockout trigger. The connection works and the
+  // next scheduled run retries the refresh on its own.
+  //
+  // Still said, not swallowed: the note names the refresh so a tenant looking
+  // at the page during an outage is not told everything is fine. Degrade to
+  // noise, never to silence.
+  if (conn && conn.last_error && conn.status === "verified") {
+    c.append(el("p", "muted small",
+      "A background session refresh did not finish. rosterbot is still " +
+      "connected and will retry on its own — there is nothing to do here."));
+  } else if (conn && conn.last_error) {
     c.append(el("p", "error", FAILURE_COPY[conn.last_error] || conn.last_error));
   }
   if (conn && conn.last_verified_at && conn.status === "verified") {

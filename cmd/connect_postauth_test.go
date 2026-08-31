@@ -165,12 +165,22 @@ func TestConnectTenant_IdentityFailureAfterAProvenCookieIsRetryable(t *testing.T
 // TestConnectTenant_NoPostProofFailureIsLeftPending covers finding 3 of the
 // bead across every failure that can happen after the proof.
 //
-// NAMED FOR WHAT IT COVERS, not for a universal it does not: the failures
-// BEFORE the login (KMS Open, a malformed credential blob, an unreadable store)
+// NAMED FOR WHAT IT COVERS, not for a universal it does not. Two sets of paths
 // still return with the record at ConnPending, which settings.js renders as
-// "Checking your credentials…" indefinitely. Those are out of this bead's scope
-// and are recorded as follow-up work; what is closed here is every path past
-// the point where Fantrax accepted the sign-in.
+// "Checking your credentials…" indefinitely:
+//
+//   - BEFORE the login — KMS Open, a malformed credential blob, an unreadable
+//     store.
+//   - AFTER the proof, and deliberately — the ErrUserConflict row of
+//     TestConnectTenant_ClaimTeamErrorsAreSplitThreeWays asserts wantWrite
+//     false, because a missing profile is our bug and not a transient; plus
+//     markVerified's two refusals and PutConnection's own failure, where there
+//     is either a programmer error or no writable store to record anything in.
+//
+// So this is NOT "every path past the point where Fantrax accepted the
+// sign-in". What it closes is every post-proof path that has something true to
+// record and a working store to record it in — which is the set the bead's
+// finding 3 was about. The residual pending paths are follow-up work.
 func TestConnectTenant_NoPostProofFailureIsLeftPending(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

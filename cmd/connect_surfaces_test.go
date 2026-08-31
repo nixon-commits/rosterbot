@@ -61,9 +61,20 @@ func TestConnectStatusReachesEveryRenderingSurface(t *testing.T) {
 			// A page that re-declared its own copy would drift from the feed's
 			// wording in cmd/connect_feed.go and from the other page's.
 			file: "settings.js",
-			want: []string{`from "./connstate.js"`},
+			want: []string{
+				`from "./connstate.js"`,
+				// The failure paragraph is gated on the status, not on the
+				// presence of a class. session_ladder.go's stop() writes
+				// conn.LastError on all three routes but moves the status only
+				// on the tenant-actionable one, so an ungated render puts a red
+				// "Try connecting again in a minute" under a green "Connected"
+				// badge — and that retry is a fresh chromedp login, the
+				// documented Fantrax lockout trigger.
+				`conn.last_error && conn.status === "verified"`,
+			},
 			why: "the account page must render the shared connection vocabulary rather " +
-				"than a private copy of it",
+				"than a private copy of it, and must not invite a reconnect on a " +
+				"connection that is verified and working",
 		},
 		{
 			file: "runs.js",
