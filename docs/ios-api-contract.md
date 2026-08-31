@@ -102,6 +102,32 @@ Run history (scheduled + manual), newest first.
 - `trigger`: `schedule` | `manual`.
 - "Errors" view = filter to `status == "FAILED"`.
 - Optional `?limit=N` (default 25, max 200).
+- `connect`: **optional object, present only on `connect …` rows** — what the
+  connect task itself concluded, joined at read time from the caller's
+  connection record.
+
+  ```json
+  { "connect": { "verdict": "failed", "last_error": "no_team" } }
+  ```
+
+  - `verdict`: `verified` | `failed`. **Colour on this and nothing else.**
+  - `last_error`: a connect failure class (`bad_credentials`,
+    `two_factor_required`, `bot_challenge`, `login_challenge_or_timeout`,
+    `team_not_owned`, `no_team`, `team_claimed`, `verification_interrupted`),
+    omitted on a `verified` verdict. Treat an unrecognised class as a failure
+    with an unknown reason rather than dropping the row's failure state.
+  - **`status` and `verdict` legitimately disagree.** A connect that fails for a
+    reason only the tenant can fix exits 0 on purpose, so opsalert does not page
+    the operator for something the operator cannot fix — such a row is
+    `"status": "SUCCESS"` with `"verdict": "failed"`. Render both.
+  - **An ABSENT `connect` means "no connection outcome is attributable to this
+    run", never "it succeeded."** It is omitted for non-connect rows, for a
+    caller with no user identity (the bearer token), when the connection store
+    is unreachable, and for any connect row older than the newest one recorded
+    — only the most recent connect run per tenant carries a verdict.
+  - It may appear on a `RUNNING` row: the connect task writes its outcome before
+    it exits and the terminal ledger row lands afterwards, so in that window the
+    verdict is the fresher fact.
 
 ### `GET /v1/runs/{id}`
 
@@ -113,7 +139,11 @@ One run plus its captured output tail.
   "log_tail": "...last ~50 lines of output..." }
 ```
 
-- `log_tail` is populated on failures (empty/omitted otherwise).
+- `log_tail` is populated on failures (empty/omitted otherwise). A connect that
+  exits 0 on a tenant-actionable failure therefore has none; `connect` below is
+  the diagnosis for that case.
+- `connect`: the same optional object as on `GET /v1/runs`, with the same rules.
+  `RunDetail` embeds `Run`, so both endpoints carry it.
 - `id` is the ECS task id — the same id `POST /v1/jobs` returns, so you can poll
   this endpoint for a run you just triggered. (Right after a POST it may `404`
   for a few seconds until the task starts; treat that as still `RUNNING`.)

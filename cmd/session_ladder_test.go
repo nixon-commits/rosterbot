@@ -489,3 +489,56 @@ func TestSessionLadder_PostAuthFailureLeavesTheTenantAlone(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionLadderStop_DoesNotClaimTheConnectRow turns cmd/session_ladder.go's
+// prose into a checked rule.
+//
+// stop() reads the connection record and Puts the whole struct back, so it
+// PRESERVES the connect stamp while replacing Status/LastError. That is what
+// makes rosterbot-jg92's design safe: this is an ordinary scheduled run, not a
+// connect, and a re-login failure inside `optimize` must not re-label a connect
+// row that succeeded. The paired verdict (rather than a bare run id beside a
+// mutable Status) is what makes the misattribution structurally impossible.
+func TestSessionLadderStop_DoesNotClaimTheConnectRow(t *testing.T) {
+	t.Setenv("RUN_ID", "optimize-run-7")
+
+	conn := connFor(t, "alice", lineupapi.ConnVerified)
+	stamp := lineupapi.ConnectRun{
+		RunID: "connect-run-1", Verdict: lineupapi.ConnectVerdictVerified,
+	}
+	conn.LastConnectRun = &stamp
+	conns := &recordingConns{conn: conn}
+	var log bytes.Buffer
+	lad := sessionLadder{
+		conns:  conns,
+		sealer: stubSealer{},
+		feed:   &memFeed{},
+		out:    &log,
+		probe:  func(string) error { return errors.New("fantrax API error WARNING_NOT_LOGGED_IN: x") },
+		mint: func(lineupapi.FantraxCreds) loginEvidence {
+			return loginEvidence{
+				Matched: map[string]bool{"login_form": true, "form_error": true},
+				Texts:   map[string]string{"form_error": "Invalid username or password"},
+			}
+		},
+	}
+
+	if err := lad.refresh(context.Background(), "alice", tenantCfg()); err == nil {
+		t.Fatal("refresh accepted a failed re-login")
+	}
+	if len(conns.put) != 1 {
+		t.Fatalf("wrote the record %d times; want 1", len(conns.put))
+	}
+	got := conns.put[0]
+	if got.LastConnectRun == nil {
+		t.Fatal("the ladder dropped the connect stamp; the connect row loses its verdict for good")
+	}
+	if *got.LastConnectRun != stamp {
+		t.Fatalf("stamp = %+v, want the untouched %+v — an optimize run must not take blame "+
+			"on a connect row", *got.LastConnectRun, stamp)
+	}
+	if got.Status != lineupapi.ConnNeedsReconnect || got.LastError != lineupapi.ConnErrBadCredentials {
+		t.Fatalf("the ladder's own outcome did not land: status %q error %q",
+			got.Status, got.LastError)
+	}
+}

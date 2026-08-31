@@ -9,6 +9,10 @@ import { api, ApiError } from "./api.js";
 import { renderLeaguesSection } from "./leagues.js";
 import { renderPasskeysSection } from "./passkeys.js";
 import { el } from "./render.js";
+// CONNECTION_COPY and FAILURE_COPY moved to connstate.js when the Runs tab
+// started rendering the same vocabulary (rosterbot-jg92); two copies would let
+// Settings and Runs disagree about what went wrong.
+import { CONNECTION_COPY, FAILURE_COPY } from "./connstate.js";
 
 function card(title) {
   const c = el("section", "card");
@@ -33,45 +37,6 @@ function kvTable(pairs) {
   t.append(body);
   return t;
 }
-
-// CONNECTION_COPY is what each state means to the person reading it, not what
-// it means to the system. "needs_reconnect" is a status; "your saved password
-// no longer works" is an answer.
-const CONNECTION_COPY = {
-  verified: ["Connected", "badge-ok"],
-  pending: ["Checking your credentials…", "badge-info"],
-  needs_reconnect: ["Not connected — your saved credentials no longer work", "badge-failed"],
-  // badge-info, not badge-failed: nothing on the tenant's side failed. Fantrax
-  // accepted the sign-in and a step after it did not finish (rosterbot-ch0s).
-  interrupted: ["Not connected — the last check did not finish", "badge-info"],
-};
-
-// FAILURE_COPY translates a ConnErr class into something actionable. The
-// classes exist precisely so a user can be told which of these happened rather
-// than "connection failed"; leaving them untranslated here would give that away
-// at the last step.
-const FAILURE_COPY = {
-  bad_credentials: "Fantrax rejected that username or password.",
-  two_factor_required:
-    "Fantrax asked for a two-factor code. rosterbot cannot answer one, so this " +
-    "account can only be connected with two-factor auth turned off.",
-  bot_challenge:
-    "Fantrax blocked the sign-in as automated traffic. This one is not your " +
-    "fault and not something you can fix — it has been reported.",
-  login_challenge_or_timeout:
-    "The sign-in did not complete and Fantrax did not say why. Trying again " +
-    "sometimes works.",
-  team_not_owned: "Those credentials do not control the team you were invited for.",
-  no_team:
-    "Your Fantrax sign-in worked. What's missing is a team: this account has " +
-    "no Fantrax team assigned, and only an admin can assign one — re-entering " +
-    "your password won't change this.",
-  team_claimed: "That Fantrax team is already claimed by another account.",
-  verification_interrupted:
-    "Your Fantrax sign-in worked — your password is not the problem. Something " +
-    "after it did not finish, so the connection is not confirmed yet. Try " +
-    "connecting again in a minute.",
-};
 
 export async function renderSettings(root) {
   let me;

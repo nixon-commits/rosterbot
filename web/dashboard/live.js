@@ -55,7 +55,15 @@ async function pollRuns() {
   for (const r of runs) {
     const prev = lastStatus.get(r.id);
     if (prev === "RUNNING" && r.status !== "RUNNING") {
-      toast(`${r.command.split(" ")[0]} ${r.status === "SUCCESS" ? "finished" : "failed"}`, r.status === "SUCCESS" ? "ok" : "fail");
+      // THIS IS THE FIRST SIGNAL A USER SEES after pressing Connect on the
+      // Settings page, so it is the first place the exit-0 routing misleads
+      // them: a connect that failed for a reason only they can fix exits 0 on
+      // purpose, and a toast reading the ledger status alone said "connect
+      // finished" in green (rosterbot-jg92). r.connect is what the connect task
+      // itself concluded; it is absent on every other job and on a connect run
+      // we cannot attribute, in which case the ledger status is all there is.
+      const failed = r.status !== "SUCCESS" || (r.connect && r.connect.verdict !== "verified");
+      toast(`${r.command.split(" ")[0]} ${failed ? "failed" : "finished"}`, failed ? "fail" : "ok");
     }
     lastStatus.set(r.id, r.status);
   }

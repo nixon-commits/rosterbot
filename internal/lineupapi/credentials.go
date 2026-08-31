@@ -134,6 +134,35 @@ const (
 	ConnErrVerificationInterrupted = "verification_interrupted"
 )
 
+// What a single connect RUN concluded. Two values only, and deliberately not
+// the ConnStatus vocabulary above: a status describes the tenant NOW, a verdict
+// describes what one run decided, and conflating them is rosterbot-jg92.
+const (
+	ConnectVerdictVerified = "verified"
+	ConnectVerdictFailed   = "failed"
+)
+
+// ConnectRun is the connect run that last wrote this record, together with the
+// verdict IT reached — COPIED beside the run id, not referenced.
+//
+// THE COPY IS THE WHOLE DESIGN. Status and LastError on FantraxConnection are
+// CURRENT state and are also written by cmd/session_ladder.go's mid-job
+// re-login, which is not a connect at all. A bare run id beside them would let
+// the ladder's outcome be rendered on a connect row that succeeded —
+// rosterbot-jg92's own bug, one writer over. Because the verdict travels with
+// the id, a later writer that changes Status cannot re-attribute itself.
+//
+// Verdict is STAMPED EXPLICITLY by the writer, never derived from Status.
+// Deriving it would reintroduce the bug mirrored: on the operator-actionable
+// route (a Cloudflare block) cmd/connect.go deliberately leaves Status alone,
+// so a re-verify of an already-verified tenant would carry Status "verified"
+// into a run that failed and paged. LastError rides along for the label only.
+type ConnectRun struct {
+	RunID     string `json:"run_id"`
+	Verdict   string `json:"verdict"` // ConnectVerdictVerified | ConnectVerdictFailed
+	LastError string `json:"last_error,omitempty"`
+}
+
 // ErrNoConnection reports that a tenant has never connected Fantrax.
 var ErrNoConnection = errors.New("lineupapi: no fantrax connection for user")
 
@@ -157,6 +186,19 @@ type FantraxConnection struct {
 
 	Status    ConnStatus `json:"status"`
 	LastError string     `json:"last_error,omitempty"`
+
+	// LastConnectRun attributes the two fields above to the connect run that
+	// produced them, so GET /v1/runs can say what a specific row concluded
+	// instead of showing the ledger's exit status alone (rosterbot-jg92).
+	//
+	// Only the connect task writes it. cmd/session_ladder.go reads this record
+	// and Puts the whole struct back, so it PRESERVES the stamp while replacing
+	// Status/LastError — which is correct: an ordinary scheduled run must not
+	// take credit or blame on a connect row.
+	//
+	// Nil on every record written before this field existed, and nil is read as
+	// "we cannot attribute an outcome", never as success.
+	LastConnectRun *ConnectRun `json:"last_connect_run,omitempty"`
 
 	LastVerifiedAt time.Time `json:"last_verified_at,omitempty"`
 	UpdatedAt      time.Time `json:"updated_at"`

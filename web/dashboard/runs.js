@@ -2,6 +2,7 @@
 // idle), a per-run detail + output viewer, and the notifications activity feed.
 import { api, ApiError } from "./api.js";
 import { renderAuto, escapeHtml, relativeTime } from "./render.js";
+import { CONNECT_CHIP, FAILURE_COPY } from "./connstate.js";
 
 const POLL_MS = 5000;
 const IDLE_POLL_MS = 30000;
@@ -98,6 +99,10 @@ async function loadRuns(container, detailSection, silent) {
       <td class="col-secondary">${escapeHtml(runDuration(run))}</td>
       <td class="col-secondary">${escapeHtml(run.trigger)}</td>
     `;
+    // Appended into the Status cell rather than added as a column: a fifth
+    // column already overflowed a 343px window (see the header comment above).
+    const chip = connectChip(run);
+    if (chip) tr.cells[1].append(" ", chip);
     tr.addEventListener("click", () => showDetail(detailSection, run.id));
     tbody.appendChild(tr);
   }
@@ -107,6 +112,46 @@ async function loadRuns(container, detailSection, silent) {
   wrap.appendChild(table);
   container.appendChild(wrap);
   return runs;
+}
+
+// connectChip renders what the CONNECT TASK concluded, beside the ledger status
+// it contradicts.
+//
+// A connect that fails for a reason only the tenant can fix exits 0 on purpose,
+// so opsalert does not page the operator for something the operator cannot fix
+// — which makes the Status cell read SUCCESS above an Activity entry saying the
+// connection failed (rosterbot-jg92). The verdict is the other half.
+//
+// ABSENT MEANS "NOT ATTRIBUTABLE", NEVER "SUCCEEDED": the API omits `connect`
+// unless the tenant's connection record names this exact run, so an older
+// connect row and every non-connect row correctly say nothing.
+//
+// Coloured on `verdict` alone. The tenant's live connection status is
+// deliberately not on the wire: on the operator-actionable route the connect
+// task leaves it untouched, so it can still read "verified" on a run that
+// failed and paged.
+//
+// Built with createElement/textContent rather than a template string because
+// last_error is a server string that reaches a title attribute — render.js's
+// escapeHtml does cover quotes now, but that comment still asks new code to use
+// the DOM API.
+function connectChip(run) {
+  const c = run.connect;
+  if (!c) return null;
+  const span = document.createElement("span");
+  if (c.verdict === "verified") {
+    span.className = "badge badge-ok";
+    span.textContent = "connected";
+    return span;
+  }
+  span.className = "badge badge-failed";
+  // An unrecognised class falls back to the raw string, and an outcome with no
+  // class at all still says the connection failed: degrade to noise, never to
+  // silence.
+  const why = c.last_error ? ": " + (CONNECT_CHIP[c.last_error] || c.last_error) : "";
+  span.textContent = "connection failed" + why;
+  if (c.last_error && FAILURE_COPY[c.last_error]) span.title = FAILURE_COPY[c.last_error];
+  return span;
 }
 
 function hasRunningRun(runs) {
@@ -154,6 +199,12 @@ async function showDetail(section, id) {
     <p>Status: <span class="badge badge-${escapeHtml(detail.status.toLowerCase())}">${escapeHtml(detail.status)}</span> · Trigger: ${escapeHtml(detail.trigger)}</p>
     <p class="muted">Started ${escapeHtml(detail.started_at)}${detail.ended_at ? " · Ended " + escapeHtml(detail.ended_at) : ""}</p>
   `;
+  const chip = connectChip(detail);
+  if (chip) {
+    const p = document.createElement("p");
+    p.append(chip);
+    card.append(p);
+  }
   if (detail.log_tail) {
     const pre = document.createElement("pre");
     pre.textContent = detail.log_tail;

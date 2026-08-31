@@ -36,9 +36,19 @@ func (s *recordingSealer) Seal(_ context.Context, uid UserID, plaintext []byte) 
 type memConnections struct {
 	conn *FantraxConnection
 	err  error
+
+	// getErr and gets exist for the runs-annotation tests: one asserts that a
+	// store failure still serves the rows, the other that the store is not
+	// consulted when no row could use the answer.
+	getErr error
+	gets   int
 }
 
 func (m *memConnections) GetConnection(context.Context, UserID) (*FantraxConnection, bool, error) {
+	m.gets++
+	if m.getErr != nil {
+		return nil, false, m.getErr
+	}
 	if m.conn == nil {
 		return nil, false, nil
 	}

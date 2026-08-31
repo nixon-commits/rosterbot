@@ -143,6 +143,36 @@ func (c connectRun) w() io.Writer {
 	return os.Stdout
 }
 
+// record is the ONLY way this task writes a connection record.
+//
+// It stamps the run in the SAME write that sets the outcome, so the two cannot
+// come apart. That is what lets GET /v1/runs say what a specific connect row
+// concluded rather than showing the ledger's exit status, which reads SUCCESS
+// on every tenant-actionable failure by design (rosterbot-jg92).
+//
+// THE VERDICT IS A PARAMETER, NOT conn.Status. On the operator-actionable route
+// fail() deliberately leaves Status alone, so a re-verify of an already-
+// verified tenant would carry "verified" into a run that failed and paged —
+// this bead's own bug, mirrored. Only the call site knows which route it is on.
+//
+// The run id is read here rather than passed in: a parameter is something a
+// call site can forget, and runConnect itself needs DynamoDB, KMS and a
+// headless browser, so no test can drive its call sites.
+//
+// With no RUN_ID (a hand-run task) it leaves any existing stamp ALONE rather
+// than clearing it. The older stamp still states truly what THAT run concluded,
+// and the read side matches on id, so it can never be shown against this one.
+func (c connectRun) record(verdict string) error {
+	if id := os.Getenv("RUN_ID"); id != "" {
+		c.conn.LastConnectRun = &lineupapi.ConnectRun{
+			RunID:     id,
+			Verdict:   verdict,
+			LastError: c.conn.LastError,
+		}
+	}
+	return c.conns.PutConnection(c.ctx, c.conn)
+}
+
 // connectVerdict is a failure class plus whatever the route it implies needs.
 //
 // It replaced a bare `class string` so that reverting a call site to
@@ -236,7 +266,7 @@ func (c connectRun) fail(v connectVerdict) error {
 	c.conn.LastError = v.class
 	switch route {
 	case routeOperator:
-		if err := c.conns.PutConnection(c.ctx, c.conn); err != nil {
+		if err := c.record(lineupapi.ConnectVerdictFailed); err != nil {
 			return err
 		}
 		return fmt.Errorf("connect: %s for %s (operator action required; "+
@@ -244,7 +274,7 @@ func (c connectRun) fail(v connectVerdict) error {
 
 	case routePostAuth:
 		c.conn.Status = lineupapi.ConnInterrupted
-		if err := c.conns.PutConnection(c.ctx, c.conn); err != nil {
+		if err := c.record(lineupapi.ConnectVerdictFailed); err != nil {
 			return err
 		}
 		// Printed as well as returned, and they are not redundant. This line is
@@ -259,7 +289,7 @@ func (c connectRun) fail(v connectVerdict) error {
 
 	default:
 		c.conn.Status = lineupapi.ConnNeedsReconnect
-		if err := c.conns.PutConnection(c.ctx, c.conn); err != nil {
+		if err := c.record(lineupapi.ConnectVerdictFailed); err != nil {
 			return err
 		}
 		fmt.Fprintf(c.w(), "connect failed for %s: %s\n", c.uid, v.class)
@@ -428,7 +458,7 @@ func (p provenRun) finish(info *fantraxUserInfo) error {
 	// Kept as a raw error deliberately: the store itself is unwritable, so
 	// there is nothing to write the outcome ONTO and the non-zero exit is the
 	// only honest channel left.
-	if err := c.conns.PutConnection(c.ctx, c.conn); err != nil {
+	if err := c.record(lineupapi.ConnectVerdictVerified); err != nil {
 		return err
 	}
 

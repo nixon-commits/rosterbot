@@ -259,7 +259,7 @@ func (cfg Config) handleRuns(w http.ResponseWriter, r *http.Request) {
 	if runs == nil {
 		runs = []Run{}
 	}
-	writeJSON(w, http.StatusOK, RunsResponse{Runs: runs})
+	writeJSON(w, http.StatusOK, RunsResponse{Runs: cfg.annotateConnectRuns(r.Context(), runs)})
 }
 
 func (cfg Config) handleRunDetail(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +281,15 @@ func (cfg Config) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "run not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	// Copied before annotating: the store may hand back a pointer into state it
+	// retains. RunDetail embeds Run, so the detail view costs exactly what the
+	// list view does — one connection read — and a detail-only or list-only fix
+	// would leave the other screen contradicting itself.
+	out := *detail
+	if lr := cfg.lastConnectRun(r.Context(), []Run{out.Run}); lr != nil {
+		applyConnectOutcome(&out.Run, lr)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (cfg Config) handleRunOutput(w http.ResponseWriter, r *http.Request) {

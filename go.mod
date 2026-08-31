@@ -12,6 +12,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.2
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.73.6
 	github.com/aws/smithy-go v1.27.8
+	github.com/chromedp/cdproto v0.0.0-20260427013145-5737772c319b
 	github.com/go-webauthn/webauthn v0.17.4
 	github.com/joho/godotenv v1.5.1
 	github.com/pmurley/go-fantrax v0.1.16
@@ -39,7 +40,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.33.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.6 // indirect
-	github.com/chromedp/cdproto v0.0.0-20260427013145-5737772c319b // indirect
 	github.com/chromedp/chromedp v0.15.1 // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect

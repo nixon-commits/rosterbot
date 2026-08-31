@@ -36,15 +36,40 @@ func TestConnectStatusReachesEveryRenderingSurface(t *testing.T) {
 		why  string
 	}{
 		{
-			file: "settings.js",
+			// The three maps moved out of settings.js into connstate.js when the
+			// Runs tab started rendering the same vocabulary (rosterbot-jg92).
+			// The guard follows the copy: this file is now what both the tenant's
+			// account page and the runs chip read.
+			file: "connstate.js",
 			want: []string{
 				// CONNECTION_COPY: the badge and its wording.
 				`  interrupted: [`,
 				// FAILURE_COPY: what the class means to the person reading it.
-				`  ` + lineupapi.ConnErrVerificationInterrupted + `:`,
+				// The key sits alone on its line above a wrapped sentence, which
+				// is what distinguishes it from the terse map below.
+				`  ` + lineupapi.ConnErrVerificationInterrupted + ":\n",
+				// CONNECT_CHIP: the short form the runs table can fit. Its value
+				// is a single string on the same line as the key.
+				`  ` + lineupapi.ConnErrVerificationInterrupted + `: "`,
 			},
 			why: "the tenant's own account page renders an unknown status as the raw " +
-				"string and an unknown class as the raw class",
+				"string and an unknown class as the raw class, and the runs chip " +
+				"falls back to the raw class with no short label",
+		},
+		{
+			// settings.js and runs.js must keep READING that shared vocabulary.
+			// A page that re-declared its own copy would drift from the feed's
+			// wording in cmd/connect_feed.go and from the other page's.
+			file: "settings.js",
+			want: []string{`from "./connstate.js"`},
+			why: "the account page must render the shared connection vocabulary rather " +
+				"than a private copy of it",
+		},
+		{
+			file: "runs.js",
+			want: []string{`from "./connstate.js"`, `run.connect`},
+			why: "without the connect verdict the Runs tab shows only the task exit " +
+				"status, which reads SUCCESS on every tenant-actionable connect failure",
 		},
 		{
 			file: "tenants.js",
