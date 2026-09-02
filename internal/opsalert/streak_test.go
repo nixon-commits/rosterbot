@@ -11,6 +11,12 @@ func recU(command, user, status string) Record {
 	return Record{ID: command + "-" + user + "-" + status, Command: command, UserID: user, Status: status}
 }
 
+// recO is rec for a SUCCESS record carrying an outcome — an exit-0 connect
+// run that left the tenant needing to act.
+func recO(command, status, outcome string) Record {
+	return Record{ID: command + "-" + status + "-" + outcome, Command: command, Status: status, Outcome: outcome}
+}
+
 // hist builds a newest-first history for one command from a status string,
 // where 'F' is FAILED, 'S' is SUCCESS and 'R' is RUNNING. Left-most is newest.
 func hist(command, statuses string) []Record {
@@ -229,5 +235,80 @@ func TestStreak_ReplaysTheRealIncident(t *testing.T) {
 	// And the recovery reports the true streak length.
 	if v := Streak(ledger, optimize, ""); v.Streak != 11 {
 		t.Errorf("recovered streak = %d, want 11", v.Streak)
+	}
+}
+
+// TestStreak_FlappingTenantFaultsDoNotDefeatEscalation is rosterbot-cnn9's
+// stronger variant: a connect that fails for an operator-actionable reason
+// (an unreachable Fantrax, no proven cookie) exits non-zero and pages, but
+// login_challenge_or_timeout — the SAME class an unreachable Fantrax produces
+// — routes to the tenant and exits 0. During one continuous outage that
+// alternates between the two, every SUCCESS row used to break the failure
+// streak and EscalateAt was never reached. With the outcome dropped from
+// grading, the three operator failures still count as three in a row.
+func TestStreak_FlappingTenantFaultsDoNotDefeatEscalation(t *testing.T) {
+	const cmd = "connect --user u1"
+	recs := []Record{ // newest first
+		rec(cmd, StatusFailed),
+		recO(cmd, StatusSuccess, OutcomeTenantActionable),
+		rec(cmd, StatusFailed),
+		recO(cmd, StatusSuccess, OutcomeTenantActionable),
+		rec(cmd, StatusFailed), // oldest
+	}
+	got := Streak(recs, cmd, "")
+	if got.Kind != Escalated || got.Streak != 3 {
+		t.Fatalf("Kind=%v Streak=%d, want Escalated/3 — a flapping outage must still escalate",
+			got.Kind, got.Streak)
+	}
+}
+
+// TestStreak_NewestTenantActionableSuccessIsNoneNotRecovered is the bead's
+// headline case: the newest row is an exit-0 connect that demoted the tenant,
+// sitting on top of an operator failure. It must not read as a recovery —
+// that run said nothing about whether the operator-facing outage cleared.
+func TestStreak_NewestTenantActionableSuccessIsNoneNotRecovered(t *testing.T) {
+	const cmd = "connect --user u1"
+	recs := []Record{ // newest first
+		recO(cmd, StatusSuccess, OutcomeTenantActionable),
+		rec(cmd, StatusFailed),
+	}
+	got := Streak(recs, cmd, "")
+	if got.Kind != None {
+		t.Fatalf("Kind = %v, want None (not Recovered): an exit-0 tenant-actionable run is not "+
+			"evidence the operator-facing outage recovered", got.Kind)
+	}
+}
+
+// TestStreak_OrdinarySuccessStillRecovers is the ABSENCE assertion: a plain
+// SUCCESS with no outcome set — every record ever written before this bead,
+// and every non-connect command today — must be untouched by the new
+// handling and keep recovering exactly as before.
+func TestStreak_OrdinarySuccessStillRecovers(t *testing.T) {
+	const cmd = "connect --user u1"
+	recs := []Record{ // newest first
+		rec(cmd, StatusSuccess),
+		rec(cmd, StatusFailed),
+	}
+	got := Streak(recs, cmd, "")
+	if got.Kind != Recovered || got.Streak != 1 {
+		t.Fatalf("Kind=%v Streak=%d, want Recovered/1", got.Kind, got.Streak)
+	}
+}
+
+// TestStreak_OnlyTenantActionableSuccessesIsAlwaysNone: a tenant who has never
+// had an operator-actionable connect failure, only ever tenant faults, must
+// never read as Started/Escalated/Recovered — there is no operator-facing
+// streak underneath these runs at all.
+func TestStreak_OnlyTenantActionableSuccessesIsAlwaysNone(t *testing.T) {
+	const cmd = "connect --user u1"
+	recs := []Record{ // newest first
+		recO(cmd, StatusSuccess, OutcomeTenantActionable),
+		recO(cmd, StatusSuccess, OutcomeTenantActionable),
+		recO(cmd, StatusSuccess, OutcomeTenantActionable),
+	}
+	for i := range recs {
+		if got := Streak(recs[i:], cmd, ""); got.Kind != None {
+			t.Errorf("record %d: Kind = %v, want None", i, got.Kind)
+		}
 	}
 }
