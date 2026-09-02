@@ -158,6 +158,13 @@ var (
 	// league, not of the manager asking. If this deployment ever spans more
 	// than one Fantrax league, both artifacts need a league segment together.
 	AvailablePool = Artifact{Name: "Available Player Pool", S3Prefix: "pool/", LocalDir: ".pool", Durable: true, MaxAge: 26 * time.Hour, Producer: "TeamValues"}
+	// RosterValues backs the app's My Team screen: every rostered player joined
+	// onto HKB value and 30-day momentum, ONE OBJECT PER TEAM keyed by Fantrax
+	// team id. Produced by TeamValues beside AvailablePool for the same reason
+	// and with the same 26h tolerance. NOT PerTenant, like its two siblings: a
+	// team's roster is a property of the league, and which team is YOURS is
+	// resolved at read time by GET /v1/roster/values.
+	RosterValues = Artifact{Name: "Roster Values", S3Prefix: "roster/", LocalDir: ".roster", Durable: true, MaxAge: 26 * time.Hour, Producer: "TeamValues"}
 
 	TradeOffers = Artifact{Name: "Trade Offer Log", S3Prefix: "analysis/trade-offers/", LocalDir: ".tradeoffers", Durable: true, MaxAge: 2 * Day, Producer: "Lineup", Partitioned: true, NoBackfill: true, PerTenant: true}
 
@@ -315,7 +322,7 @@ var (
 func All() []Artifact {
 	return []Artifact{
 		TeamValues, TradeOffers, Analysis, LineupGaps, FootballValues, Archive, Backtest,
-		Lineup, Trades, TradeValues, AvailablePool, Reports, RunLedger, RunOutput, Notification, Claims,
+		Lineup, Trades, TradeValues, AvailablePool, RosterValues, Reports, RunLedger, RunOutput, Notification, Claims,
 		Session, Cache, TenantRoster,
 	}
 }

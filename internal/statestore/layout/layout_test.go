@@ -21,6 +21,7 @@ func TestAll_CoversEveryKnownPrefix(t *testing.T) {
 		"backtest/",
 		"claims/",
 		"session/",
+		"roster/",
 	}
 	got := map[string]bool{}
 	for _, a := range All() {

@@ -77,6 +77,7 @@ var (
 	tradesArtifact           = of(layout.Trades)
 	tradeValuesArtifact      = of(layout.TradeValues)
 	availablePoolArtifact    = of(layout.AvailablePool)
+	rosterValuesArtifact     = of(layout.RosterValues)
 	tradeOfferArtifact       = of(layout.TradeOffers)
 	reportsArtifact          = of(layout.Reports)
 	footballTradesArtifact   = of(layout.FootballTrades)
@@ -391,6 +392,13 @@ func (s *Selector) TradeValuesStore() (lineupapi.BlobStore, error) {
 // rewritten daily by the TeamValues job.
 func (s *Selector) AvailablePoolStore() (lineupapi.BlobStore, error) {
 	return blobStore(s, availablePoolArtifact, "pool-")
+}
+
+// RosterValuesStore holds one object per Fantrax team (roster/<team_id>.json),
+// rewritten daily by the TeamValues job. The key is the team id; the API
+// resolves which one is the caller's.
+func (s *Selector) RosterValuesStore() (lineupapi.BlobStore, error) {
+	return blobStore(s, rosterValuesArtifact, "roster-")
 }
 
 // ReportsStore holds the three private dashboard reports (reports/model.json,
