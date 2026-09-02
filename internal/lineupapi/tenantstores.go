@@ -27,6 +27,7 @@ type TenantView struct {
 	Trades        ObjectStore
 	TradeValues   ObjectStore
 	AvailablePool ObjectStore
+	RosterValues  ObjectStore
 	Reports       ObjectStore
 }
 
@@ -63,6 +64,7 @@ func (cfg Config) tenantView(ctx context.Context) (TenantView, bool) {
 			Trades:        cfg.Trades,
 			TradeValues:   cfg.TradeValues,
 			AvailablePool: cfg.AvailablePool,
+			RosterValues:  cfg.RosterValues,
 			Reports:       cfg.Reports,
 		}, true
 	}

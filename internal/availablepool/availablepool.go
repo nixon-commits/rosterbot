@@ -74,7 +74,7 @@ type Player struct {
 
 	// RankChange30D and ValueChange30D are NORMALISED so positive always means
 	// "better": climbed the board, or gained value. See the doc on
-	// normaliseChanges — HKB's two raw fields use opposite formulas and only
+	// NormaliseChanges — HKB's two raw fields use opposite formulas and only
 	// coincide on that meaning because rank is inverted.
 	RankChange30D  int `json:"rank_change_30d"`
 	ValueChange30D int `json:"value_change_30d"`
@@ -202,13 +202,13 @@ func Build(now time.Time, hkbAsOf string, pool []PoolPlayer, hkbPlayers []hkb.Pl
 		}
 
 		status, clears := ParseStatus(pp.FantasyStatus)
-		rankChg, valueChg := normaliseChanges(hp)
+		rankChg, valueChg := NormaliseChanges(hp)
 		p := Player{
 			ID:                  pp.ID,
 			Name:                hp.Name,
 			MLBTeam:             pp.MLBTeam,
 			Pos:                 append([]string(nil), hp.Positions...),
-			FantraxPos:          parsePositions(pp.Positions),
+			FantraxPos:          ParsePositions(pp.Positions),
 			Level:               hp.Level,
 			ActiveLevels:        hp.ActiveLevels,
 			Prospect:            hp.Prospect,
@@ -219,7 +219,7 @@ func Build(now time.Time, hkbAsOf string, pool []PoolPlayer, hkbPlayers []hkb.Pl
 			RankChange30D:       rankChg,
 			ValueChange30D:      valueChg,
 			RankHistory30D:      append([]int(nil), hp.RankHistory30Days...),
-			RankHistoryStartsAt: firstRanked(hp.RankHistory30Days),
+			RankHistoryStartsAt: FirstRanked(hp.RankHistory30Days),
 			FantasyStatus:       status,
 			WaiverClearsOn:      clears,
 		}
@@ -259,8 +259,11 @@ func Build(now time.Time, hkbAsOf string, pool []PoolPlayer, hkbPlayers []hkb.Pl
 	return t
 }
 
-// normaliseChanges returns (rankChange, valueChange) with positive meaning
+// NormaliseChanges returns (rankChange, valueChange) with positive meaning
 // "improved" for both.
+//
+// Exported for internal/rostervalues, which joins the same two feeds for
+// rostered players and must not drift from this definition.
 //
 // HKB's two raw fields are computed with OPPOSITE formulas, verified against
 // the live feed on 2026-08-24 (n=1729 rank rows, n=874 value rows):
@@ -276,11 +279,12 @@ func Build(now time.Time, hkbAsOf string, pool []PoolPlayer, hkbPlayers []hkb.Pl
 //
 // The residual rows in both counts are players whose history begins with the 0
 // sentinel; HKB computes their change against the first ranked entry instead.
-func normaliseChanges(hp hkb.Player) (rank, value int) {
+func NormaliseChanges(hp hkb.Player) (rank, value int) {
 	return hp.RankChange30Days, hp.ValueChange30Days
 }
 
-// firstRanked returns the index of the first day this player was ranked at all.
+// FirstRanked returns the index of the first day this player was ranked at all.
+// Exported for internal/rostervalues for the same reason as NormaliseChanges.
 // HKB uses 0 to mean "not ranked yet", not "rank zero" — 23 of 1754 players
 // carried leading zeros on 2026-08-24, and plotting those literally draws a new
 // entrant as having fallen from the best possible rank.
@@ -288,7 +292,7 @@ func normaliseChanges(hp hkb.Player) (rank, value int) {
 // A history with no ranked entry returns len(hist), so slicing from it yields
 // an empty series. Returning 0 there would assert the opposite of the truth —
 // "ranked since day one" for a player never ranked at all.
-func firstRanked(hist []int) int {
+func FirstRanked(hist []int) int {
 	for i, v := range hist {
 		if v != 0 {
 			return i
@@ -330,7 +334,8 @@ func ParseStatus(raw string) (status, clearsOn string) {
 	return "W", clearsOn
 }
 
-// parsePositions turns the pool's PosShortNames into a clean list.
+// ParsePositions turns the pool's PosShortNames into a clean list.
+// Exported for internal/rostervalues for the same reason as NormaliseChanges.
 //
 // PosShortNames is the right source despite the markup, and both obvious
 // alternatives are wrong: MultiPositions is populated only for players eligible
@@ -338,7 +343,7 @@ func ParseStatus(raw string) (status, clearsOn string) {
 // and deriving from position IDs cannot reproduce Fantrax's own rule for when
 // the UT flex slot is shown. cmd/team-values.go's positionDisplay says the same
 // thing at length for the trades table.
-func parsePositions(raw string) []string {
+func ParsePositions(raw string) []string {
 	if raw == "" {
 		return nil
 	}

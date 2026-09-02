@@ -75,10 +75,10 @@ func assertNoFractionalTimestamp(t *testing.T, what string, body []byte) {
 // WHAT THIS GUARD CANNOT SEE, stated because a partial guard read as a total one
 // is worse than no guard (rosterbot-4e1j review).
 //
-// It walks Go TYPES, so it covers only endpoints that marshal one here. The five
+// It walks Go TYPES, so it covers only endpoints that marshal one here. The six
 // serveBlob passthrough routes — GET /v1/trades, /v1/trades/values,
-// /v1/pool/available, /v1/reports/{name}, /v1/runs/{id}/progress — hand back
-// bytes produced in internal/{tradeboard,availablepool,report,lineupgap,
+// /v1/pool/available, /v1/roster/values, /v1/reports/{name}, /v1/runs/{id}/progress — hand back
+// bytes produced in internal/{tradeboard,availablepool,rostervalues,report,lineupgap,
 // recaplog,progress}, and a raw time.Time added in any of those ships green past
 // this test. That is not hypothetical: GET /v1/reports/views was measured
 // emitting "generatedAt":"2026-08-26T21:08:27.746239Z" while this guard passed.
