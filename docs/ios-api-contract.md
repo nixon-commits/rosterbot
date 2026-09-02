@@ -35,12 +35,12 @@ type**: `internal/wiretime.Time` is the only timestamp type those response
 structs may declare, and `TestWireTypes_CarryNoRawTimeTime` walks them by
 reflection and fails on any `time.Time` that reaches it.
 
-Five endpoints are **byte passthroughs** and that walk cannot see them at all —
-`GET /v1/trades`, `/v1/trades/values`, `/v1/pool/available`, `/v1/reports/{name}`
-and `/v1/runs/{id}/progress` are served via `serveBlob` from bytes produced in
-`internal/{tradeboard,availablepool,report,lineupgap,recaplog,progress}`. Their
+Six endpoints are **byte passthroughs** and that walk cannot see them at all —
+`GET /v1/trades`, `/v1/trades/values`, `/v1/pool/available`, `/v1/roster/values`,
+`/v1/reports/{name}` and `/v1/runs/{id}/progress` are served via `serveBlob` from bytes produced in
+`internal/{tradeboard,availablepool,rostervalues,report,lineupgap,recaplog,progress}`. Their
 shape is each producer's own responsibility, so **a regression there is not
-caught by the guard and reports green**. Four hold it by formatting to a
+caught by the guard and reports green**. Five hold it by formatting to a
 `string` at construction; `internal/recaplog` holds it with `wiretime.Time`
 after `GET /v1/reports/views` was measured emitting
 `"generatedAt":"2026-08-26T21:08:27.746239Z"` (rosterbot-4e1j). If you add a
@@ -304,6 +304,71 @@ value the wrong match *would* have claimed. HKB carries one row per name; Fantra
 sometimes carries two players. Without the guard, the unowned minor-league Mason
 Miller inherits the SD closer's 3177 and sorts to the top of this screen.
 
+### `GET /v1/roster/values`
+
+The **caller's own roster**, every player on it, joined onto HKB dynasty value
+and 30-day momentum. Backs the Players tab's My Team segment. Rebuilt daily by
+the `team-values` job as **one object per Fantrax team** (`roster/<team_id>`);
+the route resolves which team is the caller's and passes the bytes through.
+
+```json
+{ "generated_at": "2026-09-02T11:07:00Z", "hkb_as_of": "2026-09-02",
+  "team_id": "abc", "team_name": "Nixon Dynasty",
+  "team_value": 41230, "league_rank": 3, "team_count": 10,
+  "mlb": [
+    { "id": "05ucd", "name": "Mason Miller", "mlb_team": "SD",
+      "pos": ["RP"], "fantrax_pos": ["RP", "P"], "level": "MLB", "active_levels": "MLB",
+      "prospect": false, "fypd": false, "age": 26.8,
+      "hkb_value": 3177, "hkb_rank": 22,
+      "rank_change_30d": 4, "value_change_30d": 120,
+      "rank_history_30d": [26, 25, 22], "rank_history_starts_at": 0 },
+    { "id": "07xyz", "name": "Some Journeyman", "mlb_team": "MIA",
+      "fantrax_pos": ["1B", "UT"], "prospect": false, "fypd": false,
+      "unranked_reason": "no HKB match" }
+  ],
+  "prospects": [],
+  "counts": { "rostered": 40, "matched": 33, "unmatched": 6,
+              "namesake_declined": 1, "mlb": 25, "prospects": 15 } }
+```
+
+**Team resolution** is `GET /v1/me`'s: the user record's `team_id`, then the
+Fantrax connection's. The operator bearer, which has no user, resolves through
+the deployment's default tenant (`ROSTERBOT_USER_ID`) and finally
+`FANTRAX_TEAM_ID` (local `serve`). No team at the end of that chain is `404`
+`"no Fantrax team bound to this account"` — the ordinary state for a member who
+has not connected Fantrax, so treat it as the empty state, never as a fault.
+
+**Ranked rows are the pool row** minus `fantasy_status` and `waiver_clears_on`:
+same sign convention (positive is better on both deltas), same `0` sentinel in
+`rank_history_30d`, same `pos` versus `fantrax_pos` split. `age` is **absent**
+when unknown here, not `0` as on the pool.
+
+**Unranked rows are kept, not dropped.** On the pickups list a player HKB does
+not value has no reason to appear; on your own roster his absence is a silent
+omission. Such a row carries `unranked_reason` — `"no HKB match"` or `"name
+shared by another Fantrax player"` — and **omits every HKB-derived field**:
+`hkb_value`, `hkb_rank`, both deltas, the history, `pos`, `level`,
+`active_levels`, `age`. Its segment follows Fantrax minors eligibility, since
+HKB's `prospect` flag is exactly what is missing; do not read `prospect: true`
+on an unranked row as an HKB judgement. Render a dash, never a `0`.
+
+**Ordering** is value descending, name ascending on ties, unranked last — the
+producer's order is the client's default sort.
+
+**Header:** `team_value` is the sum of the ranked rows below, and `league_rank`
+ranks every team's table by that same sum (1-based, descending; `team_count`
+tables in all). One sum feeds header, list and rank, so they cannot disagree
+on screen. It differs from the Team Values dashboard's total by exactly the
+namesake declines, which that aggregate counts and this one refuses.
+
+**Counts:** `rostered == mlb + prospects` is the exhaustiveness invariant
+(replacing the pool's `matched == mlb + prospects`), and `matched + unmatched +
+namesake_declined == rostered` is the join denominator. Assert both.
+
+**Freshness and errors** are the pool's: `generated_at` is the producer's run
+moment and the staleness signal; `404` before the first `team-values` run;
+`501` store not configured; `502` store error.
+
 ### `GET /v1/notifications`
 
 The activity feed — every event that also went to Pushover (lineup applied,
@@ -394,4 +459,7 @@ POST /v1/jobs/optimize
    `type` to render the per-job view (`404` → fall back to `log_tail`).
 6. **Pickups** — `GET /v1/pool/available`; two sections (MLB, Prospects), each
    ranked by `hkb_value`. Badge `rank_change_30d > 0` as a riser and
-   `rank_history_starts_at > 0` as new to the board.
+7. **My Team** — `GET /v1/roster/values`; same two sections and the same row as
+   Pickups, plus a header from `team_value` / `league_rank` / `team_count`.
+   Unranked rows (`unranked_reason` set) render a dash for the value and sort
+   last; every rostered player is on screen.
