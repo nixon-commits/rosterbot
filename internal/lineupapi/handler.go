@@ -52,6 +52,7 @@ type Config struct {
 	Trades        ObjectStore
 	TradeValues   ObjectStore
 	AvailablePool ObjectStore
+	RosterValues  ObjectStore
 	Reports       ObjectStore
 
 	// Tenants resolves the eight stores above PER CALLER. When set it wins;
@@ -63,6 +64,14 @@ type Config struct {
 	// signed-in user read the operator's data — the read half of the fan-out
 	// that crq.11 left undone.
 	Tenants TenantStores
+
+	// DefaultTenant stands in for the bearer-token caller, which has no UserID
+	// by construction, wherever a route needs a PERSON rather than a store:
+	// the Lambda sets it from ROSTERBOT_USER_ID, matching tenantStores.For.
+	// DefaultTeamID is the last resort behind it (FANTRAX_TEAM_ID, set by
+	// `serve`), so a local run answers the bearer with the deployment's roster.
+	DefaultTenant UserID
+	DefaultTeamID string
 
 	// Users and Enrollments back multi-tenant auth (rosterbot-crq.10). Users
 	// is what a session's subject resolves against; without it every session
@@ -123,6 +132,7 @@ type Config struct {
 //	GET    /v1/trades                            -> pending trade offers, HKB-valued
 //	GET    /v1/trades/values                     -> league player/pick values table
 //	GET    /v1/pool/available                    -> unowned players with HKB value + 30d momentum
+//	GET    /v1/roster/values                     -> the caller's own roster with HKB value + 30d momentum
 //	GET    /v1/reports/{name}                    -> private dashboard report (model|gap|views)
 //	POST   /v1/jobs/{name}                       -> launch a job (async), 202
 //	GET    /v1/me                                -> the caller's own profile + Fantrax status
@@ -165,6 +175,7 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/trades", cfg.handleTrades)
 	mux.HandleFunc("GET /v1/trades/values", cfg.handleTradeValues)
 	mux.HandleFunc("GET /v1/pool/available", cfg.handleAvailablePool)
+	mux.HandleFunc("GET /v1/roster/values", cfg.handleRosterValues)
 	mux.HandleFunc("GET /v1/reports/{name}", cfg.handleReport)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
 	mux.HandleFunc("GET /v1/me", cfg.handleMe)
