@@ -16,8 +16,9 @@ import (
 // dangerous on the dashboard, where each surface keys off the raw string and
 // falls through to something benign for anything it does not recognise:
 // settings.js renders an unknown status as the bare word with badge-info,
-// tenants.js's attentionFrom returns "—" (a red-free, owner-free row on the one
-// screen the operator uses to find failures), and app.js's global banner
+// tenants.js's attentionFrom falls through to its terminal branch, which
+// reads "—" unless a job happens to be failing (a red-free, owner-free row on
+// the one screen the operator uses to find failures), and app.js's global banner
 // returns early and never renders at all. Each fallthrough is silence on the
 // surface that most needed to speak.
 //
@@ -91,8 +92,8 @@ func TestConnectStatusReachesEveryRenderingSurface(t *testing.T) {
 				// i.e. healthy, on the one screen built to find failures.
 				`t.conn_status === "interrupted"`,
 			},
-			why: "attentionFrom returns \"—\" for a status it does not know, so the " +
-				"operator's row reads as healthy",
+			why: "attentionFrom's terminal branch reads \"—\" for a status it does not " +
+				"know (unless a job is failing), so the operator's row reads as healthy",
 		},
 		{
 			file: "app.js",

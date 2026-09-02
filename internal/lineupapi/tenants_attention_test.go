@@ -69,6 +69,10 @@ func TestTenantsAttentionFrom_PendingAttributesAFailingRunToTheOperator(t *testi
 		// (3) precedence: needs_reconnect outranks the run-failure fallback
 		// even when a run is failing — the tenant, not the operator, must act.
 		{"needs_reconnect_with_failure", tenantMustReconnect},
+		// (3b) precedence: an operator-actionable conn_error on a still-pending
+		// row keeps its own, more specific copy rather than the run-failure
+		// fallback's — the fallback is the LAST branch, not a new first one.
+		{"pending_operator_actionable_with_failure", "You (not the tenant)"},
 		// (4) interrupted keeps its own copy, unaffected by the fallback.
 		{"interrupted_with_failure", operatorCheckDidNotFinish},
 		// (5) verified is unchanged (it already had this behavior).
@@ -158,6 +162,8 @@ report("pending_runs_no_failure",
     { status: "active", conn_status: "pending", runs: { last_failure: null } });
 report("needs_reconnect_with_failure",
     { status: "active", conn_status: "needs_reconnect", runs: { last_failure: { error: "connect failed" } } });
+report("pending_operator_actionable_with_failure",
+    { status: "active", conn_status: "pending", conn_error: "bot_challenge", runs: { last_failure: { error: "connect failed" } } });
 report("interrupted_with_failure",
     { status: "active", conn_status: "interrupted", runs: { last_failure: { error: "connect failed" } } });
 report("verified_with_failure",
