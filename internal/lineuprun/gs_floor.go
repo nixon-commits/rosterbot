@@ -105,6 +105,10 @@ type gsFloorFinding struct {
 	Supply    float64 // credited starts from tomorrow through week end
 	Shortfall float64 // Need - Supply; positive is the alerting direction
 	DaysLeft  int
+	// TodayUnsettled is echoed from the budget so the coverage line can show
+	// its working: a Need that already nets off today's confirmed starts is
+	// otherwise indistinguishable from a week that simply used more.
+	TodayUnsettled int
 
 	// EmptyDays are days on which no rostered SP has a scheduled turn at all:
 	// nobody of ours confirmed, and no club of ours playing that has yet to
@@ -148,7 +152,29 @@ func evaluateGSFloor(b *optimizer.GSBudget) gsFloorFinding {
 		return f
 	}
 	f.Floor, f.Used, f.Limit, f.WeekEnd = b.Floor, b.Used, b.Limit, b.WeekEnd
-	f.Need = b.NeedForFloor()
+
+	// Credit today's confirmed-but-unsettled starts against the need.
+	//
+	// NeedForFloor is Floor - Used, and Used trails reality for most of the
+	// day: Fantrax settles a day's YTD GS deltas hours after its games. Supply
+	// meanwhile starts strictly TOMORROW. So today's confirmed starters — the
+	// best-known quantity in the whole forecast, already named by MLB — were
+	// counted in neither term, and the reported shortfall spiked at every day
+	// roll and decayed every evening while nothing about the roster changed.
+	// Measured on Period 22: 03:01Z read +1.2 and 11:30Z read +2.7, and the
+	// once-per-week dedup spent the week's only alert at the top of that
+	// sawtooth (rosterbot-ogtq).
+	//
+	// Corrected here rather than inside NeedForFloor deliberately. The gate's
+	// floor PROTECTION reads the same method (applyGSGate), and protection is a
+	// lineup decision: crediting a start there would let the gate stop
+	// protecting an arm on the strength of a start that has not happened yet.
+	// This alert only reports, so it is the safe place to be more accurate.
+	f.TodayUnsettled = b.TodayUnsettled
+	f.Need = b.NeedForFloor() - b.TodayUnsettled
+	if f.Need < 0 {
+		f.Need = 0
+	}
 
 	for _, d := range b.Forecast {
 		// Strictly after today, matching FutureDemand. Today is excluded on
@@ -248,9 +274,17 @@ func reportGSFloor(in gsFloorInputs) {
 	// comfortable week and a structurally blind trigger read identically — and
 	// a forecast that silently reported zero all season is precisely the
 	// failure this repo has already had once (rosterbot-1jvj).
+	//
+	// Need is reported AFTER today's credit, so on a day that has starts the
+	// line must say so — otherwise it cannot be reconciled against Used and
+	// Floor, and the daily audit greps exactly this line to rebuild a week.
+	need := fmt.Sprintf("%d needed", f.Need)
+	if f.TodayUnsettled > 0 {
+		need = fmt.Sprintf("%d needed after %d confirmed today", f.Need, f.TodayUnsettled)
+	}
 	fmt.Fprintf(in.Out,
-		"  gs floor check: %d/%d used, floor %d (%d needed), %.1f credited over %d remaining day(s), %d empty\n",
-		f.Used, f.Limit, f.Floor, f.Need, f.Supply, f.DaysLeft, len(f.EmptyDays))
+		"  gs floor check: %d/%d used, floor %d (%s), %.1f credited over %d remaining day(s), %d empty\n",
+		f.Used, f.Limit, f.Floor, need, f.Supply, f.DaysLeft, len(f.EmptyDays))
 
 	if !f.Fires {
 		return
@@ -305,8 +339,17 @@ func gsFloorMarkerKey(season int, period fantrax.WeeklyPeriod) string {
 // TestGSFloorMessage_IsNotBadgedAsASuccess.
 func gsFloorMessage(f gsFloorFinding) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "⚠️ GS floor risk: this week projects to finish under the %d-start minimum — %d used, %.1f more expected over %d remaining day(s), leaving it about %.1f short.",
-		f.Floor, f.Used, f.Supply, f.DaysLeft, f.Shortfall)
+	// Today's confirmed starts are named explicitly rather than folded into
+	// Used. They are a THIRD term — Used is what Fantrax has settled, Supply is
+	// tomorrow onward, and these sit between the two — so quietly adding them
+	// to either would misdescribe the week. Stating all three is also what lets
+	// the reader check the shortfall: used + today + supply against the floor.
+	today := ""
+	if f.TodayUnsettled > 0 {
+		today = fmt.Sprintf("%d starting today, ", f.TodayUnsettled)
+	}
+	fmt.Fprintf(&b, "⚠️ GS floor risk: this week projects to finish under the %d-start minimum — %d used, %s%.1f more expected over %d remaining day(s), leaving it about %.1f short.",
+		f.Floor, f.Used, today, f.Supply, f.DaysLeft, f.Shortfall)
 
 	switch {
 	case len(f.EmptyDays) > 0:

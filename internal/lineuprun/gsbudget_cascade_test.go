@@ -360,3 +360,84 @@ func TestComputeGSBudget_MissingFloorDoesNotDisableTheGate(t *testing.T) {
 		t.Errorf("NeedForFloor() = %d, want 0 with no floor configured", d.Budget.NeedForFloor())
 	}
 }
+
+// lockedSP is an SP whose game is already in progress or final. Fantrax locks
+// him at first pitch, which is the same boundary its YTD GS settlement crosses
+// — so a locked probable's start is (or is about to be) in Used and must not
+// be counted a second time.
+func lockedSP(id, name, team string) fantrax.Player {
+	p := activeSP(id, name, team)
+	p.Locked = true
+	return p
+}
+
+// Today sits in a seam: buildGSForecast starts TOMORROW and Used only reflects
+// a day once Fantrax settles its YTD GS deltas that evening. Between the two,
+// today's confirmed starters are counted nowhere, which is what made the floor
+// alert's shortfall spike every morning (rosterbot-ogtq). The budget has to
+// carry that count so the alert can net it off.
+func TestComputeGSBudget_CountsTodaysUnlockedProbablesAsUnsettled(t *testing.T) {
+	sched := &fakeSchedule{
+		probables: map[string]map[string]string{
+			"2026-07-25": {"ace arm": "LAD", "second arm": "NYY"},
+		},
+	}
+
+	got := ComputeGSBudget(healthyGS(), sched, gsInputs())
+
+	if got.Budget == nil {
+		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
+	}
+	if got.Budget.TodayUnsettled != 2 {
+		t.Errorf("TodayUnsettled = %d, want 2 — both of today's probables are unlocked, so neither is in Used yet",
+			got.Budget.TodayUnsettled)
+	}
+}
+
+// The lock is the settlement boundary. Once a start is under way Fantrax will
+// credit it to Used on its own, so counting it here too would net the same
+// start off the floor twice and quiet an alert that should have fired — the
+// false NEGATIVE this alert can least afford.
+func TestComputeGSBudget_LockedProbablesAreAlreadySettled(t *testing.T) {
+	sched := &fakeSchedule{
+		probables: map[string]map[string]string{
+			"2026-07-25": {"ace arm": "LAD", "second arm": "NYY"},
+		},
+	}
+	in := gsInputs()
+	in.PitcherRoster = []fantrax.Player{
+		lockedSP("a", "Ace Arm", "LAD"),
+		activeSP("b", "Second Arm", "NYY"),
+	}
+
+	got := ComputeGSBudget(healthyGS(), sched, in)
+
+	if got.Budget == nil {
+		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
+	}
+	if got.Budget.TodayUnsettled != 1 {
+		t.Errorf("TodayUnsettled = %d, want 1 — Ace Arm is locked, so his start is Used's to count",
+			got.Budget.TodayUnsettled)
+	}
+}
+
+// A statsapi blip on TODAY's probables must not disable the budget, and must
+// not invent a credit either. Degrading to zero reproduces the pre-fix
+// shortfall exactly: louder than the truth, never quieter.
+func TestComputeGSBudget_TodaysProbablesFailureDegradesToNoCredit(t *testing.T) {
+	sched := &fakeSchedule{
+		probablesErr: map[string]error{"2026-07-25": errors.New("statsapi 503")},
+	}
+
+	got := ComputeGSBudget(healthyGS(), sched, gsInputs())
+
+	if got.Budget == nil {
+		t.Fatalf("a probables blip for today must not disable the gate. logs:\n%s", logsJoined(got))
+	}
+	if got.Budget.TodayUnsettled != 0 {
+		t.Errorf("TodayUnsettled = %d, want 0 when today's probables are unreadable", got.Budget.TodayUnsettled)
+	}
+	if !strings.Contains(logsJoined(got), "today's probables") {
+		t.Errorf("the degrade must be visible in the logs, got:\n%s", logsJoined(got))
+	}
+}

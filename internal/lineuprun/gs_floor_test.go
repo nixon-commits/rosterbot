@@ -577,3 +577,132 @@ func TestEvaluateGSFloor_StillFiresOnAGenuinelyShortMidweek(t *testing.T) {
 			f.Need, f.Supply, f.DaysLeft)
 	}
 }
+
+// Period 22 (2026-08-31..09-06) read at the 2026-09-02T14:01Z run, the alert's
+// first-ever live fire. Fantrax had settled 2 starts (Mon + Tue) into Used, and
+// two more of our SPs — Eury Perez and Noah Cameron — were confirmed probables
+// for TODAY. Those two are in neither term: the forecast begins tomorrow
+// (buildGSForecast iterates today+1..weekEnd) and Used will not carry them
+// until Fantrax settles them that evening.
+//
+// Production reported "about 2.7 short" and paged on it. The honest figure was
+// 0.7: need 8 - today's 2 = 6, against 5.3 credited. Since the alert is
+// deduped to one send per matchup week, that overstatement was the only thing
+// the week ever said (rosterbot-ogtq).
+func TestEvaluateGSFloor_TodaysUnsettledStartsAreCreditedAgainstNeed(t *testing.T) {
+	b := gsFloorBudget(10, 12, 2,
+		fc(1, nil, 0.8),
+		fc(2, nil, 1.8),
+		fc(3, nil, 2.0),
+		fc(4, nil, 2.0),
+	)
+	b.TodayUnsettled = 2
+
+	f := evaluateGSFloor(b)
+
+	if f.Need != 6 {
+		t.Errorf("Need = %d, want 6 (floor 10 - used 2 - today's 2 confirmed)", f.Need)
+	}
+	if got := f.Shortfall; got < 0.7 || got > 0.75 {
+		t.Errorf("Shortfall = %.2f, want ~0.72 — production reported 2.7 by dropping today entirely", got)
+	}
+	if !f.Fires {
+		t.Error("the week is genuinely short and inside the day window; it must still fire")
+	}
+}
+
+// The same week eight hours later, after Fantrax settled today's two starts
+// into Used. TodayUnsettled collapses to 0 as those pitchers lock, so Need
+// falls by the same 2 that leaves the correction. The shortfall must be
+// IDENTICAL across that boundary.
+//
+// This is the regression that matters: before the fix the reported shortfall
+// stepped +1.5 across every day roll (03:01Z read +1.2, 11:30Z read +2.7 on
+// unchanged roster facts), so the once-per-week alert fired at the top of a
+// sawtooth rather than on the week's real shape.
+func TestEvaluateGSFloor_ShortfallIsFlatAcrossSettlement(t *testing.T) {
+	days := []optimizer.DayForecast{
+		fc(1, nil, 0.8), fc(2, nil, 1.8), fc(3, nil, 2.0), fc(4, nil, 2.0),
+	}
+
+	morning := gsFloorBudget(10, 12, 2, days...)
+	morning.TodayUnsettled = 2
+
+	evening := gsFloorBudget(10, 12, 4, days...)
+	evening.TodayUnsettled = 0
+
+	gotM, gotE := evaluateGSFloor(morning), evaluateGSFloor(evening)
+
+	if gotM.Shortfall != gotE.Shortfall {
+		t.Errorf("shortfall moved %.2f -> %.2f across settlement on unchanged roster facts",
+			gotM.Shortfall, gotE.Shortfall)
+	}
+	if gotM.Need != gotE.Need {
+		t.Errorf("Need moved %d -> %d across settlement", gotM.Need, gotE.Need)
+	}
+}
+
+// A correction can close the gap but never invert it: more confirmed starts
+// today than the floor still needs must leave Need at 0 and stay silent, the
+// same contract NeedForFloor already honours for an over-met floor.
+func TestEvaluateGSFloor_TodayCreditCannotDriveNeedNegative(t *testing.T) {
+	b := gsFloorBudget(10, 12, 9, fc(1, nil, 0), fc(2, nil, 0), fc(3, nil, 0), fc(4, nil, 0))
+	b.TodayUnsettled = 5
+
+	f := evaluateGSFloor(b)
+
+	if f.Need != 0 {
+		t.Errorf("Need = %d, want 0 — one short of the floor with 5 confirmed today is met, not -4", f.Need)
+	}
+	if f.Fires {
+		t.Error("fired on a week the floor correction shows is already met")
+	}
+}
+
+// The message states its own arithmetic, so every term it nets off has to be
+// visible in it. Once today's confirmed starts are credited against Need, a
+// message reporting only "used" and "more expected" no longer adds up to the
+// shortfall it quotes: Period 22's real numbers would read "2 used, 5.3 more
+// expected ... about 0.7 short" and invite the reader to compute 2.7.
+func TestGSFloorMessage_AccountsForTodaysStartsInItsArithmetic(t *testing.T) {
+	b := gsFloorBudget(10, 12, 2,
+		fc(1, nil, 0.8), fc(2, nil, 1.8), fc(3, nil, 2.0), fc(4, nil, 2.0))
+	b.TodayUnsettled = 2
+
+	msg := gsFloorMessage(evaluateGSFloor(b))
+
+	if !strings.Contains(msg, "2 starting today") {
+		t.Errorf("message hides the term that makes it add up (used 2 + today 2 + supply 5.3 vs floor 10):\n%s", msg)
+	}
+	if !strings.Contains(msg, "0.7 short") {
+		t.Errorf("message should quote the corrected shortfall:\n%s", msg)
+	}
+}
+
+// A week with nothing starting today must read exactly as it did before the
+// correction existed — no dangling "0 starting today" clause.
+func TestGSFloorMessage_OmitsTodayWhenThereIsNothingToSay(t *testing.T) {
+	msg := gsFloorMessage(evaluateGSFloor(gsFloorBudget(10, 12, 4,
+		fc(1, nil, 0), fc(2, nil, 0), fc(3, nil, 1.0), fc(4, nil, 1.0))))
+
+	if strings.Contains(msg, "starting today") {
+		t.Errorf("no starts today, so the clause must not appear:\n%s", msg)
+	}
+}
+
+// The coverage line is what the daily audit greps to reconstruct a week, and a
+// Need that silently nets off today reads as a week that simply used more.
+// Show the correction so the line stays reconcilable against Used and Floor.
+func TestReportGSFloor_CoverageLineShowsTodaysCredit(t *testing.T) {
+	h := newGSFloorHarness()
+	b := gsFloorBudget(10, 12, 2,
+		fc(1, nil, 0.8), fc(2, nil, 1.8), fc(3, nil, 2.0), fc(4, nil, 2.0))
+	b.TodayUnsettled = 2
+
+	h.run(b, false)
+
+	got := h.out.String()
+	if !strings.Contains(got, "6 needed after 2 confirmed today") {
+		t.Errorf("coverage line does not show why Need fell from 8 to 6:\n%s", got)
+	}
+}
