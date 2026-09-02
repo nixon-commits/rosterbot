@@ -111,6 +111,28 @@ func ResolveMLBAMIDsNoCache(names []string) (*ResolvedPlayers, error) {
 	return fetchAndResolve(names, "")
 }
 
+// SetBaseURLForTest points every playername HTTP call (the season-index
+// dumps and the people-search fallback) at url and clears the process-wide
+// season-index memo, so a test's httptest server is actually consulted
+// rather than a build cached under whatever URL ran before it — httptest
+// recycles OS ports, so a stale memo entry can otherwise leak between tests.
+// Returns a func that restores both.
+//
+// Exported (unlike mlbBaseURL itself) because ResolveMLBAMIDs is the sole
+// name→MLBAM resolution path for every caller, including packages outside
+// playername (internal/prospects, as of rosterbot-hdiu) whose own tests need
+// to drive it against a fake server without reaching across the package
+// boundary at an unexported var.
+func SetBaseURLForTest(url string) func() {
+	old := mlbBaseURL
+	mlbBaseURL = url
+	resetSeasonIndexMemo()
+	return func() {
+		mlbBaseURL = old
+		resetSeasonIndexMemo()
+	}
+}
+
 func fetchAndResolve(names []string, cacheDir string) (*ResolvedPlayers, error) {
 	rp := &ResolvedPlayers{
 		ByName: make(map[string]int),
