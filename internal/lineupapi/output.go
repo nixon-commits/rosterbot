@@ -49,7 +49,7 @@ func (s *FileOutputStore) path(runID string) string {
 }
 
 func (s *FileOutputStore) GetOutput(_ context.Context, runID string) ([]byte, bool, error) {
-	if !safeRunID(runID) {
+	if !safeComponent(runID) {
 		return nil, false, nil
 	}
 	data, err := os.ReadFile(s.path(runID))
@@ -63,7 +63,7 @@ func (s *FileOutputStore) GetOutput(_ context.Context, runID string) ([]byte, bo
 }
 
 func (s *FileOutputStore) PutOutput(_ context.Context, runID string, data []byte) error {
-	if !safeRunID(runID) {
+	if !safeComponent(runID) {
 		return fmt.Errorf("invalid run id %q", runID)
 	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
