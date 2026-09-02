@@ -61,7 +61,7 @@ func TestFileOutputStoreRoundTrip(t *testing.T) {
 
 // TestFileOutputStore_ReadTraversalEscape plants a sentinel file at the
 // traversal escape target (base/secret.json, sibling of the store dir) and
-// asserts GetOutput does not return it. Without the safeRunID guard,
+// asserts GetOutput does not return it. Without the safeComponent guard,
 // path("../secret") = filepath.Join(base/store, "../secret.json") =
 // base/secret.json, so an unguarded read would return the sentinel bytes —
 // this is the discriminating assertion (data == nil, not merely err == nil).
@@ -87,7 +87,7 @@ func TestFileOutputStore_ReadTraversalEscape(t *testing.T) {
 
 // TestFileOutputStore_WriteTraversalEscape targets an escape directory
 // (base) that already exists, so an unguarded write would succeed with no
-// coincidental ENOENT to mask the missing guard. Without safeRunID,
+// coincidental ENOENT to mask the missing guard. Without safeComponent,
 // path("../evil") = filepath.Join(base/store, "../evil.json") = base/evil.json,
 // and base exists — so the write would land. Both assertions matter: a
 // non-nil error AND the escape target's absence, which is what actually
