@@ -129,6 +129,9 @@ func buildStores(ctx context.Context, bucket string) (lineupapi.Config, error) {
 	if cfg.AvailablePool, err = store(layout.AvailablePool.PrefixFor(tenant)); err != nil {
 		return cfg, fmt.Errorf("init s3 available pool store: %w", err)
 	}
+	if cfg.RosterValues, err = store(layout.RosterValues.PrefixFor(tenant)); err != nil {
+		return cfg, fmt.Errorf("init s3 roster values store: %w", err)
+	}
 
 	// The three private dashboard reports. They live in the state bucket, not
 	// the dashboard bucket's world-readable report/ prefix, so serving them
@@ -240,6 +243,10 @@ func main() {
 	// reports and notification feed — the read half of the fan-out, which
 	// crq.11 left undone while the write half shipped.
 	apiCfg.Tenants = newTenantStores(bucket, lineupapi.UserID(os.Getenv("ROSTERBOT_USER_ID")))
+	// The same default tenant, for the one route that needs a PERSON rather
+	// than a store: GET /v1/roster/values resolves the bearer caller's team
+	// through this user record.
+	apiCfg.DefaultTenant = lineupapi.UserID(os.Getenv("ROSTERBOT_USER_ID"))
 
 	apiCfg.Token = token
 	apiCfg.Jobs = jobs

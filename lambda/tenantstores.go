@@ -76,7 +76,7 @@ func (t *tenantStores) For(ctx context.Context, uid lineupapi.UserID) (lineupapi
 	return v, nil
 }
 
-// build constructs the eight per-tenant stores. Prefixes come from
+// build constructs the nine per-tenant stores. Prefixes come from
 // layout.Artifact.PrefixFor rather than being composed here, so the reader and
 // the producers cannot disagree about where a tenant's data lives — which is
 // exactly how the read half came to be pointed at one tenant while the write
@@ -100,6 +100,9 @@ func (t *tenantStores) build(ctx context.Context, uid lineupapi.UserID) (lineupa
 	}
 	if v.AvailablePool, err = store(layout.AvailablePool.PrefixFor(tenant)); err != nil {
 		return v, fmt.Errorf("tenant %s: available pool store: %w", uid, err)
+	}
+	if v.RosterValues, err = store(layout.RosterValues.PrefixFor(tenant)); err != nil {
+		return v, fmt.Errorf("tenant %s: roster values store: %w", uid, err)
 	}
 	if v.Reports, err = store(layout.Reports.PrefixFor(tenant)); err != nil {
 		return v, fmt.Errorf("tenant %s: reports store: %w", uid, err)

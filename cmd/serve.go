@@ -89,6 +89,11 @@ func newServeMux(token string, sessionSecret []byte, lineupDir, webDir string) h
 		TradeValues: lineupapi.NewFileBlobStore(layout.TradeValues.LocalDir, "tradevalues-"),
 		// The Pickups screen's payload, written by the same team-values job.
 		AvailablePool: lineupapi.NewFileBlobStore(layout.AvailablePool.LocalDir, "pool-"),
+		// The My Team screen's payload, one file per Fantrax team, written by
+		// the same job. FANTRAX_TEAM_ID lets the bearer caller — the local curl
+		// and Simulator workflow — read the deployment's own roster.
+		RosterValues:  lineupapi.NewFileBlobStore(layout.RosterValues.LocalDir, "roster-"),
+		DefaultTeamID: os.Getenv("FANTRAX_TEAM_ID"),
 		// Same arrangement for the private reports: projection-site writes
 		// .reports/{model,gap,views}.json, and `serve` reads exactly those
 		// bytes, so the Projections and Views tabs work locally against the

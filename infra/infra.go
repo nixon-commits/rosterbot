@@ -511,6 +511,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	stateBucket.GrantRead(apiFn, jsii.String("trades/*"))
 	stateBucket.GrantRead(apiFn, jsii.String("tradevalues/*"))
 	stateBucket.GrantRead(apiFn, jsii.String("pool/*"))
+	stateBucket.GrantRead(apiFn, jsii.String("roster/*"))
 	// reports/ holds the three private dashboard reports (model, gap, views).
 	// They are in THIS bucket rather than the dashboard bucket's report/ prefix
 	// precisely because no CloudFront distribution fronts the state bucket:

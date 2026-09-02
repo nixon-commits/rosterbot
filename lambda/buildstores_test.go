@@ -27,7 +27,9 @@ var nonStoreFields = map[string]string{
 	// composes its flat fields from. Those flat fields remain the fallback
 	// shape for `rosterbot serve` and the tests; this provider is what answers
 	// a real request.
-	"Tenants": "per-caller store provider, built in main from the state bucket",
+	"Tenants":       "per-caller store provider, built in main from the state bucket",
+	"DefaultTenant": "the bearer caller's stand-in user id, set in main from ROSTERBOT_USER_ID",
+	"DefaultTeamID": "serve-only FANTRAX_TEAM_ID fallback; the Lambda resolves the team through DefaultTenant",
 }
 
 // TestBuildStores_WiresEveryStoreField is the regression guard for the class of
