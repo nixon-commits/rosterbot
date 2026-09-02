@@ -441,3 +441,65 @@ func TestComputeGSBudget_TodaysProbablesFailureDegradesToNoCredit(t *testing.T) 
 		t.Errorf("the degrade must be visible in the logs, got:\n%s", logsJoined(got))
 	}
 }
+
+// A benched pitcher's real-world start never reaches Used — GetTeamGS counts
+// only active-slot GS deltas (internal/fantrax/pitcher_starts.go:84-85), so a
+// reserve SP confirmed as today's probable is never going to settle into the
+// week's used count no matter how certain MLB is about him pitching.
+// todayUnsettledStarts must not credit him, or the shortfall reads low on a
+// day the roster actually left that start on the bench — the false NEGATIVE
+// the design explicitly rejects (rosterbot-ogtq lens A).
+func TestComputeGSBudget_ReserveConfirmedStarterIsNotCredited(t *testing.T) {
+	sched := &fakeSchedule{
+		probables: map[string]map[string]string{
+			"2026-07-25": {"ace arm": "LAD", "second arm": "NYY"},
+		},
+	}
+	in := gsInputs()
+	in.PitcherRoster = []fantrax.Player{
+		activeSP("a", "Ace Arm", "LAD"),
+		reserveSP("b", "Second Arm", "NYY"),
+	}
+
+	got := ComputeGSBudget(healthyGS(), sched, in)
+
+	if got.Budget == nil {
+		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
+	}
+	if got.Budget.TodayUnsettled != 1 {
+		t.Errorf("TodayUnsettled = %d, want 1 — Second Arm is benched, so his start cannot reach Used",
+			got.Budget.TodayUnsettled)
+	}
+}
+
+// todayUnsettledStarts must never credit more starts than the roster has
+// active pitcher slots to hold them in, mirroring buildGSForecast's own cap
+// ("Cap at active P slots, keeping the highest-value probables",
+// gsbudget.go ~325-333) — a team can only actually start as many pitchers as
+// it has active P slots, so an uncapped count would over-credit on any
+// roster carrying more confirmed-starter-eligible SPs than P slots
+// (rosterbot-ogtq lens B).
+func TestComputeGSBudget_TodayUnsettledCapsAtPitcherSlots(t *testing.T) {
+	sched := &fakeSchedule{
+		probables: map[string]map[string]string{
+			"2026-07-25": {"ace arm": "LAD", "second arm": "NYY", "third arm": "BOS"},
+		},
+	}
+	in := gsInputs()
+	in.NumPitcherSlots = 2
+	in.PitcherRoster = []fantrax.Player{
+		activeSP("a", "Ace Arm", "LAD"),
+		activeSP("b", "Second Arm", "NYY"),
+		activeSP("c", "Third Arm", "BOS"),
+	}
+
+	got := ComputeGSBudget(healthyGS(), sched, in)
+
+	if got.Budget == nil {
+		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
+	}
+	if got.Budget.TodayUnsettled != 2 {
+		t.Errorf("TodayUnsettled = %d, want 2 — capped at NumPitcherSlots even though 3 active SPs are confirmed",
+			got.Budget.TodayUnsettled)
+	}
+}
