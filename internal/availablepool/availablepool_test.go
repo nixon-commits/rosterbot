@@ -56,7 +56,7 @@ func TestSignConvention(t *testing.T) {
 				tc.p.Name, got, tc.p.ValueChange30Days)
 		}
 
-		rank, value := normaliseChanges(tc.p)
+		rank, value := NormaliseChanges(tc.p)
 		if (rank > 0) != tc.wantRankUp {
 			t.Errorf("%s: rank_change_30d=%d, want positive==%v (positive MUST mean climbed)",
 				tc.p.Name, rank, tc.wantRankUp)
@@ -180,16 +180,16 @@ func TestParseStatusStripsMarkup(t *testing.T) {
 
 func TestFirstRankedHandlesTheZeroSentinel(t *testing.T) {
 	// Conor Essenburg's real shape: unranked for 8 days, then 848 -> 674.
-	if got := firstRanked([]int{0, 0, 0, 0, 0, 0, 0, 0, 848, 674}); got != 8 {
-		t.Errorf("firstRanked=%d, want 8 (first day actually ranked)", got)
+	if got := FirstRanked([]int{0, 0, 0, 0, 0, 0, 0, 0, 848, 674}); got != 8 {
+		t.Errorf("FirstRanked=%d, want 8 (first day actually ranked)", got)
 	}
-	if got := firstRanked([]int{300, 275, 250}); got != 0 {
-		t.Errorf("firstRanked=%d, want 0 for a fully-ranked history", got)
+	if got := FirstRanked([]int{300, 275, 250}); got != 0 {
+		t.Errorf("FirstRanked=%d, want 0 for a fully-ranked history", got)
 	}
 	// Never ranked: slicing from len yields an empty series. Returning 0 would
 	// assert "ranked since day one" for a player never ranked at all.
-	if got := firstRanked([]int{0, 0, 0}); got != 3 {
-		t.Errorf("firstRanked=%d, want 3 (len) for an all-zero history", got)
+	if got := FirstRanked([]int{0, 0, 0}); got != 3 {
+		t.Errorf("FirstRanked=%d, want 3 (len) for an all-zero history", got)
 	}
 }
 
@@ -260,11 +260,11 @@ func TestActiveLevelsSurvivesAnMLBLevel(t *testing.T) {
 }
 
 func TestParsePositionsHandlesAbsence(t *testing.T) {
-	if got := parsePositions(""); got != nil {
-		t.Errorf("parsePositions(\"\")=%v, want nil — absent, not an empty position", got)
+	if got := ParsePositions(""); got != nil {
+		t.Errorf("ParsePositions(\"\")=%v, want nil — absent, not an empty position", got)
 	}
-	if got := parsePositions("SP"); !equalStrings(got, []string{"SP"}) {
-		t.Errorf("parsePositions(SP)=%v, want [SP]", got)
+	if got := ParsePositions("SP"); !equalStrings(got, []string{"SP"}) {
+		t.Errorf("ParsePositions(SP)=%v, want [SP]", got)
 	}
 }
 
