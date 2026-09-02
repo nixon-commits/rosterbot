@@ -12,6 +12,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/availablepool"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/rostervalues"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/nixon-commits/rosterbot/internal/statestore/layout"
 	"github.com/nixon-commits/rosterbot/internal/teamvalue"
@@ -101,6 +102,12 @@ func runTeamValues(cmd *cobra.Command, args []string) error {
 		poolTable.Counts.MLB, poolTable.Counts.Prospects, poolTable.Counts.Matched,
 		poolTable.Counts.Unmatched, poolTable.Counts.NamesakeDeclined)
 
+	// The My Team screen's payload, built here for the same reason as the
+	// pool and before the same gate. One line of summary, so a roster count
+	// that drops to zero is visible in the run log.
+	rosters := buildRosterValues(date, pool, hkbPlayers, rows, teamNames)
+	fmt.Printf("roster values: %d teams\n", len(rosters))
+
 	if dryRun {
 		fmt.Printf("team-values (dry-run): computed %d team rows for %s; not written\n", len(rows), date.Format("2006-01-02"))
 		return nil
@@ -141,6 +148,10 @@ func runTeamValues(cmd *cobra.Command, args []string) error {
 	// with it.
 	if err := publishAvailablePool(poolTable); err != nil {
 		warn("team-values: available pool not written: %v", err)
+	}
+	// Same producer, same soft-fail rationale as the two artifacts above.
+	if err := publishRosterValues(rosters); err != nil {
+		warn("team-values: roster values not written: %v", err)
 	}
 	return nil
 }
@@ -311,4 +322,54 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+// buildRosterValues maps the pool and the league table across to the leaf
+// package, which deliberately does not import internal/fantrax. The FULL pool
+// is passed for the reason buildAvailablePool gives: the namesake guard can
+// only see a contested name if both rows are present.
+//
+// Team names prefer the standings fetch and fall back to the pool's own
+// FantasyTeamName, exactly as teamvalue.Aggregate does — a standings failure
+// is cosmetic and must not blank the header.
+func buildRosterValues(date time.Time, pool []models.PoolPlayer, hkbPlayers []hkb.Player, rows []teamvalue.Row, teamNames map[string]string) map[string]rostervalues.Table {
+	players := make([]rostervalues.PoolPlayer, 0, len(pool))
+	for _, pp := range pool {
+		players = append(players, rostervalues.PoolPlayer{
+			ID:             pp.PlayerID,
+			Name:           pp.Name,
+			MLBTeam:        pp.MLBTeamShortName,
+			Positions:      pp.PosShortNames,
+			FantasyTeamID:  pp.FantasyTeamID,
+			MinorsEligible: pp.MinorsEligible,
+		})
+	}
+	teams := make([]rostervalues.Team, 0, len(rows))
+	for _, r := range rows {
+		name := teamNames[r.TeamID]
+		if name == "" {
+			name = r.TeamName
+		}
+		teams = append(teams, rostervalues.Team{ID: r.TeamID, Name: name})
+	}
+	return rostervalues.BuildAll(time.Now().UTC(), date.Format("2006-01-02"), players, hkbPlayers, teams)
+}
+
+// publishRosterValues stores one object per team under its Fantrax team id —
+// the key GET /v1/roster/values resolves the caller to.
+func publishRosterValues(tables map[string]rostervalues.Table) error {
+	store, err := statestore.FromEnv().RosterValuesStore()
+	if err != nil {
+		return fmt.Errorf("open roster values store: %w", err)
+	}
+	for id, t := range tables {
+		data, err := json.Marshal(t)
+		if err != nil {
+			return fmt.Errorf("marshal roster %s: %w", id, err)
+		}
+		if err := store.Publish(id, data); err != nil {
+			return fmt.Errorf("publish roster %s: %w", id, err)
+		}
+	}
+	return nil
 }
