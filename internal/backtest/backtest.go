@@ -129,9 +129,16 @@ type SnapshotPlayer struct {
 	HasGame        bool    `json:"has_game"`
 	IsPitcher      bool    `json:"is_pitcher"`
 	IsStarter      bool    `json:"is_starter,omitempty"`
-	Role           string  `json:"role,omitempty"`   // "SP" / "RP" for pitchers
-	Slot           string  `json:"slot,omitempty"`   // active slot occupied, e.g. "OF"; "" if benched
-	Locked         bool    `json:"locked,omitempty"` // game in progress/final at snapshot time
+	Role           string  `json:"role,omitempty"` // "SP" / "RP" for pitchers
+	Slot           string  `json:"slot,omitempty"` // active slot occupied, e.g. "OF"; "" if benched
+	// Locked reports whether the player's MLB team's game was in progress or
+	// final at snapshot time (fantrax.Player.Locked, set per-date by
+	// lineuprun.markLocked off the team's own game state, not any other kind
+	// of lock). A Locked row written for a given date is preserved wholesale
+	// against every later rewrite of that date's snapshot — see
+	// lineuprun.writeProjectionSnapshot — so it is also the merge key that
+	// keeps the archived projection the one the optimizer actually used.
+	Locked bool `json:"locked,omitempty"`
 	// GSSuppressed records that the weekly game-start gate declined this
 	// pitcher's start on this date. Written from the gate's own report, not
 	// inferred. Present only from 2026-08 forward; earlier snapshots read as
