@@ -61,9 +61,17 @@ func NewFileBlobStore(dir, namePrefix string) *FileStore {
 // tokens are never paths, so a value that is not a clean component can only be
 // malformed or hostile, and one shared test means the stores cannot drift on
 // what "safe" means.
+//
+// The shape is load-bearing for CodeQL as well as for correctness. Its
+// go/path-injection query clears a sink only behind a guard it recognizes —
+// filepath.IsLocal is one; strings.ContainsAny and a Clean equality are not —
+// and it reads a helper as that guard only when every path to `true` runs
+// through the recognized check in a form it can follow, of which a single
+// conjunctive return is the documented one. Replacing IsLocal with an
+// equivalent hand-rolled test, or splitting this into early returns, keeps the
+// stores safe and reopens the alert.
 func safeComponent(s string) bool {
-	return s != "" && s != "." && s != ".." &&
-		!strings.ContainsAny(s, `/\`) && s == filepath.Clean(s)
+	return filepath.IsLocal(s) && s != "." && !strings.ContainsAny(s, `/\`)
 }
 
 func (s *FileStore) path(key string) string {
@@ -76,7 +84,8 @@ func (s *FileStore) Get(_ context.Context, key string) ([]byte, bool, error) {
 		// object can exist under it, and the run stores answer the same way.
 		return nil, false, nil
 	}
-	data, err := os.ReadFile(s.path(key))
+	file := s.path(key)
+	data, err := os.ReadFile(file)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil
 	}
@@ -93,7 +102,8 @@ func (s *FileStore) Publish(key string, data []byte) error {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(s.path(key), data, 0o644)
+	file := s.path(key)
+	return os.WriteFile(file, data, 0o644)
 }
 
 var (
