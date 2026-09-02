@@ -14,105 +14,28 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/cache"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/scoring"
-	"github.com/nixon-commits/rosterbot/internal/teams"
 	"golang.org/x/sync/errgroup"
 )
 
 // URL vars (overridable in tests).
-var mlbPlayerSearchURL = "https://statsapi.mlb.com/api/v1/people/search?names=%s&sportIds=11,12,13,14,1"
 var mlbGameLogURL = "https://statsapi.mlb.com/api/v1/people/%d/stats?stats=gameLog&group=%s&season=%d&sportId=11,12,13,14"
 
 // performanceCacheDir is the directory the prospects-performance caches
-// (player IDs, game logs) live in. Package-level var so tests can swap it.
-// The pre-existing `.cache/player-ids.json` ad-hoc bulk file from before
-// the cache.FileCache migration is orphaned; safe to delete.
+// (the shared playername MLBAM-ID resolution cache, game logs) live in.
+// Package-level var so tests can swap it. The pre-existing
+// `.cache/player-ids.json` ad-hoc bulk file from before the cache.FileCache
+// migration, and the `.cache/mlb-player-id-<name>-<team>` entries this
+// package wrote before it was routed through playername.ResolveMLBAMIDs
+// (rosterbot-hdiu), are both orphaned and safe to delete.
 var performanceCacheDir = ".cache"
-
-// playerIDTTL: MLB player IDs are immutable, so a 30d TTL is plenty.
-const playerIDTTL = 30 * 24 * time.Hour
 
 // gameLogTTL: in-season game logs grow daily; an hour is a good compromise
 // between freshness and reuse across the prospects daily run + same-day
 // dev iteration.
 const gameLogTTL = time.Hour
-
-// ---------------------------------------------------------------------------
-// Resolve MLB player ID
-// ---------------------------------------------------------------------------
-
-func resolveMLBPlayerID(name, team string) (int, bool) {
-	fc := cache.New[int](performanceCacheDir, playerIDTTL)
-	normName := projections.NormalizeName(name)
-	normTeam := strings.ToLower(teams.Normalize(team))
-	key := cache.Key("mlb-player-id", normName, normTeam)
-
-	id, err := fc.Get(key, func() (int, error) {
-		got, ok := fetchMLBPlayerID(name, team, normName, normTeam)
-		if !ok {
-			// Don't cache misses — return a sentinel error so the cache
-			// layer skips the save and the next run retries the upstream.
-			return 0, fmt.Errorf("not found")
-		}
-		return got, nil
-	})
-	if err != nil || id == 0 {
-		return 0, false
-	}
-	return id, true
-}
-
-func fetchMLBPlayerID(name, team, normName, normTeam string) (int, bool) {
-	url := fmt.Sprintf(mlbPlayerSearchURL, strings.ReplaceAll(name, " ", "%20"))
-	resp, err := http.Get(url)
-	if err != nil {
-		log.Printf("WARNING: MLB search API error for %q: %v", name, err)
-		return 0, false
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var result struct {
-		People []struct {
-			ID          int    `json:"id"`
-			FullName    string `json:"fullName"`
-			CurrentTeam struct {
-				Abbreviation string `json:"abbreviation"`
-			} `json:"currentTeam"`
-		} `json:"people"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		log.Printf("WARNING: MLB search API decode error for %q: %v", name, err)
-		return 0, false
-	}
-
-	// First pass: exact name + team match.
-	// Second pass: name-only match for prospects whose currentTeam is missing
-	// from the API (common for players without MLB service time).
-	var nameOnlyMatch int
-	var nameOnlyCount int
-	for _, p := range result.People {
-		pName := projections.NormalizeName(p.FullName)
-		if pName != normName {
-			continue
-		}
-		pTeam := strings.ToLower(teams.Normalize(p.CurrentTeam.Abbreviation))
-		if pTeam == normTeam {
-			return p.ID, true
-		}
-		if pTeam == "" {
-			nameOnlyMatch = p.ID
-			nameOnlyCount++
-		}
-	}
-	// Accept a name-only match when exactly one result had no team.
-	if nameOnlyCount == 1 && nameOnlyMatch != 0 {
-		return nameOnlyMatch, true
-	}
-
-	log.Printf("WARNING: no MLB ID found for %q (%s) — skipping", name, team)
-	return 0, false
-}
 
 // ---------------------------------------------------------------------------
 // Game log types and fetching
@@ -398,8 +321,13 @@ func (c PerformanceCoverage) String() string {
 }
 
 // FetchPerformanceAlerts checks MiLB game logs for breakout/cold streaks.
-// Player ID lookups and game log fetches are persisted under
-// performanceCacheDir via cache.FileCache (see playerIDTTL / gameLogTTL).
+// Name→MLBAM ID resolution is done ONCE for the whole roster via
+// playername.ResolveMLBAMIDs (the same bulk season-index-then-search path
+// buildRankLookups uses), rather than one people-search per player — this
+// used to be a sixth, independent resolution path that bypassed the season
+// index entirely and so did not carry rosterbot-1x8's namesake-collision
+// guarantee (rosterbot-hdiu). Game log fetches are still persisted under
+// performanceCacheDir via cache.FileCache (see gameLogTTL).
 //
 // It returns a PerformanceCoverage alongside the alerts. Every per-prospect
 // failure is deliberately soft (the closure returns nil on both drop paths),
@@ -412,12 +340,27 @@ func FetchPerformanceAlerts(prospects []fantrax.Player, rankings map[string]int,
 	var alerts []ProspectAlert
 	var unresolved, noGameLog []string
 
+	names := make([]string, len(prospects))
+	for i, p := range prospects {
+		names[i] = p.Name
+	}
+	resolved, resolveErr := playername.ResolveMLBAMIDs(names, performanceCacheDir)
+	if resolveErr != nil {
+		// A degraded (partial) result is returned out-of-band by
+		// ResolveMLBAMIDs and used as-is (see its doc comment) — this branch
+		// is defensive for any other failure shape, in which case every
+		// prospect below falls through to the unresolved path exactly as a
+		// dead resolver would have before this change.
+		log.Printf("WARNING: MLBAM ID resolution failed: %v — every prospect will be treated as unresolved", resolveErr)
+	}
+
 	g := new(errgroup.Group)
-	// Each prospect makes up to two MLB statsapi calls (player-id resolve +
-	// game-log fetch). The MLB API tolerates well above 5 concurrent
-	// connections; cap at NumCPU * 2 (or 16 floor) so cold runs aren't
-	// bottlenecked on a serial-by-default rate. Once cached, this loop is
-	// pure file I/O and the concurrency cost is trivial.
+	// Each prospect goroutine makes at most one MLB statsapi call (the
+	// game-log fetch); ID resolution happens once, up front, through
+	// playername.ResolveMLBAMIDs. The MLB API tolerates well above 5
+	// concurrent connections; cap at NumCPU * 2 (or 16 floor) so cold runs
+	// aren't bottlenecked on a serial-by-default rate. Once cached, this loop
+	// is pure file I/O and the concurrency cost is trivial.
 	maxConcurrent := runtime.NumCPU() * 2
 	if maxConcurrent < 16 {
 		maxConcurrent = 16
@@ -426,7 +369,11 @@ func FetchPerformanceAlerts(prospects []fantrax.Player, rankings map[string]int,
 
 	for _, p := range prospects {
 		g.Go(func() error {
-			id, found := resolveMLBPlayerID(p.Name, p.MLBTeam)
+			var id int
+			var found bool
+			if resolved != nil {
+				id, found = resolved.ByName[playername.Normalize(p.Name)]
+			}
 			if !found {
 				// Still not an error, and deliberately so: one unresolvable
 				// name must not fail the prospects job or drop the rest of

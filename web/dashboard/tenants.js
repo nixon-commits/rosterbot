@@ -419,7 +419,12 @@ function attentionFrom(t) {
     return "You (not the tenant) — the check did not finish";
   }
   if (t.conn_status === "needs_reconnect") return "The tenant — they must reconnect";
-  return "—";
+  // Pending never reaches the verified branch above: a connect task that
+  // crashes before it writes a connection record leaves conn_status stuck at
+  // "pending" forever (tracked separately as rosterbot-spb9), so that row
+  // still needs to attribute a failing job to the operator rather than fall
+  // through as if it were healthy (rosterbot-v1ro).
+  return t.runs && t.runs.last_failure ? "You (not the tenant) — a job is failing" : "—";
 }
 
 function errorCard(err) {

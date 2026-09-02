@@ -82,6 +82,36 @@ func TestRecordDecodesARealLedgerRecord(t *testing.T) {
 	}
 }
 
+// TestRecordDecodesTheTenantActionableOutcome is the rosterbot-cnn9 half of
+// this contract: opsalert.Streak keys its handling of a tenant-actionable
+// exit-0 connect run on Record.Outcome, and the two packages' string
+// constants (lineupapi.RunOutcomeTenantActionable, opsalert.OutcomeTenantActionable)
+// are two independent literals with nothing but this test tying them
+// together. A drift here would not error — it would decode to the empty
+// string, which Streak reads as an ordinary SUCCESS, silently reinstating the
+// false "recovered" verdict this bead exists to remove.
+func TestRecordDecodesTheTenantActionableOutcome(t *testing.T) {
+	want := lineupapi.RunDetail{
+		Run: lineupapi.Run{
+			ID:      "task-1",
+			Command: "connect --user u1",
+			Status:  "SUCCESS",
+			Outcome: lineupapi.RunOutcomeTenantActionable,
+		},
+	}
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got opsalert.Record
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Outcome != opsalert.OutcomeTenantActionable {
+		t.Errorf("Outcome = %q, want %q", got.Outcome, opsalert.OutcomeTenantActionable)
+	}
+}
+
 // A RUNNING record has no exit code and no log tail; decoding must leave them
 // zero rather than erroring, because the streak logic sees these too.
 //
@@ -99,6 +129,9 @@ func TestRecordDecodesARunningLedgerRecord(t *testing.T) {
 	if strings.Contains(string(data), "user_id") {
 		t.Errorf("an untagged record serialized user_id: %s", data)
 	}
+	if strings.Contains(string(data), "outcome") {
+		t.Errorf("a record with no outcome serialized the field anyway: %s", data)
+	}
 	var got opsalert.Record
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
@@ -111,6 +144,9 @@ func TestRecordDecodesARunningLedgerRecord(t *testing.T) {
 	}
 	if got.UserID != "" {
 		t.Errorf("UserID = %q, want empty", got.UserID)
+	}
+	if got.Outcome != "" {
+		t.Errorf("Outcome = %q, want empty", got.Outcome)
 	}
 }
 

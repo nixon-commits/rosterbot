@@ -292,6 +292,14 @@ func (c connectRun) fail(v connectVerdict) error {
 		if err := c.record(lineupapi.ConnectVerdictFailed); err != nil {
 			return err
 		}
+		// This is the exit-0 route: nothing here pages the operator, so the
+		// only durable statement that THIS run left the tenant needing to act
+		// is the one riding on the ledger record itself (rosterbot-cnn9).
+		// Without it, opsalert.Streak reads the SUCCESS status at face value
+		// and can report the tenant "recovered" while their connection is
+		// needs_reconnect — or, under a flapping outage that alternates with
+		// tenant-fault runs, never escalate at all.
+		recordRunOutcome(lineupapi.RunOutcomeTenantActionable)
 		fmt.Fprintf(c.w(), "connect failed for %s: %s\n", c.uid, v.class)
 		return nil
 	}

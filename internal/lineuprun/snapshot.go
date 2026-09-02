@@ -1,6 +1,9 @@
 package lineuprun
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -31,13 +34,84 @@ type dateResult struct {
 	budget *optimizer.GSBudget
 }
 
-// writeProjectionSnapshot archives the per-date projection values the optimizer
-// used so a future `rosterbot backtest` can grade projection accuracy exactly
-// (no reconstruction). snapshotRoot names the partition WITHIN st — "snapshots"
-// for a normal optimize run, or a per-system shadow-capture partition (see
-// Options.SnapshotRoot).
-func writeProjectionSnapshot(dr dateResult, hitSys, pitSys string, slotName map[string]string, hittersNoData, pitchersNoData bool, st backtest.SnapshotStore, snapshotRoot string) error {
-	return backtest.WriteSnapshot(st, snapshotRoot, buildSnapshot(dr, hitSys, pitSys, slotName, hittersNoData, pitchersNoData))
+// writeProjectionSnapshot archives the per-date projection values the
+// optimizer used so a future `rosterbot backtest` can grade projection
+// accuracy exactly (no reconstruction). snapshotRoot names the partition
+// WITHIN st — "snapshots" for a normal optimize run, or a per-system
+// shadow-capture partition (see Options.SnapshotRoot).
+//
+// The hourly run rewrites the same date's file all day, and a naive
+// last-write-wins wipes out the projection a LOCKED player's slot was
+// actually decided on: once his team's game starts, the following run's
+// rescore reflects what happened (injury, benching, a final line), not what
+// the optimizer saw when it made the call — see the SnapshotPlayer.Locked doc
+// for exactly what that flag means and its confirmed measured scope
+// (rosterbot-w79p; the Cade Cavalli 2026-08-29 case this fixes). So this does
+// a per-player merge against whatever was already archived for the date:
+// any player whose EXISTING entry is Locked survives the write wholesale
+// (every field, since that row is what the optimizer saw at lock time);
+// every other player — including one only locked in THIS write — takes the
+// fresh value, preserving the intraday-refinement behavior a --matchup
+// pre-write of a future (never-locked) date relies on. Date-level fields
+// (GeneratedAt, GS forecast/limits, …) always come from the fresh write, so
+// the day's final write keeps passing the sameETDate staleness guard. A
+// missing prior snapshot is a plain fresh write; a prior snapshot that can't
+// be read back degrades to a fresh write with a printed warning, never
+// silently.
+func writeProjectionSnapshot(out io.Writer, dr dateResult, hitSys, pitSys string, slotName map[string]string, hittersNoData, pitchersNoData bool, st backtest.SnapshotStore, snapshotRoot string) error {
+	fresh := buildSnapshot(dr, hitSys, pitSys, slotName, hittersNoData, pitchersNoData)
+
+	data, found, err := st.Get(backtest.SnapshotKey(snapshotRoot, fresh.Date))
+	switch {
+	case err != nil:
+		fmt.Fprintf(out, "  ⚠ existing snapshot for %s unreadable, writing fresh: %v\n", fresh.Date, err)
+	case found:
+		var existing backtest.Snapshot
+		if uerr := json.Unmarshal(data, &existing); uerr != nil {
+			fmt.Fprintf(out, "  ⚠ existing snapshot for %s corrupt, writing fresh: %v\n", fresh.Date, uerr)
+		} else {
+			fresh.Hitters = mergeLockedPlayers(fresh.Hitters, existing.Hitters)
+			fresh.Pitchers = mergeLockedPlayers(fresh.Pitchers, existing.Pitchers)
+		}
+	}
+
+	return backtest.WriteSnapshot(st, snapshotRoot, fresh)
+}
+
+// mergeLockedPlayers merges a date's freshly-scored player rows onto the
+// previously archived ones, keeping any EXISTING row whose Locked is true
+// wholesale and taking the fresh row for everyone else. A player present only
+// in the existing list is kept only if it was locked (it dropped out of this
+// run's scoring, e.g. no longer rostered); a player present only in the fresh
+// list is taken as-is.
+func mergeLockedPlayers(fresh, existing []backtest.SnapshotPlayer) []backtest.SnapshotPlayer {
+	if len(existing) == 0 {
+		return fresh
+	}
+	existingByID := make(map[string]backtest.SnapshotPlayer, len(existing))
+	for _, p := range existing {
+		existingByID[p.PlayerID] = p
+	}
+
+	merged := make([]backtest.SnapshotPlayer, 0, len(fresh))
+	seen := make(map[string]bool, len(fresh))
+	for _, p := range fresh {
+		seen[p.PlayerID] = true
+		if old, ok := existingByID[p.PlayerID]; ok && old.Locked {
+			merged = append(merged, old)
+			continue
+		}
+		merged = append(merged, p)
+	}
+	for _, old := range existing {
+		if seen[old.PlayerID] {
+			continue
+		}
+		if old.Locked {
+			merged = append(merged, old)
+		}
+	}
+	return merged
 }
 
 // buildSnapshot is the pure mapping from a day's optimizer results to the

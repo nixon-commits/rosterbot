@@ -128,7 +128,7 @@ func writeSnapshots(in EmitInputs) {
 		return
 	}
 	for _, dr := range in.Results {
-		if err := writeProjectionSnapshot(dr, in.HitterSystem, in.PitcherSystem, in.SlotName, in.HittersNoData, in.PitchersNoData, in.SnapshotStore, in.SnapshotRoot); err != nil {
+		if err := writeProjectionSnapshot(in.Out, dr, in.HitterSystem, in.PitcherSystem, in.SlotName, in.HittersNoData, in.PitchersNoData, in.SnapshotStore, in.SnapshotRoot); err != nil {
 			fmt.Fprintf(in.Out, "  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)
 		}
 	}

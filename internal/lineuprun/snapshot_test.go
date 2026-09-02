@@ -1,9 +1,12 @@
 package lineuprun
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 )
@@ -206,5 +209,195 @@ func TestBuildSnapshot_NoGateLeavesCapUnset(t *testing.T) {
 
 	if snap := buildSnapshot(dr, "depthcharts-ros", "depthcharts-ros", nil, false, false); snap.GSLimit != 0 {
 		t.Errorf("GSLimit = %d, want 0 when no budget was in force", snap.GSLimit)
+	}
+}
+
+// --- writeProjectionSnapshot merge behavior (rosterbot-w79p) ---
+
+// TestWriteProjectionSnapshot_PreservesLockedRowAcrossRewrites is the Cade
+// Cavalli regression: a player locked (team game underway) at the time of an
+// earlier write must keep that write's projection, deployment and status
+// through every later same-date rewrite — even one that recomputes him at
+// zero after an in-game injury flips him to Reserve. Without the merge, the
+// later run's rescore silently overwrites the projection the optimizer
+// actually used when the lineup was locked in.
+func TestWriteProjectionSnapshot_PreservesLockedRowAcrossRewrites(t *testing.T) {
+	st := backtest.NewFileSnapshotStore(t.TempDir())
+	date := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
+
+	first := dateResult{
+		date: date,
+		pitcherResult: optimizer.PitcherResult{
+			Scored: []optimizer.ScoredPitcher{{
+				Player: fantrax.Player{
+					ID: "cavalli", Name: "Cade Cavalli", PosShortNames: "SP",
+					Status: "Active", Locked: true,
+				},
+				ExpectedPts: 17.02, HasGame: true, IsStarter: true,
+			}},
+		},
+	}
+	if err := writeProjectionSnapshot(&bytes.Buffer{}, first, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+
+	second := dateResult{
+		date: date,
+		pitcherResult: optimizer.PitcherResult{
+			Scored: []optimizer.ScoredPitcher{{
+				Player: fantrax.Player{
+					ID: "cavalli", Name: "Cade Cavalli", PosShortNames: "SP",
+					Status: "Reserve", Locked: true,
+				},
+				ExpectedPts: 0, HasGame: false, IsStarter: false,
+			}},
+		},
+	}
+	if err := writeProjectionSnapshot(&bytes.Buffer{}, second, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+
+	snap, ok := backtest.LoadSnapshot(st, "snapshots", date)
+	if !ok {
+		t.Fatalf("snapshot not found")
+	}
+	if len(snap.Pitchers) != 1 {
+		t.Fatalf("want 1 pitcher, got %d", len(snap.Pitchers))
+	}
+	p := snap.Pitchers[0]
+	if p.ProjPtsPerGame != 17.02 {
+		t.Errorf("ProjPtsPerGame = %v, want 17.02 (the locked-at-write-time value)", p.ProjPtsPerGame)
+	}
+	if !p.HasGame {
+		t.Error("HasGame = false, want true (survived from the locked write)")
+	}
+	if !p.IsStarter {
+		t.Error("IsStarter = false, want true (survived from the locked write)")
+	}
+	if p.Status != "Active" {
+		t.Errorf("Status = %q, want Active (survived from the locked write)", p.Status)
+	}
+}
+
+// TestWriteProjectionSnapshot_UnlockedRowsTakeTheLatestWrite is the absence
+// half of the guard: it must be scoped to locked rows only, not freeze the
+// whole date. A hitter unlocked in the first write whose projection
+// legitimately changes in the second write must read the SECOND write's
+// value, and a pitcher locked ONLY in the second write (never archived
+// before) must simply take that write's value.
+func TestWriteProjectionSnapshot_UnlockedRowsTakeTheLatestWrite(t *testing.T) {
+	st := backtest.NewFileSnapshotStore(t.TempDir())
+	date := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
+
+	first := dateResult{
+		date: date,
+		hitterResult: optimizer.Result{
+			Scored: []optimizer.ScoredPlayer{{
+				Player:      fantrax.Player{ID: "q", Name: "Unlocked Hitter", Status: "Active", Locked: false},
+				ExpectedPts: 5.0, HasGame: true,
+			}},
+		},
+	}
+	if err := writeProjectionSnapshot(&bytes.Buffer{}, first, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+
+	second := dateResult{
+		date: date,
+		hitterResult: optimizer.Result{
+			Scored: []optimizer.ScoredPlayer{{
+				// Q is STILL unlocked in the second write — an ordinary
+				// intraday reprojection, not a post-lock overwrite.
+				Player:      fantrax.Player{ID: "q", Name: "Unlocked Hitter", Status: "Active", Locked: false},
+				ExpectedPts: 9.0, HasGame: true,
+			}},
+		},
+		pitcherResult: optimizer.PitcherResult{
+			Scored: []optimizer.ScoredPitcher{{
+				// R never appeared in the first write at all; locked only here.
+				Player:      fantrax.Player{ID: "r", Name: "Newly Locked", Status: "Active", Locked: true},
+				ExpectedPts: 11.5, HasGame: true, IsStarter: true,
+			}},
+		},
+	}
+	if err := writeProjectionSnapshot(&bytes.Buffer{}, second, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+
+	snap, ok := backtest.LoadSnapshot(st, "snapshots", date)
+	if !ok {
+		t.Fatalf("snapshot not found")
+	}
+	if len(snap.Hitters) != 1 || snap.Hitters[0].ProjPtsPerGame != 9.0 {
+		t.Errorf("unlocked hitter should read the second write's value: %+v", snap.Hitters)
+	}
+	if len(snap.Pitchers) != 1 || snap.Pitchers[0].ProjPtsPerGame != 11.5 || !snap.Pitchers[0].IsStarter {
+		t.Errorf("pitcher locked only in the second write should take that write's values: %+v", snap.Pitchers)
+	}
+}
+
+// TestWriteProjectionSnapshot_MissingPriorSnapshotWritesFresh pins the base
+// case: no prior snapshot for the date means a plain fresh write, with no
+// warning printed (there is nothing wrong to report).
+func TestWriteProjectionSnapshot_MissingPriorSnapshotWritesFresh(t *testing.T) {
+	st := backtest.NewFileSnapshotStore(t.TempDir())
+	date := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
+	dr := dateResult{
+		date: date,
+		pitcherResult: optimizer.PitcherResult{
+			Scored: []optimizer.ScoredPitcher{{
+				Player:      fantrax.Player{ID: "p1", Name: "Ace", Status: "Active"},
+				ExpectedPts: 12.0, HasGame: true, IsStarter: true,
+			}},
+		},
+	}
+
+	var out bytes.Buffer
+	if err := writeProjectionSnapshot(&out, dr, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("expected no warning on a missing prior snapshot, got: %q", out.String())
+	}
+
+	snap, ok := backtest.LoadSnapshot(st, "snapshots", date)
+	if !ok || len(snap.Pitchers) != 1 || snap.Pitchers[0].ProjPtsPerGame != 12.0 {
+		t.Errorf("fresh write missing or wrong: ok=%v snap=%+v", ok, snap)
+	}
+}
+
+// TestWriteProjectionSnapshot_CorruptPriorSnapshotWritesFreshAndWarns pins the
+// degrade-to-noise-never-to-silence behavior: an unreadable prior snapshot
+// must not block the fresh write, but must print a warning rather than fail
+// silently.
+func TestWriteProjectionSnapshot_CorruptPriorSnapshotWritesFreshAndWarns(t *testing.T) {
+	st := backtest.NewFileSnapshotStore(t.TempDir())
+	date := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
+
+	if err := st.Put(backtest.SnapshotKey("snapshots", date.Format("2006-01-02")), []byte("not valid json")); err != nil {
+		t.Fatalf("seed corrupt snapshot: %v", err)
+	}
+
+	dr := dateResult{
+		date: date,
+		pitcherResult: optimizer.PitcherResult{
+			Scored: []optimizer.ScoredPitcher{{
+				Player:      fantrax.Player{ID: "p1", Name: "Ace", Status: "Active"},
+				ExpectedPts: 12.0, HasGame: true, IsStarter: true,
+			}},
+		},
+	}
+
+	var out bytes.Buffer
+	if err := writeProjectionSnapshot(&out, dr, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !strings.Contains(out.String(), date.Format("2006-01-02")) {
+		t.Errorf("expected a printed warning naming the date, got: %q", out.String())
+	}
+
+	snap, ok := backtest.LoadSnapshot(st, "snapshots", date)
+	if !ok || len(snap.Pitchers) != 1 || snap.Pitchers[0].ProjPtsPerGame != 12.0 {
+		t.Errorf("fresh write missing or wrong after corrupt prior snapshot: ok=%v snap=%+v", ok, snap)
 	}
 }

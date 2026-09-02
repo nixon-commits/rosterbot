@@ -45,6 +45,16 @@ func activeSP(id, name, team string) fantrax.Player {
 	return fantrax.Player{ID: id, Name: name, MLBTeam: team, Status: "Active", PosShortNames: "SP"}
 }
 
+// reserveSP is an SP-eligible, non-minors, non-injured pitcher who is NOT
+// occupying an active roster slot today. rosterSPNames does not filter these
+// out (it only drops InMinors/IsInjured), but Fantrax's GS walk credits only
+// active-slot deltas (internal/fantrax/pitcher_starts.go) — a benched
+// pitcher's real-world start never lands in Used no matter what MLB's
+// probables say (rosterbot-ogtq).
+func reserveSP(id, name, team string) fantrax.Player {
+	return fantrax.Player{ID: id, Name: name, MLBTeam: team, Status: "Reserve", PosShortNames: "SP"}
+}
+
 // --- buildGSForecast: no network, only the schedule seam ---
 
 func TestBuildGSForecast_ConfirmedProbablesUseProjectedPoints(t *testing.T) {

@@ -62,19 +62,25 @@ const gsFloorMinDaysLeft = 2
 // in GSBudget.Used the moment Fantrax settles them, and nothing at this seam
 // separates a settled start from a pending one — the ambiguity that made the
 // old live-roster count diverge every evening (rosterbot-cg8l). That exclusion
-// is right, but it leaves the projection missing exactly today's starts, and
-// that omission is WORST at the start of a week, where Need is simultaneously
-// at its maximum because Used is still zero.
+// is right, but before GSBudget.TodayUnsettled (rosterbot-ogtq) it left the
+// projection missing exactly today's starts, and that omission was WORST at the
+// start of a week, where Need is simultaneously at its maximum because Used is
+// still zero. TodayUnsettled now credits today's confirmed-but-unlocked
+// probables against Need in evaluateGSFloor, so that gap is closed for the
+// confirmed subset; only the estimated-for-today subset and the brief
+// locked-but-not-yet-settled window remain uncredited here.
 //
 // Measured against the real Period 21 snapshots (.backtest/.../2026-08-24..27,
-// the first week to carry gs_floor/gs_forecast). Monday's own forecast reads
-// confirmed 3 + estimated 7.4, so Supply is 8.92 against a Need of the full
-// floor, 10 — a 1.08 shortfall on a week that finished roughly +3 CLEAR, which
-// is the bead's designated must-not-fire case. The Lineup cron runs hourly
-// 14:00-03:00 UTC, so Used stays 0 through every daytime run before that
-// evening's games settle: the false alert was not an edge case but a near
-// certainty every Monday, and per-period dedup means it would spend the one
-// alert that week was ever going to get.
+// the first week to carry gs_floor/gs_forecast), BEFORE TodayUnsettled existed.
+// Monday's own forecast read confirmed 3 + estimated 7.4, so Supply was 8.92
+// against a Need of the full floor, 10 — a 1.08 shortfall on a week that
+// finished roughly +3 CLEAR, which is the bead's designated must-not-fire case.
+// The Lineup cron runs hourly 14:00-03:00 UTC, so Used stays 0 through every
+// daytime run before that evening's games settle: the false alert was not an
+// edge case but a near certainty every Monday, and per-period dedup means it
+// would spend the one alert that week was ever going to get. That arithmetic
+// has not been re-measured against the corrected Need formula, so 4 may now be
+// more conservative than the corrected projection needs.
 //
 // The projection itself is NOT wrong — Used + undiscounted supply reads 13.40
 // on both Monday and Tuesday, matching the audit's own ~13.4 figure exactly.

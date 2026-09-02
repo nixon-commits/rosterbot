@@ -208,7 +208,7 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 	// credit rather than disabling the gate: zero reproduces the pre-fix
 	// arithmetic exactly, which reads a shortfall louder than the truth and
 	// never quieter, and this correction only ever feeds a report.
-	todayUnsettled, tuErr := todayUnsettledStarts(sched, spNames, in.Today)
+	todayUnsettled, tuErr := todayUnsettledStarts(sched, spNames, in.NumPitcherSlots, in.Today)
 	if tuErr != nil {
 		d.logf("WARNING: today's probables unavailable (%v) — floor shortfall may read high", tuErr)
 	}
@@ -363,23 +363,34 @@ func buildGSForecast(
 // counted by neither, which reads the shortfall slightly HIGH — the same
 // direction as the bug this replaces, and the safe direction for an alert.
 //
+// Two more guards keep this in step with what Used can actually reflect
+// (rosterbot-ogtq lens A/B). GetTeamGS credits only ACTIVE-SLOT GS deltas
+// (internal/fantrax/pitcher_starts.go:84-85) — a benched pitcher's real-world
+// start never lands in Used no matter what MLB's probables say, so a
+// confirmed starter must also be occupying an active slot (p.Status ==
+// "Active") to count here. And the count is capped at numPSlots, mirroring
+// buildGSForecast's own cap ("Cap at active P slots, keeping the
+// highest-value probables"): a team can only start as many pitchers as it has
+// active P slots, so nothing this function returns can exceed that whether or
+// not the active-status filter above already implies the same bound.
+//
 // Deliberately not folded into buildGSForecast. Adding today to Forecast would
 // be invisible to every current consumer (all four guard on Date.After(Today)),
 // but it would make a today row appear in the archived gs_forecast snapshots
 // and quietly change what backtest grades.
-func todayUnsettledStarts(sched gsScheduleClient, spNames map[string]fantrax.Player, today time.Time) (int, error) {
+func todayUnsettledStarts(sched gsScheduleClient, spNames map[string]fantrax.Player, numPSlots int, today time.Time) (int, error) {
 	probs, err := sched.ProbableStarters(today)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for _, p := range spNames {
-		if p.Locked {
+		if p.Locked || p.Status != "Active" {
 			continue
 		}
 		if playername.MatchProbable(p.Name, p.MLBTeam, probs) == playername.ConfirmedStarter {
 			n++
 		}
 	}
-	return n, nil
+	return min(n, numPSlots), nil
 }

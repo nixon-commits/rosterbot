@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/playername"
 )
 
 // ---------------------------------------------------------------------------
@@ -194,64 +197,21 @@ func TestComputeHitterBreakout_Cold(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// resolveMLBPlayerID tests
-// ---------------------------------------------------------------------------
-
-func TestResolveMLBPlayerID_SearchAPI(t *testing.T) {
-	// Hits the upstream once on cache miss, then cache hit on second call —
-	// the second call should not depend on the test server (we close it
-	// before the second call to prove that).
-	fixture := map[string]any{
-		"people": []map[string]any{
-			{
-				"id":       808080,
-				"fullName": "Jackson Holliday",
-				"currentTeam": map[string]any{
-					"abbreviation": "BAL",
-				},
-			},
-		},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(fixture)
-	}))
-
-	origURL := mlbPlayerSearchURL
-	mlbPlayerSearchURL = srv.URL + "?names=%s"
-	origDir := performanceCacheDir
-	performanceCacheDir = t.TempDir()
-	defer func() {
-		mlbPlayerSearchURL = origURL
-		performanceCacheDir = origDir
-	}()
-
-	id, found := resolveMLBPlayerID("Jackson Holliday", "BAL")
-	if !found {
-		t.Fatal("expected found=true from API")
-	}
-	if id != 808080 {
-		t.Errorf("expected id=808080, got %d", id)
-	}
-
-	// Second call after upstream is gone — must come from the file cache.
-	srv.Close()
-	id2, found2 := resolveMLBPlayerID("Jackson Holliday", "BAL")
-	if !found2 || id2 != 808080 {
-		t.Errorf("expected cached id=808080, got id=%d found=%v", id2, found2)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Unresolved-ID coverage tests (rosterbot-2onc)
 // ---------------------------------------------------------------------------
 
-// statsapiStub serves the two MLB statsapi endpoints FetchPerformanceAlerts
-// hits. A name absent from people is the unresolvable case: the real API
-// answers a search it cannot match with an empty list, not an error.
-// gameLogsFail makes the stub's game-log endpoint 500 while people-search keeps
-// working. The two statsapi endpoints fail independently in production, and
-// that asymmetry is the whole reason PerformanceCoverage counts the two drops
-// separately.
+// statsapiStub serves the MLB statsapi endpoints FetchPerformanceAlerts now
+// reaches through playername.ResolveMLBAMIDs (the season-index dumps and the
+// people-search fallback, at their real paths) plus this package's own
+// game-log endpoint. A name absent from `people` is the unresolvable case:
+// the real search API answers a query it cannot match with an empty list,
+// not an error. The season-index sport dumps always answer empty — well
+// below seasonIndexMinPlayers — so every name is refused by the index and
+// falls through to the search, which is the path these tests exist to
+// exercise. gameLogsFail makes the game-log endpoint 500 while people-search
+// keeps working: the two statsapi endpoints fail independently in
+// production, and that asymmetry is the whole reason PerformanceCoverage
+// counts the two drops separately.
 func gameLogsFail(c *stubConfig) { c.gameLogsFail = true }
 
 type stubConfig struct{ gameLogsFail bool }
@@ -263,6 +223,11 @@ func statsapiStub(t *testing.T, people map[string]int, opts ...stubOpt) {
 	var sc stubConfig
 	for _, o := range opts {
 		o(&sc)
+	}
+
+	idToName := make(map[int]string, len(people))
+	for name, id := range people {
+		idToName[id] = name
 	}
 
 	hotHitterLog := func() any {
@@ -287,34 +252,51 @@ func statsapiStub(t *testing.T, people map[string]int, opts ...stubOpt) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/log" {
+		switch {
+		case r.URL.Path == "/log":
 			if sc.gameLogsFail {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 			_ = json.NewEncoder(w).Encode(hotHitterLog())
 			return
-		}
-		name := r.URL.Query().Get("names")
-		id, ok := people[name]
-		if !ok {
+		case r.URL.Path == "/api/v1/people/search":
+			var out []map[string]any
+			for _, name := range strings.Split(r.URL.Query().Get("names"), ",") {
+				if id, ok := people[name]; ok {
+					out = append(out, map[string]any{"id": id, "fullName": name, "firstName": name, "lastName": name, "active": true})
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"people": out})
+			return
+		case r.URL.Path == "/api/v1/people":
+			var out []map[string]any
+			for _, idStr := range strings.Split(r.URL.Query().Get("personIds"), ",") {
+				id, _ := strconv.Atoi(idStr)
+				if name, ok := idToName[id]; ok {
+					out = append(out, map[string]any{"id": id, "fullName": name, "firstName": name, "lastName": name, "active": true})
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"people": out})
+			return
+		case strings.HasPrefix(r.URL.Path, "/api/v1/sports/"):
+			// Deliberately empty: below seasonIndexMinPlayers, so the season
+			// index refuses and every name falls through to the search above.
 			_ = json.NewEncoder(w).Encode(map[string]any{"people": []map[string]any{}})
 			return
+		default:
+			http.NotFound(w, r)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"people": []map[string]any{{
-			"id":          id,
-			"fullName":    name,
-			"currentTeam": map[string]any{"abbreviation": "ATH"},
-		}}})
 	}))
 
-	origSearch, origLog, origDir := mlbPlayerSearchURL, mlbGameLogURL, performanceCacheDir
-	mlbPlayerSearchURL = srv.URL + "/search?names=%s"
+	restoreBaseURL := playername.SetBaseURLForTest(srv.URL)
+	origLog, origDir := mlbGameLogURL, performanceCacheDir
 	mlbGameLogURL = srv.URL + "/log?id=%d&group=%s&season=%d"
 	performanceCacheDir = t.TempDir()
 	t.Cleanup(func() {
 		srv.Close()
-		mlbPlayerSearchURL, mlbGameLogURL, performanceCacheDir = origSearch, origLog, origDir
+		restoreBaseURL()
+		mlbGameLogURL, performanceCacheDir = origLog, origDir
 	})
 }
 
@@ -459,5 +441,130 @@ func TestFetchPerformanceAlerts_CountsTheTwoDropsSeparately(t *testing.T) {
 	}
 	if len(cov.Unresolved) != 1 || len(cov.NoGameLog) != 1 {
 		t.Errorf("the two drops must not be merged: unresolved=%v noGameLog=%v", cov.Unresolved, cov.NoGameLog)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Season-index integration (rosterbot-hdiu)
+// ---------------------------------------------------------------------------
+
+// TestFetchPerformanceAlerts_PrefersActiveNamesakeOverRetired pins that
+// FetchPerformanceAlerts resolves through playername.ResolveMLBAMIDs — the
+// same season-index-then-search path buildRankLookups uses — rather than its
+// own former one-search-per-player path (resolveMLBPlayerID/
+// fetchMLBPlayerID, deleted). MLB's people-search spans retired players, so a
+// common name can return both an active player and a retired namesake; the
+// season index resolves this class structurally by excluding the retired
+// player from its season dump, but here the dump is deliberately too small
+// (seasonIndexMinPlayers refuses it) so the request falls through to the
+// search, where playername.claimName's active-first tie-break must still
+// pick the active player. The old per-player search had no such tie-break —
+// it took whichever result matched by name+team first, which the mutation
+// proof exercises directly.
+func TestFetchPerformanceAlerts_PrefersActiveNamesakeOverRetired(t *testing.T) {
+	var mu sync.Mutex
+	var gameLogIDs []int
+
+	// The retired catcher (501447) is listed first — MLB's search response
+	// order is not to be relied on, and this is the ordering that broke the
+	// old per-player search (rosterbot-bms).
+	peopleFixture := `{"people":[` +
+		`{"id":501447,"fullName":"Jose Altuve","firstName":"Jose","lastName":"Altuve","active":false},` +
+		`{"id":514888,"fullName":"Jose Altuve","firstName":"Jose","lastName":"Altuve","active":true}` +
+		`]}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/people/search", r.URL.Path == "/api/v1/people":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(peopleFixture))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/sports/"):
+			// Deliberately empty — below seasonIndexMinPlayers — so the
+			// season index refuses and the request reaches the search above.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"people":[]}`))
+		case r.URL.Path == "/gamelog":
+			id, _ := strconv.Atoi(r.URL.Query().Get("id"))
+			mu.Lock()
+			gameLogIDs = append(gameLogIDs, id)
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"stats":[{"splits":[{"date":"2026-05-01","sport":{"abbreviation":"AAA"},"stat":{"atBats":4,"hits":1}}]}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	restoreBaseURL := playername.SetBaseURLForTest(srv.URL)
+	defer restoreBaseURL()
+	origLog, origDir := mlbGameLogURL, performanceCacheDir
+	mlbGameLogURL = srv.URL + "/gamelog?id=%d&group=%s&season=%d"
+	performanceCacheDir = t.TempDir()
+	defer func() { mlbGameLogURL, performanceCacheDir = origLog, origDir }()
+
+	_, cov, err := FetchPerformanceAlerts([]fantrax.Player{minorsProspect("Jose Altuve")}, nil, 2026, 14, 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cov.Unresolved) != 0 {
+		t.Fatalf("expected Jose Altuve to resolve, got unresolved=%v", cov.Unresolved)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(gameLogIDs) != 1 || gameLogIDs[0] != 514888 {
+		t.Errorf("expected the game log fetched for the ACTIVE player (514888), got %v", gameLogIDs)
+	}
+}
+
+// TestFetchPerformanceAlerts_UnresolvedNameNeverFetchesAGameLog is the
+// absence case beside the namesake test above: a name the resolver cannot
+// place at all must be skipped without error and without ever reaching the
+// game-log endpoint — the same silent-drop contract
+// TestFetchPerformanceAlerts_ReportsAnUnresolvedProspectAndStillSkipsHim
+// pins for the alerts list, asserted here at the HTTP boundary instead.
+func TestFetchPerformanceAlerts_UnresolvedNameNeverFetchesAGameLog(t *testing.T) {
+	var mu sync.Mutex
+	var gameLogHits int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/people/search", r.URL.Path == "/api/v1/people":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"people":[]}`))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/sports/"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"people":[]}`))
+		case r.URL.Path == "/gamelog":
+			mu.Lock()
+			gameLogHits++
+			mu.Unlock()
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	restoreBaseURL := playername.SetBaseURLForTest(srv.URL)
+	defer restoreBaseURL()
+	origLog, origDir := mlbGameLogURL, performanceCacheDir
+	mlbGameLogURL = srv.URL + "/gamelog?id=%d&group=%s&season=%d"
+	performanceCacheDir = t.TempDir()
+	defer func() { mlbGameLogURL, performanceCacheDir = origLog, origDir }()
+
+	alerts, cov, err := FetchPerformanceAlerts([]fantrax.Player{minorsProspect("Nobody Findable")}, nil, 2026, 14, 5)
+	if err != nil {
+		t.Fatalf("an unresolvable name must not fail the scan: %v", err)
+	}
+	if len(alerts) != 0 {
+		t.Errorf("expected no alerts, got %d", len(alerts))
+	}
+	if len(cov.Unresolved) != 1 || cov.Unresolved[0] != "Nobody Findable (ATH)" {
+		t.Errorf("expected him named as unresolved, got %v", cov.Unresolved)
+	}
+	if gameLogHits != 0 {
+		t.Errorf("expected zero game-log requests for an unresolved name, got %d", gameLogHits)
 	}
 }

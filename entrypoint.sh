@@ -65,7 +65,18 @@ CMD="$*"
 # file for the ledger's log_tail. The braces+echo capture the bot's real exit
 # code through the pipe (POSIX sh has no PIPESTATUS). RUN_ID lets the bot tag
 # activity-feed events with the run that produced them.
+#
+# RUN_OUTCOME_FILE is the other channel a subcommand has for the terminal
+# ledger write: an exit code alone cannot say "this run exited 0 but left the
+# tenant needing to act" (cmd/connect.go's routeTenant route is deliberately
+# exit-0, so opsalert does not page the operator for something only the user
+# can fix). Removed before the run so a stale file from an earlier invocation
+# of this same binary cannot leak in — belt-and-braces, since the container is
+# fresh per run anyway. See lineupapi.RunOutcomeTenantActionable and cmd's
+# recordRunOutcome.
 export RUN_ID="$ID"
+export RUN_OUTCOME_FILE=/tmp/rosterbot.outcome
+rm -f "$RUN_OUTCOME_FILE" 2>/dev/null || true
 { ./rosterbot "$@" 2>&1; echo $? >/tmp/rosterbot.rc; } | tee /tmp/rosterbot.log
 rc=$(cat /tmp/rosterbot.rc 2>/dev/null || echo 1)
 
@@ -75,7 +86,8 @@ STATUS=SUCCESS
 
 ./rosterbot run-ledger --id "$ID" --command "$CMD" --status "$STATUS" \
   --exit-code "$rc" --started "$STARTED" --ended "$ENDED" \
-  --trigger "$TRIGGER" --user "$RUN_USER" --log-file /tmp/rosterbot.log || true
+  --trigger "$TRIGGER" --user "$RUN_USER" --log-file /tmp/rosterbot.log \
+  --outcome "$(cat "$RUN_OUTCOME_FILE" 2>/dev/null || true)" || true
 
 sync_up
 exit "$rc"

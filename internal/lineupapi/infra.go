@@ -35,14 +35,19 @@ type PrefixListing struct {
 	Bytes        int64     `json:"bytes"`
 	LastModified time.Time `json:"last_modified"`
 
-	// Truncated is true when the walk hit its object cap and stopped before
-	// enumerating the whole prefix. Every field above and below it is then a
-	// statement about the PART of the prefix that was read, not the prefix —
-	// and not merely approximate: Objects/Bytes are floors, but LastModified is
-	// the newest object SEEN, so a prefix with fresh objects past the cut can
-	// read stale, and Partitions/the sub-dimension values can omit the actual
-	// newest day entirely. A listing that never truncates (the local
-	// FileInfraStore has no cap) leaves this false.
+	// Truncated is true when the listing did not cover the whole prefix —
+	// either the S3 walk hit its object cap and stopped, or (FileInfraStore)
+	// the local walk hit an entry it could not read (a WalkDir error, a
+	// failed filepath.Rel, or a stat that failed after readdir). Every field
+	// above and below it is then a statement about the PART of the prefix
+	// that was read, not the prefix — and not merely approximate:
+	// Objects/Bytes are floors, but LastModified is the newest object SEEN,
+	// so a prefix with fresh objects past the cut can read stale, and
+	// Partitions/the sub-dimension values can omit the actual newest day
+	// entirely. Both causes get identical treatment downstream: what the
+	// walk couldn't reach isn't distinguishable from what doesn't exist, so
+	// every consumer treats Truncated as "don't trust this floor" regardless
+	// of why it's set.
 	Truncated bool `json:"truncated,omitempty"`
 
 	// Partitions holds the days this prefix has data for (YYYY-MM-DD), read
@@ -773,18 +778,23 @@ func (f *FileInfraStore) ListPrefix(ctx context.Context, prefix string) (PrefixL
 		if err != nil {
 			// Skip the entry; returning it aborts WalkDir and the check below
 			// blanks the whole /v1/infra listing for one bad entry, which is
-			// the opposite of what the Infra page is for. Open question, NOT
-			// settled here: the skip silently makes Objects/Bytes floors
-			// without setting PrefixListing.Truncated — see rosterbot-xi3p.
-			return nil //nolint:nilerr // deliberate skip; the silent-floor question is rosterbot-xi3p
+			// the opposite of what the Infra page is for. rosterbot-xi3p:
+			// the skip marks the listing Truncated — a partial local walk
+			// gets the same "do not trust this floor" treatment every
+			// consumer already gives the S3 cap, since the cause (cap vs
+			// unreadable entry) doesn't change what a reader should do with
+			// a degraded Objects/Bytes count.
+			out.Truncated = true
+			return nil //nolint:nilerr // deliberate skip; marks the listing Truncated (rosterbot-xi3p)
 		}
 		rel, relErr := filepath.Rel(full, path)
 		if relErr != nil {
 			// WalkDir only yields paths under full, so Rel should not fail;
 			// this is the inert branch, not a swallowed diagnosis. If it ever
-			// does fire it drops the entry silently — same open question as
-			// above, rosterbot-xi3p.
-			return nil //nolint:nilerr // deliberate skip; the silent-floor question is rosterbot-xi3p
+			// does fire it drops the entry the same way the branch above
+			// does, so it marks Truncated too — rosterbot-xi3p.
+			out.Truncated = true
+			return nil //nolint:nilerr // deliberate skip; marks the listing Truncated (rosterbot-xi3p)
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
@@ -808,10 +818,12 @@ func (f *FileInfraStore) ListPrefix(ctx context.Context, prefix string) (PrefixL
 		}
 		info, statErr := d.Info()
 		if statErr != nil {
-			// The entry vanished between readdir and stat. Skipping costs this
-			// object's contribution to Objects/Bytes below, which is exactly
-			// the un-marked floor rosterbot-xi3p is open on.
-			return nil //nolint:nilerr // deliberate skip; the silent-floor question is rosterbot-xi3p
+			// The entry vanished between readdir and stat, or otherwise
+			// can't be read. Skipping costs this object's contribution to
+			// Objects/Bytes below, so it marks Truncated for the same
+			// reason as the two branches above — rosterbot-xi3p.
+			out.Truncated = true
+			return nil //nolint:nilerr // deliberate skip; marks the listing Truncated (rosterbot-xi3p)
 		}
 		out.Objects++
 		out.Bytes += info.Size()

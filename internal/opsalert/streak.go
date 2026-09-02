@@ -5,7 +5,7 @@
 // Lambda, and internal/lineupapi — where the run ledger's wire types live —
 // transitively pulls internal/fantrax and therefore chromedp. A notification
 // Lambda has no business carrying a headless browser, so Record redeclares the
-// five fields this package needs and contract_test.go guards the duplication.
+// fields this package needs and contract_test.go guards the duplication.
 //
 // Everything here is pure: the Lambda fetches, opsalert judges.
 package opsalert
@@ -42,7 +42,21 @@ type Record struct {
 	StartedAt string `json:"started_at"`
 	ExitCode  *int   `json:"exit_code,omitempty"`
 	LogTail   string `json:"log_tail,omitempty"`
+
+	// Outcome mirrors lineupapi.Run.Outcome: the process's own statement about
+	// an exit-0 run, for a reader — this package — that cannot join the
+	// connection record lineupapi's HTTP surface joins at read time. See
+	// OutcomeTenantActionable and the Streak doc.
+	Outcome string `json:"outcome,omitempty"`
 }
+
+// OutcomeTenantActionable mirrors lineupapi.RunOutcomeTenantActionable (the
+// duplication contract_test.go in internal/lineupapi guards, same as every
+// other field on Record). It marks a SUCCESS ledger row — a connect that
+// exited 0 on purpose so opsalert would not page the operator — that left the
+// tenant needing to act. Streak treats it as evidence about nothing rather
+// than as a recovery.
+const OutcomeTenantActionable = "tenant_actionable"
 
 // Started parses StartedAt. The zero time means the record carries no usable
 // timestamp, which every caller must treat as "unknown", never as "the epoch".
@@ -118,6 +132,17 @@ type Verdict struct {
 // end-of-run write later overwrites at the same key, so an in-flight sibling
 // run must not be mistaken for a break in the streak.
 //
+// A SUCCESS record carrying OutcomeTenantActionable is a connect that exited 0
+// on purpose (so this package would not page the operator) but left the
+// tenant needing to act — see Record.Outcome. It is not evidence the
+// operator-facing streak recovered, so when it is the NEWEST record for this
+// (command, userID) the verdict is None: not a false Recovered, and not a
+// silent skip either — Streak is recomputed fresh every time a run stops, so
+// skipping the newest record would re-report whatever verdict the OLDER
+// history already earned, once per subsequent tenant-fault run. Any older
+// such record is dropped from hist entirely, so it neither breaks a failure
+// streak (a false Recovered) nor extends one (it is not a failure).
+//
 // The whole decision is derived from the ledger, which is why there is no
 // counter object to keep consistent and no cooldown to tune: streak
 // transitions deduplicate themselves.
@@ -137,6 +162,11 @@ func Streak(recs []Record, command, userID string) Verdict {
 		return none
 	}
 
+	if hist[0].Status == StatusSuccess && hist[0].Outcome == OutcomeTenantActionable {
+		return none
+	}
+	hist = dropTenantActionableSuccesses(hist)
+
 	if hist[0].Status == StatusSuccess {
 		n := leadingFailures(hist[1:])
 		if n == 0 {
@@ -154,6 +184,22 @@ func Streak(recs []Record, command, userID string) Verdict {
 		v.Kind = Escalated
 	}
 	return v
+}
+
+// dropTenantActionableSuccesses removes every tenant-actionable SUCCESS record
+// from hist. The caller has already handled hist[0] being one (Streak returns
+// before calling this in that case), so this only ever removes older entries
+// in practice — but it is written to filter the whole slice rather than
+// hist[1:] so that invariant lives in one place, not two.
+func dropTenantActionableSuccesses(hist []Record) []Record {
+	out := make([]Record, 0, len(hist))
+	for _, r := range hist {
+		if r.Status == StatusSuccess && r.Outcome == OutcomeTenantActionable {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // leadingFailures counts consecutive FAILED records from the front of recs.

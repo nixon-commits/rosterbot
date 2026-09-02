@@ -21,6 +21,7 @@ var (
 	ledgerEnded    string
 	ledgerTrigger  string
 	ledgerLogFile  string
+	ledgerOutcome  string
 )
 
 // run-ledger is an internal command invoked by entrypoint.sh to record one job
@@ -48,6 +49,10 @@ func init() {
 	f.StringVar(&ledgerEnded, "ended", "", "RFC3339 end time")
 	f.StringVar(&ledgerTrigger, "trigger", "schedule", "schedule | manual")
 	f.StringVar(&ledgerLogFile, "log-file", "", "path to captured output (tailed into log_tail on failure)")
+	// Read from RUN_OUTCOME_FILE by entrypoint.sh's terminal write only (the
+	// RUNNING write has nothing to report yet). Empty is the ordinary case:
+	// the status speaks for itself. See lineupapi.RunOutcomeTenantActionable.
+	f.StringVar(&ledgerOutcome, "outcome", "", "process-stated outcome for an exit-0 run (empty = status speaks for itself)")
 	rootCmd.AddCommand(ledgerCmd)
 }
 
@@ -73,6 +78,19 @@ func runLedger(cmd *cobra.Command, args []string) error {
 	}
 	if ledgerStatus == "FAILED" && ledgerLogFile != "" {
 		rec.LogTail = tailFile(ledgerLogFile, 50, 8000)
+	}
+	switch ledgerOutcome {
+	case "":
+		// The ordinary case: nothing to add, the status speaks for itself.
+	case lineupapi.RunOutcomeTenantActionable:
+		rec.Outcome = ledgerOutcome
+	default:
+		// Degrade to noise, never to silence: the terminal write must land
+		// regardless (a missing terminal record leaves the run RUNNING
+		// forever, blinding both Streak and Overdue), so an unrecognized
+		// outcome is warned about and simply dropped rather than failing
+		// the whole write.
+		fmt.Fprintf(cmd.ErrOrStderr(), "run-ledger: unknown --outcome %q, writing the record without it\n", ledgerOutcome)
 	}
 
 	w, err := statestore.FromEnv().RunLedger()

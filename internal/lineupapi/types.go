@@ -122,7 +122,30 @@ type Run struct {
 	// connect row, no session caller, no connection store, or the record's
 	// stamp names a different run. It is never to be read as success.
 	Connect *RunConnect `json:"connect,omitempty"`
+
+	// Outcome is the process's own statement about an exit-0 run, for readers
+	// that CANNOT do the Connect join above. internal/opsalert is a stdlib-only
+	// leaf and structurally cannot import lineupapi (chromedp is transitively
+	// behind it), so it reads raw ledger records directly rather than through
+	// GET /v1/runs — Connect is joined only at HTTP read time and never reaches
+	// it. Outcome rides on the ledger record itself instead: the run completed
+	// without an operator-actionable error but did not achieve its purpose,
+	// and someone other than the operator must act. See RunOutcomeTenantActionable.
+	//
+	// Empty means the status speaks for itself, which is every record written
+	// before this field existed and every non-connect command today.
+	Outcome string `json:"outcome,omitempty"`
 }
+
+// RunOutcomeTenantActionable marks a connect run that exited 0 (so the ledger
+// pages nobody) but left the tenant needing to act — a demotion to
+// needs_reconnect, no_team, or similar. entrypoint.sh's terminal run-ledger
+// write carries it via RUN_OUTCOME_FILE (cmd's recordRunOutcome writes that
+// file; cmd/ledger.go's --outcome flag reads it back). internal/opsalert.Streak
+// treats a SUCCESS record carrying this outcome as saying nothing about the
+// operator-facing streak it sits on top of — not a recovery, and not silently
+// skipped either, since a skip would let an older streak re-report.
+const RunOutcomeTenantActionable = "tenant_actionable"
 
 // RunConnect is the connect task's own verdict on a run, as served on Run.
 //
