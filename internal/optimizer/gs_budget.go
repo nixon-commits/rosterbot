@@ -10,12 +10,32 @@ import (
 // GSBudget carries weekly game-start budget state for pitcher optimization.
 // A nil *GSBudget means no GS limit is configured.
 type GSBudget struct {
-	Limit    int       // max GS per matchup week (fetched live from Fantrax's per-period config)
-	Floor    int       // min GS per matchup week (0 = unset); live-fetched like Limit, never a constant
-	Used     int       // GS already consumed this matchup week (past days)
-	Today    time.Time // the date being optimized
+	Limit int       // max GS per matchup week (fetched live from Fantrax's per-period config)
+	Floor int       // min GS per matchup week (0 = unset); live-fetched like Limit, never a constant
+	Used  int       // GS already consumed this matchup week (past days)
+	Today time.Time // the date being optimized
+
 	WeekEnd  time.Time // last day of matchup week (inclusive)
 	Forecast []DayForecast
+
+	// TodayUnsettled counts our SPs confirmed as probable starters TODAY whose
+	// starts Used does not yet reflect. It exists because today falls into a
+	// seam: Forecast begins TOMORROW (buildGSForecast iterates today+1..weekEnd)
+	// and Used only picks a day up once Fantrax settles that day's YTD GS
+	// deltas, hours after the games are played. For the whole daytime window
+	// today's starts are therefore counted nowhere, which made the floor
+	// alert's shortfall spike at every day roll and decay every evening on
+	// unchanged roster facts (rosterbot-ogtq).
+	//
+	// It counts only UNLOCKED confirmed starters, so it collapses to 0 as those
+	// games begin — which is the same boundary Used fills in from the other
+	// side. Fantrax locks a player when his game is in progress OR final, so a
+	// start can briefly be locked-but-not-yet-settled and get counted by
+	// neither. That residual error is bounded by a single evening's starts and
+	// runs in the CONSERVATIVE direction (a shortfall read slightly high, never
+	// slightly low), which is the right way to be wrong for an alert whose
+	// design rationale is that a missed week is worse than a loud one.
+	TodayUnsettled int
 }
 
 // DayForecast holds the projected SP starts for a single future day.

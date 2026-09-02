@@ -203,13 +203,24 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 		return d
 	}
 
+	// Today's own starts belong to neither the walk nor the forecast for most
+	// of the day; see GSBudget.TodayUnsettled. A failure here degrades to no
+	// credit rather than disabling the gate: zero reproduces the pre-fix
+	// arithmetic exactly, which reads a shortfall louder than the truth and
+	// never quieter, and this correction only ever feeds a report.
+	todayUnsettled, tuErr := todayUnsettledStarts(sched, spNames, in.Today)
+	if tuErr != nil {
+		d.logf("WARNING: today's probables unavailable (%v) — floor shortfall may read high", tuErr)
+	}
+
 	d.Budget = &optimizer.GSBudget{
-		Limit:    gsLimit,
-		Floor:    gsFloor,
-		Used:     usedGS,
-		Today:    in.Today,
-		WeekEnd:  weekEnd,
-		Forecast: forecast,
+		Limit:          gsLimit,
+		Floor:          gsFloor,
+		Used:           usedGS,
+		Today:          in.Today,
+		WeekEnd:        weekEnd,
+		Forecast:       forecast,
+		TodayUnsettled: todayUnsettled,
 	}
 	if need := d.Budget.NeedForFloor(); need > 0 {
 		d.logf("GS budget: %d/%d used (floor %d, %d more needed), %.1f projected future starts",
@@ -339,4 +350,36 @@ func buildGSForecast(
 		forecast = append(forecast, df)
 	}
 	return forecast, nil
+}
+
+// todayUnsettledStarts counts our rostered SPs named as probable starters TODAY
+// whose starts Fantrax has not yet credited to the week's used count.
+//
+// The lock is what separates the two regimes, and it is the only free signal
+// that does: Fantrax locks a player at first pitch, which is the same boundary
+// its YTD GS settlement crosses from the other side. An unlocked probable has
+// not thrown, so he cannot be in Used; a locked one has, so he is Used's to
+// count. The narrow window where a start is locked but not yet settled is
+// counted by neither, which reads the shortfall slightly HIGH — the same
+// direction as the bug this replaces, and the safe direction for an alert.
+//
+// Deliberately not folded into buildGSForecast. Adding today to Forecast would
+// be invisible to every current consumer (all four guard on Date.After(Today)),
+// but it would make a today row appear in the archived gs_forecast snapshots
+// and quietly change what backtest grades.
+func todayUnsettledStarts(sched gsScheduleClient, spNames map[string]fantrax.Player, today time.Time) (int, error) {
+	probs, err := sched.ProbableStarters(today)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, p := range spNames {
+		if p.Locked {
+			continue
+		}
+		if playername.MatchProbable(p.Name, p.MLBTeam, probs) == playername.ConfirmedStarter {
+			n++
+		}
+	}
+	return n, nil
 }
