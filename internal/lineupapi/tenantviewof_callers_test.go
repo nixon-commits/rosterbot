@@ -177,7 +177,9 @@ func TestNoRequestValueBecomesATenantID(t *testing.T) {
 // these same helpers over these exact shapes and getting FLAGGED=false with
 // an empty tainted set for all three (see the bead).
 //
-// D/E/F are the positive fixtures; G/H are ABSENCE fixtures and are not
+// D/E/F are the positive fixtures, I/J the two split forms the first review
+// found unrecognised (a decoder held in a local; a decode straight into a
+// field address); G/H/K are ABSENCE fixtures and are not
 // decoration — a taint pass that starts tainting every struct-field
 // assignment, or every Decode call, regardless of its source would pass D/E/F
 // for the wrong reason (flagging everything downstream of any assignment), so
@@ -266,6 +268,62 @@ import (
 func H(s string) {
 	var body struct{ Tenant string }
 	json.NewDecoder(strings.NewReader(s)).Decode(&body)
+	_ = cfg.tenantViewOf(nil, UserID(body.Tenant))
+}
+`,
+			wantFlag: false,
+		},
+		{
+			name:   "I_decoder_held_in_a_local",
+			fnName: "I",
+			src: `package fixture
+
+import (
+	"encoding/json"
+	"net/http"
+)
+
+func I(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Tenant string }
+	dec := json.NewDecoder(r.Body)
+	dec.Decode(&body)
+	_ = cfg.tenantViewOf(r.Context(), UserID(body.Tenant))
+}
+`,
+			wantFlag: true,
+		},
+		{
+			name:   "J_decode_into_a_field_address",
+			fnName: "J",
+			src: `package fixture
+
+import (
+	"encoding/json"
+	"net/http"
+)
+
+func J(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Tenant string }
+	json.NewDecoder(r.Body).Decode(&req.Tenant)
+	_ = cfg.tenantViewOf(r.Context(), UserID(req.Tenant))
+}
+`,
+			wantFlag: true,
+		},
+		{
+			name:   "K_decoder_local_from_non_body_reader",
+			fnName: "K",
+			src: `package fixture
+
+import (
+	"encoding/json"
+	"strings"
+)
+
+func K(s string) {
+	var body struct{ Tenant string }
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.Decode(&body)
 	_ = cfg.tenantViewOf(nil, UserID(body.Tenant))
 }
 `,
@@ -589,7 +647,15 @@ func taintedLocals(fn *ast.FuncDecl) map[string]bool {
 				}
 			case *ast.CallExpr:
 				sel, ok := stmt.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "Decode" || !isRequestDerived(stmt) {
+				if !ok || sel.Sel.Name != "Decode" {
+					return true
+				}
+				// The receiver is request-derived either inline
+				// (json.NewDecoder(r.Body).Decode) or through a local the
+				// AssignStmt branch already tainted (dec := json.NewDecoder(r.Body);
+				// dec.Decode). isRequestDerived has no taint map, so the split
+				// form is resolved here, where the map lives.
+				if !isRequestDerived(stmt) && !tainted[taintRoot(sel.X)] {
 					return true
 				}
 				for _, arg := range stmt.Args {
@@ -597,11 +663,14 @@ func taintedLocals(fn *ast.FuncDecl) map[string]bool {
 					if !ok || un.Op != token.AND {
 						continue
 					}
-					id, ok := un.X.(*ast.Ident)
-					if !ok || id.Name == "_" || tainted[id.Name] {
+					// taintRoot, not an Ident assertion: Decode(&cfg.Tenant)
+					// taints cfg, the same generalisation the AssignStmt branch
+					// applies to a selector LHS.
+					root := taintRoot(un.X)
+					if root == "" || root == "_" || tainted[root] {
 						continue
 					}
-					tainted[id.Name] = true
+					tainted[root] = true
 					grew = true
 				}
 			}

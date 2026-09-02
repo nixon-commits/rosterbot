@@ -34,9 +34,11 @@ func (s *Store) Get(key string) ([]byte, bool, error) {
 	return s.blob.Get(context.Background(), key)
 }
 
-// Put writes one snapshot. Snapshots are rewritten when the same date is
-// optimized twice (last write wins, which the hourly lineup job relies on), so
-// this is deliberately an unconditional overwrite and not a conditional write.
+// Put writes one snapshot as an unconditional overwrite, not a conditional
+// write. A date optimized twice is rewritten, but the bytes handed in are no
+// longer a from-scratch recompute: lineuprun.writeProjectionSnapshot merges
+// the prior snapshot's locked rows into the new one before calling Put
+// (rosterbot-w79p), so the store itself stays a plain last-write-wins slot.
 func (s *Store) Put(key string, b []byte) error {
 	return s.blob.PutJSON(context.Background(), key, b)
 }

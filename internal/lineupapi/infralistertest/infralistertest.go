@@ -10,8 +10,11 @@
 // Deliberately OUTSIDE the contract, each for its own reason:
 //   - LastModified: file mtime vs S3 put-time are different clocks; asserting
 //     equality would pin an accident.
-//   - Truncated: the file walker has no cap by design; the S3 cap has its own
-//     dedicated tests (s3lineup's infra_truncated_test.go).
+//   - Truncated: the file walker has no object-count cap by design, so the
+//     two listers legitimately differ here. Each side's own truncation has
+//     its own tests: the S3 cap in s3lineup's infra_truncated_test.go, the
+//     local walker's unreadable-entry case (rosterbot-xi3p) in
+//     lineupapi's infra_filestore_walkerror_test.go.
 //   - Tenants: computed by the S3 lister for the deployed page; the local
 //     lister does not break out user= segments today. Pinning parity there
 //     would first require building it — a separate decision, not a drift.
