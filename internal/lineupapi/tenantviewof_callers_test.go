@@ -168,6 +168,166 @@ func TestNoRequestValueBecomesATenantID(t *testing.T) {
 	}
 }
 
+// TestNoRequestValueBecomesATenantID_BodyAndStructFieldForms is the pin for
+// rosterbot-l29p: isRequestDerived / taintedLocals / containsRequestDerived,
+// run directly against synthetic fixtures (parser.ParseFile, no type
+// checking, matching how packageFiles reads the real package), must flag a
+// tenant id that arrives through a struct-field assignment or a decoded JSON
+// body — the two shapes the live guard above could not see. Found by running
+// these same helpers over these exact shapes and getting FLAGGED=false with
+// an empty tainted set for all three (see the bead).
+//
+// D/E/F are the positive fixtures; G/H are ABSENCE fixtures and are not
+// decoration — a taint pass that starts tainting every struct-field
+// assignment, or every Decode call, regardless of its source would pass D/E/F
+// for the wrong reason (flagging everything downstream of any assignment), so
+// G and H pin that a non-request source stays clean.
+func TestNoRequestValueBecomesATenantID_BodyAndStructFieldForms(t *testing.T) {
+	cases := []struct {
+		name     string
+		fnName   string
+		src      string
+		wantFlag bool
+	}{
+		{
+			name:   "D_struct_field_assign",
+			fnName: "D",
+			src: `package fixture
+
+import "net/http"
+
+func D(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Tenant string }
+	req.Tenant = r.URL.Query().Get("t")
+	_ = cfg.tenantViewOf(r.Context(), UserID(req.Tenant))
+}
+`,
+			wantFlag: true,
+		},
+		{
+			name:   "E_json_body_decode",
+			fnName: "E",
+			src: `package fixture
+
+import (
+	"encoding/json"
+	"net/http"
+)
+
+func E(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Tenant string }
+	json.NewDecoder(r.Body).Decode(&body)
+	_ = cfg.tenantViewOf(r.Context(), UserID(body.Tenant))
+}
+`,
+			wantFlag: true,
+		},
+		{
+			name:   "F_json_body_to_tenantViewOf",
+			fnName: "F",
+			src: `package fixture
+
+import (
+	"encoding/json"
+	"net/http"
+)
+
+func F(w http.ResponseWriter, r *http.Request) {
+	var tenant string
+	json.NewDecoder(r.Body).Decode(&tenant)
+	_ = cfg.tenantViewOf(r.Context(), UserID(tenant))
+}
+`,
+			wantFlag: true,
+		},
+		{
+			name:   "G_struct_field_from_non_request_value",
+			fnName: "G",
+			src: `package fixture
+
+func G(other string) {
+	var req struct{ Tenant string }
+	req.Tenant = other
+	_ = cfg.tenantViewOf(nil, UserID(req.Tenant))
+}
+`,
+			wantFlag: false,
+		},
+		{
+			name:   "H_decode_from_non_body_reader",
+			fnName: "H",
+			src: `package fixture
+
+import (
+	"encoding/json"
+	"strings"
+)
+
+func H(s string) {
+	var body struct{ Tenant string }
+	json.NewDecoder(strings.NewReader(s)).Decode(&body)
+	_ = cfg.tenantViewOf(nil, UserID(body.Tenant))
+}
+`,
+			wantFlag: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, tc.name+".go", tc.src, 0)
+			if err != nil {
+				t.Fatalf("parse fixture: %v", err)
+			}
+			var fn *ast.FuncDecl
+			for _, d := range f.Decls {
+				if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == tc.fnName {
+					fn = fd
+				}
+			}
+			if fn == nil {
+				t.Fatalf("fixture defines no func %s", tc.fnName)
+			}
+
+			tainted := taintedLocals(fn)
+			flagged := false
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || tenantSinkName(call) == "" {
+					return true
+				}
+				for _, arg := range call.Args {
+					if containsRequestDerived(arg, tainted) {
+						flagged = true
+					}
+				}
+				return true
+			})
+
+			if flagged != tc.wantFlag {
+				t.Errorf("%s: FLAGGED=%v taintedLocals=%v, want FLAGGED=%v",
+					tc.name, flagged, sortedKeys(tainted), tc.wantFlag)
+			}
+			if tc.wantFlag && len(tainted) == 0 {
+				t.Errorf("%s: flagged with an EMPTY tainted set — the detector "+
+					"caught the sink through some path this fixture isn't "+
+					"pinning, so a real regression here could still read green",
+					tc.name)
+			}
+		})
+	}
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 type parsedFile struct {
 	name string
 	file *ast.File
@@ -315,30 +475,61 @@ func tenantSinkName(call *ast.CallExpr) string {
 }
 
 // isRequestDerived reports whether n is a read of the incoming request:
-// Query(), PathValue(...), FormValue(...), PostFormValue(...) or a
-// Header.Get(...). Matched on the method name alone, so renaming the *http.Request
-// variable cannot hide it.
+// Query(), PathValue(...), FormValue(...), PostFormValue(...), a
+// Header.Get(...), a bare <ident>.Body selector (e.g. r.Body), or a
+// X.Decode(...) call whose receiver is (transitively) json.NewDecoder of an
+// argument that mentions the request body. Matched on the method/field name
+// alone, so renaming the *http.Request variable cannot hide it.
 func isRequestDerived(n ast.Node) bool {
-	call, ok := n.(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	switch sel.Sel.Name {
-	case "Query", "PathValue", "FormValue", "PostFormValue":
-		return true
-	case "Get":
-		// url.Values.Get / http.Header.Get. Narrowed to a chain whose receiver
-		// is itself a call or a Header/URL selector, so an unrelated store
-		// `Get(ctx, id)` is not swept in.
-		switch recv := sel.X.(type) {
-		case *ast.CallExpr:
-			return isRequestDerived(recv)
-		case *ast.SelectorExpr:
-			return recv.Sel.Name == "Header" || recv.Sel.Name == "URL"
+	switch x := n.(type) {
+	case *ast.SelectorExpr:
+		// <ident>.Body: the request body reader itself, e.g. `r.Body`. This is
+		// deliberately loose (any identifier, not just `r`) — same reasoning
+		// as matching on method name alone above — and is what lets the
+		// NewDecoder case below recurse into an arbitrarily wrapped argument
+		// (http.MaxBytesReader(w, r.Body, n), every real handler in this
+		// package) rather than only a bare top-level r.Body.
+		if x.Sel.Name != "Body" {
+			return false
+		}
+		_, ok := x.X.(*ast.Ident)
+		return ok
+	case *ast.CallExpr:
+		sel, ok := x.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		switch sel.Sel.Name {
+		case "Query", "PathValue", "FormValue", "PostFormValue":
+			return true
+		case "Get":
+			// url.Values.Get / http.Header.Get. Narrowed to a chain whose
+			// receiver is itself a call or a Header/URL selector, so an
+			// unrelated store `Get(ctx, id)` is not swept in.
+			switch recv := sel.X.(type) {
+			case *ast.CallExpr:
+				return isRequestDerived(recv)
+			case *ast.SelectorExpr:
+				return recv.Sel.Name == "Header" || recv.Sel.Name == "URL"
+			}
+		case "NewDecoder":
+			// json.NewDecoder(<expr mentioning the body>): request-derived
+			// when any argument's subtree contains a body selector — reusing
+			// containsRequestDerived (nil taint map; reads from a nil map are
+			// safe) is what lets this see through a wrapper call like
+			// http.MaxBytesReader(w, r.Body, n) instead of only a bare arg.
+			for _, arg := range x.Args {
+				if containsRequestDerived(arg, nil) {
+					return true
+				}
+			}
+		case "Decode":
+			// X.Decode(...) where X is (transitively) json.NewDecoder(...ofBody).
+			// Recurses into the receiver the same way the Get case above
+			// recurses into its own receiver.
+			if recv, ok := sel.X.(*ast.CallExpr); ok {
+				return isRequestDerived(recv)
+			}
 		}
 	}
 	return false
@@ -360,28 +551,53 @@ func isRequestDerived(n ast.Node) bool {
 // a type-checked taint analysis — shadowing or a closure can still hide a value
 // from it — which is why the caller allowlist above is a separate, independent
 // guard rather than a redundant one.
+//
+// Two more shapes were folded into the same fixed-point loop for rosterbot-l29p:
+// an assignment whose LHS is a struct-field selector (`req.Tenant = <tainted>`)
+// taints the selector's ROOT identifier — coarse on purpose, since the pass
+// cannot know which other fields alias the same struct, and a struct written
+// from a request value is exactly the shape the bead's fixtures exist to
+// catch; and a call `<request-derived receiver>.Decode(&target)` taints
+// target, because Decode's taint arrives through an out-parameter rather than
+// a return value, so it cannot go through the AssignStmt branch at all.
 func taintedLocals(fn *ast.FuncDecl) map[string]bool {
 	tainted := map[string]bool{}
 	for {
 		grew := false
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			as, ok := n.(*ast.AssignStmt)
-			if !ok {
-				return true
-			}
-			for i, rhs := range as.Rhs {
-				if !containsRequestDerived(rhs, tainted) {
-					continue
+			switch stmt := n.(type) {
+			case *ast.AssignStmt:
+				for i, rhs := range stmt.Rhs {
+					if !containsRequestDerived(rhs, tainted) {
+						continue
+					}
+					// One RHS feeding several LHS (a multi-value call) taints all
+					// of them: which one carries the value is not knowable here,
+					// and over-tainting fails loud rather than silent.
+					lhs := stmt.Lhs
+					if len(stmt.Rhs) == len(stmt.Lhs) {
+						lhs = stmt.Lhs[i : i+1]
+					}
+					for _, l := range lhs {
+						root := taintRoot(l)
+						if root == "" || root == "_" || tainted[root] {
+							continue
+						}
+						tainted[root] = true
+						grew = true
+					}
 				}
-				// One RHS feeding several LHS (a multi-value call) taints all
-				// of them: which one carries the value is not knowable here,
-				// and over-tainting fails loud rather than silent.
-				lhs := as.Lhs
-				if len(as.Rhs) == len(as.Lhs) {
-					lhs = as.Lhs[i : i+1]
+			case *ast.CallExpr:
+				sel, ok := stmt.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "Decode" || !isRequestDerived(stmt) {
+					return true
 				}
-				for _, l := range lhs {
-					id, ok := l.(*ast.Ident)
+				for _, arg := range stmt.Args {
+					un, ok := arg.(*ast.UnaryExpr)
+					if !ok || un.Op != token.AND {
+						continue
+					}
+					id, ok := un.X.(*ast.Ident)
 					if !ok || id.Name == "_" || tainted[id.Name] {
 						continue
 					}
@@ -393,6 +609,23 @@ func taintedLocals(fn *ast.FuncDecl) map[string]bool {
 		})
 		if !grew {
 			return tainted
+		}
+	}
+}
+
+// taintRoot returns the identifier that owns l: l itself if it is a plain
+// identifier, or the root of a selector chain (`req.Tenant` -> "req";
+// `a.b.c` -> "a"). Anything else (an index expression, a dereference) is not
+// resolvable here and returns "".
+func taintRoot(l ast.Expr) string {
+	for {
+		switch x := l.(type) {
+		case *ast.Ident:
+			return x.Name
+		case *ast.SelectorExpr:
+			l = x.X
+		default:
+			return ""
 		}
 	}
 }
