@@ -34,6 +34,17 @@ func NewUserID(handle []byte) UserID {
 // expects. An unparsable id yields nil, which callers must treat as "no such
 // user" rather than "empty handle" — go-webauthn compares handles bytewise and
 // an empty one would match nothing anyway, but failing explicitly is clearer.
+//
+// go-webauthn 0.18.0 (up from 0.17.4, rosterbot-jlqt) added its own check on
+// the decoded result: BeginRegistration now rejects a handle that is not
+// 1..64 bytes with "the user id must be between 1 and 64 bytes", where 0.17
+// silently accepted a zero-length one. This method does not enforce that
+// range itself — every production id goes through NewUserID(handle) with a
+// real 64-byte handle (see newWebAuthnUserID), so the range holds by
+// construction — but a caller minting a ceremony from a UserID it did not
+// mint itself (a hand-typed id, a corrupted record) should check the decoded
+// length explicitly rather than let go-webauthn's opaque error be the first
+// sign of trouble; see registrationSubject's caller in webauthn.go.
 func (u UserID) WebAuthnHandle() []byte {
 	b, err := base64.RawURLEncoding.DecodeString(string(u))
 	if err != nil {

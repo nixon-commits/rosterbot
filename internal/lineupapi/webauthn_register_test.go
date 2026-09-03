@@ -62,7 +62,7 @@ func TestRegisterFinish_SucceedsEndToEnd(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := users.CreateEnrollment(context.Background(), hash,
-				Enrollment{UserID: "alice", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+				Enrollment{UserID: testUserID("alice"), ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
 				t.Fatal(err)
 			}
 			return nil, map[string]any{"token": string(tok)}, func(t *testing.T) {
@@ -89,20 +89,21 @@ func TestRegisterFinish_SucceedsEndToEnd(t *testing.T) {
 			// Seed a passkey so BeginRegistration builds a non-empty exclusion
 			// list — the shape "add another device" actually has, and the one
 			// the drained-body bug broke without any enrollment link involved.
-			if err := users.PutCredential(context.Background(), "alice",
+			if err := users.PutCredential(context.Background(), testUserID("alice"),
 				webauthn.Credential{ID: []byte("existing-cred"), PublicKey: []byte("pk")}); err != nil {
 				t.Fatal(err)
 			}
 			rec := httptest.NewRecorder()
-			setSessionCookie(rec, secret, "alice", 0, time.Now())
+			setSessionCookie(rec, secret, testUserID("alice"), 0, time.Now())
 			return rec.Result().Cookies(), nil, nil
 		},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			secret := []byte("s")
+			alice := testUserID("alice")
 			users := NewFileUserStore(t.TempDir())
 			if err := users.CreateUser(context.Background(), &User{
-				ID: "alice", Email: "a@example.test", Role: RoleMember, Status: UserActive,
+				ID: alice, Email: "a@example.test", Role: RoleMember, Status: UserActive,
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -157,7 +158,7 @@ func TestRegisterFinish_SucceedsEndToEnd(t *testing.T) {
 
 			// --- what the ceremony was FOR -----------------------------------
 			ctx := context.Background()
-			creds, err := users.Credentials(ctx, "alice")
+			creds, err := users.Credentials(ctx, alice)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -177,10 +178,10 @@ func TestRegisterFinish_SucceedsEndToEnd(t *testing.T) {
 			// through the store rather than trusting that PutCredential wrote it.
 			// TestRevokePasskey_RemovesMatchingCredential pins the mirror image:
 			// a credential still resolvable after revocation is still usable.
-			if owner, ok, err := users.UserByCredential(ctx, credID); err != nil || !ok || owner != "alice" {
-				t.Errorf("UserByCredential(new credential) = (%q, %v, %v), want (alice, true, nil) — "+
+			if owner, ok, err := users.UserByCredential(ctx, credID); err != nil || !ok || owner != alice {
+				t.Errorf("UserByCredential(new credential) = (%q, %v, %v), want (%q, true, nil) — "+
 					"a registered passkey the lookup index cannot resolve is a passkey that cannot log in",
-					owner, ok, err)
+					owner, ok, err, alice)
 			}
 
 			// Registration signs you in. Without this the user completes Touch ID
@@ -423,9 +424,10 @@ func TestRegisterFinish_CompletesFromEitherProductionOrigin(t *testing.T) {
 			}
 
 			secret := []byte("s")
+			alice := testUserID("alice")
 			users := NewFileUserStore(t.TempDir())
 			if err := users.CreateUser(context.Background(), &User{
-				ID: "alice", Email: "a@example.test", Role: RoleMember, Status: UserActive,
+				ID: alice, Email: "a@example.test", Role: RoleMember, Status: UserActive,
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -433,7 +435,7 @@ func TestRegisterFinish_CompletesFromEitherProductionOrigin(t *testing.T) {
 				WebAuthn: wa, SessionSecret: secret})
 
 			rec := httptest.NewRecorder()
-			setSessionCookie(rec, secret, "alice", 0, time.Now())
+			setSessionCookie(rec, secret, alice, 0, time.Now())
 			authCookies := rec.Result().Cookies()
 
 			beginRec := httptest.NewRecorder()
@@ -488,9 +490,9 @@ func TestRegisterFinish_CompletesFromEitherProductionOrigin(t *testing.T) {
 			}
 			// A 200 that stored nothing would be a ceremony that "succeeded" into
 			// a user with no passkey, so assert the credential the ceremony was for.
-			if owner, ok, err := users.UserByCredential(context.Background(), credID); err != nil || !ok || owner != "alice" {
-				t.Errorf("UserByCredential after a ceremony from %s = (%q, %v, %v), want (alice, true, nil)",
-					tc.origin, owner, ok, err)
+			if owner, ok, err := users.UserByCredential(context.Background(), credID); err != nil || !ok || owner != alice {
+				t.Errorf("UserByCredential after a ceremony from %s = (%q, %v, %v), want (%q, true, nil)",
+					tc.origin, owner, ok, err, alice)
 			}
 		})
 	}
