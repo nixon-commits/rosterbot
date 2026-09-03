@@ -72,6 +72,14 @@ export const api = {
   tenantRecovery: (id) =>
     request("POST", `/v1/tenants/${encodeURIComponent(id)}/recovery`, {}),
   tenantDelete: (id) => request("DELETE", `/v1/tenants/${encodeURIComponent(id)}`),
+  // Admin drill-down (rosterbot-f0th): one tenant's full run ledger and one of
+  // their runs' captured output. Scoped by PATH, never a query param — a
+  // ?tenant= here would reach no server-side gate at all (see
+  // internal/lineupapi/tenantviewof_callers_test.go).
+  tenantRuns: (id, limit = 25) =>
+    request("GET", `/v1/tenants/${encodeURIComponent(id)}/runs?limit=${limit}`),
+  tenantRunOutput: (id, runID) =>
+    request("GET", `/v1/tenants/${encodeURIComponent(id)}/runs/${encodeURIComponent(runID)}/output`),
   connect: (username, password) => request("POST", "/v1/connect", { username, password }),
 
   // Leagues. The caller's own list spans platforms; the three mutating calls
