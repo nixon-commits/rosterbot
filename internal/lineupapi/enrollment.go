@@ -121,7 +121,13 @@ type EnrollmentStore interface {
 	// redeemed.
 	RedeemEnrollment(ctx context.Context, tokenHash string, now time.Time) (Enrollment, error)
 
-	// GetEnrollment reads a link without redeeming it, so a UI can show what an
-	// invite is for before the user commits to spending it.
+	// GetEnrollment reads a link without redeeming it.
+	//
+	// Its consumer is registrationSubject (webauthn.go), at register/begin:
+	// the ceremony needs to know WHO it is for before it starts, but must not
+	// spend the link yet, because an abandoned ceremony — the user closes the
+	// tab at the Touch ID prompt — has to leave a single-use link usable for a
+	// retry. Redemption happens separately, at register/finish, only once the
+	// ceremony actually produced a credential.
 	GetEnrollment(ctx context.Context, tokenHash string) (Enrollment, bool, error)
 }

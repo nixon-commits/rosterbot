@@ -178,6 +178,10 @@ async function applyRole() {
 // — and a status this banner did not know about would have silently returned
 // early, which is the same discover-it-late failure the comment above names.
 //
+// "check_failed" DOES fire too, one step earlier (rosterbot-spb9): the check
+// never reached Fantrax at all, but it is exactly as un-Usable as
+// "interrupted" and the tenant is just as unmanaged either way.
+//
 // "pending" is excluded on purpose and is the one non-Usable status that is:
 // a verification is RUNNING, it is time-boxed by connectInFlightWindow, and the
 // settings page already says so. A red banner during every normal connect would
@@ -190,6 +194,11 @@ const BANNER_COPY = {
   interrupted: [
     "rosterbot could not finish checking your Fantrax connection, so it is not " +
       "managing your team. Your password is not the problem. ",
+    "Try again in Settings",
+  ],
+  check_failed: [
+    "rosterbot could not check your Fantrax connection because of a problem on our " +
+      "side, so it is not managing your team. Your password is not the problem. ",
     "Try again in Settings",
   ],
 };

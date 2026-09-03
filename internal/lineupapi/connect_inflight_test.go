@@ -113,3 +113,53 @@ func TestConnect_AnInterruptedCheckIsRetryableOnceTheCooldownPasses(t *testing.T
 		t.Error("the retry never launched a verification task")
 	}
 }
+
+// TestConnect_ThrottlesRetriesAfterACheckThatNeverReachedFantrax is
+// ConnCheckFailed's mirror of TestConnect_ThrottlesRetriesAfterAnInterruptedCheck
+// (rosterbot-spb9): the fault was on OUR side, not Fantrax's, but "try again" is
+// still an invitation to drive another full chromedp login on every impatient
+// click, so it gets the SAME cooldown as ConnInterrupted rather than
+// ConnPending's open-ended block — there is no task in flight to wait for.
+func TestConnect_ThrottlesRetriesAfterACheckThatNeverReachedFantrax(t *testing.T) {
+	h, conns, jobs, _ := connectFixture(t, "team-7")
+	conns.conn = &FantraxConnection{
+		UserID: "alice", Status: ConnCheckFailed,
+		LastError:       ConnErrCheckFailed,
+		CredsCiphertext: []byte("sealed:original"),
+		UpdatedAt:       time.Now().UTC(),
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, testSecret, "/v1/connect", "alice",
+		`{"username":"u2","password":"p2"}`))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("immediate retry after a check_failed = %d, want 409: %s", rec.Code, rec.Body)
+	}
+	if jobs.launched {
+		t.Error("launched another headless login inside the cooldown")
+	}
+}
+
+// TestConnect_ACheckThatNeverReachedFantraxIsRetryableOnceTheCooldownPasses is
+// the other half, mirroring TestConnect_AnInterruptedCheckIsRetryableOnceTheCooldownPasses.
+func TestConnect_ACheckThatNeverReachedFantraxIsRetryableOnceTheCooldownPasses(t *testing.T) {
+	h, conns, jobs, _ := connectFixture(t, "team-7")
+	conns.conn = &FantraxConnection{
+		UserID: "alice", Status: ConnCheckFailed,
+		LastError:       ConnErrCheckFailed,
+		CredsCiphertext: []byte("sealed:original"),
+		UpdatedAt:       time.Now().UTC().Add(-connectInterruptedCooldown - time.Second),
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, postJSON(t, testSecret, "/v1/connect", "alice",
+		`{"username":"u2","password":"p2"}`))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("retry after the cooldown = %d, want 202: %s", rec.Code, rec.Body)
+	}
+	if !jobs.launched {
+		t.Error("the retry never launched a verification task")
+	}
+}

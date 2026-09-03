@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -37,6 +38,18 @@ type API struct {
 	// scan silently truncates in production at 1 MB; a double that always
 	// returns everything in one page can never catch that.
 	ScanPageSize int
+
+	// AfterGetItem, when set, runs after GetItem has released the table lock
+	// and returned its result — never while holding it, or a hook that calls
+	// back into this API (BumpVersion included) would deadlock on a mutex
+	// that is not reentrant.
+	//
+	// It exists to simulate the ONE race ddbuser cannot avoid by construction:
+	// a concurrent writer landing between a caller's own GetItem (read) and
+	// PutItem (conditional write). Nothing else in this double can express
+	// that interleaving, because every method here runs a single request to
+	// completion before the next one starts.
+	AfterGetItem func(pk, sk string)
 }
 
 func New() *API { return &API{items: map[string]item{}} }
@@ -62,12 +75,42 @@ func clone(i item) item {
 
 func (a *API) GetItem(_ context.Context, in *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	it, ok := a.items[keyOf(in.Key)]
+	var out item
+	if ok {
+		out = clone(it)
+	}
+	a.mu.Unlock()
+
+	if a.AfterGetItem != nil {
+		a.AfterGetItem(str(in.Key["pk"]), str(in.Key["sk"]))
+	}
 	if !ok {
 		return &dynamodb.GetItemOutput{}, nil
 	}
-	return &dynamodb.GetItemOutput{Item: clone(it)}, nil
+	return &dynamodb.GetItemOutput{Item: out}, nil
+}
+
+// BumpVersion increments the profile item's numeric `ver` attribute in place,
+// as if an independent writer's PutUser had landed. Test-only: it simulates
+// the interleaving AfterGetItem exists to make possible, and is a no-op if the
+// item or its `ver` attribute is absent.
+func (a *API) BumpVersion(pk, sk string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	it, ok := a.items[key(pk, sk)]
+	if !ok {
+		return
+	}
+	cur, ok := it["ver"].(*types.AttributeValueMemberN)
+	if !ok {
+		return
+	}
+	n, err := strconv.ParseInt(cur.Value, 10, 64)
+	if err != nil {
+		return
+	}
+	it["ver"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(n+1, 10)}
 }
 
 // evalCondition understands only the expressions ddbuser emits. Anything else

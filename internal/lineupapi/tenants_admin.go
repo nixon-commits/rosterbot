@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/wiretime"
@@ -423,4 +425,152 @@ func (cfg Config) handleTenantRecovery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg.mintEnrollmentAndRespond(w, r, u.ID, u.TeamID, u.Email, body.TTLHours)
+}
+
+// requireExistingTenant answers the 404 half every handler in this file
+// already gives its own PathValue("id") — GetUser, not tenantViewOf, because
+// tenantViewOf builds stores at a PREFIX derived from the uid string and
+// succeeds for a prefix that has never been written to (an unregistered id
+// reads as an empty, brand-new tenant, not as "no such tenant"). Only the user
+// directory can tell the two apart.
+func (cfg Config) requireExistingTenant(w http.ResponseWriter, r *http.Request, id UserID) bool {
+	_, ok, err := cfg.Users.GetUser(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "user directory unavailable")
+		return false
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such user")
+		return false
+	}
+	return true
+}
+
+// tenantConnectRun reads uid's OWN connection record for the connect verdict
+// to stamp onto their runs.
+//
+// NEVER lastConnectRun (connectrun.go) here: that helper keys off
+// CallerFrom(ctx), which on this admin route is the OPERATOR, not the tenant
+// named in the path. Reusing it would stamp the operator's own connect
+// verdict onto a tenant's runs — the exact per-row mis-attribution
+// rosterbot-nejq's TenantView was built to remove, one join away from where
+// that bead closed it. tenants.go's runSummary hits the same requirement and
+// solves it the same way: read THIS tenant's connection record directly.
+func (cfg Config) tenantConnectRun(ctx context.Context, uid UserID, runs []Run) *ConnectRun {
+	if cfg.Connections == nil || uid == "" || !slices.ContainsFunc(runs, isConnectRun) {
+		return nil
+	}
+	conn, ok, err := cfg.Connections.GetConnection(ctx, uid)
+	if err != nil || !ok || conn == nil {
+		return nil
+	}
+	return conn.LastConnectRun
+}
+
+// handleTenantRuns serves ONE TENANT's full run ledger — the admin drill-down
+// GET /v1/tenants/{id}/runs (rosterbot-f0th). rosterbot-nejq put a BOUNDED run
+// summary (last run, last failure, N of last 25) on each row of GET
+// /v1/tenants because RunStore.Get scans RunLookback (200) records and must
+// never run per row inside that listing; this route is the "show me" an
+// operator reaches for after the summary flags a tenant, and it pays that
+// cost for exactly the one tenant being examined.
+//
+// It mirrors handleRuns exactly (same limit param, same shape), just resolved
+// against the TENANT named in the path rather than the caller.
+//
+// NESTED under /v1/tenants/{id}/, never a ?tenant= query param: isAdminOnlyPath
+// (authz.go) matches on r.URL.Path alone, so a query string on GET /v1/runs
+// would reach no gate at all and let any member read any other tenant's
+// ledger. runs_tenantparam_test.go's TestRuns_IgnoresATenantQueryParam and
+// tenantviewof_callers_test.go's TestNoRequestValueBecomesATenantID both
+// refuse that shape; the second is what would fail if this ever moved off an
+// admin-only path, because it reads real mux registrations rather than trusting
+// a hand-kept list. This handler's tenantViewOf call is authorized because it
+// is registered EXCLUSIVELY here, inside the /v1/tenants adminOnlyRoutes
+// prefix — see tenantviewof_callers_test.go's allowedCallers, which records
+// handleTenantRuns as a caller for exactly this reason.
+func (cfg Config) handleTenantRuns(w http.ResponseWriter, r *http.Request) {
+	if cfg.Users == nil {
+		writeErr(w, http.StatusNotImplemented, "user directory not configured")
+		return
+	}
+	id := UserID(r.PathValue("id"))
+	if !cfg.requireExistingTenant(w, r, id) {
+		return
+	}
+
+	view, ok := cfg.tenantViewOf(r.Context(), id)
+	if !ok {
+		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+		return
+	}
+	if view.Runs == nil {
+		writeErr(w, http.StatusNotImplemented, "run ledger not configured")
+		return
+	}
+	limit := defaultRunsLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	runs, err := view.Runs.List(r.Context(), limit)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "run ledger unavailable")
+		return
+	}
+	if runs == nil {
+		runs = []Run{}
+	}
+	if lr := cfg.tenantConnectRun(r.Context(), id, runs); lr != nil {
+		out := slices.Clone(runs)
+		for i := range out {
+			applyConnectOutcome(&out[i], lr)
+		}
+		runs = out
+	}
+	writeJSON(w, http.StatusOK, RunsResponse{Runs: runs})
+}
+
+// handleTenantRunOutput serves ONE TENANT's captured stdout for one run — the
+// admin drill-down GET /v1/tenants/{id}/runs/{runID}/output (rosterbot-f0th).
+// Mirrors handleRunOutput exactly, resolved against the tenant named in the
+// path.
+//
+// Same gating reasoning as handleTenantRuns above: nested under
+// /v1/tenants/{id}/, registered exclusively there, and tenantViewOf's call is
+// authorized on that basis — see tenantviewof_callers_test.go's
+// allowedCallers.
+func (cfg Config) handleTenantRunOutput(w http.ResponseWriter, r *http.Request) {
+	if cfg.Users == nil {
+		writeErr(w, http.StatusNotImplemented, "user directory not configured")
+		return
+	}
+	id := UserID(r.PathValue("id"))
+	if !cfg.requireExistingTenant(w, r, id) {
+		return
+	}
+
+	view, ok := cfg.tenantViewOf(r.Context(), id)
+	if !ok {
+		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+		return
+	}
+	if view.Output == nil {
+		writeErr(w, http.StatusNotImplemented, "run output not configured")
+		return
+	}
+	runID := r.PathValue("runID")
+	data, ok, err := view.Output.GetOutput(r.Context(), runID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "run output unavailable")
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no output for run")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }

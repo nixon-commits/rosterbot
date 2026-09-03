@@ -6,13 +6,17 @@
 // every column here is user- or Fantrax-supplied (display name, email, a
 // connection error string).
 import { api, ApiError } from "./api.js";
-import { el, relativeTime } from "./render.js";
+import { el, relativeTime, renderAuto } from "./render.js";
 
 const CONN_TONE = {
   verified: ["Connected", "badge-ok"],
   pending: ["Pending", "badge-info"],
   needs_reconnect: ["Needs reconnect", "badge-failed"],
   interrupted: ["Interrupted", "badge-info"],
+  // The check never reached Fantrax at all (rosterbot-spb9) — badge-info like
+  // "interrupted", not badge-failed: nothing here is a verdict on the
+  // tenant's credentials.
+  check_failed: ["Check failed", "badge-info"],
 };
 
 // WHO CAN ACT ON THIS — the failure taxonomy from crq.14, applied at the point
@@ -185,10 +189,25 @@ function runsCell(t) {
 
   // Always stated, including the zero case, and always with the span it covers:
   // a bare green badge would read as a claim about this tenant's whole history
-  // when 25 records is about a day and a half of an hourly job.
+  // when the window can be as narrow as a day and a half of an hourly job.
   const since = r.since ? ` since ${relativeTime(r.since)}` : "";
   td.append(el("div", "muted small",
     `${r.failures} of last ${r.window} failed${since}`));
+
+  // rosterbot-91c4: the badge above is driven by last_failure, which is only
+  // ever the SINGLE newest failure across every command — a healthy hourly
+  // job's blip can sit newer than, and so hide, a still-broken WEEKLY one.
+  // commands carries each distinct job's OWN newest failure so that one
+  // cannot stay invisible behind another. Only list ones the badge above
+  // didn't already name.
+  const others = (r.commands || []).filter((c) =>
+    c.last_failure && (!r.last_failure || c.last_failure.id !== r.last_failure.id));
+  if (others.length) {
+    const line = others
+      .map((c) => `${c.command} (${relativeTime(c.last_failure.started_at)})`)
+      .join(", ");
+    td.append(el("div", "muted small", `Also failing: ${line}`));
+  }
   return td;
 }
 
@@ -255,6 +274,21 @@ function actionsCell(t, root, parked) {
   });
   td.append(teamBtn);
 
+  // Runs is the admin drill-down (rosterbot-f0th): the bounded summary in the
+  // Runs cell answers "is something failing"; this answers "show me". It
+  // reuses runs.js's own row/output shapes, just fetched from the tenant-
+  // scoped routes instead of the caller's own /v1/runs.
+  const runsBtn = el("button", null, "Runs");
+  runsBtn.addEventListener("click", () => {
+    const existing = root.querySelector(".tenant-runs-card");
+    if (existing) existing.remove();
+    const card = tenantRunsCard(t);
+    card.classList.add("tenant-runs-card");
+    root.prepend(card);
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  td.append(runsBtn);
+
   const recoverBtn = el("button", null, "Recovery link");
   recoverBtn.addEventListener("click", async () => {
     try {
@@ -282,6 +316,79 @@ function actionsCell(t, root, parked) {
   td.append(deleteBtn);
 
   return td;
+}
+
+// tenantRunsCard renders one tenant's full run ledger (GET
+// /v1/tenants/{id}/runs) and, on a row click, that run's captured output (GET
+// /v1/tenants/{id}/runs/{runID}/output) — the admin drill-down rosterbot-f0th
+// adds below the bounded Runs cell.
+//
+// There is no per-tenant run-DETAIL route (no log tail here, unlike runs.js's
+// own showDetail), so a clicked row shows only what the output route can
+// answer — this stays a small, additive card rather than a reimplementation of
+// runs.js's detail view.
+function tenantRunsCard(t) {
+  const name = t.display_name || t.email || String(t.id);
+  const c = el("section", "card");
+  c.append(el("h2", null, `Runs — ${name}`));
+
+  const list = el("div");
+  const outputSection = el("div");
+  c.append(list, outputSection);
+
+  api.tenantRuns(t.id).then((resp) => {
+    const runs = resp.runs || [];
+    if (runs.length === 0) {
+      list.append(el("p", "muted", "No runs yet."));
+      return;
+    }
+    const table = el("table", "data-table");
+    const head = el("tr");
+    for (const h of ["Command", "Status", "Started"]) head.append(el("th", null, h));
+    const thead = el("thead");
+    thead.append(head);
+    const tbody = el("tbody");
+    for (const run of runs) {
+      const tr = el("tr");
+      tr.style.cursor = "pointer";
+      tr.append(el("td", null, run.command));
+      const statusTd = el("td");
+      statusTd.append(el("span", `badge badge-${run.status.toLowerCase()}`, run.status));
+      tr.append(statusTd);
+      tr.append(el("td", null, relativeTime(run.started_at)));
+      tr.addEventListener("click", () => loadTenantRunOutput(outputSection, t.id, run));
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    list.append(table);
+  }).catch((err) => {
+    list.append(el("p", "error", err instanceof ApiError ? err.message : "failed to load runs"));
+  });
+
+  return c;
+}
+
+// loadTenantRunOutput fetches and renders one run's captured output into
+// outputSection, replacing whatever was shown for a previously clicked row.
+async function loadTenantRunOutput(outputSection, tenantID, run) {
+  outputSection.textContent = "";
+  outputSection.append(el("p", "muted", "Loading output…"));
+  try {
+    const output = await api.tenantRunOutput(tenantID, run.id);
+    outputSection.textContent = "";
+    outputSection.append(el("h3", null, `Output — ${run.command} (${output.type})`));
+    outputSection.append(renderAuto(output.data));
+  } catch (err) {
+    outputSection.textContent = "";
+    if (err instanceof ApiError && err.status === 404) {
+      // Most job types record no typed output (optimize, recap-site) —
+      // routine, not an error worth surfacing, matching runs.js's own
+      // showDetail.
+      outputSection.append(el("p", "muted", "This run recorded no output."));
+    } else {
+      outputSection.append(el("p", "error", err instanceof ApiError ? err.message : "failed to load output"));
+    }
+  }
 }
 
 // tenantSetTeam POSTs the team binding.
@@ -417,6 +524,13 @@ function attentionFrom(t) {
   // uses to find what is failing (rosterbot-ch0s).
   if (t.conn_status === "interrupted") {
     return "You (not the tenant) — the check did not finish";
+  }
+  // Also above needs_reconnect: the check never reached Fantrax at all, so —
+  // like "interrupted" one step later — the tenant has nothing to fix
+  // (rosterbot-spb9). Without this the row fell through to "—" the same way
+  // "interrupted" used to before rosterbot-ch0s.
+  if (t.conn_status === "check_failed") {
+    return "You (not the tenant) — the check never reached fantrax";
   }
   if (t.conn_status === "needs_reconnect") return "The tenant — they must reconnect";
   // Pending never reaches the verified branch above: a connect task that

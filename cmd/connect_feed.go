@@ -118,6 +118,9 @@ func connectFailureMessage(class string) string {
 		return "Your Fantrax sign-in worked — your password is not the problem. " +
 			"Something after it did not finish, so the connection is not confirmed yet. " +
 			"Try connecting again in a minute."
+	case lineupapi.ConnErrCheckFailed:
+		return "The check couldn't run because of a problem on our side — your password " +
+			"is not the problem. Try connecting again in a minute."
 	default:
 		return "The Fantrax sign-in did not complete and Fantrax did not say why. " +
 			"Trying again in Settings sometimes works."

@@ -31,10 +31,14 @@ var arbitraryTenantFuncs = []string{"tenantViewOf", "runSummary"}
 
 // allowedCallers is the recorded, deliberate caller set for each.
 //
-//	tenantViewOf  tenantView (the caller's own uid) and runSummary (admin listing)
+//	tenantViewOf  tenantView (the caller's own uid), runSummary (admin listing),
+//	              and handleTenantRuns / handleTenantRunOutput — the admin
+//	              drill-down (rosterbot-f0th), authorized because both are
+//	              registered EXCLUSIVELY at /v1/tenants/{id}/runs[...], inside
+//	              the adminOnlyRoutes "/v1/tenants" prefix.
 //	runSummary    fillRunSummaries, driven by handleTenants
 var allowedCallers = map[string][]string{
-	"tenantViewOf": {"tenantView", "runSummary"},
+	"tenantViewOf": {"tenantView", "runSummary", "handleTenantRuns", "handleTenantRunOutput"},
 	"runSummary":   {"fillRunSummaries"},
 }
 

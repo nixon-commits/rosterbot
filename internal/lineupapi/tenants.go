@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,12 @@ import (
 // the whole point: a single "last run" cell reads SUCCESS while the hourly
 // optimize is fine and a daily grade fails every day — the same (command,
 // user_id) blindness internal/opsalert keys its own decisions on to avoid.
+// LastFailure is still just the single NEWEST failure across every command,
+// though — a transient hourly blip can sit newer than, and so mask, an older
+// but STILL-BROKEN weekly job. Commands below is what rosterbot-91c4 adds to
+// fix that: every distinct command gets its own newest record and newest
+// failure, so a still-failing Backtest cannot hide behind a Lineup run that
+// has since recovered.
 //
 // Window is the number of records ACTUALLY read, so "no failures" is always a
 // bounded claim ("none in the last W runs") and never a statement about the
@@ -42,15 +49,39 @@ type TenantRuns struct {
 	Window int `json:"window"`
 
 	// Since is the oldest record's started_at (RFC3339), empty when Window is
-	// 0. Without it "0 of last 25 failed" is uninterpretable: 25 records is
-	// about 1.4 days for a member (measured below), so it can be read as a
-	// week's clean bill of health when it is a day's.
+	// 0. Without it "0 of last W failed" is uninterpretable — see
+	// tenantRunWindow/tenantRunScanCap for how wide a claim W can be.
 	Since string `json:"since,omitempty"`
+
+	// Commands is the per-distinct-command breakdown over the SAME scanned
+	// span Window/Since describe (never a wider claim than the row as a
+	// whole). Order is alphabetical by Command for a stable wire shape.
+	// Absent (nil) only when Window is 0 — an empty ledger has no commands to
+	// report, same rule as Last/LastFailure being absent there.
+	Commands []CommandRun `json:"commands,omitempty"`
 }
 
-// tenantRunWindow is how many of a tenant's newest ledger records the admin
-// listing reads. It is a COST BUDGET, deliberately not tied to
-// defaultRunsLimit, which is a page size answering a different question.
+// CommandRun is one distinct base command's own newest record and newest
+// failure, scoped to the same window TenantRuns.Window/Since describe for the
+// row as a whole — "no failure for this command in the window" is bounded the
+// same way "no failure" is for the whole row, never a claim about history
+// before Since.
+//
+// Command is the BASE token (e.g. "optimize" for
+// "optimize --matchup --archive-projections"), the same extraction
+// inFlightRun uses in jobs.go to match a RUNNING record to a job name while
+// ignoring flags — grouping on the full command string would fragment one
+// job into many rows the moment a manual trigger added a flag the scheduled
+// run doesn't carry.
+type CommandRun struct {
+	Command     string `json:"command"`
+	Last        *Run   `json:"last,omitempty"`
+	LastFailure *Run   `json:"last_failure,omitempty"`
+}
+
+// tenantRunWindow is the size of the FIRST, cheap listing runSummary reads for
+// a tenant. It is a COST BUDGET, deliberately not tied to defaultRunsLimit,
+// which is a page size answering a different question.
 //
 // Cost per tenant is exactly one ListObjectsV2 plus at most this many
 // GetObject calls: s3lineup's flatKeys stops the walk once the limit is
@@ -61,18 +92,76 @@ type TenantRuns struct {
 // so a future sub-object under runledger/ would silently unbound the walk.
 // It must never reach RunStore.Get, which scans RunLookback records.
 //
-// THE WINDOW IS SHORT, AND THAT IS A REAL LIMIT, NOT A ROUNDING. Counted from
-// infra/infra.go's schedule table and perTenantJobs set: Lineup is
-// cron(0 14-23,0-3 * * ? *) = 14 runs a day, plus Grade, Shadow, Prospects and
-// ProjectionReports once each = 18 records a day for a member, and more for the
-// operator, whose prefix also receives every league-wide singleton. So 25
-// records is about 1.4 days for a member (25/18) and less for the operator, and
-// the WEEKLY Backtest job (cron(0 12 ? * MON *)) is pushed out of this window
-// by the 24 records that follow it — about 32 hours (24/18 days) after it runs,
-// i.e. by Tuesday evening. This column cannot report on a low-frequency job for
-// most of the week; TenantRuns.Since is what stops that reading as a clean
-// week. Widening it is a cost decision, not a free one — see tenantRunBudget.
+// THIS ALONE USED TO BE THE WHOLE WINDOW, AND THAT WAS THE BUG (rosterbot-91c4).
+// Counted from infra/infra.go's schedule table and perTenantJobs set: Lineup
+// is cron(0 14-23,0-3 * * ? *) = 14 runs a day, plus Grade, Shadow, Prospects
+// and ProjectionReports once each = 18 records a day for a member, and more
+// for the operator, whose prefix also receives every league-wide singleton.
+// 25 records is about 1.4 days for a member (25/18), so the WEEKLY Backtest
+// job (cron(0 12 ? * MON *)) used to be pushed out of a single-read window by
+// the 24 records that follow it — about 32 hours (24/18 days) after it runs,
+// i.e. by Tuesday evening — and reported "0 of last 25 failed" for the rest of
+// the week rather than the still-broken FAILED it should have shown.
+//
+// runSummary now reads this cheap window FIRST and escalates to
+// tenantRunScanCap only when it comes back full AND tenantKnownCommands isn't
+// fully covered yet — see both. A tenant whose commands are all already
+// represented (the common case, once this week's Backtest has run) never
+// pays for the wider read, so this stays the ONLY listing for most requests;
+// widening it further unconditionally is the cost tradeoff tenantRunScanCap's
+// doc explains rather than takes for granted.
 const tenantRunWindow = 25
+
+// tenantRunScanCap is the size of the SECOND, escalated listing runSummary
+// reads for a tenant whose first tenantRunWindow records did not carry a
+// fresh record for every name in tenantKnownCommands — almost always because
+// the weekly Backtest run sits further back than the daily/hourly noise in
+// front of it (see tenantRunWindow). 250 is comfortably more than a week even
+// at the OPERATOR's higher combined cadence (per-tenant jobs plus every
+// league-wide singleton, easily 25-30 records a day), so the escalated read
+// is sized to the tenant who actually needs the width, not the member whose
+// six commands usually show up inside the cheap read alone.
+//
+// THIS IS PAID ONLY BY THE TENANT THAT NEEDS IT, and paid AT MOST ONCE:
+// runSummary escalates exactly one time, never loops, so the worst case per
+// tenant is tenantRunWindow + tenantRunScanCap GetObject calls (275), not an
+// unbounded climb. tenantRunBudget's context deadline still bounds the wall
+// clock either way — a slow escalated read degrades that row to unknown
+// (RunsBudgetExpired) rather than costing the page, the same as every other
+// failure in this file.
+const tenantRunScanCap = 250
+
+// tenantKnownCommands names the base commands infra/infra.go's perTenantJobs
+// set schedules once per tenant (Lineup→optimize, Grade→grade,
+// Backtest→backtest, Shadow→shadow, Prospects→prospects,
+// ProjectionReports→projection-site). infra/ is a separate Go module (its own
+// go.mod) this package cannot import, so this is a deliberate, documented
+// duplication — the same shape as internal/backtest.standardRotationSize
+// citing internal/lineuprun.RotationSize — except nothing here can cross-check
+// it automatically, since the two sides live in modules that cannot import
+// each other.
+//
+// IT IS AN EARLY-EXIT HINT, NEVER A CORRECTNESS BOUND. runSummary keeps
+// whatever it actually read either way, and a command absent from this set
+// (a manual trigger, an operator-only league-wide singleton) still gets its
+// own Commands entry — this set only decides whether the cheap tenantRunWindow
+// read is enough or whether the tenant pays for the wider tenantRunScanCap
+// read. The two ways it can drift from perTenantJobs fail in opposite
+// directions, and neither is a wrong answer. A job ADDED to perTenantJobs
+// without an entry here is simply not waited for: the cheap read can look
+// complete while that job's weekly record sits further back, and its Commands
+// entry appears only once it falls inside whichever read ran — the pre-91c4
+// blindness, confined to the one unlisted job. A name KEPT here after its job
+// is removed from perTenantJobs can never be covered, so every tenant pays the
+// escalated read on every page load — a cost, visibly, never a wrong answer.
+// The operator escalates more often than a member for the ordinary reason:
+// their prefix also receives every league-wide singleton, so the weekly
+// Backtest falls out of the cheap 25 sooner — expected, and accepted, per
+// tenantRunScanCap's sizing.
+var tenantKnownCommands = map[string]bool{
+	"optimize": true, "grade": true, "backtest": true,
+	"shadow": true, "prospects": true, "projection-site": true,
+}
 
 // tenantRunConcurrency bounds the fan-out. Same shape as opsnotify's ledger
 // reader: a semaphore, not errgroup, because every failure here is soft.
@@ -161,12 +250,13 @@ type TenantsResponse struct {
 // — this endpoint exposes every tenant's email, team and connection state, so
 // its entry there is the load-bearing part of this file, not this function.
 //
-// Each row carries a BOUNDED run summary (tenantRunWindow records), resolved
-// through the same per-tenant view GET /v1/runs serves, so the operator can see
-// which tenant is failing. Until rosterbot-nejq this comment claimed that
-// "an operator who needs a tenant's runs has a place to look" — there was no
-// such place, GET /v1/runs serves the CALLER's ledger only, and babysitting the
-// pilot cohort ran entirely on Pushover.
+// Each row carries a BOUNDED run summary (tenantRunWindow records, sometimes
+// escalated to tenantRunScanCap — see both), resolved through the same
+// per-tenant view GET /v1/runs serves, so the operator can see which tenant is
+// failing. Until rosterbot-nejq this comment claimed that "an operator who
+// needs a tenant's runs has a place to look" — there was no such place, GET
+// /v1/runs serves the CALLER's ledger only, and babysitting the pilot cohort
+// ran entirely on Pushover.
 //
 // It is HERE rather than as a ?tenant= param on GET /v1/runs because
 // isAdminOnlyPath matches on r.URL.Path (authz.go): a query string reaches no
@@ -177,8 +267,9 @@ type TenantsResponse struct {
 // TestRuns_IgnoresATenantQueryParam pins the refusal at the trap's own address.
 //
 // The cost the old comment was right to worry about is bounded rather than
-// avoided: one listing plus at most tenantRunWindow object reads per tenant,
-// fanned out at tenantRunConcurrency under tenantRunBudget, every failure soft.
+// avoided: one listing (occasionally two, see tenantRunScanCap) plus at most
+// tenantRunWindow+tenantRunScanCap object reads per tenant, fanned out at
+// tenantRunConcurrency under tenantRunBudget, every failure soft.
 func (cfg Config) handleTenants(w http.ResponseWriter, r *http.Request) {
 	if cfg.Users == nil {
 		writeErr(w, http.StatusNotImplemented, "user directory not configured")
@@ -278,6 +369,17 @@ func runIsFailure(r Run) bool {
 // applyConnectOutcome matches on the run id, so a stamp for a different run is
 // ignored rather than mislabelling one.
 //
+// THE READ IS ONE LISTING, OR TWO (rosterbot-91c4): tenantRunWindow's cheap
+// read is used as-is when it already covers every name in
+// tenantKnownCommands, or when it came back short of tenantRunWindow (the
+// tenant's whole ledger fit inside it, so there is nothing further back to
+// find). Otherwise a SECOND, wider read at tenantRunScanCap replaces it —
+// never more than one escalation, so the worst case is bounded, not a loop.
+// This is what stops a low-frequency job (the weekly Backtest) from being
+// pushed out of view by a high-frequency one (the hourly Lineup optimize)
+// while keeping the common, fully-covered case at the original single cheap
+// read.
+//
 // NIL MEANS "COULD NOT READ", never "nothing to report".
 func (cfg Config) runSummary(ctx context.Context, uid UserID, stamp *ConnectRun) *TenantRuns {
 	view, ok := cfg.tenantViewOf(ctx, uid)
@@ -288,7 +390,28 @@ func (cfg Config) runSummary(ctx context.Context, uid UserID, stamp *ConnectRun)
 	if err != nil {
 		return nil
 	}
+	out := summarizeRuns(recs, stamp)
+	if len(recs) >= tenantRunWindow && !coversKnownCommands(out.Commands) {
+		if wider, werr := view.Runs.List(ctx, tenantRunScanCap); werr == nil {
+			out = summarizeRuns(wider, stamp)
+		}
+		// A failed escalation is not fatal: out already holds the cheap read's
+		// summary, which is still a true (if possibly incomplete) bounded
+		// claim — degrade to a narrower answer, never to nothing, matching
+		// every other soft failure on this page.
+	}
+	return out
+}
+
+// summarizeRuns builds a TenantRuns from one already-fetched, newest-first
+// batch of records. The overall Last/LastFailure/Failures/Window/Since are
+// unchanged from the pre-rosterbot-91c4 shape; Commands is the per-command
+// breakdown that bead adds — see TenantRuns' doc for why the overall
+// LastFailure alone cannot be trusted to surface a still-broken low-frequency
+// job.
+func summarizeRuns(recs []Run, stamp *ConnectRun) *TenantRuns {
 	out := &TenantRuns{Window: len(recs)}
+	byCommand := map[string]*CommandRun{}
 	for i := range recs {
 		// Copied before stamping: a RunStore may hand back a slice it retains,
 		// and applyConnectOutcome writes to the value it is given.
@@ -302,14 +425,73 @@ func (cfg Config) runSummary(ctx context.Context, uid UserID, stamp *ConnectRun)
 			out.Last = &r
 		}
 		out.Since = r.StartedAt
-		if runIsFailure(r) {
+		failed := runIsFailure(r)
+		if failed {
 			out.Failures++
 			if out.LastFailure == nil {
 				out.LastFailure = &r
 			}
 		}
+
+		base := commandBase(r.Command)
+		cr, seen := byCommand[base]
+		if !seen {
+			cr = &CommandRun{Command: base}
+			byCommand[base] = cr
+		}
+		// Same newest-first-wins rule as the overall fields above, scoped to
+		// this one command.
+		if cr.Last == nil {
+			cr.Last = &r
+		}
+		if failed && cr.LastFailure == nil {
+			cr.LastFailure = &r
+		}
+	}
+	if len(byCommand) > 0 {
+		out.Commands = make([]CommandRun, 0, len(byCommand))
+		for _, cr := range byCommand {
+			out.Commands = append(out.Commands, *cr)
+		}
+		// Alphabetical, not scan order: scan order depends on which command
+		// happened to run most recently, which would reshuffle the row on
+		// every poll for no reason a reader could see.
+		sort.Slice(out.Commands, func(i, j int) bool {
+			return out.Commands[i].Command < out.Commands[j].Command
+		})
 	}
 	return out
+}
+
+// commandBase returns the CLI subcommand token a ledger record's Command
+// string starts with (e.g. "optimize" for
+// "optimize --matchup --archive-projections") — the same extraction
+// inFlightRun uses in jobs.go to match a RUNNING record to a job name while
+// ignoring flags. Grouping on the full command string instead would fragment
+// one job into several rows the moment a manual trigger added a flag the
+// scheduled run doesn't carry (e.g. "optimize --dates 2026-09-03").
+func commandBase(cmd string) string {
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+// coversKnownCommands reports whether commands already carries an entry for
+// every name in tenantKnownCommands — see tenantRunScanCap for what this
+// gates.
+func coversKnownCommands(commands []CommandRun) bool {
+	seen := make(map[string]bool, len(commands))
+	for _, c := range commands {
+		seen[c.Command] = true
+	}
+	for name := range tenantKnownCommands {
+		if !seen[name] {
+			return false
+		}
+	}
+	return true
 }
 
 // fillRunSummaries populates out[i].Runs concurrently under its own budget, and

@@ -274,6 +274,21 @@ func (st *Store) PutUser(ctx context.Context, u *lineupapi.User) error {
 // ClaimTeam is idempotent for the holder: re-claiming a team you already hold
 // succeeds. A reconnect runs this again, and failing there would lock a user
 // out of the team they legitimately own.
+//
+// The profile update after the team-pointer claim is READ-MODIFY-WRITE against
+// PutUser's optimistic lock, and it re-reads and re-applies on a lost race
+// rather than reporting one failure — mirroring the bounded retry
+// Config.mutateUser gives every other profile mutation. Without it, ANY writer
+// landing between this function's GetUser and PutUser (a passkey registration,
+// a token-version bump, another ClaimTeam) turned a routine lost race into a
+// permanent ErrUserConflict: the team-pointer claim had already succeeded, so
+// the operation could never be retried from scratch, and the caller's existing
+// comment ("retrying cannot help") was true for a genuine missing profile and
+// false for this — reproduced live over ddbusertest, where a forced version
+// bump between the read and the write made a bare retry of THE SAME CALL
+// succeed (rosterbot-spb9). FileUserStore.ClaimTeam has no equivalent gap: it
+// writes under a mutex and never calls PutUser, so this is DynamoDB-only, i.e.
+// production-only.
 func (st *Store) ClaimTeam(ctx context.Context, id lineupapi.UserID, teamID string) error {
 	_, err := st.api.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:                 aws.String(st.table),
@@ -289,15 +304,31 @@ func (st *Store) ClaimTeam(ctx context.Context, id lineupapi.UserID, teamID stri
 		return err
 	}
 
-	u, ok, err := st.GetUser(ctx, id)
-	if err != nil {
-		return err
+	// Bounded like Config.mutateUser (5 attempts): re-read the CURRENT record
+	// each time rather than retrying PutUser on the stale one it built the
+	// first pass — a stale re-write would just lose the race again.
+	for attempt := 0; attempt < 5; attempt++ {
+		u, ok, err := st.GetUser(ctx, id)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return lineupapi.ErrUserConflict
+		}
+		u.TeamID = teamID
+		err = st.PutUser(ctx, u)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, lineupapi.ErrUserConflict) {
+			return err
+		}
 	}
-	if !ok {
-		return lineupapi.ErrUserConflict
-	}
-	u.TeamID = teamID
-	return st.PutUser(ctx, u)
+	// Exhausted the bounded retry: five consecutive losses against the same
+	// profile is not the transient race this loop exists to absorb, so this
+	// is genuinely our bug, and the comment at the call site (cmd/connect.go)
+	// now describes it correctly.
+	return lineupapi.ErrUserConflict
 }
 
 func (st *Store) Credentials(ctx context.Context, id lineupapi.UserID) ([]webauthn.Credential, error) {

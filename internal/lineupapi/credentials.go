@@ -47,6 +47,26 @@ const (
 	// what the tenant is told and what they are asked to do — retry, not
 	// re-enter.
 	ConnInterrupted ConnStatus = "interrupted"
+
+	// ConnCheckFailed: the connect task could not even ATTEMPT the sign-in — a
+	// fault on OUR side (decrypting the stored credentials, reading the
+	// connection record, or the task's own KMS/DynamoDB wiring) before Fantrax
+	// was asked anything at all.
+	//
+	// It is not ConnInterrupted. That status's whole meaning is "Fantrax
+	// accepted the sign-in" — there is no loginProof this early, nothing was
+	// ever submitted to Fantrax, and reusing it here would claim a fact this
+	// route does not have. It is not ConnPending either: pending means a
+	// verification is RUNNING, and settings.js renders it as "Checking your
+	// credentials…" with no bound, so a run that died before Fantrax was ever
+	// asked left it there forever — the whole of rosterbot-spb9.
+	//
+	// Usable() stays false, so AuthorizeRun and the tenant fan-out refuse it
+	// with no edit. What differs from every other failing status is what the
+	// tenant is told: retry, because nothing here says anything about their
+	// password — the same remedy as ConnInterrupted, reached for the opposite
+	// reason (before the check ever started, not after it half-finished).
+	ConnCheckFailed ConnStatus = "check_failed"
 )
 
 // Connect failure classes. These are CLASSES, not messages: they are shown to
@@ -132,6 +152,21 @@ const (
 	// operator can act on a Fantrax outage, and the run ledger is where they
 	// hear about it.
 	ConnErrVerificationInterrupted = "verification_interrupted"
+
+	// ConnErrCheckFailed — the check never reached Fantrax: something on OUR
+	// side broke first (a KMS decrypt, a DynamoDB read, the task's own KMS or
+	// storage wiring). There is no evidence here about the tenant's
+	// credentials at all, in either direction — unlike
+	// ConnErrVerificationInterrupted, which requires a proven FX_RM cookie,
+	// this class requires the OPPOSITE: it is reached only where no such
+	// cookie could exist yet.
+	//
+	// Like ConnErrVerificationInterrupted, this is tenant-facing (told to
+	// retry) AND operator-actionable (the connect task exits non-zero, since
+	// only the operator can fix a KMS or DynamoDB fault) — routeInternal
+	// carries both halves the same way routePostAuth does, for the same
+	// reason: the tenant did nothing wrong, and only the operator can act.
+	ConnErrCheckFailed = "check_failed"
 )
 
 // What a single connect RUN concluded. Two values only, and deliberately not

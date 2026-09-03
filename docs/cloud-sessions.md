@@ -96,24 +96,65 @@ startup — and finish in about five minutes so the environment cache can build.
 
 ```bash
 #!/bin/bash
-# ICU headers first: bd links Dolt, which will not compile without them
-# (the build dies on unicode/uregex.h).
-apt-get update -qq || true
-apt-get install -y -qq libicu-dev || true
+# bd (beads) ships prebuilt release binaries; fetch one of those instead of
+# building from source. `go install github.com/steveyegge/beads/cmd/bd@v1.0.4`
+# compiles bd's Dolt-linked ~200 MB binary from scratch, backgrounded against
+# `go mod download` on the theory that the two together would fit the ~5
+# minute budget the environment allows before it gives up on caching. That
+# theory is now timed (see "Measured cost" below): a fully cold `go install`
+# alone finishes around 42s on comparable hardware, well inside the budget --
+# so the switch below isn't rescuing a timeout, it's the bead's own stated
+# preference plus a much smaller download and no C++/ICU toolchain to keep
+# working. The prebuilt tarball is a ~45 MB download instead (verified live:
+# linux_amd64 is 47,668,079 bytes, linux_arm64 is 44,283,170, via the GitHub
+# Releases API), verified against the release's own checksums.txt before
+# anything from it runs. There's no apt-get step left: it existed only to
+# give the from-source build a C++ toolchain and ICU headers (unicode/regex.h
+# and unicode/uregex.h), and beads' own install script
+# (github.com/gastownhall/beads/blob/main/scripts/install.sh) installs the
+# release binaries on a bare box with no apt-get at all.
+BD_VERSION="1.0.4"
+BD_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+case "$(uname -m)" in
+  x86_64) BD_ARCH="amd64" ;;
+  aarch64|arm64) BD_ARCH="arm64" ;;
+  *) BD_ARCH="$(uname -m)" ;;
+esac
+BD_ASSET="beads_${BD_VERSION}_${BD_OS}_${BD_ARCH}.tar.gz"
+BD_BASE_URL="https://github.com/gastownhall/beads/releases/download/v${BD_VERSION}"
 
-# The bd build is the long pole (~200 MB binary), so start it and warm the
-# module cache alongside it.
-go install github.com/steveyegge/beads/cmd/bd@v1.0.4 &
-BD=$!
+# sha256sum is the common case (every Linux distro's coreutils); shasum -a
+# 256 covers macOS, which has no sha256sum by default. Picking the tool once
+# up front (rather than chaining `sha256sum ... || shasum ...`) matters: a
+# genuine mismatch from sha256sum still exits non-zero, and chained that fell
+# through to shasum too -- which then failed on its own with a confusing "no
+# properly formatted SHA checksum lines found" instead of one clear message.
+if command -v sha256sum >/dev/null 2>&1; then
+  BD_SHA256_VERIFY="sha256sum -c -"
+else
+  BD_SHA256_VERIFY="shasum -a 256 -c -"
+fi
+
+bd_tmp="$(mktemp -d)"
+if curl -fsSL --max-time 120 -o "$bd_tmp/$BD_ASSET" "$BD_BASE_URL/$BD_ASSET" \
+    && curl -fsSL --max-time 30 -o "$bd_tmp/checksums.txt" "$BD_BASE_URL/checksums.txt"; then
+  bd_line="$(awk -v f="$BD_ASSET" '$2 == f' "$bd_tmp/checksums.txt")"
+  if [ -n "$bd_line" ] && (cd "$bd_tmp" && echo "$bd_line" | $BD_SHA256_VERIFY); then
+    tar -xzf "$bd_tmp/$BD_ASSET" -C "$bd_tmp"
+    install -m 0755 "$bd_tmp/bd" /usr/local/bin/bd
+  else
+    echo "bd: checksum verification failed for $BD_ASSET, leaving bd uninstalled" >&2
+  fi
+else
+  echo "bd: no release asset for $BD_OS/$BD_ARCH ($BD_ASSET), leaving bd uninstalled" >&2
+fi
+rm -rf "$bd_tmp"
+
+# Warm the module cache in the foreground -- there's no longer a long
+# background `go install` for it to overlap with.
 for d in /home/user/rosterbot /workspace/rosterbot; do
   if [ -f "$d/go.mod" ]; then (cd "$d" && go mod download) || true; break; fi
 done
-wait $BD || true
-
-# go install writes to GOPATH/bin, which is NOT on PATH in a cloud session —
-# without this the binary exists and every `command -v bd` still fails.
-GOBIN="$(go env GOPATH)/bin"
-[ -x "$GOBIN/bd" ] && ln -sf "$GOBIN/bd" /usr/local/bin/bd
 
 exit 0
 ```
@@ -124,7 +165,29 @@ installed v1.2.1 here, which is newer than the Dolt data on this repo's
 `refs/dolt/data`; `bd bootstrap` then refuses to hydrate and `bd init` offers
 to migrate a database shared with every other clone. Matching the version
 sidesteps the question. If you do want to upgrade, do it deliberately from one
-machine, not implicitly from a cloud VM that is discarded an hour later.
+machine, not implicitly from a cloud VM that is discarded an hour later. The
+pin now lives entirely in the release URL (`BD_VERSION`), not in a Go module
+`@` suffix, so bumping it costs one variable edit and no `go install` cache to
+invalidate or distrust.
+
+**Measured cost (rosterbot-c8e).** A fully cold `go install
+github.com/steveyegge/beads/cmd/bd@v1.0.4` (fresh `GOPATH`, `GOCACHE` and
+`GOMODCACHE`; ICU supplied through `CGO_CFLAGS`/`CGO_CXXFLAGS`/`CGO_LDFLAGS`,
+since the package carries no `#cgo pkg-config` directive and the header a
+naive build actually stops on is `unicode/regex.h`) took **41.7s wall** on an
+Apple-silicon laptop and produced a 178.5 MB binary. So the old script was
+not blowing the ~5 minute budget on comparable hardware; the prebuilt binary
+is preferred for the smaller download (~45 MB per the GitHub Releases API)
+and for having no C++/ICU toolchain to keep working, not to rescue a timeout.
+The new script's logic (os/arch detection, download, checksum verification
+against both a matching and a deliberately corrupted checksum, extraction,
+the PATH install) was exercised end to end against a local HTTP stand-in for
+GitHub serving a real `bd 1.0.4` tarball; its non-network overhead is under
+0.3s. **Still unmeasured:** the real download time from
+`release-assets.githubusercontent.com` inside a cloud session, and whether
+the environment cache engages on the second session afterward (the
+observable signal is that session starting fast). Record both here after the
+first live run.
 
 ## What the SessionStart hook handles
 

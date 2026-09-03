@@ -53,6 +53,7 @@ func TestTenantsAttentionFrom_PendingAttributesAFailingRunToTheOperator(t *testi
 	const operatorRunFailing = "You (not the tenant) — a job is failing"
 	const tenantMustReconnect = "The tenant — they must reconnect"
 	const operatorCheckDidNotFinish = "You (not the tenant) — the check did not finish"
+	const operatorCheckNeverReachedFantrax = "You (not the tenant) — the check never reached fantrax"
 
 	cases := []struct {
 		name string
@@ -75,6 +76,10 @@ func TestTenantsAttentionFrom_PendingAttributesAFailingRunToTheOperator(t *testi
 		{"pending_operator_actionable_with_failure", "You (not the tenant)"},
 		// (4) interrupted keeps its own copy, unaffected by the fallback.
 		{"interrupted_with_failure", operatorCheckDidNotFinish},
+		// (4b) check_failed (rosterbot-spb9) keeps its own copy too, one step
+		// earlier than interrupted: the check never reached Fantrax at all,
+		// so the tenant still has nothing to fix.
+		{"check_failed_with_failure", operatorCheckNeverReachedFantrax},
 		// (5) verified is unchanged (it already had this behavior).
 		{"verified_with_failure", operatorRunFailing},
 	}
@@ -166,6 +171,8 @@ report("pending_operator_actionable_with_failure",
     { status: "active", conn_status: "pending", conn_error: "bot_challenge", runs: { last_failure: { error: "connect failed" } } });
 report("interrupted_with_failure",
     { status: "active", conn_status: "interrupted", runs: { last_failure: { error: "connect failed" } } });
+report("check_failed_with_failure",
+    { status: "active", conn_status: "check_failed", runs: { last_failure: { error: "connect failed" } } });
 report("verified_with_failure",
     { status: "active", conn_status: "verified", runs: { last_failure: { error: "connect failed" } } });
 `

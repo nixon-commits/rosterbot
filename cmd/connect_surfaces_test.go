@@ -45,13 +45,16 @@ func TestConnectStatusReachesEveryRenderingSurface(t *testing.T) {
 			want: []string{
 				// CONNECTION_COPY: the badge and its wording.
 				`  interrupted: [`,
+				`  check_failed: [`,
 				// FAILURE_COPY: what the class means to the person reading it.
 				// The key sits alone on its line above a wrapped sentence, which
 				// is what distinguishes it from the terse map below.
 				`  ` + lineupapi.ConnErrVerificationInterrupted + ":\n",
+				`  ` + lineupapi.ConnErrCheckFailed + ":\n",
 				// CONNECT_CHIP: the short form the runs table can fit. Its value
 				// is a single string on the same line as the key.
 				`  ` + lineupapi.ConnErrVerificationInterrupted + `: "`,
+				`  ` + lineupapi.ConnErrCheckFailed + `: "`,
 			},
 			why: "the tenant's own account page renders an unknown status as the raw " +
 				"string and an unknown class as the raw class, and the runs chip " +
@@ -88,9 +91,11 @@ func TestConnectStatusReachesEveryRenderingSurface(t *testing.T) {
 			want: []string{
 				// CONN_TONE: the badge on the operator's row.
 				`  interrupted: [`,
+				`  check_failed: [`,
 				// attentionFrom: who has to act. Without it the row reads "—",
 				// i.e. healthy, on the one screen built to find failures.
 				`t.conn_status === "interrupted"`,
+				`t.conn_status === "check_failed"`,
 			},
 			why: "attentionFrom's terminal branch reads \"—\" for a status it does not " +
 				"know (unless a job is failing), so the operator's row reads as healthy",
@@ -100,6 +105,7 @@ func TestConnectStatusReachesEveryRenderingSurface(t *testing.T) {
 			want: []string{
 				// BANNER_COPY: the global, unmissable tenant banner.
 				`  interrupted: [`,
+				`  check_failed: [`,
 			},
 			why: "showConnectionBanner returns early for a status it does not know, so " +
 				"the tenant learns the bot stopped managing their team only by " +

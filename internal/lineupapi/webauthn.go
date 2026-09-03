@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -209,6 +210,20 @@ func (cfg Config) handleAuthRegisterBegin(w http.ResponseWriter, r *http.Request
 	u, ok := cfg.registrationSubject(r, enrollmentToken(r))
 	if !ok {
 		writeErr(w, http.StatusForbidden, "not authorized to register a passkey")
+		return
+	}
+	// go-webauthn 0.18.0 refuses to build a ceremony for a handle outside
+	// 1..64 bytes (see UserID.WebAuthnHandle's doc comment) and reports it as
+	// an opaque "error generating credential creation" with no id attached —
+	// indistinguishable, from the caller's side, from every other reason
+	// BeginRegistration can fail. Every production id decodes to exactly 64
+	// bytes (NewUserID(newWebAuthnUserID())), so this should never fire
+	// outside a hand-typed test id or a corrupted record; catching it here
+	// names the actual user and turns a blanket 500 into a diagnosable one.
+	if handle := u.ID.WebAuthnHandle(); len(handle) < 1 || len(handle) > 64 {
+		log.Printf("lineupapi: register/begin refused: user %q has an invalid webauthn handle (%d bytes, want 1..64)",
+			u.ID, len(handle))
+		writeErr(w, http.StatusInternalServerError, "account has an invalid webauthn identity")
 		return
 	}
 	creds, err := cfg.Users.Credentials(r.Context(), u.ID)

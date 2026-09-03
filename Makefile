@@ -1,4 +1,4 @@
-.PHONY: build build-modules check-pins install lint lint-install test test-modules run dry-run run-all clean-cache
+.PHONY: build build-modules check-pins install lint lint-install lint-version test test-modules run dry-run run-all clean-cache
 
 build: check-pins build-modules
 	go build -o rosterbot .
@@ -83,6 +83,15 @@ lint:
 
 lint-install:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+# Prints exactly the pinned version, nothing else, so a caller (CI's cache-key
+# step) can read the single source of truth above without grepping the
+# Makefile's line format — a grep that would silently break the moment this
+# line's syntax changes. GOLANGCI_LINT_VERSION stays a `?=` var rather than a
+# hardcoded echo so an environment override (same mechanism `check-pins` and
+# the rest of this file already respect) is reflected here too.
+lint-version:
+	@echo $(GOLANGCI_LINT_VERSION)
 
 install:
 	go install .

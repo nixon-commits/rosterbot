@@ -53,6 +53,18 @@ type Model struct {
 	Views         map[string]View                    `json:"views"`         // keyed "system|window|role"
 	Compare       map[string][]SystemScore           `json:"compare"`       // keyed "window|role" → systems ranked by rho descending; nil for role "all"
 	CompareTrends map[string]map[string][]TrendPoint `json:"compareTrends"` // keyed "window|role" → system → trend
+
+	// ExcludedRows is the count of graded rows withheld from every view/compare
+	// figure above as known-bad model input (see analysis.Exclusions,
+	// rosterbot-c61b) -- e.g. a Shadow capture that served a stale-cache
+	// fallback instead of a fresh projection. The rows stay physically in the
+	// Analysis Store; this is a read-time exclusion, disclosed here rather
+	// than silent. Zero on a Model built from a store with no matching data.
+	ExcludedRows int `json:"excludedRows"`
+	// Excluded is the (date, system) partitions that contributed to
+	// ExcludedRows, one entry per pair with a nonzero row count, sorted by
+	// date then system.
+	Excluded []ExcludedPair `json:"excluded,omitempty"`
 }
 
 var (
@@ -90,6 +102,16 @@ func Aggregate(rows []analysis.GradeRow, generatedAt, seasonStart time.Time) *Mo
 	// than silently dropped from the detail dashboard.
 	rows = normalizeSystems(rows)
 
+	// Withhold known-bad (date, system) captures -- e.g. a Shadow run that
+	// served a stale-cache fallback instead of a fresh projection -- before
+	// any of them can reach a view, trend, or comparison figure below. See
+	// excludeStaleGrades and analysis.Exclusions.
+	rows, excluded := excludeStaleGrades(rows)
+	excludedRows := 0
+	for _, p := range excluded {
+		excludedRows += p.Rows
+	}
+
 	latest := seasonStart
 	for _, r := range rows {
 		if d, err := time.Parse("2006-01-02", r.Dt); err == nil && d.After(latest) {
@@ -108,6 +130,8 @@ func Aggregate(rows []analysis.GradeRow, generatedAt, seasonStart time.Time) *Mo
 		Views:         map[string]View{},
 		Compare:       map[string][]SystemScore{},
 		CompareTrends: map[string]map[string][]TrendPoint{},
+		ExcludedRows:  excludedRows,
+		Excluded:      excluded,
 	}
 
 	// Detailed dashboard: every captured system, so the Detail panel's system

@@ -13,6 +13,18 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
+// testUserID mints a UserID whose handle actually decodes, the way every
+// production id does (see NewUserID / cmd/invite.go's newUserID).
+//
+// A literal like UserID("alice") looks like a fine test fixture and is not:
+// UserID IS the base64url of the raw WebAuthn handle, and "alice" (5 bytes,
+// length mod 4 == 1) is not valid base64url, so WebAuthnHandle() returns nil
+// and go-webauthn 0.18.0's BeginRegistration refuses it outright ("the user
+// id must be between 1 and 64 bytes but it has a length of 0"). Wrapping the
+// name through NewUserID produces a real, if short, handle that decodes fine
+// — distinct names still yield distinct ids, which is all these tests need.
+func testUserID(name string) UserID { return NewUserID([]byte(name)) }
+
 func testWebAuthn(t *testing.T) *webauthn.WebAuthn {
 	t.Helper()
 	wa, err := webauthn.New(&webauthn.Config{
@@ -66,7 +78,8 @@ func TestRegisterBegin_RejectsBootstrapToken(t *testing.T) {
 func TestRegisterBegin_AcceptsEnrollmentToken(t *testing.T) {
 	users := NewFileUserStore(t.TempDir())
 	ctx := context.Background()
-	u := &User{ID: "alice", Email: "a@example.test", Role: RoleMember, Status: UserActive}
+	alice := testUserID("alice")
+	u := &User{ID: alice, Email: "a@example.test", Role: RoleMember, Status: UserActive}
 	if err := users.CreateUser(ctx, u); err != nil {
 		t.Fatal(err)
 	}
@@ -103,8 +116,9 @@ func TestRegisterBegin_AcceptsEnrollmentToken(t *testing.T) {
 func TestRegisterBegin_AcceptsValidSession(t *testing.T) {
 	secret := []byte("s")
 	users := NewFileUserStore(t.TempDir())
+	alice := testUserID("alice")
 	if err := users.CreateUser(context.Background(), &User{
-		ID: "alice", Email: "a@example.test", Role: RoleMember, Status: UserActive,
+		ID: alice, Email: "a@example.test", Role: RoleMember, Status: UserActive,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +127,7 @@ func TestRegisterBegin_AcceptsValidSession(t *testing.T) {
 
 	// Mint a valid session cookie the same way login/finish would.
 	sessionRec := httptest.NewRecorder()
-	setSessionCookie(sessionRec, secret, "alice", 0, time.Now())
+	setSessionCookie(sessionRec, secret, alice, 0, time.Now())
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
 	for _, c := range sessionRec.Result().Cookies() {
@@ -126,11 +140,57 @@ func TestRegisterBegin_AcceptsValidSession(t *testing.T) {
 	}
 }
 
+// TestRegisterBegin_RefusesInvalidHandle pins the loud failure this bead adds
+// (rosterbot-jlqt): a user record whose id does not decode to a 1..64-byte
+// WebAuthn handle must be refused with a distinct, diagnosable error rather
+// than reaching go-webauthn 0.18.0's own opaque "could not begin
+// registration" 500 — the same failure that made every register/begin test
+// in this package fail identically until each was traced back to a
+// hand-typed "alice" fixture (see testUserID's doc comment).
+//
+// No production id can trigger this (every real one is minted by
+// NewUserID(newWebAuthnUserID()), always exactly 64 bytes — see
+// UserID.WebAuthnHandle's doc comment), so the fixture here is deliberately
+// the same shape as the tests that used to break: a literal, non-base64url
+// id, standing in for a hand-typed record or a corrupted one.
+func TestRegisterBegin_RefusesInvalidHandle(t *testing.T) {
+	secret := []byte("s")
+	users := NewFileUserStore(t.TempDir())
+	const badID UserID = "alice" // 5 bytes, length mod 4 == 1: not valid base64url
+	if err := users.CreateUser(context.Background(), &User{
+		ID: badID, Email: "a@example.test", Role: RoleMember, Status: UserActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := Handler(Config{Token: "secret-token", Users: users, Enrollments: users,
+		WebAuthn: testWebAuthn(t), SessionSecret: secret})
+
+	sessionRec := httptest.NewRecorder()
+	setSessionCookie(sessionRec, secret, badID, 0, time.Now())
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
+	for _, c := range sessionRec.Result().Cookies() {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "could not begin registration") {
+		t.Fatalf("body = %s, want the specific invalid-handle refusal, not go-webauthn's "+
+			"opaque error — the whole point is naming the actual cause", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "invalid webauthn identity") {
+		t.Fatalf("body = %s, want it to name an invalid webauthn identity", rec.Body.String())
+	}
+}
+
 func TestRegisterFinish_RejectsWithoutCeremonyCookie(t *testing.T) {
 	secret := []byte("s")
 	users := NewFileUserStore(t.TempDir())
+	alice := testUserID("alice")
 	if err := users.CreateUser(context.Background(), &User{
-		ID: "alice", Email: "a@example.test", Role: RoleMember, Status: UserActive,
+		ID: alice, Email: "a@example.test", Role: RoleMember, Status: UserActive,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +201,7 @@ func TestRegisterFinish_RejectsWithoutCeremonyCookie(t *testing.T) {
 	// to come first — otherwise this would answer 400 to someone who was never
 	// entitled to ask, which is the same ordering mistake handleJob had.
 	sessionRec := httptest.NewRecorder()
-	setSessionCookie(sessionRec, secret, "alice", 0, time.Now())
+	setSessionCookie(sessionRec, secret, alice, 0, time.Now())
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/finish", strings.NewReader("{}"))
 	for _, c := range sessionRec.Result().Cookies() {
 		req.AddCookie(c)
@@ -248,12 +308,13 @@ func TestListPasskeys_RequiresSession(t *testing.T) {
 
 func TestListPasskeys_ReturnsRegisteredIDs(t *testing.T) {
 	secret := []byte("s")
-	users := seedUserWithCredential(t, "alice", "cred-1")
+	alice := testUserID("alice")
+	users := seedUserWithCredential(t, alice, "cred-1")
 	h := Handler(Config{Token: "t", Users: users, Enrollments: users,
 		WebAuthn: testWebAuthn(t), SessionSecret: secret})
 
 	sessionRec := httptest.NewRecorder()
-	setSessionCookie(sessionRec, secret, "alice", 0, time.Now())
+	setSessionCookie(sessionRec, secret, alice, 0, time.Now())
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/passkeys", nil)
 	for _, c := range sessionRec.Result().Cookies() {
 		req.AddCookie(c)
@@ -271,12 +332,13 @@ func TestListPasskeys_ReturnsRegisteredIDs(t *testing.T) {
 
 func TestRevokePasskey_RemovesMatchingCredential(t *testing.T) {
 	secret := []byte("s")
-	users := seedUserWithCredential(t, "alice", "cred-1")
+	alice := testUserID("alice")
+	users := seedUserWithCredential(t, alice, "cred-1")
 	h := Handler(Config{Token: "t", Users: users, Enrollments: users,
 		WebAuthn: testWebAuthn(t), SessionSecret: secret})
 
 	sessionRec := httptest.NewRecorder()
-	setSessionCookie(sessionRec, secret, "alice", 0, time.Now())
+	setSessionCookie(sessionRec, secret, alice, 0, time.Now())
 	id := base64.RawURLEncoding.EncodeToString([]byte("cred-1"))
 	req := httptest.NewRequest(http.MethodDelete, "/v1/auth/passkeys/"+id, nil)
 	for _, c := range sessionRec.Result().Cookies() {
@@ -288,7 +350,7 @@ func TestRevokePasskey_RemovesMatchingCredential(t *testing.T) {
 		t.Fatalf("status = %d, want 204, body=%s", rec.Code, rec.Body.String())
 	}
 
-	creds, err := users.Credentials(context.Background(), "alice")
+	creds, err := users.Credentials(context.Background(), alice)
 	if err != nil {
 		t.Fatal(err)
 	}

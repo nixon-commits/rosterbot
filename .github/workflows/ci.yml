@@ -36,7 +36,39 @@ jobs:
       # the Makefile, so that string lives in exactly one place too.
       #
       # Placed before the slower test run so a lint failure reports fast.
+      #
+      # `make lint-version` (not a grep of this file) is the single source of
+      # truth for the pin, so the cache key can never disagree with what
+      # lint-install actually installs. GOTOOLVERSION comes from the live
+      # toolchain (`go env GOVERSION`) rather than parsing go.mod's version
+      # line, since setup-go can resolve a newer patch than go.mod states —
+      # keying on the string actually running is what makes a toolchain bump
+      # correctly invalidate the cache instead of silently reusing a binary
+      # built against a different Go.
+      - name: Resolve golangci-lint cache key inputs
+        run: |
+          echo "GOLANGCI_LINT_VERSION=$(make lint-version)" >> "$GITHUB_ENV"
+          echo "GOTOOLVERSION=$(go env GOVERSION)" >> "$GITHUB_ENV"
+          echo "GOLANGCI_LINT_BIN=$(go env GOPATH)/bin/golangci-lint" >> "$GITHUB_ENV"
+
+      - name: Cache golangci-lint binary
+        id: golangci-lint-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.GOLANGCI_LINT_BIN }}
+          key: golangci-lint-${{ runner.os }}-${{ env.GOTOOLVERSION }}-${{ env.GOLANGCI_LINT_VERSION }}
+
+      # Network-free on a warm run: setup-go's module cache is keyed on
+      # go.sum, so any go.sum change (a dependabot bump, an unrelated dep
+      # add) makes the *next* run cold-download golangci-lint's whole
+      # dependency graph through the proxy and verify it against
+      # sum.golang.org — surface area for a step whose output is one pinned
+      # binary (2026-09-02, run 33653268252: this died on a transient
+      # sum.golang.org HTTP/2 error and a same-commit re-run passed). Caching
+      # the binary itself, keyed independently of go.sum, removes that
+      # exposure entirely on a cache hit.
       - name: Install golangci-lint
+        if: steps.golangci-lint-cache.outputs.cache-hit != 'true'
         run: make lint-install
 
       - name: Lint (all modules)

@@ -232,6 +232,13 @@ covers, because 25 records is roughly a day and a half of the hourly lineup job
 reason only the tenant can fix exits 0 on purpose, so it is labelled by the
 connect task's own verdict rather than by its exit status.
 
+Each row's **Runs** button opens that tenant's full ledger and, on a row
+click, that run's captured output (`GET /v1/tenants/{id}/runs` and
+`GET /v1/tenants/{id}/runs/{runID}/output`) — the drill-down an operator
+reaches for once the bounded summary above flags a tenant. Both are nested
+under `/v1/tenants/{id}/`, inheriting the same admin-only gate, and resolve
+the named tenant's own stores rather than the caller's.
+
 The token is printed **once** and is not recoverable: only its SHA-256 is
 stored, so a leak of the identity table yields no usable links. The link is
 single-use, scoped to one user, and redeemed only when a registration actually

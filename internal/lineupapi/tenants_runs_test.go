@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // tenantsRunsFixture is tenantsFixture plus a run ledger: the same two users,
@@ -277,7 +279,13 @@ func (s sharedRuns) For(context.Context, UserID) (TenantView, error) {
 	return TenantView{Runs: s.store}, nil
 }
 
-// TestTenants_RunSummaryIsBounded pins the two costs this column must not pay.
+// TestTenants_RunSummaryIsBounded pins the two costs this column must not pay,
+// for the COMMON case: a tenant whose ledger is small enough that its records
+// come back short of tenantRunWindow, so runSummary has nothing further back
+// to look for and never escalates. TestTenants_RunSummaryEscalationIsBounded
+// below covers the OTHER case — a full first read that still doesn't cover
+// tenantKnownCommands — and pins that escalation is capped at exactly one
+// extra call, never a loop.
 //
 // An unbounded List makes s3lineup's flatKeys walk the ENTIRE runledger prefix
 // instead of stopping at the window, and any call to RunStore.Get is a
@@ -452,5 +460,230 @@ func TestTenants_ConnectVerdictIsTheRowTenantsNotTheCallers(t *testing.T) {
 		bob.Runs.Last.Connect.Verdict != ConnectVerdictVerified {
 		t.Errorf("bob's row carries no verdict of its own (%+v), so the assertion above "+
 			"would pass on a build that stamped nothing at all", bob.Runs.Last)
+	}
+}
+
+// limitedRuns is a RunStore whose List genuinely ENFORCES limit — returning
+// the newest `limit` of its backing records — unlike staticRuns/budgetRuns
+// above, which return everything (or a fixed set) regardless of what was
+// asked. A fake that never truncates cannot reproduce the window bug this
+// file exists to fix: `all` must already be supplied newest-first, matching
+// what a real store's RunKey ordering guarantees.
+type limitedRuns struct {
+	mu  sync.Mutex
+	all []Run
+}
+
+func (r *limitedRuns) List(_ context.Context, limit int) ([]Run, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if limit <= 0 || limit >= len(r.all) {
+		return append([]Run(nil), r.all...), nil
+	}
+	return append([]Run(nil), r.all[:limit]...), nil
+}
+
+func (r *limitedRuns) Get(context.Context, string) (*RunDetail, bool, error) {
+	return nil, false, nil
+}
+
+// commandEntry finds one command's entry in a TenantRuns.Commands breakdown,
+// or nil if that command never appeared in the scanned window.
+func commandEntry(commands []CommandRun, name string) *CommandRun {
+	for i := range commands {
+		if commands[i].Command == name {
+			return &commands[i]
+		}
+	}
+	return nil
+}
+
+// TestTenants_WeeklyFailureSurvivesHourlyNoise is rosterbot-91c4 itself: a
+// single tenantRunWindow-sized read must not let hourly Lineup noise push a
+// WEEKLY Backtest failure out of view for most of the week.
+//
+// Uses limitedRuns rather than runsPerTenant/staticRuns specifically because
+// those ignore the requested limit — against them this test would pass on
+// the unfixed code too, pinning nothing.
+//
+// MUTATION: revert runSummary to the single, non-escalating
+// `summarizeRuns(recs)` where recs = view.Runs.List(ctx, tenantRunWindow) with
+// no follow-up read. The 30 newer "optimize" records fill the whole window
+// and the older "backtest" FAILED record is never read at all.
+func TestTenants_WeeklyFailureSurvivesHourlyNoise(t *testing.T) {
+	newest := time.Date(2026, 8, 31, 23, 0, 0, 0, time.UTC) // a Monday evening
+	var all []Run
+	// 30 hourly Lineup records — comfortably more than tenantRunWindow (25) —
+	// newest first, one per hour back from "now".
+	for i := 0; i < 30; i++ {
+		at := newest.Add(-time.Duration(i) * time.Hour)
+		all = append(all, Run{
+			ID:        fmt.Sprintf("lineup-%02d", i),
+			Command:   "optimize --matchup --archive-projections",
+			Status:    "SUCCESS",
+			StartedAt: at.Format(time.RFC3339),
+		})
+	}
+	// The weekly Backtest, older than every one of the 30 above, and FAILED.
+	all = append(all, Run{
+		ID:        "backtest-1",
+		Command:   "backtest",
+		Status:    "FAILED",
+		StartedAt: newest.Add(-8 * 24 * time.Hour).Format(time.RFC3339),
+	})
+
+	h, secret := tenantsRunsFixture(t, mixedRuns{"bob": &limitedRuns{all: all}}, nil)
+
+	bob := rowByID(t, getTenants(t, h, secret, "admin1"), "bob")
+	if bob.Runs == nil {
+		t.Fatal("bob has no run summary")
+	}
+	if bob.Runs.LastFailure == nil || bob.Runs.LastFailure.ID != "backtest-1" {
+		t.Fatalf("the weekly Backtest failure was pushed out of view by 30 newer "+
+			"hourly optimize records: runs=%+v", bob.Runs)
+	}
+}
+
+// TestTenants_CommandsBreakdownKeepsEachCommandsOwnFailureVisible is the
+// masking half of rosterbot-91c4: the row-level LastFailure is, by design,
+// just the SINGLE newest failure across every command — so a newer, healthy
+// job's failure hides an older, STILL-BROKEN one there. Commands must not.
+//
+// MUTATION: collapse summarizeRuns' per-command tracking so cr.LastFailure is
+// only ever set from the SAME record that set out.LastFailure (i.e. share one
+// pointer across commands) — backtest's own entry would then read nil.
+func TestTenants_CommandsBreakdownKeepsEachCommandsOwnFailureVisible(t *testing.T) {
+	h, secret := tenantsRunsFixture(t, runsPerTenant{
+		"bob": {
+			{ID: "r-lineup-fail", Command: "optimize --matchup --archive-projections",
+				Status: "FAILED", StartedAt: "2026-08-31T23:00:00Z"},
+			{ID: "r-backtest-fail", Command: "backtest",
+				Status: "FAILED", StartedAt: "2026-08-24T12:00:00Z"},
+		},
+	}, nil)
+
+	bob := rowByID(t, getTenants(t, h, secret, "admin1"), "bob")
+	if bob.Runs == nil {
+		t.Fatal("bob has no run summary")
+	}
+	// Row-level LastFailure is unchanged from before rosterbot-91c4: the
+	// single newest failure, here optimize.
+	if bob.Runs.LastFailure == nil || bob.Runs.LastFailure.ID != "r-lineup-fail" {
+		t.Fatalf("row-level last_failure = %+v, want the newest failure (optimize)",
+			bob.Runs.LastFailure)
+	}
+	bt := commandEntry(bob.Runs.Commands, "backtest")
+	if bt == nil || bt.LastFailure == nil || bt.LastFailure.ID != "r-backtest-fail" {
+		t.Fatalf("commands = %+v, want a backtest entry whose OWN last_failure is "+
+			"r-backtest-fail, not masked by the newer optimize failure", bob.Runs.Commands)
+	}
+	opt := commandEntry(bob.Runs.Commands, "optimize")
+	if opt == nil || opt.LastFailure == nil || opt.LastFailure.ID != "r-lineup-fail" {
+		t.Fatalf("commands = %+v, want an optimize entry whose own last_failure is "+
+			"r-lineup-fail", bob.Runs.Commands)
+	}
+}
+
+// escalatingRuns simulates a ledger with AT LEAST as many records as asked
+// for, every one of them "optimize" — so coversKnownCommands can never be
+// satisfied (backtest/grade/shadow/prospects/projection-site never appear)
+// and runSummary MUST escalate, exactly once, never more.
+type escalatingRuns struct {
+	mu     sync.Mutex
+	limits []int
+	gets   int
+}
+
+func (r *escalatingRuns) List(_ context.Context, limit int) ([]Run, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.limits = append(r.limits, limit)
+	out := make([]Run, limit)
+	for i := range out {
+		out[i] = Run{
+			ID: fmt.Sprintf("r%d-%d", limit, i), Command: "optimize",
+			Status: "SUCCESS", StartedAt: nowRFC3339(),
+		}
+	}
+	return out, nil
+}
+
+func (r *escalatingRuns) Get(context.Context, string) (*RunDetail, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gets++
+	return nil, false, nil
+}
+
+// TestTenants_RunSummaryEscalationIsBounded is the escalation-path sibling of
+// TestTenants_RunSummaryIsBounded: a tenant whose known command set is NEVER
+// satisfied must still cost exactly two List calls — tenantRunWindow then
+// tenantRunScanCap — never an unbounded climb, and never a RunStore.Get.
+//
+// MUTATION A: drop the `len(recs) >= tenantRunWindow` / coverage guard so
+// runSummary always escalates even when nothing more could be found — this
+// test's fixture would still only see 2 calls (it always returns `limit`
+// records, so the guard's other half never trips it), so a stronger canary
+// for that half lives in TestTenants_RunSummaryIsBounded's fixture ending
+// short of the window. MUTATION B: loop the escalation (e.g. retry at an ever
+// -larger limit until coverage or a huge cap) — store.limits grows past 2.
+func TestTenants_RunSummaryEscalationIsBounded(t *testing.T) {
+	store := &escalatingRuns{}
+	h, secret := tenantsRunsFixture(t, mixedRuns{"bob": store}, nil)
+
+	body := getTenants(t, h, secret, "admin1")
+	bob := rowByID(t, body, "bob")
+	if bob.Runs == nil {
+		t.Fatal("bob has no run summary")
+	}
+
+	if len(store.limits) != 2 {
+		t.Fatalf("List called %d times, want exactly 2 (the cheap read, then one "+
+			"escalation): %v", len(store.limits), store.limits)
+	}
+	if store.limits[0] != tenantRunWindow || store.limits[1] != tenantRunScanCap {
+		t.Errorf("List limits = %v, want [%d %d]", store.limits, tenantRunWindow, tenantRunScanCap)
+	}
+	if store.gets != 0 {
+		t.Errorf("RunStore.Get called %d times; escalation must stay inside List, "+
+			"never reach the RunLookback-record Get scan", store.gets)
+	}
+}
+
+// TestCoversKnownCommands_IsByName pins that the escalation gate checks NAMES,
+// not a count: six distinct commands that are not the known six must not read
+// as covered, and the known six minus any one must not either. A count-based
+// check would let an operator ledger full of league-wide singletons look
+// complete while the weekly Backtest was still out of view — the exact
+// blindness the escalation exists to remove.
+func TestCoversKnownCommands_IsByName(t *testing.T) {
+	entries := func(names ...string) []CommandRun {
+		out := make([]CommandRun, 0, len(names))
+		for _, n := range names {
+			out = append(out, CommandRun{Command: n})
+		}
+		return out
+	}
+	known := make([]string, 0, len(tenantKnownCommands))
+	for name := range tenantKnownCommands {
+		known = append(known, name)
+	}
+	if !coversKnownCommands(entries(known...)) {
+		t.Fatal("every known command present must read as covered")
+	}
+	if !coversKnownCommands(entries(append([]string{"gs-check", "waivers"}, known...)...)) {
+		t.Fatal("extra, unknown commands must not un-cover a complete set")
+	}
+	if coversKnownCommands(entries("a", "b", "c", "d", "e", "f")) {
+		t.Fatal("six unrelated commands read as covered: the check is counting, not naming")
+	}
+	for i := range known {
+		missingOne := append(append([]string{}, known[:i]...), known[i+1:]...)
+		if coversKnownCommands(entries(missingOne...)) {
+			t.Errorf("covered without %q: a still-unseen weekly job would never trigger the wider read", known[i])
+		}
+	}
+	if coversKnownCommands(nil) {
+		t.Fatal("an empty breakdown must not read as covered")
 	}
 }

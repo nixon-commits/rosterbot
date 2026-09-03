@@ -27,9 +27,17 @@ type postAuthConns struct {
 
 	claimErr error
 	putErr   error
+
+	// getErr, when set, makes GetConnection fail outright — the "we could not
+	// even read the record" case (rosterbot-spb9), distinct from conn == nil
+	// ("the record legitimately does not exist").
+	getErr error
 }
 
 func (c *postAuthConns) GetConnection(context.Context, lineupapi.UserID) (*lineupapi.FantraxConnection, bool, error) {
+	if c.getErr != nil {
+		return nil, false, c.getErr
+	}
 	if c.conn == nil {
 		return nil, false, nil
 	}

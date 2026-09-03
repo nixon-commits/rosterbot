@@ -93,6 +93,17 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "Published report %q (%d graded rows, latest %s)\n",
 			lineupapi.ReportModelKey, len(rows), m.LatestDate)
+		// Disclose read-time exclusions (rosterbot-c61b) on the same run that
+		// would otherwise silently compare stale model input against fresh
+		// actuals -- the rows are still in the store, but m has already
+		// withheld them from every view/compare figure it just published.
+		if m.ExcludedRows > 0 {
+			fmt.Fprintf(os.Stderr, "Excluded %d graded row(s) as known-stale model input:\n", m.ExcludedRows)
+			for _, p := range m.Excluded {
+				fmt.Fprintf(os.Stderr, "  dt=%s system=%s rows=%d (%s; %s)\n",
+					p.Dt, p.System, p.Rows, p.Bead, p.Reason)
+			}
+		}
 	}
 
 	// Only for a scope that actually publishes into it — see ensurePublicDir.

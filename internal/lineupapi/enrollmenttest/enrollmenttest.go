@@ -125,8 +125,9 @@ func Run(t *testing.T, newStore func(t *testing.T) lineupapi.EnrollmentStore) {
 			t.Fatalf("GetEnrollment: ok=%v err=%v", ok, err)
 		}
 		if got.Redeemed() {
-			t.Fatal("GetEnrollment reported the link as redeemed; reading an invite " +
-				"to show what it is for must not spend it")
+			t.Fatal("GetEnrollment reported the link as redeemed; register/begin reads " +
+				"the link to learn who a ceremony is for and must not spend it, or an " +
+				"abandoned ceremony would burn a single-use link with no way to retry")
 		}
 		if _, err := s.RedeemEnrollment(ctx, hash, now); err != nil {
 			t.Fatalf("redeeming after a read = %v, want nil", err)

@@ -214,7 +214,8 @@ function destroy(el, id) {
 
 function paint(el, model, gap, state) {
   el.meta.textContent =
-    "Latest graded: " + model.latestDate + " · season since " + model.seasonStart + " · generated " + model.generatedAt;
+    "Latest graded: " + model.latestDate + " · season since " + model.seasonStart + " · generated " + model.generatedAt +
+    (model.excludedRows ? " · " + model.excludedRows + " row(s) excluded as known-stale model input" : "");
 
   paintSegActive(el.winseg, state, "window");
   paintSegActive(el.roleseg, state, "role");
