@@ -170,56 +170,24 @@ pin now lives entirely in the release URL (`BD_VERSION`), not in a Go module
 `@` suffix, so bumping it costs one variable edit and no `go install` cache to
 invalidate or distrust.
 
-**The old `go install` cold-build time — the bead's step 1 — is measured, and
-it fits the budget.** `release-assets.githubusercontent.com` (where GitHub
-redirects a release-asset `curl`) is unreachable from this analysis sandbox —
-confirmed again while writing this — but that host has nothing to do with
-timing the *old* approach: `go install
-github.com/steveyegge/beads/cmd/bd@v1.0.4` only needs `proxy.golang.org`
-(reachable here in ~1s) plus a C++ toolchain and ICU headers, and an earlier
-pass at this doc wrongly treated the CDN outage as blocking that measurement
-too. Run cold — fresh `GOPATH`, `GOCACHE` and `GOMODCACHE`, so every module
-download and every compile actually happened — it finished in **41.7s wall**
-(`181.00s user, 35.71s system, 519% cpu`), producing a 178.5 MB binary that
-then reported `bd version 1.0.4 (dev)`. That is comfortably inside the ~5
-minute setup-script budget, on this machine. (It needed `CGO_CFLAGS` and
-`CGO_CXXFLAGS` pointed at a local ICU install — Homebrew's `icu4c@78` here —
-plus `CGO_LDFLAGS`; the package has no `#cgo pkg-config` directive, so nothing
-finds ICU without those set explicitly. And the missing header on a plain
-build is `unicode/regex.h`, pulled in by a C++ translation unit, not only the
-`unicode/uregex.h` the comment above names — both are real requirements, but
-`regex.h` is the one that actually stops a naive build.) This measurement
-doesn't prove a cloud VM — different cores, different network path to
-`proxy.golang.org` — lands under budget too, but it does mean the switch to a
-prebuilt binary was not rescuing a build that was actually timing out on
-comparable hardware; the "theory nobody had actually timed" in the comment
-above is now timed, and came in fine. The prebuilt-binary approach still
-stands on its own merits — the bead's own first preference, a 25x smaller
-download, and no C++/ICU toolchain dependency to go stale — just not on an
-urgent timeout risk.
-
-**What's still unmeasured (rosterbot-c8e), and why.** Two numbers remain
-genuinely out of reach from this sandbox, for the reason above: the *new*
-script's real network-download time, and whether the environment cache
-engages on a second session afterward (the observable signal is that second
-session starting fast). Both need `release-assets.githubusercontent.com` —
-confirmed unreachable again just now, timing out connecting to all four
-Fastly edge IPs on every attempt, while `github.com`, `api.github.com` and
-`proxy.golang.org` stayed reachable in under half a second (`proxy.golang.org`
-under a second) — or a real `claude.ai/code` cloud session, and record them
-here once one runs the script. What *was* verified from this sandbox for the
-new approach: the real release assets are ~45 MB
-(`beads_1.0.4_linux_amd64.tar.gz` is 47,668,079 bytes, `linux_arm64` is
-44,283,170, per the GitHub Releases API); and the script's own logic —
-arch/os detection, download, checksum verification on both a matching and a
-deliberately corrupted checksum, extraction, and the PATH install — was run
-end to end against a local HTTP server standing in for GitHub, serving a
-real `bd 1.0.4` binary repackaged into an identically-shaped tarball (44.2 MB,
-matching the real `darwin_arm64` asset's 44,302,058 bytes almost exactly),
-and came back reporting `bd version 1.0.4` afterward; the corrupted-checksum
-run correctly refused to install anything and left `bd` absent. Non-network
-overhead (checksum + extract + install) measured under 0.3s against that
-local stand-in.
+**Measured cost (rosterbot-c8e).** A fully cold `go install
+github.com/steveyegge/beads/cmd/bd@v1.0.4` (fresh `GOPATH`, `GOCACHE` and
+`GOMODCACHE`; ICU supplied through `CGO_CFLAGS`/`CGO_CXXFLAGS`/`CGO_LDFLAGS`,
+since the package carries no `#cgo pkg-config` directive and the header a
+naive build actually stops on is `unicode/regex.h`) took **41.7s wall** on an
+Apple-silicon laptop and produced a 178.5 MB binary. So the old script was
+not blowing the ~5 minute budget on comparable hardware; the prebuilt binary
+is preferred for the smaller download (~45 MB per the GitHub Releases API)
+and for having no C++/ICU toolchain to keep working, not to rescue a timeout.
+The new script's logic (os/arch detection, download, checksum verification
+against both a matching and a deliberately corrupted checksum, extraction,
+the PATH install) was exercised end to end against a local HTTP stand-in for
+GitHub serving a real `bd 1.0.4` tarball; its non-network overhead is under
+0.3s. **Still unmeasured:** the real download time from
+`release-assets.githubusercontent.com` inside a cloud session, and whether
+the environment cache engages on the second session afterward (the
+observable signal is that session starting fast). Record both here after the
+first live run.
 
 ## What the SessionStart hook handles
 

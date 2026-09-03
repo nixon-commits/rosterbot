@@ -1,6 +1,9 @@
 package analysis
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestExcludedGrade_StalePairsFlagged pins the presence side: every one of the
 // six known-stale (date, system) partitions from rosterbot-c61b must be
@@ -51,7 +54,7 @@ func TestExclusions_CitesBothBeads(t *testing.T) {
 		if e.Reason == "" {
 			t.Errorf("entry %+v has no Reason", e)
 		}
-		if e.Bead == "" || !contains(e.Bead, "rosterbot-c61b") || !contains(e.Bead, "rosterbot-sagc") {
+		if e.Bead == "" || !strings.Contains(e.Bead, "rosterbot-c61b") || !strings.Contains(e.Bead, "rosterbot-sagc") {
 			t.Errorf("entry %+v does not cite both beads", e)
 		}
 	}
@@ -69,13 +72,4 @@ func TestExclusions_ReturnsACopy(t *testing.T) {
 	if !ExcludedGrade("2026-08-19", "atc-ros") {
 		t.Fatal("mutating the returned slice corrupted the standing table's original entry")
 	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
