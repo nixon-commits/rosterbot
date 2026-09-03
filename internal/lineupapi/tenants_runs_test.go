@@ -649,3 +649,41 @@ func TestTenants_RunSummaryEscalationIsBounded(t *testing.T) {
 			"never reach the RunLookback-record Get scan", store.gets)
 	}
 }
+
+// TestCoversKnownCommands_IsByName pins that the escalation gate checks NAMES,
+// not a count: six distinct commands that are not the known six must not read
+// as covered, and the known six minus any one must not either. A count-based
+// check would let an operator ledger full of league-wide singletons look
+// complete while the weekly Backtest was still out of view — the exact
+// blindness the escalation exists to remove.
+func TestCoversKnownCommands_IsByName(t *testing.T) {
+	entries := func(names ...string) []CommandRun {
+		out := make([]CommandRun, 0, len(names))
+		for _, n := range names {
+			out = append(out, CommandRun{Command: n})
+		}
+		return out
+	}
+	known := make([]string, 0, len(tenantKnownCommands))
+	for name := range tenantKnownCommands {
+		known = append(known, name)
+	}
+	if !coversKnownCommands(entries(known...)) {
+		t.Fatal("every known command present must read as covered")
+	}
+	if !coversKnownCommands(entries(append([]string{"gs-check", "waivers"}, known...)...)) {
+		t.Fatal("extra, unknown commands must not un-cover a complete set")
+	}
+	if coversKnownCommands(entries("a", "b", "c", "d", "e", "f")) {
+		t.Fatal("six unrelated commands read as covered: the check is counting, not naming")
+	}
+	for i := range known {
+		missingOne := append(append([]string{}, known[:i]...), known[i+1:]...)
+		if coversKnownCommands(entries(missingOne...)) {
+			t.Errorf("covered without %q: a still-unseen weekly job would never trigger the wider read", known[i])
+		}
+	}
+	if coversKnownCommands(nil) {
+		t.Fatal("an empty breakdown must not read as covered")
+	}
+}

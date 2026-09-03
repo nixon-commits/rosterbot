@@ -146,12 +146,18 @@ const tenantRunScanCap = 250
 // (a manual trigger, an operator-only league-wide singleton) still gets its
 // own Commands entry — this set only decides whether the cheap tenantRunWindow
 // read is enough or whether the tenant pays for the wider tenantRunScanCap
-// read. A name added to perTenantJobs without a matching entry here just
-// means that tenant's cheap read never looks "complete," so it always
-// escalates — the same degrade-to-a-little-more-cost, never to a wrong
-// answer, every other soft failure in this file follows. This is also why
-// the operator (whose ledger holds several names never in this set) almost
-// always escalates: expected, and accepted, per tenantRunScanCap's sizing.
+// read. The two ways it can drift from perTenantJobs fail in opposite
+// directions, and neither is a wrong answer. A job ADDED to perTenantJobs
+// without an entry here is simply not waited for: the cheap read can look
+// complete while that job's weekly record sits further back, and its Commands
+// entry appears only once it falls inside whichever read ran — the pre-91c4
+// blindness, confined to the one unlisted job. A name KEPT here after its job
+// is removed from perTenantJobs can never be covered, so every tenant pays the
+// escalated read on every page load — a cost, visibly, never a wrong answer.
+// The operator escalates more often than a member for the ordinary reason:
+// their prefix also receives every league-wide singleton, so the weekly
+// Backtest falls out of the cheap 25 sooner — expected, and accepted, per
+// tenantRunScanCap's sizing.
 var tenantKnownCommands = map[string]bool{
 	"optimize": true, "grade": true, "backtest": true,
 	"shadow": true, "prospects": true, "projection-site": true,

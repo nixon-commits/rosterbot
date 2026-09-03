@@ -88,11 +88,9 @@ func runConnect(cmd *cobra.Command, args []string) error {
 
 	// FROM HERE THE STORE EXISTS, so a construction failure is OUR fault and
 	// gets a durable record — rosterbot-spb9 extending "every route writes"
-	// past the login itself. No existing connection record is read first
-	// (failCheck writes a bare one): reading one here just to preserve it
-	// would cost every tenant an extra DynamoDB round trip on the common path
-	// to protect against a KMS wiring failure that, once fixed, the tenant's
-	// own resubmission repairs anyway.
+	// past the login itself. failCheck reads the tenant's record back on the
+	// failure path only (the common path pays no extra round trip) so the
+	// status lands beside their sealed credentials rather than replacing them.
 	opener, err := kmscreds.NewOpener(ctx)
 	if err != nil {
 		return failCheck(ctx, failDeps, uid, nil, "constructing the credential opener", err)
@@ -379,24 +377,43 @@ func (c connectRun) fail(v connectVerdict) error {
 // with — the routeInternal counterpart to connectRun.fail for the sites that
 // have not yet built a connectRun (rosterbot-spb9).
 //
-// It always writes SOMETHING, extending "every route writes" past the login
-// itself: when no existing connection record could be read (existing is nil —
-// the GetConnection read that just failed IS the fault), it writes a bare
-// record naming only the tenant and the new status. That drops whatever
-// ciphertext was already there, and that is accepted rather than worked
-// around: recovery is identical to any other resubmission, and the tenant's
-// next attempt (handleConnect) reseals fresh credentials over whatever this
-// write left behind. Where a record WAS already read (the two call sites
-// inside connectTenant, past a successful GetConnection), existing carries it
-// through untouched, so this path never has to make that trade.
+// It writes onto the record it can READ BACK, never blind. existing is the
+// record a caller already holds (the two connectTenant sites past a successful
+// GetConnection); when it is nil this reads the record itself, on the failure
+// path only, so the common path pays no extra round trip. Three outcomes: the
+// read succeeds and the status lands on the real record, ciphertext and all;
+// the record genuinely does not exist and a bare one naming the tenant and
+// the status is written, since there is nothing to lose; or the read FAILS,
+// and then nothing durable is written. A store that could not be read must
+// not be overwritten on a guess: the guess would replace the tenant's sealed
+// credentials with an empty record for what may be a DynamoDB blip, a
+// transient dressed as permanent, the shape rosterbot-ch0s removed from
+// ClaimTeam. On that last path the tenant is still told through the feed, the
+// operator through the non-zero exit, and the pending status the dashboard
+// shows is bounded by connectInFlightWindow (settings.js states the bound),
+// so "every route writes" holds for the two PEOPLE and degrades only for the
+// record.
 func failCheck(ctx context.Context, d connectDeps, uid lineupapi.UserID,
 	existing *lineupapi.FantraxConnection, stage string, cause error) error {
 
-	conn := existing
-	if conn == nil {
-		conn = &lineupapi.FantraxConnection{UserID: uid}
+	c := connectRun{connectDeps: d, ctx: ctx, uid: uid, conn: existing}
+	if c.conn == nil {
+		cur, ok, err := d.conns.GetConnection(ctx, uid)
+		switch {
+		case err != nil:
+			recordConnectFailure(ctx, d.feed, d.push, uid, lineupapi.ConnErrCheckFailed)
+			fmt.Fprintf(c.w(), "connect: %s failed for %s before fantrax was ever asked "+
+				"anything, and the connection record could not be read back (%v); nothing "+
+				"durable written, the credentials are not implicated\n", stage, uid, err)
+			return fmt.Errorf("connect: %s failed for %s before the check ever reached "+
+				"fantrax, and the connection record could not be read (operator action "+
+				"required; tenant credentials not implicated): %w", stage, uid, degradeToNoise(cause))
+		case ok:
+			c.conn = cur
+		default:
+			c.conn = &lineupapi.FantraxConnection{UserID: uid}
+		}
 	}
-	c := connectRun{connectDeps: d, ctx: ctx, uid: uid, conn: conn}
 	return c.fail(internalFault(stage, cause))
 }
 

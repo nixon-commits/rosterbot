@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/s3blob"
@@ -119,24 +122,66 @@ func readNewest[T any](ctx context.Context, blob *s3blob.Blob, limit int) ([]T, 
 		return nil, err
 	}
 
-	var out []T
-	var lastErr error
-	for _, k := range keys {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("run ledger: read cut short after %d of %d records: %w",
-				len(out), len(keys), err)
-		}
-		data, found, err := blob.Get(ctx, k)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if !found {
-			continue
-		}
-		var v T
-		if json.Unmarshal(data, &v) == nil {
-			out = append(out, v)
+	// The reads fan out under readConcurrency, and that is load-bearing, not
+	// an optimisation: every record is its own GetObject, so a sequential loop
+	// costs limit x (one S3 round trip, ~15-30 ms from Lambda). At the admin
+	// page's original 25-record window that was a few hundred milliseconds;
+	// rosterbot-91c4's escalated 250-record read would have been 4-8 s serial,
+	// past tenantRunBudget (4 s) on exactly the tenants the escalation exists
+	// for, so the fix would have degraded to "unknown" in production while
+	// passing every hermetic test. Results keep listing order (newest first)
+	// by slot, whatever order the reads land in.
+	type slot struct {
+		v  T
+		ok bool
+	}
+	slots := make([]slot, len(keys))
+	var (
+		mu      sync.Mutex
+		lastErr error
+		read    int
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(readConcurrency)
+	for i, k := range keys {
+		g.Go(func() error {
+			if err := gctx.Err(); err != nil {
+				return err
+			}
+			data, found, err := blob.Get(gctx, k)
+			if err != nil {
+				// A cancelled context is reported, never skipped: a deadline
+				// firing mid-read must not turn the remainder into "no records"
+				// (TestReadNewest_ACancelledContextIsReportedNotSkipped).
+				if cerr := gctx.Err(); cerr != nil {
+					return cerr
+				}
+				mu.Lock()
+				lastErr = err
+				mu.Unlock()
+				return nil
+			}
+			if !found {
+				return nil
+			}
+			var v T
+			if json.Unmarshal(data, &v) == nil {
+				slots[i] = slot{v: v, ok: true}
+				mu.Lock()
+				read++
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, fmt.Errorf("run ledger: read cut short after %d of %d records: %w",
+			read, len(keys), err)
+	}
+	out := make([]T, 0, read)
+	for _, sl := range slots {
+		if sl.ok {
+			out = append(out, sl.v)
 		}
 	}
 	if len(out) == 0 && len(keys) > 0 && lastErr != nil {
@@ -145,6 +190,12 @@ func readNewest[T any](ctx context.Context, blob *s3blob.Blob, limit int) ([]T, 
 	}
 	return out, nil
 }
+
+// readConcurrency bounds readNewest's parallel GetObject calls per listing.
+// Eight is well inside S3's per-prefix request rate and the Lambda's default
+// HTTP connection pool, and the admin page already fans out eight tenants at
+// a time (tenantRunConcurrency), so the worst case is 64 in-flight reads.
+const readConcurrency = 8
 
 // recent lists the newest `limit` ledger records and reads each.
 func (s *RunsStore) recent(ctx context.Context, limit int) ([]lineupapi.RunDetail, error) {
