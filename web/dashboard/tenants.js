@@ -13,6 +13,10 @@ const CONN_TONE = {
   pending: ["Pending", "badge-info"],
   needs_reconnect: ["Needs reconnect", "badge-failed"],
   interrupted: ["Interrupted", "badge-info"],
+  // The check never reached Fantrax at all (rosterbot-spb9) — badge-info like
+  // "interrupted", not badge-failed: nothing here is a verdict on the
+  // tenant's credentials.
+  check_failed: ["Check failed", "badge-info"],
 };
 
 // WHO CAN ACT ON THIS — the failure taxonomy from crq.14, applied at the point
@@ -520,6 +524,13 @@ function attentionFrom(t) {
   // uses to find what is failing (rosterbot-ch0s).
   if (t.conn_status === "interrupted") {
     return "You (not the tenant) — the check did not finish";
+  }
+  // Also above needs_reconnect: the check never reached Fantrax at all, so —
+  // like "interrupted" one step later — the tenant has nothing to fix
+  // (rosterbot-spb9). Without this the row fell through to "—" the same way
+  // "interrupted" used to before rosterbot-ch0s.
+  if (t.conn_status === "check_failed") {
+    return "You (not the tenant) — the check never reached fantrax";
   }
   if (t.conn_status === "needs_reconnect") return "The tenant — they must reconnect";
   // Pending never reaches the verified branch above: a connect task that

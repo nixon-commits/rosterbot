@@ -84,6 +84,17 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 				"the last check reached Fantrax but did not finish; try again in a minute")
 			return
 		}
+		// ConnCheckFailed gets the SAME cooldown as ConnInterrupted, not
+		// ConnPending's open-ended block: like ConnInterrupted, there is no
+		// task in flight to wait for, and "try again" against a fault on our
+		// own side is the same invitation to hold the button down — every
+		// submission drives a full chromedp login regardless of why the
+		// PREVIOUS one never reached Fantrax (rosterbot-spb9).
+		if cur.Status == ConnCheckFailed && time.Since(cur.UpdatedAt) < connectInterruptedCooldown {
+			writeErr(w, http.StatusConflict,
+				"the last check could not run because of a problem on our side; try again in a minute")
+			return
+		}
 	}
 
 	plain, err := json.Marshal(FantraxCreds{Username: body.Username, Password: body.Password})

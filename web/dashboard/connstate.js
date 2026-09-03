@@ -16,11 +16,20 @@
 // no longer works" is an answer.
 export const CONNECTION_COPY = {
   verified: ["Connected", "badge-ok"],
-  pending: ["Checking your credentials…", "badge-info"],
+  // Bounded, not open-ended (rosterbot-spb9): a connect task that crashes
+  // before it writes ANY record leaves this status showing forever otherwise
+  // — 10 minutes is connectInFlightWindow in
+  // internal/lineupapi/connect.go, the same value that unblocks a fresh
+  // submission.
+  pending: ["Checking your credentials… (should resolve within 10 minutes)", "badge-info"],
   needs_reconnect: ["Not connected — your saved credentials no longer work", "badge-failed"],
   // badge-info, not badge-failed: nothing on the tenant's side failed. Fantrax
   // accepted the sign-in and a step after it did not finish (rosterbot-ch0s).
   interrupted: ["Not connected — the last check did not finish", "badge-info"],
+  // Also badge-info, and for the same reason one step earlier: the check
+  // never reached Fantrax at all, so there is nothing here about the
+  // tenant's credentials in either direction (rosterbot-spb9).
+  check_failed: ["Not connected — the last check could not run", "badge-info"],
 };
 
 // FAILURE_COPY translates a ConnErr class into something actionable. The
@@ -48,6 +57,9 @@ export const FAILURE_COPY = {
     "Your Fantrax sign-in worked — your password is not the problem. Something " +
     "after it did not finish, so the connection is not confirmed yet. Try " +
     "connecting again in a minute.",
+  check_failed:
+    "The check couldn't run because of a problem on our side — your password " +
+    "is not the problem. Try connecting again in a minute.",
 };
 
 // CONNECT_CHIP is the TERSE form for the runs table, where the sentence in
@@ -67,4 +79,5 @@ export const CONNECT_CHIP = {
   no_team: "no team assigned",
   team_claimed: "team already claimed",
   verification_interrupted: "sign-in worked, check did not finish",
+  check_failed: "check never reached fantrax",
 };

@@ -98,6 +98,31 @@ const (
 	// non-zero exit (only they can fix a Fantrax outage), and the status says
 	// interrupted rather than blaming a working password.
 	routePostAuth
+
+	// routeInternal: the task never got far enough to ask Fantrax anything —
+	// a fault on OUR side (decrypting stored credentials, reading the
+	// connection record, or the task's own KMS/DynamoDB wiring) before any
+	// sign-in was attempted. Like routePostAuth it carries BOTH halves: the
+	// tenant is told to retry (nothing here says anything about their
+	// password) and the operator is paged via the non-zero exit (only they
+	// can fix a KMS or DynamoDB fault). The status says check_failed —
+	// never interrupted, which claims a proven Fantrax login this route
+	// structurally cannot have (rosterbot-spb9).
+	//
+	// UNREACHABLE FROM cmd/session_ladder.go BY CONSTRUCTION, not by
+	// omission. classifyLogin, the ladder's only source of a loginVerdict,
+	// classifies evidence FROM an attempted login — a cookie, a probe match,
+	// a browser error — and never returns ConnErrCheckFailed, because the
+	// ladder's refresh() only calls classifyLogin after it has already
+	// installed a session and driven a re-login; it never touches the
+	// decrypt-and-read machinery this route exists to guard, which lives
+	// entirely in cmd/connect.go's connectTenant/runConnect. If that ever
+	// changed, sessionLadder.stop's switch treats an unrecognised route
+	// exactly like routeOperator (never touches conn.Status) rather than
+	// falling into its default case, which assumes routeTenant and would
+	// wrongly demote the tenant to needs_reconnect for a fault that was
+	// never theirs.
+	routeInternal
 )
 
 // loginVerdict is a class plus what to do about it.
@@ -202,6 +227,8 @@ func routeFor(class string) failureRoute {
 		return routeOperator
 	case lineupapi.ConnErrVerificationInterrupted:
 		return routePostAuth
+	case lineupapi.ConnErrCheckFailed:
+		return routeInternal
 	default:
 		return routeTenant
 	}

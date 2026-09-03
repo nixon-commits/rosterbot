@@ -219,7 +219,16 @@ func (l sessionLadder) stop(ctx context.Context, conn *lineupapi.FantraxConnecti
 	// Either half runs BEFORE the write, like connect's fail(), so a store that
 	// rejects the update still tells the person the run stopped.
 	switch v.route {
-	case routeOperator:
+	case routeOperator, routeInternal:
+		// routeInternal is UNREACHABLE HERE by construction (see its doc in
+		// connect_classify.go): classifyLogin, this ladder's only source of a
+		// loginVerdict, classifies evidence from an attempted login and never
+		// returns ConnErrCheckFailed. Grouped with routeOperator rather than
+		// falling into the default case below regardless — a route this
+		// switch does not recognise must never be treated as routeTenant's
+		// "the tenant's credentials are implicated", which is exactly what an
+		// un-cased default would do.
+		//
 		// Names the session refresh, not "connect": an operator sent to the
 		// connect task and the dashboard connect flow finds that nothing
 		// happened there, because nothing did.
@@ -267,7 +276,7 @@ func (l sessionLadder) stop(ctx context.Context, conn *lineupapi.FantraxConnecti
 	setFantraxEnv("", "", "")
 
 	switch v.route {
-	case routeOperator:
+	case routeOperator, routeInternal:
 		return fmt.Errorf("tenant %s: re-login blocked by %s (operator action required; "+
 			"tenant credentials not implicated)", uid, v.class)
 	case routePostAuth:

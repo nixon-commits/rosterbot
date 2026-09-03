@@ -52,6 +52,15 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
 	uid := lineupapi.UserID(connectUser)
 
+	// THE TWO PATHS BELOW CANNOT WRITE ANYTHING DURABLE, and that is a
+	// structural fact, not an oversight left over from rosterbot-spb9's fix:
+	// PutConnection lives on the store this code has not managed to build
+	// yet, so there is nothing to write through. settings.js compensates by
+	// bounding the pending copy at connectInFlightWindow (10 minutes,
+	// internal/lineupapi/connect.go) instead of promising a resolution that
+	// cannot arrive — a crashed task before this point leaves the record
+	// pending, and that window is what stops it from reading that way
+	// forever.
 	table := os.Getenv("IDENTITY_TABLE")
 	if table == "" {
 		return fmt.Errorf("connect: IDENTITY_TABLE must be set")
@@ -60,23 +69,37 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	opener, err := kmscreds.NewOpener(ctx)
-	if err != nil {
-		return err
-	}
-	sealer, err := kmscreds.NewSealer(ctx, os.Getenv("FANTRAX_CRED_KEY"))
-	if err != nil {
-		return err
-	}
 
-	// The tenant's own activity feed. Composed from the environment, which the
-	// launcher set to THIS tenant, so the store is already theirs. Soft: a feed
-	// that cannot be opened must not stop connect recording the outcome.
+	// The tenant's own activity feed, built as soon as the store exists so
+	// every failure from here on has somewhere durable to land. Composed from
+	// the environment, which the launcher set to THIS tenant, so the store is
+	// already theirs. Soft: a feed that cannot be opened must not stop
+	// connect recording the outcome.
 	feed, feedErr := statestore.FromEnv().Notifications()
 	if feedErr != nil {
 		fmt.Fprintf(out, "note: activity feed unavailable (%v); the outcome is still "+
 			"recorded on the connection\n", feedErr)
 		feed = nil
+	}
+	// Only the fields failCheck needs (conns, feed, push, out) — opener,
+	// sealer, login and teams are exactly what the two failures below could
+	// not construct, so a connectDeps carrying them here would be a lie.
+	failDeps := connectDeps{conns: store, feed: feed, push: notifyOperator, out: out}
+
+	// FROM HERE THE STORE EXISTS, so a construction failure is OUR fault and
+	// gets a durable record — rosterbot-spb9 extending "every route writes"
+	// past the login itself. No existing connection record is read first
+	// (failCheck writes a bare one): reading one here just to preserve it
+	// would cost every tenant an extra DynamoDB round trip on the common path
+	// to protect against a KMS wiring failure that, once fixed, the tenant's
+	// own resubmission repairs anyway.
+	opener, err := kmscreds.NewOpener(ctx)
+	if err != nil {
+		return failCheck(ctx, failDeps, uid, nil, "constructing the credential opener", err)
+	}
+	sealer, err := kmscreds.NewSealer(ctx, os.Getenv("FANTRAX_CRED_KEY"))
+	if err != nil {
+		return failCheck(ctx, failDeps, uid, nil, "constructing the credential sealer", err)
 	}
 
 	return connectTenant(ctx, uid, connectDeps{
@@ -185,8 +208,12 @@ func (c connectRun) record(verdict string) error {
 type connectVerdict struct {
 	class string
 
-	// proof, stage and cause are carried by the post-auth route only.
+	// proof is carried by the post-auth route only — it is what fail refuses
+	// to record without.
 	proof loginProof
+	// stage and cause are carried by the post-auth AND internal routes: both
+	// describe a specific step that broke and the underlying error, unlike
+	// tenantFault's classes, none of which come with either.
 	stage string
 	cause error
 }
@@ -198,15 +225,34 @@ func tenantFault(class string) connectVerdict { return connectVerdict{class: cla
 // sign-in. Its class is fixed rather than a parameter: there is exactly one,
 // and a caller that could pass a class here could pass a demoting one.
 func postAuth(p loginProof, stage string, cause error) connectVerdict {
-	if cause == nil {
-		// Degrade to noise. A stage with no error attached still has to say
-		// something, or the ledger's log_tail quotes "<nil>".
-		cause = errors.New("no underlying error was recorded")
-	}
 	return connectVerdict{
 		class: lineupapi.ConnErrVerificationInterrupted,
-		proof: p, stage: stage, cause: cause,
+		proof: p, stage: stage, cause: degradeToNoise(cause),
 	}
+}
+
+// internalFault is a verdict about a step that broke BEFORE Fantrax was ever
+// asked anything — the routeInternal counterpart to postAuth, and built the
+// same way for the same reason: its class is fixed rather than a parameter,
+// because there is exactly one and a caller that could pass a class here could
+// pass a demoting one. Unlike postAuth it carries no loginProof — there is
+// none to carry, since nothing was submitted to Fantrax yet — which is exactly
+// why this must never be recorded as ConnInterrupted (rosterbot-spb9).
+func internalFault(stage string, cause error) connectVerdict {
+	return connectVerdict{
+		class: lineupapi.ConnErrCheckFailed,
+		stage: stage, cause: degradeToNoise(cause),
+	}
+}
+
+// degradeToNoise is the fallback both stage-carrying verdicts share: a stage
+// with no error attached still has to say something, or the ledger's
+// log_tail quotes "<nil>".
+func degradeToNoise(cause error) error {
+	if cause == nil {
+		return errors.New("no underlying error was recorded")
+	}
+	return cause
 }
 
 // classified turns a login verdict into a connect verdict, carrying the proof
@@ -223,7 +269,7 @@ func classified(p loginProof, v loginVerdict, ev loginEvidence) connectVerdict {
 	return postAuth(p, "the session cookie cache write", ev.PersistErr)
 }
 
-// fail records the outcome of a failed connect on one of three routes.
+// fail records the outcome of a failed connect on one of four routes.
 //
 // routeTenant returns nil: a connect that legitimately could not authenticate
 // is a RESULT, not a task crash. Exiting non-zero would make the run ledger
@@ -240,10 +286,18 @@ func classified(p loginProof, v loginVerdict, ev loginEvidence) connectVerdict {
 // to fix. The status says interrupted, which is not usable but does not accuse
 // a password Fantrax has just accepted.
 //
+// routeInternal is routePostAuth's mirror image on the OTHER side of the
+// login: a fault on our own side stopped the check before Fantrax was ever
+// asked anything (rosterbot-spb9). It carries both halves the same way —
+// tenant told to retry, operator paged via the non-zero exit — but the status
+// says check_failed rather than interrupted, because interrupted's whole
+// meaning is a proven Fantrax login and this route has no proof to offer.
+//
 // EVERY ROUTE WRITES. The 2026-08-26 attempt at this bead added a post-login
 // path that wrote nothing at all, leaving the record at ConnPending and the
 // dashboard rendering "Checking your credentials…" forever. Not demoting is not
-// the same as saying nothing.
+// the same as saying nothing. rosterbot-spb9 found the same gap one step
+// earlier: every failure BEFORE the login attempt also wrote nothing.
 func (c connectRun) fail(v connectVerdict) error {
 	route := routeFor(v.class)
 
@@ -287,6 +341,21 @@ func (c connectRun) fail(v connectVerdict) error {
 		return fmt.Errorf("connect: %s failed after a proven Fantrax login for %s: %w",
 			v.stage, c.uid, v.cause)
 
+	case routeInternal:
+		// THE FOURTH ROUTE (rosterbot-spb9). Nothing was ever submitted to
+		// Fantrax, so — unlike routePostAuth — the status must NOT say
+		// interrupted, which claims a proven login this route cannot have.
+		c.conn.Status = lineupapi.ConnCheckFailed
+		if err := c.record(lineupapi.ConnectVerdictFailed); err != nil {
+			return err
+		}
+		fmt.Fprintf(c.w(), "connect: %s failed for %s before fantrax was ever asked "+
+			"anything; recorded %s, the credentials are not implicated\n",
+			v.stage, c.uid, v.class)
+		return fmt.Errorf("connect: %s failed for %s before the check ever reached "+
+			"fantrax (operator action required; tenant credentials not implicated): %w",
+			v.stage, c.uid, v.cause)
+
 	default:
 		c.conn.Status = lineupapi.ConnNeedsReconnect
 		if err := c.record(lineupapi.ConnectVerdictFailed); err != nil {
@@ -305,6 +374,32 @@ func (c connectRun) fail(v connectVerdict) error {
 	}
 }
 
+// failCheck records a connect run that never reached Fantrax because
+// something on OUR side broke first, and returns the error the task exits
+// with — the routeInternal counterpart to connectRun.fail for the sites that
+// have not yet built a connectRun (rosterbot-spb9).
+//
+// It always writes SOMETHING, extending "every route writes" past the login
+// itself: when no existing connection record could be read (existing is nil —
+// the GetConnection read that just failed IS the fault), it writes a bare
+// record naming only the tenant and the new status. That drops whatever
+// ciphertext was already there, and that is accepted rather than worked
+// around: recovery is identical to any other resubmission, and the tenant's
+// next attempt (handleConnect) reseals fresh credentials over whatever this
+// write left behind. Where a record WAS already read (the two call sites
+// inside connectTenant, past a successful GetConnection), existing carries it
+// through untouched, so this path never has to make that trade.
+func failCheck(ctx context.Context, d connectDeps, uid lineupapi.UserID,
+	existing *lineupapi.FantraxConnection, stage string, cause error) error {
+
+	conn := existing
+	if conn == nil {
+		conn = &lineupapi.FantraxConnection{UserID: uid}
+	}
+	c := connectRun{connectDeps: d, ctx: ctx, uid: uid, conn: conn}
+	return c.fail(internalFault(stage, cause))
+}
+
 // connectTenant verifies one tenant's credentials and records the outcome.
 func connectTenant(ctx context.Context, uid lineupapi.UserID, d connectDeps) error {
 	// Fail safe: nothing downstream should be able to authenticate as this
@@ -315,7 +410,12 @@ func connectTenant(ctx context.Context, uid lineupapi.UserID, d connectDeps) err
 
 	conn, ok, err := d.conns.GetConnection(ctx, uid)
 	if err != nil {
-		return err
+		// Was a bare `return err`, which left the record at ConnPending and
+		// the tenant's settings page saying "Checking your credentials…"
+		// forever — the same gap rosterbot-ch0s closed one step later in this
+		// same function (rosterbot-spb9). There is no `conn` to carry here:
+		// the read that would have produced one is exactly what failed.
+		return failCheck(ctx, d, uid, nil, "reading the connection record", err)
 	}
 	if !ok || len(conn.CredsCiphertext) == 0 {
 		return fmt.Errorf("connect: %w", lineupapi.ErrNoConnection)
@@ -327,12 +427,13 @@ func connectTenant(ctx context.Context, uid lineupapi.UserID, d connectDeps) err
 		// A decrypt failure is infrastructure, not a user error — wrong key,
 		// missing grant, or a ciphertext sealed for a different tenant. It must
 		// NOT be recorded as needs_reconnect, which would tell the user to
-		// re-enter perfectly good credentials.
-		return fmt.Errorf("connect: open credentials: %w", err)
+		// re-enter perfectly good credentials. `conn` is already the real
+		// record here, so nothing is lost recording through it.
+		return failCheck(ctx, d, uid, conn, "decrypting the stored credentials", err)
 	}
 	var creds lineupapi.FantraxCreds
 	if err := json.Unmarshal(plain, &creds); err != nil {
-		return fmt.Errorf("connect: malformed credential blob")
+		return failCheck(ctx, d, uid, conn, "parsing the stored credential blob", err)
 	}
 
 	ev := d.login(creds)
@@ -430,9 +531,18 @@ func (p provenRun) finish(info *fantraxUserInfo) error {
 		case errors.Is(err, lineupapi.ErrTeamTaken):
 			return p.ownershipFault(lineupapi.ConnErrTeamClaimed)
 		case errors.Is(err, lineupapi.ErrUserConflict):
-			// Our bug, not a transient: a claim that succeeded against a
-			// profile that is not there. Retrying cannot help, so it must not
-			// be dressed as something that can.
+			// Our bug, not a transient — and that is true now, not merely
+			// asserted. ddbuser.ClaimTeam used to map ANY lost optimistic-lock
+			// race on the profile update to this same error with no retry, so
+			// a routine concurrent write (a passkey registration, a
+			// token-version bump landing in the same window) looked identical
+			// to a claim that succeeded against a profile that is not there.
+			// ClaimTeam now re-reads and re-applies the claim itself, bounded,
+			// the same shape as Config.mutateUser — so every retryable race is
+			// absorbed before this ever sees it, and reaching here means five
+			// consecutive losses against the same profile or a profile that
+			// genuinely is not there (rosterbot-spb9). Retrying HERE cannot
+			// help, so it must not be dressed as something that can.
 			return fmt.Errorf("connect: claimed team %s for %s but its profile could "+
 				"not be updated: %w", proof.teamID, c.uid, err)
 		default:

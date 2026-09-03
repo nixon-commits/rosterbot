@@ -201,6 +201,54 @@ func TestEnrollment_UnusedItemHasNoUsedAtAttribute(t *testing.T) {
 	}
 }
 
+// TestClaimTeam_SurvivesALostVersionRace reproduces the source-2 case from
+// rosterbot-spb9: a writer landing between ClaimTeam's own GetUser and PutUser
+// bumps `ver`, so PutUser's condition (`ver = :v`) fails on the version
+// ClaimTeam actually read — a routine lost optimistic-concurrency race, not a
+// broken claim. Before the retry loop this surfaced as a PERMANENT
+// ErrUserConflict indistinguishable from the genuine "no profile" case, even
+// though calling ClaimTeam again with the exact same arguments would have
+// succeeded.
+func TestClaimTeam_SurvivesALostVersionRace(t *testing.T) {
+	ctx := context.Background()
+	api := ddbusertest.New()
+	store := ddbuser.NewWithAPI(api, "test-table")
+
+	u := &lineupapi.User{ID: "alice", Email: "alice@example.test", Role: lineupapi.RoleMember, Status: lineupapi.UserActive}
+	if err := store.CreateUser(ctx, u); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	// Fires exactly once, on the read ClaimTeam performs after it has already
+	// won the team-pointer claim — simulating an independent writer (a passkey
+	// registration, a token-version bump, another ClaimTeam) landing in the
+	// same window and bumping `ver` before ClaimTeam's own PutUser lands.
+	bumped := false
+	api.AfterGetItem = func(pk, sk string) {
+		if bumped || pk != "USER#alice" || sk != "PROFILE" {
+			return
+		}
+		bumped = true
+		api.BumpVersion(pk, sk)
+	}
+
+	if err := store.ClaimTeam(ctx, "alice", "team-7"); err != nil {
+		t.Fatalf("ClaimTeam: %v — a lost version race must be retried, not reported as a "+
+			"permanent conflict", err)
+	}
+	if !bumped {
+		t.Fatal("the hook never fired; this test proves nothing without the simulated race")
+	}
+
+	got, ok, err := store.GetUser(ctx, "alice")
+	if err != nil || !ok {
+		t.Fatalf("GetUser after ClaimTeam: ok=%v err=%v", ok, err)
+	}
+	if got.TeamID != "team-7" {
+		t.Fatalf("TeamID = %q, want %q — the retried claim did not land", got.TeamID, "team-7")
+	}
+}
+
 func TestStore_PushDeviceConformance(t *testing.T) {
 	pushdevicetest.Run(t, func(t *testing.T) lineupapi.PushDeviceStore {
 		return ddbuser.NewWithAPI(ddbusertest.New(), "test-table")
