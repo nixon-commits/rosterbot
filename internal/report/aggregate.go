@@ -137,6 +137,69 @@ type SystemScore struct {
 	TotalN int `json:"totalN"`
 }
 
+// ExcludedPair is one (date, system) grade partition Aggregate withheld from
+// its Model, plus how many of its rows were actually present to withhold.
+//
+// Rows is what makes this a measurement rather than a restatement of
+// analysis.Exclusion's config: a pair can be configured with nothing yet in
+// the store to drop (a day not graded yet, a local dev store with no such
+// partition), and the disclosure should say so rather than implying rows
+// vanished that were never there. Aggregate only reports pairs with Rows > 0.
+type ExcludedPair struct {
+	Dt     string `json:"dt"`
+	System string `json:"system"`
+	Reason string `json:"reason"`
+	Bead   string `json:"bead"`
+	Rows   int    `json:"rows"`
+}
+
+// excludeStaleGrades drops rows whose (date, system) pair analysis.ExcludedGrade
+// flags as known-bad model input (rosterbot-c61b), and reports what it dropped
+// so the exclusion is disclosed on the Model rather than silent.
+//
+// This is the single point every consumer of graded rows funnels through on
+// the way to a Model: cmd/projection-site.go's production report and the
+// internal/report diag harness (diag_compare_test.go) both hand Aggregate raw
+// analysis.Reader.ReadAll() output, and this runs first inside Aggregate.
+// cmd/grade.go's own coverage check (latestGradedDay) does NOT go through
+// here -- it asks whether a day was graded AT ALL, to size a re-grade window,
+// not whether the bot trusts what it graded, and the excluded rows must stay
+// visible to that question. The Analysis Store itself is untouched: this is a
+// read-time filter over already-loaded rows, never a rewrite.
+func excludeStaleGrades(rows []analysis.GradeRow) ([]analysis.GradeRow, []ExcludedPair) {
+	table := analysis.Exclusions()
+	if len(table) == 0 {
+		return rows, nil
+	}
+	idx := make(map[[2]string]int, len(table))
+	pairs := make([]ExcludedPair, len(table))
+	for i, e := range table {
+		pairs[i] = ExcludedPair{Dt: e.Dt, System: e.System, Reason: e.Reason, Bead: e.Bead}
+		idx[[2]string{e.Dt, e.System}] = i
+	}
+	kept := make([]analysis.GradeRow, 0, len(rows))
+	for _, r := range rows {
+		if i, ok := idx[[2]string{r.Dt, r.System}]; ok {
+			pairs[i].Rows++
+			continue
+		}
+		kept = append(kept, r)
+	}
+	out := make([]ExcludedPair, 0, len(pairs))
+	for _, p := range pairs {
+		if p.Rows > 0 {
+			out = append(out, p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Dt != out[j].Dt {
+			return out[i].Dt < out[j].Dt
+		}
+		return out[i].System < out[j].System
+	})
+	return kept, out
+}
+
 // normalizeSystems returns a copy of rows with any empty System attributed to
 // detailSystem (the production system / legacy attribution), so un-attributed
 // input still feeds the detail dashboard. Non-empty systems pass through.
