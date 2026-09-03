@@ -185,10 +185,25 @@ function runsCell(t) {
 
   // Always stated, including the zero case, and always with the span it covers:
   // a bare green badge would read as a claim about this tenant's whole history
-  // when 25 records is about a day and a half of an hourly job.
+  // when the window can be as narrow as a day and a half of an hourly job.
   const since = r.since ? ` since ${relativeTime(r.since)}` : "";
   td.append(el("div", "muted small",
     `${r.failures} of last ${r.window} failed${since}`));
+
+  // rosterbot-91c4: the badge above is driven by last_failure, which is only
+  // ever the SINGLE newest failure across every command — a healthy hourly
+  // job's blip can sit newer than, and so hide, a still-broken WEEKLY one.
+  // commands carries each distinct job's OWN newest failure so that one
+  // cannot stay invisible behind another. Only list ones the badge above
+  // didn't already name.
+  const others = (r.commands || []).filter((c) =>
+    c.last_failure && (!r.last_failure || c.last_failure.id !== r.last_failure.id));
+  if (others.length) {
+    const line = others
+      .map((c) => `${c.command} (${relativeTime(c.last_failure.started_at)})`)
+      .join(", ");
+    td.append(el("div", "muted small", `Also failing: ${line}`));
+  }
   return td;
 }
 
