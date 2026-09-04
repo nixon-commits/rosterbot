@@ -123,15 +123,18 @@ func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
 	return buildFanGraphsPitcherSource(rows), nil
 }
 
-// NewFanGraphsPitcherSourceCached is like NewFanGraphsPitcherSource but uses a file cache.
-func NewFanGraphsPitcherSourceCached(cacheDir string, ttl time.Duration) (*FanGraphsPitcherSource, error) {
+// NewFanGraphsPitcherSourceCached is like NewFanGraphsPitcherSource but uses a
+// file cache. Like its batting twin it also reports when the rows it built
+// from were last fetched from FanGraphs (zero = unknown); see
+// NewFanGraphsSourceCached for why that is not the time of this call.
+func NewFanGraphsPitcherSourceCached(cacheDir string, ttl time.Duration) (*FanGraphsPitcherSource, time.Time, error) {
 	c := cache.New[[]fgPitchRow](cacheDir, ttl)
 	key := cache.Key(keyFanGraphs, "pit", currentAPIType)
-	rows, err := c.GetWithStaleFallback(key, fetchPitchingRows)
+	rows, fetchedAt, err := c.GetWithStaleFallbackAt(key, fetchPitchingRows)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	return buildFanGraphsPitcherSource(rows), nil
+	return buildFanGraphsPitcherSource(rows), fetchedAt, nil
 }
 
 // NewFanGraphsPitcherSourceFromCSV loads pitching projections from a local CSV file.
@@ -289,7 +292,7 @@ func LoadPitcherProjections(system, cacheDir string, ttl time.Duration) (*FanGra
 		if err := SetProjectionSystem(sys); err != nil {
 			continue
 		}
-		src, err := NewFanGraphsPitcherSourceCached(cacheDir, ttl)
+		src, fetchedAt, err := NewFanGraphsPitcherSourceCached(cacheDir, ttl)
 		if err != nil {
 			if i < len(systems)-1 {
 				continue
@@ -304,6 +307,7 @@ func LoadPitcherProjections(system, cacheDir string, ttl time.Duration) (*FanGra
 			break
 		}
 		result.System = sys
+		result.FetchedAt = fetchedAt
 		return src, result, nil
 	}
 

@@ -34,6 +34,31 @@ type dateResult struct {
 	budget *optimizer.GSBudget
 }
 
+// projInputs is what the run's two projection loads reported about
+// themselves, per role: the system actually used, whether it produced nothing,
+// and when its data was last fetched from FanGraphs.
+//
+// It is a struct rather than six more positional parameters because four of
+// the six are role pairs of the same type — a transposed pair would attribute
+// one role's freshness to the other silently, which is precisely the failure
+// FetchedAt exists to make visible.
+type projInputs struct {
+	// HitterSystem/PitcherSystem are the RESOLVED systems the loads actually
+	// used (post RoS-first fallback), per role since rosterbot-5qvs.
+	HitterSystem  string
+	PitcherSystem string
+	// HittersNoData/PitchersNoData record a role whose source had nothing that
+	// day; see backtest.Snapshot for why grading treats it separately.
+	HittersNoData  bool
+	PitchersNoData bool
+	// HitterFetchedAt/PitcherFetchedAt are projections.LoadResult.FetchedAt —
+	// when the numbers were last fetched upstream, NOT when this run happened.
+	// Zero means unknown (CSV fallback, no data, or an undated cache entry),
+	// and grading treats it as unjudgeable rather than old.
+	HitterFetchedAt  time.Time
+	PitcherFetchedAt time.Time
+}
+
 // writeProjectionSnapshot archives the per-date projection values the
 // optimizer used so a future `rosterbot backtest` can grade projection
 // accuracy exactly (no reconstruction). snapshotRoot names the partition
@@ -58,8 +83,8 @@ type dateResult struct {
 // missing prior snapshot is a plain fresh write; a prior snapshot that can't
 // be read back degrades to a fresh write with a printed warning, never
 // silently.
-func writeProjectionSnapshot(out io.Writer, dr dateResult, hitSys, pitSys string, slotName map[string]string, hittersNoData, pitchersNoData bool, st backtest.SnapshotStore, snapshotRoot string) error {
-	fresh := buildSnapshot(dr, hitSys, pitSys, slotName, hittersNoData, pitchersNoData)
+func writeProjectionSnapshot(out io.Writer, dr dateResult, pi projInputs, slotName map[string]string, st backtest.SnapshotStore, snapshotRoot string) error {
+	fresh := buildSnapshot(dr, pi, slotName)
 
 	data, found, err := st.Get(backtest.SnapshotKey(snapshotRoot, fresh.Date))
 	switch {
@@ -120,24 +145,28 @@ func mergeLockedPlayers(fresh, existing []backtest.SnapshotPlayer) []backtest.Sn
 // started the player — so future analysis can slice projection error along any
 // of those dimensions. slotName maps a player's RosterPosition (slot pos ID) to
 // its display name; benched players (no active slot) get an empty Slot.
-func buildSnapshot(dr dateResult, hitSys, pitSys string, slotName map[string]string, hittersNoData, pitchersNoData bool) backtest.Snapshot {
+func buildSnapshot(dr dateResult, pi projInputs, slotName map[string]string) backtest.Snapshot {
 	// The unified field survives only when it can be truthful — see the
 	// Snapshot doc for why a split run omits it.
 	unified := ""
-	if hitSys == pitSys {
-		unified = hitSys
+	if pi.HitterSystem == pi.PitcherSystem {
+		unified = pi.HitterSystem
 	}
 	snap := backtest.Snapshot{
 		Date:             dr.date.Format("2006-01-02"),
 		ProjectionSystem: unified,
-		HitterSystem:     hitSys,
-		PitcherSystem:    pitSys,
+		HitterSystem:     pi.HitterSystem,
+		PitcherSystem:    pi.PitcherSystem,
 		GeneratedAt:      time.Now().UTC(),
-		HittersNoData:    hittersNoData,
-		PitchersNoData:   pitchersNoData,
-		GSLimit:          dr.pitcherResult.GateReport.Limit,
-		GSFloor:          dr.pitcherResult.GateReport.Floor,
-		GSForecast:       forecastRows(dr.budget),
+		HittersNoData:    pi.HittersNoData,
+		PitchersNoData:   pi.PitchersNoData,
+		// Recorded in UTC to match GeneratedAt, which the grade-time
+		// staleness comparison subtracts it from.
+		HitterProjFetchedAt:  utcOrZero(pi.HitterFetchedAt),
+		PitcherProjFetchedAt: utcOrZero(pi.PitcherFetchedAt),
+		GSLimit:              dr.pitcherResult.GateReport.Limit,
+		GSFloor:              dr.pitcherResult.GateReport.Floor,
+		GSForecast:           forecastRows(dr.budget),
 	}
 
 	for _, sp := range dr.hitterResult.Scored {
@@ -188,6 +217,17 @@ func buildSnapshot(dr dateResult, hitSys, pitSys string, slotName map[string]str
 	}
 
 	return snap
+}
+
+// utcOrZero normalizes a timestamp for the archive without turning the zero
+// value into a real instant: time.Time{}.UTC() is still zero, but going
+// through one helper keeps "zero means unknown" visible at the call site
+// rather than resting on that fact.
+func utcOrZero(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Time{}
+	}
+	return t.UTC()
 }
 
 // forecastRows flattens the gate's forward view into the archived form.

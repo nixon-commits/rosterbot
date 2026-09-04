@@ -654,15 +654,24 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		WriteSnapshots: opts.WriteSnapshots,
 		SnapshotStore:  opts.SnapshotStore,
 		SnapshotRoot:   opts.SnapshotRoot,
-		HitterSystem:   batLoadResult.System,
-		PitcherSystem:  pitLoadResult.System,
-		HittersNoData:  batLoadResult.NoData,
-		PitchersNoData: pitLoadResult.NoData,
-		PublishLineup:  opts.PublishLineupFlag,
-		Publisher:      opts.Publisher,
-		HKB:            hkbMeta,
-		Cfg:            cfg,
-		Out:            out,
+		Projections: projInputs{
+			HitterSystem:   batLoadResult.System,
+			PitcherSystem:  pitLoadResult.System,
+			HittersNoData:  batLoadResult.NoData,
+			PitchersNoData: pitLoadResult.NoData,
+			// The one fact the snapshot could not previously record: how old
+			// these projections already were when the run scored with them.
+			// A capture built on the cache's stale fallback is otherwise
+			// indistinguishable from a fresh one at grade time
+			// (rosterbot-c61b).
+			HitterFetchedAt:  batLoadResult.FetchedAt,
+			PitcherFetchedAt: pitLoadResult.FetchedAt,
+		},
+		PublishLineup: opts.PublishLineupFlag,
+		Publisher:     opts.Publisher,
+		HKB:           hkbMeta,
+		Cfg:           cfg,
+		Out:           out,
 		Notify: func(message string) {
 			sendOptimizeNotify(ctx, message)
 		},

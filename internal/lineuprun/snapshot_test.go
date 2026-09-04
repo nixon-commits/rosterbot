@@ -11,6 +11,14 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 )
 
+// sysPair is the ordinary case for these tests: one system for both roles,
+// real data, and no opinion about input freshness (zero = unknown, graded as
+// before). Tests that care about a role split or about staleness spell out a
+// projInputs literal instead.
+func sysPair(system string) projInputs {
+	return projInputs{HitterSystem: system, PitcherSystem: system}
+}
+
 // TestBuildSnapshot_MapsRichFields verifies the pure snapshot builder copies
 // the projected value plus the extra look-back fields (slot, locked,
 // eligibility, role, was-started) off the optimizer results.
@@ -51,7 +59,7 @@ func TestBuildSnapshot_MapsRichFields(t *testing.T) {
 		},
 	}
 
-	snap := buildSnapshot(dr, "depthcharts", "depthcharts", slotName, false, false)
+	snap := buildSnapshot(dr, sysPair("depthcharts"), slotName)
 
 	if snap.Date != "2026-05-29" {
 		t.Errorf("Date = %q, want 2026-05-29", snap.Date)
@@ -93,7 +101,7 @@ func TestBuildSnapshot_MapsRichFields(t *testing.T) {
 func TestBuildSnapshot_RecordsPerRoleSystems(t *testing.T) {
 	dr := dateResult{date: time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)}
 
-	snap := buildSnapshot(dr, "atc-ros", "steamer-ros", nil, false, false)
+	snap := buildSnapshot(dr, projInputs{HitterSystem: "atc-ros", PitcherSystem: "steamer-ros"}, nil)
 	if snap.HitterSystem != "atc-ros" || snap.PitcherSystem != "steamer-ros" {
 		t.Errorf("systems = %q/%q, want atc-ros/steamer-ros",
 			snap.HitterSystem, snap.PitcherSystem)
@@ -102,7 +110,7 @@ func TestBuildSnapshot_RecordsPerRoleSystems(t *testing.T) {
 		t.Errorf("split run: ProjectionSystem = %q, want omitted", snap.ProjectionSystem)
 	}
 
-	snap = buildSnapshot(dr, "depthcharts-ros", "depthcharts-ros", nil, false, false)
+	snap = buildSnapshot(dr, sysPair("depthcharts-ros"), nil)
 	if snap.ProjectionSystem != "depthcharts-ros" {
 		t.Errorf("unified run: ProjectionSystem = %q, want depthcharts-ros", snap.ProjectionSystem)
 	}
@@ -118,7 +126,7 @@ func TestBuildSnapshot_RecordsPerRoleSystems(t *testing.T) {
 func TestBuildSnapshot_SetsNoDataFlags(t *testing.T) {
 	dr := dateResult{date: time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)}
 
-	snap := buildSnapshot(dr, "atc-ros", "atc-ros", nil, true, false)
+	snap := buildSnapshot(dr, projInputs{HitterSystem: "atc-ros", PitcherSystem: "atc-ros", HittersNoData: true}, nil)
 	if !snap.HittersNoData {
 		t.Error("HittersNoData = false, want true")
 	}
@@ -126,7 +134,7 @@ func TestBuildSnapshot_SetsNoDataFlags(t *testing.T) {
 		t.Error("PitchersNoData = true, want false")
 	}
 
-	snap = buildSnapshot(dr, "atc-ros", "atc-ros", nil, false, true)
+	snap = buildSnapshot(dr, projInputs{HitterSystem: "atc-ros", PitcherSystem: "atc-ros", PitchersNoData: true}, nil)
 	if snap.HittersNoData {
 		t.Error("HittersNoData = true, want false")
 	}
@@ -174,7 +182,7 @@ func TestBuildSnapshot_RecordsStatusAndGSCap(t *testing.T) {
 		},
 	}
 
-	snap := buildSnapshot(dr, "depthcharts-ros", "depthcharts-ros", nil, false, false)
+	snap := buildSnapshot(dr, sysPair("depthcharts-ros"), nil)
 
 	if snap.GSLimit != 12 {
 		t.Errorf("GSLimit = %d, want 12", snap.GSLimit)
@@ -207,7 +215,7 @@ func TestBuildSnapshot_NoGateLeavesCapUnset(t *testing.T) {
 		},
 	}
 
-	if snap := buildSnapshot(dr, "depthcharts-ros", "depthcharts-ros", nil, false, false); snap.GSLimit != 0 {
+	if snap := buildSnapshot(dr, sysPair("depthcharts-ros"), nil); snap.GSLimit != 0 {
 		t.Errorf("GSLimit = %d, want 0 when no budget was in force", snap.GSLimit)
 	}
 }
@@ -237,7 +245,7 @@ func TestWriteProjectionSnapshot_PreservesLockedRowAcrossRewrites(t *testing.T) 
 			}},
 		},
 	}
-	if err := writeProjectionSnapshot(&bytes.Buffer{}, first, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+	if err := writeProjectionSnapshot(&bytes.Buffer{}, first, sysPair("depthcharts-ros"), nil, st, "snapshots"); err != nil {
 		t.Fatalf("first write: %v", err)
 	}
 
@@ -253,7 +261,7 @@ func TestWriteProjectionSnapshot_PreservesLockedRowAcrossRewrites(t *testing.T) 
 			}},
 		},
 	}
-	if err := writeProjectionSnapshot(&bytes.Buffer{}, second, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+	if err := writeProjectionSnapshot(&bytes.Buffer{}, second, sysPair("depthcharts-ros"), nil, st, "snapshots"); err != nil {
 		t.Fatalf("second write: %v", err)
 	}
 
@@ -298,7 +306,7 @@ func TestWriteProjectionSnapshot_UnlockedRowsTakeTheLatestWrite(t *testing.T) {
 			}},
 		},
 	}
-	if err := writeProjectionSnapshot(&bytes.Buffer{}, first, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+	if err := writeProjectionSnapshot(&bytes.Buffer{}, first, sysPair("depthcharts-ros"), nil, st, "snapshots"); err != nil {
 		t.Fatalf("first write: %v", err)
 	}
 
@@ -320,7 +328,7 @@ func TestWriteProjectionSnapshot_UnlockedRowsTakeTheLatestWrite(t *testing.T) {
 			}},
 		},
 	}
-	if err := writeProjectionSnapshot(&bytes.Buffer{}, second, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+	if err := writeProjectionSnapshot(&bytes.Buffer{}, second, sysPair("depthcharts-ros"), nil, st, "snapshots"); err != nil {
 		t.Fatalf("second write: %v", err)
 	}
 
@@ -353,7 +361,7 @@ func TestWriteProjectionSnapshot_MissingPriorSnapshotWritesFresh(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := writeProjectionSnapshot(&out, dr, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+	if err := writeProjectionSnapshot(&out, dr, sysPair("depthcharts-ros"), nil, st, "snapshots"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if out.Len() != 0 {
@@ -389,7 +397,7 @@ func TestWriteProjectionSnapshot_CorruptPriorSnapshotWritesFreshAndWarns(t *test
 	}
 
 	var out bytes.Buffer
-	if err := writeProjectionSnapshot(&out, dr, "depthcharts-ros", "depthcharts-ros", nil, false, false, st, "snapshots"); err != nil {
+	if err := writeProjectionSnapshot(&out, dr, sysPair("depthcharts-ros"), nil, st, "snapshots"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if !strings.Contains(out.String(), date.Format("2006-01-02")) {

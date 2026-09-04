@@ -263,6 +263,10 @@ const standardRotationSize = 5.0
 // as not deployed. That is the conservative direction and the honest one: the
 // day's roster is the authority on who was slotted, and a player it does not
 // list was not.
+//
+// Like SummarizeGSGate, this does NOT exclude a capture whose projection input
+// was stale (SourceInputStale). Those numbers still drove the lineup that was
+// actually fielded, and this report is about what was fielded.
 func SummarizeRosterShape(st SnapshotStore, dir string, days []fantrax.DayRoster, hitterSlots, pitcherSlots int) RosterShape {
 	s := RosterShape{Days: len(days), HitterSlots: hitterSlots, PitcherSlots: pitcherSlots}
 
