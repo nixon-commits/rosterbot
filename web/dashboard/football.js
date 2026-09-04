@@ -263,7 +263,7 @@ function paintStandings(host, model, state) {
 // verdictBadge renders the THREE states a football trade can be in. Baseball's
 // trades.js has four because tradevalue compares two pricing methods and can
 // report them disagreeing; dynasty.GradeTrade is deliberately two-branch (no
-// PackageDecay is ported), so "too close" does not exist here. The third state
+// package discount is ported), so "too close" does not exist here. The third state
 // is the log being empty, handled by the caller.
 //
 // Neither badge is colored good or bad. There is no "your team" in a

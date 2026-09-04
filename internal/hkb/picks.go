@@ -22,8 +22,9 @@ var pickNameRe = regexp.MustCompile(`^(\d{4}) (Early|Mid|Late) (\d+)(?:st|nd|rd|
 // -- but not that team's projected standing, which is what would be needed
 // to pick one of HKB's three tiers over the other two. Averaging them is a
 // deliberately coarse stand-in: a defensible single number rather than a
-// claim of precision the recovered identity doesn't support, in the same
-// spirit as tradevalue.PackageDecay.
+// claim of precision the recovered identity doesn't support -- the same
+// "disagreement over false precision" spirit in which tradevalue withholds a
+// verdict when its two pricing methods diverge.
 //
 // tiersFound is 0 for a year HKB no longer lists as upcoming (its draft has
 // already happened), which is the common case for a pick identified from an

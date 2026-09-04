@@ -21,29 +21,70 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 )
 
-// PackageDecay discounts each asset on a side after the most valuable one:
-// the k-th best asset (0-indexed) contributes Value * PackageDecay^k. It
-// models the fact that roster spots are finite, so three good players are
-// worth less than the sum of three good players.
+// DefaultLeagueSize is the team count Adjusted() prices at. It is HKB's own
+// calculator default, which is what makes an adjusted figure here comparable
+// to the number a league mate reads off their screen.
+const DefaultLeagueSize = 12
+
+// The package-discount ladder, MEASURED against HKB's calculator on 2026-09-04
+// (rosterbot-492). See testdata/hkb_calculator_2026-09-04.csv for the 19
+// one-sided packages the numbers below reproduce exactly, and
+// testdata/hkb_netting_2026-09-04.md for the two-sided control.
 //
-// THIS CONSTANT IS AN UNMEASURED PRIOR, NOT A MEASURED VALUE. HKB applies a
-// "package adjustment" in client-side JS that is not present anywhere in the
-// payload we scrape, so 0.70 was fitted to exactly ONE observation of their
-// calculator: assets 589/540/366 summing to 1495 were reported at 1144, and
-// 589 + 540(0.70) + 366(0.70^2) = 1146.3, a residual of ~0.2%. One data point
-// cannot distinguish this decay from a dozen other curves that pass near it.
+// The predecessor of these constants was `PackageDecay = 0.70`, a geometric
+// ladder fitted to exactly ONE observation (589/540/366 shown as 1144, a 0.2%
+// residual). That one point is real and the fit through it was genuinely
+// close: redrawn on 2026-09-04 the same trio reads 590/540/366 -> 1145, which
+// the old curve still hits within 2.3. It was also the ONLY shape of package
+// it hit. Across the 19 rows captured here the old curve is out by up to 38%
+// (24 assets: 24307 against HKB's 39483) and by 22% on an eight-pick package
+// -- and, being geometric, it is out in BOTH directions depending on package
+// size, so no single rescale of 0.70 would have fixed it. A constant fitted to
+// one point is not a curve; it is a point with a curve drawn through it.
+const (
+	// packageDiscountBase is the discount at k=1 before the per-step term,
+	// at DefaultLeagueSize.
+	packageDiscountBase = 0.36
+	// packageDiscountStep is added per rank, so the ladder is ARITHMETIC in
+	// the discount rather than geometric in the retained share. That is the
+	// substantive shape change: at 12 teams the retained shares run
+	// 1.00, 0.62, 0.60, 0.58, ... where the old model ran 1.00, 0.70, 0.49,
+	// 0.34 -- the old curve punished the second asset harder and the sixth
+	// far harder than HKB does.
+	packageDiscountStep = 0.02
+	// packageDiscountCap ceilings the ladder. Observable: row 14 of the
+	// capture is 24 assets deep, so its last two are clamped here.
+	packageDiscountCap = 0.78
+	// packageDiscountPerTeam moves the base one step per team away from
+	// DefaultLeagueSize -- "larger leagues reduce the penalty because depth
+	// is more valuable", in HKB's own words. Swept across their whole
+	// picker range (8..30) in rows 15-19.
+	packageDiscountPerTeam = 0.01
+)
+
+// PackageDiscount is the share of the k-th best asset's value (0-indexed) that
+// a package of this size, in a league of this size, throws away.
 //
-// That uncertainty is exactly why Evaluate never reports the adjusted figure
-// as the answer. The adjustment is real and large enough to invert a verdict
-// -- on live offer lpe0ltlcmsdt40zv a 2-for-1 reads "favors you by 333" raw
-// and "favors them by 37" adjusted -- so ignoring it would be worse than
-// approximating it. But the honest reading of a fitted-to-one-point constant
-// is that when it disagrees with the raw sum, the trade is too close to call,
-// which is what Evaluate reports. The disagreement is the signal; the adjusted
-// number by itself is not.
+// The best asset is never discounted, which is what makes the adjustment a
+// statement about the TAIL of a package rather than about its size: HKB's own
+// tooltip calls it "a deduction when combining lower value players to acquire a
+// high value player".
 //
-// Fitting it properly against several observations is rosterbot-492.
-const PackageDecay = 0.70
+// The max(0, ...) floor on the base is the one term here NOT confirmed by
+// observation: it only bites at 48 teams or more, and HKB's picker stops at 30
+// (an out-of-range value in their URL falls back to 8, so it cannot be reached
+// that way either). It is carried because their client-side code carries it,
+// and it is flagged rather than quietly asserted.
+func PackageDiscount(k, leagueSize int) float64 {
+	if k <= 0 {
+		return 0
+	}
+	base := packageDiscountBase - float64(leagueSize-DefaultLeagueSize)*packageDiscountPerTeam
+	if base < 0 {
+		base = 0
+	}
+	return math.Min(packageDiscountCap, base+packageDiscountStep*float64(k))
+}
 
 // Asset is one thing changing hands: a player, or a draft pick.
 type Asset struct {
@@ -88,9 +129,28 @@ func (s Side) Raw() int {
 	return total
 }
 
-// Adjusted is the sum with PackageDecay applied to every asset after the
-// best: the k-th most valuable contributes Value * PackageDecay^k.
+// Adjusted is the sum with the package discount applied to every asset after
+// the best, at DefaultLeagueSize.
 func (s Side) Adjusted() float64 {
+	return s.AdjustedForLeague(DefaultLeagueSize)
+}
+
+// AdjustedForLeague is Adjusted in a league of the given size: the k-th most
+// valuable priced asset contributes Value * (1 - PackageDiscount(k, size)).
+//
+// It reproduces HKB's per-side figure exactly on all 19 captured packages. Two
+// things it deliberately does NOT reproduce:
+//
+//   - HKB floors its deduction to a whole number and displays raw minus that,
+//     so their rendered total is this value rounded UP. The rounding is a
+//     display step and is left to whoever renders.
+//   - When BOTH sides of a trade carry a deduction, HKB nets them and charges
+//     only the excess to the side carrying more. That shifts both sides by the
+//     same amount, so it can change neither the leader nor the gap between
+//     them (verified live -- see testdata/hkb_netting_2026-09-04.md), and a
+//     function of the opposing side has no signature to live in on a per-side
+//     method anyway.
+func (s Side) AdjustedForLeague(leagueSize int) float64 {
 	vals := make([]int, 0, len(s.Assets))
 	for _, a := range s.Assets {
 		if a.Priced {
@@ -101,7 +161,7 @@ func (s Side) Adjusted() float64 {
 
 	total := 0.0
 	for k, v := range vals {
-		total += float64(v) * math.Pow(PackageDecay, float64(k))
+		total += float64(v) * (1 - PackageDiscount(k, leagueSize))
 	}
 	return total
 }
@@ -131,8 +191,18 @@ type Status string
 const (
 	// StatusFavors means both pricing methods agree on which side wins.
 	StatusFavors Status = "favors"
-	// StatusTooClose means the raw and adjusted sums name different
-	// winners, so the trade is inside the model's own uncertainty.
+	// StatusTooClose means the raw and adjusted sums name different winners,
+	// so which side the trade favors depends entirely on whether you charge
+	// the package discount.
+	//
+	// rosterbot-492 measured that discount exactly (see PackageDiscount), and
+	// deliberately did NOT promote the adjusted figure to the headline on the
+	// strength of it. What was measured is HKB's penalty schedule, not this
+	// league's roster economics: the schedule is their editorial judgement
+	// about combining lesser assets to acquire a star, keyed to a league size
+	// we supply as a constant. Knowing it precisely settles what HKB would
+	// print; it does not settle which team won the trade. When the two methods
+	// name opposite winners, that unsettled question is the finding.
 	StatusTooClose Status = "too-close"
 	// StatusIncomplete means at least one asset could not be priced, so no
 	// comparison is meaningful at all.
@@ -141,8 +211,8 @@ const (
 	// exactly level, so the pricing produced no discriminating input.
 	//
 	// It is deliberately NOT StatusTooClose, which means something specific and
-	// different — the two methods named OPPOSITE winners, so the answer is
-	// inside the model's uncertainty. Here the methods do not disagree; they
+	// different — the two methods named OPPOSITE winners, so the answer turns
+	// on whether the package discount is charged. Here the methods do not disagree; they
 	// agree on a number that cannot separate the sides. Folding the two
 	// together would also break the documented invariant that RawLeader and
 	// AdjLeader differ whenever Status is StatusTooClose, and would force every
@@ -197,10 +267,10 @@ type Verdict struct {
 //     teams happen to sort in. This is also where the all-sides-worth-zero
 //     case lands, by the same route rather than by a guard of its own.
 //  3. The methods disagree on the leader, OR exactly one came out level ->
-//     StatusTooClose. For the first, the gap is inside the uncertainty of a
-//     constant fitted to one data point, so neither number earns the call;
-//     for the second, the two readings disagree about whether there is a
-//     winner at all, which is the same kind of not-knowing.
+//     StatusTooClose. For the first, the two methods are answering different
+//     questions and the answer depends on which you accept, so neither number
+//     earns the call; for the second, the two readings disagree about whether
+//     there is a winner at all, which is the same kind of not-knowing.
 //  4. Otherwise -> StatusFavors.
 //
 // Fewer than two sides is StatusIncomplete: there is nothing to compare.

@@ -30,8 +30,8 @@ type TradeSide struct {
 	Players  []TradePlayer
 
 	// Total is the plain sum of HKB values; Adjusted discounts every asset
-	// after the best by tradevalue.PackageDecay. Both are reported because on
-	// live offers they disagree about who wins -- see Trade.Verdict.
+	// after the best by tradevalue.PackageDiscount. Both are reported because
+	// on live offers they disagree about who wins -- see Trade.Verdict.
 	Total    int
 	Adjusted float64
 }

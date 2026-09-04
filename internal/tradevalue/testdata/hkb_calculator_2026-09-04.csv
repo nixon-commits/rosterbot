@@ -1,0 +1,38 @@
+# HKB trade-calculator observations, captured 2026-09-04 from the public,
+# login-free page https://harryknowsball.com/calculator .
+#
+# HKB values drift daily, so every row here was captured in ONE sitting and the
+# `values` column records the per-asset value the page displayed AT CAPTURE
+# TIME. Re-reading the site later will not reproduce these numbers; the rows
+# are a frozen observation set, not a live fixture.
+#
+# Each row is a ONE-SIDED package (team 2 left empty). That matters: HKB nets
+# the two sides' deductions against each other before display, so only a
+# one-sided capture shows a side's own, un-netted package adjustment. See
+# hkb_netting_2026-09-04.md for the two-sided control.
+#
+# hkb_adjustment is the "Package adjustment" line (0 when HKB renders no line,
+# which it does for a single asset); hkb_total is the "Total value" line.
+# hkb_total == raw - hkb_adjustment in every row, and because HKB floors the
+# deduction, hkb_total is ceil(the exact adjusted value).
+#
+# columns: id,league_size,values (| separated, as displayed),hkb_adjustment,hkb_total,label
+1,12,10000,0,10000,one asset - no adjustment line rendered
+2,12,10000|9758,3708,16050,two elite assets
+3,12,10000|9758|8556,7130,21184,three elite assets
+4,12,10000|9758|8556|7698,10363,25649,four elite assets
+5,12,590|540|366,351,1145,low value trio - the bead's original single observation redrawn
+6,12,10000|60,22,10038,huge top with a negligible tail
+7,12,300|150,57,393,low value pair
+8,12,3304|3270|3243,2539,7278,three near-equal mid assets
+9,12,3304|2592|1801|1200|798,2560,7135,five mid assets with a long tail
+10,12,5026|4196|3304|2592|1801|1200,5349,12770,six mid assets
+11,12,1511|884|784,649,2530,three draft picks
+12,12,10000|1511|384,727,11168,elite player plus two draft picks
+13,12,1511|1255|884|784|769|609|384|360,2142,4414,eight draft picks
+14,12,10000|7698|7153|6024|5375|4969|4216|3562|2934|2784|2262|1801|1539|1251|1025|880|769|674|587|503|415|366|326|284,27914,39483,24 assets - the only row that reaches the 0.78 discount cap
+15,8,10000|9758|8556,7863,20451,league size 8 - smallest the picker offers
+16,10,10000|9758|8556,7496,20818,league size 10
+17,14,10000|9758|8556,6764,21550,league size 14
+18,20,10000|9758|8556,5665,22649,league size 20
+19,30,10000|9758|8556,3833,24481,league size 30 - largest the picker offers
