@@ -121,7 +121,8 @@ rosterbot optimize --dry-run
 rosterbot optimize --dry-run --dates 2026-04-01
 rosterbot optimize --dry-run --dates 2026-03-26:2026-03-28
 
-# All remaining days in the current matchup period (what the hourly job runs)
+# All remaining days in the current matchup period (what the once-daily
+# matchup pre-write job runs; the hourly job runs today only)
 rosterbot optimize --dry-run --matchup
 
 # Show the full hitter adjustment pipeline: base → blend → park → platoon → opp SP → final
@@ -436,12 +437,13 @@ The bot's game day, ordered by clock (times shown in ET for reading; the authori
 
 | When (ET) | Job | Command | Schedule (as configured) |
 |---|---|---|---|
-| Hourly, 11a–10p | Set the lineup | `optimize --matchup` | every hour 8am–7pm **PT** |
+| Hourly, 11a–10p | Set today's lineup | `optimize` | every hour 8am–7pm **PT** |
 | 6:30a | API version check | `version-check` | 10:30 UTC daily |
 | 7:00a | Prospects | `prospects` | 7am ET daily |
 | 8:00a | GS check | `gs-check` | 8am ET daily |
 | 9:00a | Waivers | `waivers` | 9am ET daily |
 | 9:30a | Grade projections | `grade` | 13:30 UTC daily |
+| 9:45a | Pre-write matchup week | `optimize --matchup` | 13:45 UTC daily |
 | 10:00a | Claims recap | `claims` | 10am ET daily |
 | 10:00a | Trades | `transactions` | 10am ET daily |
 | 10:00a | Archive | `archive` | 14:00 UTC daily |
@@ -449,6 +451,8 @@ The bot's game day, ordered by clock (times shown in ET for reading; the authori
 | 11:00a | Dashboard data | `projection-site --out report` | 15:00 UTC daily |
 | 7:00a Mon | Weekly recap site | `recap-site --out dist` | 7am ET Mondays |
 | 7:40p | Shadow capture | `shadow` | 23:40 UTC daily |
+
+The hourly `optimize` run is **today-only** — an hourly cadence can only legitimately learn anything new about today (late scratches, probables firming up), and re-deciding a future day's lineup every hour was pure churn (measured: 84% of lineup notifications were future-dated `--matchup` speculation re-decided the next hour, with individual players re-flipped 20-30+ times for one future date). The once-daily `optimize --matchup` pass pre-writes the rest of the current matchup week instead, ahead of the hourly window opening at 14:00 UTC.
 
 `entrypoint.sh` publishes the recap site from `./dist` to `SITE_BUCKET`, and the **public** dashboard data (`report/value.json`, `report/football.json` + `report/football-trades.json`) into `DASHBOARD_BUCKET`'s `report/` prefix — the same CloudFront distribution as the dashboard SPA. Any job can also be launched on demand as a one-off Fargate task (or via `POST /v1/jobs/{name}` — see below).
 
