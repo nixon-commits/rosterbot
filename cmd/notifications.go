@@ -47,7 +47,11 @@ func installNotifyDispatcher() {
 	// PUSHOVER_USER_KEY, which the operator channel reads permanently.
 	if os.Getenv("PUSHOVER_FANTASY_DUAL_SEND") != "" {
 		if u, tkn := os.Getenv("PUSHOVER_USER_KEY"), os.Getenv("PUSHOVER_API_TOKEN"); u != "" && tkn != "" {
-			d.Sinks = append(d.Sinks, &notify.PushoverSink{UserKey: u, APIToken: tkn})
+			d.Sinks = append(d.Sinks, &notify.PushoverSink{
+				UserKey:     u,
+				APIToken:    tkn,
+				TenantLabel: resolveTenantLabel(context.Background(), uid),
+			})
 		}
 	}
 
@@ -84,4 +88,59 @@ func ddbPushDeviceStore(table string) (lineupapi.PushDeviceStore, error) {
 		return nil, err
 	}
 	return st, nil
+}
+
+// userLookup is the narrowest slice of the identity store resolveTenantLabel
+// needs. It is deliberately smaller than tenantDirectory (tenantcreds.go),
+// which also needs ConnectionStore to run a job as a tenant — this read only
+// decorates a notification title and never gates writing anywhere, so it has
+// no business requiring the connection half.
+type userLookup interface {
+	GetUser(ctx context.Context, id lineupapi.UserID) (*lineupapi.User, bool, error)
+}
+
+// resolveTenantLabel names the tenant a dual-send Pushover push should be
+// tagged with, for PushoverSink.TenantLabel (rosterbot-b1oh) — the minimum
+// per-tenant routing the bead's own text accepts in lieu of per-user Pushover
+// keys: every tenant's dual-send traffic still lands on the deployment's one
+// PUSHOVER_USER_KEY (the operator's phone), so a tester's push is tagged with
+// their name instead of reading as the operator's own team.
+//
+// It returns "" — untagged, today's byte-identical behaviour — whenever a tag
+// would be either meaningless or actively wrong:
+//   - uid is empty: a single-tenant/local-dev run has no tenant to tag.
+//   - uid IS the operator's own tenant (OPERATOR_USER_ID, see
+//     viewsReportBelongsHere in projection_scope.go for the same comparison
+//     used for a different report). The fix exists to stop OTHER tenants'
+//     pushes reading as the operator's; a tag on the operator's own pushes
+//     would just be noise on every message they already know is theirs.
+//   - IDENTITY_TABLE is unset: there is no directory to look the tenant up
+//     in, and this must not construct a store against an empty table name.
+//   - the lookup errors, the record is missing, or DisplayName is empty:
+//     nothing usable to tag with — refusing to guess matches the direction
+//     tenantRunConfig takes on its own read failure (act on what is known).
+func resolveTenantLabel(ctx context.Context, uid string) string {
+	if uid == "" || uid == os.Getenv("OPERATOR_USER_ID") {
+		return ""
+	}
+	table := os.Getenv("IDENTITY_TABLE")
+	if table == "" {
+		return ""
+	}
+	store, err := ddbuser.New(ctx, table)
+	if err != nil {
+		return ""
+	}
+	return tenantLabelFrom(ctx, store, lineupapi.UserID(uid))
+}
+
+// tenantLabelFrom does the actual directory read, split out from
+// resolveTenantLabel so the decision is testable against a stub rather than
+// DynamoDB.
+func tenantLabelFrom(ctx context.Context, dir userLookup, uid lineupapi.UserID) string {
+	u, ok, err := dir.GetUser(ctx, uid)
+	if err != nil || !ok {
+		return ""
+	}
+	return u.DisplayName
 }

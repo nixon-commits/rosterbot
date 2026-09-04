@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/apns"
@@ -114,12 +115,44 @@ func summarize(message string) string {
 // PUSHOVER_USER_KEY's presence: the operator channel owns that variable
 // permanently, and tying the cutover to it would silence operator alerts as
 // a side effect of finishing an unrelated migration.
+//
+// Every tenant's dual-send traffic lands on this ONE UserKey/APIToken pair —
+// the deployment's PUSHOVER_USER_KEY, i.e. the operator's own phone
+// (rosterbot-b1oh). TenantLabel is the minimum fix the bead accepted in lieu
+// of per-user Pushover keys: it prefixes the title with the tenant's display
+// name so a tester's lineup push reads as theirs rather than as the
+// operator's own team. Empty (the single-tenant/local-dev case, and the
+// operator's own tenant — see resolveTenantLabel in cmd/notifications.go)
+// leaves the title exactly as it was before this field existed.
 type PushoverSink struct {
 	UserKey, APIToken string
+	TenantLabel       string
 }
 
 func (p *PushoverSink) Name() string { return "pushover" }
 
 func (p *PushoverSink) Deliver(_ context.Context, e Event, _ string) error {
-	return SendPushover(p.UserKey, p.APIToken, e.Title, e.Message)
+	return sendPushover(p.UserKey, p.APIToken, tagTitle(p.TenantLabel, e.Title), e.Message)
+}
+
+// sendPushover is the seam Deliver calls through. Production leaves it at
+// SendPushover; tests override it to capture what a delivery would send
+// without reaching the real Pushover API — the tag has to be proven applied
+// at the point Deliver actually uses it, not merely in tagTitle's own table
+// test, since a helper that is correct in isolation and never wired in would
+// pass TestTagTitle while leaving every real push untagged.
+var sendPushover = SendPushover
+
+// tagTitle prefixes title with label, trimming whitespace and any brackets
+// the caller's label already carries so a display name like "[Jon]" cannot
+// double up into "[[Jon]] ...". An empty (post-trim) label leaves title
+// untouched — the whole point for the single-tenant/local-dev and
+// operator-tenant cases, where a self-tag would be pure noise.
+func tagTitle(label, title string) string {
+	label = strings.Trim(strings.TrimSpace(label), "[]")
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return title
+	}
+	return "[" + label + "] " + title
 }
