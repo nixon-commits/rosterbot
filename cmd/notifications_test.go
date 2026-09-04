@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/notify"
 )
 
 // stubUserLookup is a one-method fake for userLookup — resolveTenantLabel's
@@ -89,5 +90,63 @@ func TestResolveTenantLabel_EmptyWhenIdentityTableUnset(t *testing.T) {
 	got := resolveTenantLabel(context.Background(), "some-tenant")
 	if got != "" {
 		t.Errorf("with no directory to consult the push must stay untagged, got %q", got)
+	}
+}
+
+// --- dualSendPushoverSink: the actual installNotifyDispatcher call site ---
+//
+// These drive the real construction path (dualSendPushoverSink, called from
+// installNotifyDispatcher) rather than resolveTenantLabel/tenantLabelFrom or
+// PushoverSink.Deliver directly, closing the gap the review flagged: nothing
+// previously exercised the line that wires resolveTenantLabel's result into
+// PushoverSink.TenantLabel at the one place production actually builds that
+// sink.
+
+func TestDualSendPushoverSink_TagsWithTheResolvedLabel(t *testing.T) {
+	t.Setenv("PUSHOVER_FANTASY_DUAL_SEND", "1")
+	t.Setenv("PUSHOVER_USER_KEY", "ukey")
+	t.Setenv("PUSHOVER_API_TOKEN", "tkn")
+
+	orig := resolveTenantLabelFunc
+	defer func() { resolveTenantLabelFunc = orig }()
+	var gotUID string
+	resolveTenantLabelFunc = func(_ context.Context, uid string) string {
+		gotUID = uid
+		return "Jon's Team"
+	}
+
+	sink := dualSendPushoverSink("tenant-1")
+	ps, ok := sink.(*notify.PushoverSink)
+	if !ok {
+		t.Fatalf("dualSendPushoverSink returned %T, want *notify.PushoverSink", sink)
+	}
+	if gotUID != "tenant-1" {
+		t.Errorf("resolveTenantLabelFunc called with uid=%q, want %q", gotUID, "tenant-1")
+	}
+	if ps.TenantLabel != "Jon's Team" {
+		t.Errorf("TenantLabel = %q, want %q — the wiring to resolveTenantLabelFunc is missing", ps.TenantLabel, "Jon's Team")
+	}
+	if ps.UserKey != "ukey" || ps.APIToken != "tkn" {
+		t.Errorf("sink = %+v, want UserKey/APIToken from env", ps)
+	}
+}
+
+func TestDualSendPushoverSink_NilWhenCutoverFlagUnset(t *testing.T) {
+	t.Setenv("PUSHOVER_FANTASY_DUAL_SEND", "")
+	t.Setenv("PUSHOVER_USER_KEY", "ukey")
+	t.Setenv("PUSHOVER_API_TOKEN", "tkn")
+
+	if sink := dualSendPushoverSink("tenant-1"); sink != nil {
+		t.Errorf("expected nil sink when the cutover flag is unset, got %+v", sink)
+	}
+}
+
+func TestDualSendPushoverSink_NilWhenCredentialsMissing(t *testing.T) {
+	t.Setenv("PUSHOVER_FANTASY_DUAL_SEND", "1")
+	t.Setenv("PUSHOVER_USER_KEY", "")
+	t.Setenv("PUSHOVER_API_TOKEN", "")
+
+	if sink := dualSendPushoverSink("tenant-1"); sink != nil {
+		t.Errorf("expected nil sink when Pushover credentials are missing, got %+v", sink)
 	}
 }

@@ -40,23 +40,52 @@ func installNotifyDispatcher() {
 	if sink := apnsSink(lineupapi.UserID(uid)); sink != nil {
 		d.Sinks = append(d.Sinks, sink)
 	}
-	// Cutover window only (see the spec's Cutover section): while this flag is
-	// set, every fantasy event also reaches Pushover, so APNs delivery can be
-	// confirmed against a channel known to work. Unsetting it completes the
-	// migration with no code change — and deliberately without touching
-	// PUSHOVER_USER_KEY, which the operator channel reads permanently.
-	if os.Getenv("PUSHOVER_FANTASY_DUAL_SEND") != "" {
-		if u, tkn := os.Getenv("PUSHOVER_USER_KEY"), os.Getenv("PUSHOVER_API_TOKEN"); u != "" && tkn != "" {
-			d.Sinks = append(d.Sinks, &notify.PushoverSink{
-				UserKey:     u,
-				APIToken:    tkn,
-				TenantLabel: resolveTenantLabel(context.Background(), uid),
-			})
-		}
+	if sink := dualSendPushoverSink(uid); sink != nil {
+		d.Sinks = append(d.Sinks, sink)
 	}
 
 	notify.Default = d
 }
+
+// dualSendPushoverSink builds the cutover-window Pushover sink for uid, or
+// nil when the cutover flag or its credentials are absent (see the spec's
+// Cutover section: while PUSHOVER_FANTASY_DUAL_SEND is set, every fantasy
+// event also reaches Pushover, so APNs delivery can be confirmed against a
+// channel known to work; unsetting it completes the migration with no code
+// change — and deliberately without touching PUSHOVER_USER_KEY, which the
+// operator channel reads permanently).
+//
+// Split out of installNotifyDispatcher so a test can drive this exact
+// construction — including the TenantLabel field that is the entire content
+// of rosterbot-b1oh's fix — without also exercising installNotifyDispatcher's
+// statestore/APNs wiring. TestDualSendPushoverSink_TagsWithTheResolvedLabel
+// fails if the TenantLabel assignment below is ever dropped; before this
+// extraction nothing did (the tests for resolveTenantLabel/tenantLabelFrom
+// and for PushoverSink.Deliver both call their targets directly, bypassing
+// this call site entirely).
+func dualSendPushoverSink(uid string) notify.Sink {
+	if os.Getenv("PUSHOVER_FANTASY_DUAL_SEND") == "" {
+		return nil
+	}
+	u, tkn := os.Getenv("PUSHOVER_USER_KEY"), os.Getenv("PUSHOVER_API_TOKEN")
+	if u == "" || tkn == "" {
+		return nil
+	}
+	return &notify.PushoverSink{
+		UserKey:     u,
+		APIToken:    tkn,
+		TenantLabel: resolveTenantLabelFunc(context.Background(), uid),
+	}
+}
+
+// resolveTenantLabelFunc is the seam dualSendPushoverSink calls through.
+// Production leaves it at resolveTenantLabel; tests override it to prove the
+// resolved label is actually wired into PushoverSink.TenantLabel without
+// standing up a DynamoDB-backed identity store (resolveTenantLabel's own
+// non-empty-result path requires a live ddbuser.New lookup, which has no
+// hermetic double at this call site — mirrors the sendPushover seam in
+// internal/notify/sinks.go).
+var resolveTenantLabelFunc = resolveTenantLabel
 
 // apnsSink returns nil when APNs is not configured, which is the normal state
 // locally and in every test. All four inputs are required: the key pair to
