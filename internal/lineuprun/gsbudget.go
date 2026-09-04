@@ -25,6 +25,7 @@ type gsFantraxClient interface {
 	GetMatchupWeekBounds(date, seasonStart time.Time) (weekStart, weekEnd time.Time, err error)
 	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
 	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
+	GetTeamPitcherDays(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.PitcherDay, error)
 }
 
 // RotationSize is the standard starting rotation depth used to estimate how
@@ -44,6 +45,11 @@ type GSInputs struct {
 
 	PitcherRoster   []fantrax.Player
 	NumPitcherSlots int
+
+	// NoCache mirrors the persistent --no-cache flag. It reaches only the
+	// start-rate history read, whose per-period snapshots are the one thing
+	// this phase fetches that is cacheable at all.
+	NoCache bool
 
 	// ProjPts values a pitcher for the forecast's value ranking. Injected so
 	// the phase never has to build a projection source.
@@ -192,12 +198,41 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 	}
 
 	spNames := rosterSPNames(in.PitcherRoster)
+
+	// Per-pitcher start rates. The read is SOFT, and the asymmetry against the
+	// schedule seam below is the point rather than an inconsistency: a lost
+	// schedule moves the forecast in an UNKNOWN direction (confirmed starts
+	// worth 1.0 each drop out while settled clubs get promoted into the
+	// estimate at ~0.2 each), whereas a lost history has exactly one effect —
+	// every SP reverts to the flat rate, which is the behaviour that shipped
+	// all season. Degrading to the status quo ante is never worse than the
+	// status quo ante, so it must not disable a gate that would otherwise run.
+	rates, rateErr := computeStartRates(ft, sched, in.TeamID, in.SeasonStart, in.Today,
+		cacheTTL(in.NoCache, fantrax.PastPeriodTTL))
+	if rateErr != nil {
+		d.logf("WARNING: start-rate history unavailable (%v) — every SP priced at the flat %.2f",
+			rateErr, 1/RotationSize)
+	}
+	priced := 0
+	for key := range spNames {
+		if _, ok := rates[key]; ok {
+			priced++
+		}
+	}
+	// Printed unconditionally, including the all-flat case, on the same
+	// reasoning as the "gs floor check:" and "il-start check:" lines. A
+	// weighting that silently stopped matching any pitcher would forecast
+	// exactly what the flat divisor forecasts, and nothing else in the output
+	// would say so.
+	d.logf("GS start rates: %d of %d rostered SPs priced from their own %d-day active-slot history, %d at the flat %.2f",
+		priced, len(spNames), gsStartRateWindow, len(spNames)-priced, 1/RotationSize)
+
 	// The forecast is the last step of the cascade and obeys the same rule as
 	// every step before it: no gate beats a gate running on a number nobody can
 	// vouch for. Unlike the GS-limit fetch this raises no Pushover — a statsapi
 	// blip is transient and self-healing on the next hourly run, where a
 	// Fantrax config read that stops working is not.
-	forecast, fcErr := buildGSForecast(sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts)
+	forecast, fcErr := buildGSForecast(sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts, rates)
 	if fcErr != nil {
 		d.logf("WARNING: %v — GS limit disabled", fcErr)
 		return d
@@ -242,7 +277,11 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 //     projected points so the gate can rank across the week by value rather
 //     than by count;
 //   - club plays but has not named anyone yet → rotation-math demand, since a
-//     start is coming from that club and we do not yet know whose;
+//     start is coming from that club and we do not yet know whose. Each such
+//     pitcher contributes his OWN measured active-slot start rate rather than a
+//     flat 1-in-5 (see computeStartRates and rosterbot-goht); with no history
+//     he contributes exactly 1/RotationSize, so the pre-weighting arithmetic is
+//     the default rather than a special case;
 //   - club plays and named someone else → nothing, the day is settled for us;
 //   - club does not play → nothing.
 //
@@ -282,6 +321,7 @@ func buildGSForecast(
 	numPSlots int,
 	today, weekEnd time.Time,
 	projPts func(fantrax.Player) float64,
+	startRate map[string]float64,
 ) ([]optimizer.DayForecast, error) {
 	var forecast []optimizer.DayForecast
 	for d := today.AddDate(0, 0, 1); !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
@@ -307,15 +347,38 @@ func buildGSForecast(
 		}
 
 		df := optimizer.DayForecast{Date: d}
-		var unannouncedSPs float64
-		for _, p := range spNames {
+		// The unannounced bucket is split in two, and the split is what keeps
+		// the no-history path EXACT. Pitchers with no measured rate are
+		// counted and divided once, reproducing the old unannouncedSPs/
+		// RotationSize expression bit for bit; only pitchers with a measured
+		// rate are summed. Summing 1/RotationSize n times instead would drift
+		// in the last bits (3 × 0.2 = 0.6000000000000001), which is a change
+		// nobody asked for on every roster that has no history at all.
+		var flatSPs float64
+		var measured []float64
+		for key, p := range spNames {
 			if playername.MatchProbable(p.Name, p.MLBTeam, probs) == playername.ConfirmedStarter {
 				df.ConfirmedStarters = append(df.ConfirmedStarters, projPts(p))
 				continue
 			}
 			if playing[p.MLBTeam] && !announced[p.MLBTeam] {
-				unannouncedSPs++
+				if r, ok := startRate[key]; ok {
+					measured = append(measured, r)
+					continue
+				}
+				flatSPs++
 			}
+		}
+		// Sorted before summing for the same reason ConfirmedStarters is
+		// sorted below: spNames is a map, so the append order is Go's
+		// randomized iteration order, and floating-point addition is not
+		// associative. Without this, two runs on identical inputs could
+		// produce Estimated values differing in the last bits — which this
+		// package owes not to do (see the Idempotency section of CLAUDE.md).
+		sort.Float64s(measured)
+		unannouncedDemand := flatSPs / RotationSize
+		for _, r := range measured {
+			unannouncedDemand += r
 		}
 
 		// Sorted unconditionally, not only when the cap binds: spNames is a
@@ -344,7 +407,7 @@ func buildGSForecast(
 		// claimed slots, so the estimate may only fill what they left. Capping
 		// each regime at numPSlots separately would forecast up to 2x the
 		// starts the roster can physically field.
-		df.Estimated = max(min(unannouncedSPs/RotationSize,
+		df.Estimated = max(min(unannouncedDemand,
 			float64(numPSlots-len(df.ConfirmedStarters))), 0)
 
 		forecast = append(forecast, df)

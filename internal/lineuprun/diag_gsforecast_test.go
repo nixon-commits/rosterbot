@@ -47,7 +47,7 @@ func TestDiagGSForecastAgainstLiveSchedule(t *testing.T) {
 	sched := schedule.NewClient()
 
 	forecast, err := buildGSForecast(sched, spNames, 6, today, weekEnd,
-		func(fantrax.Player) float64 { return 12 })
+		func(fantrax.Player) float64 { return 12 }, nil)
 	if err != nil {
 		t.Fatalf("forecast failed: %v", err)
 	}

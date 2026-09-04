@@ -9,7 +9,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 )
 
-// fakeGSFantrax is the three-method Fantrax surface the cascade needs. Each
+// fakeGSFantrax is the four-method Fantrax surface the cascade needs. Each
 // step can be failed independently so every disable path gets its own test —
 // the branch ordering here is load-bearing and was previously untested
 // (rosterbot-32a criterion 2).
@@ -34,6 +34,20 @@ type fakeGSFantrax struct {
 
 	limitCalls   int
 	limitsForPer fantrax.WeeklyPeriod
+
+	// pitcherDays feeds the start-rate history read; pitcherDaysErr fails it.
+	// A nil slice with a nil error is an honest "nothing settled yet", which is
+	// what every pre-existing cascade test wants: no history means every SP is
+	// priced at the flat rate and the forecast is unchanged.
+	pitcherDays    []fantrax.PitcherDay
+	pitcherDaysErr error
+	pitcherDayFrom time.Time
+	pitcherDayTo   time.Time
+}
+
+func (f *fakeGSFantrax) GetTeamPitcherDays(_ string, start, end, _ time.Time, _ string, _ time.Duration) ([]fantrax.PitcherDay, error) {
+	f.pitcherDayFrom, f.pitcherDayTo = start, end
+	return f.pitcherDays, f.pitcherDaysErr
 }
 
 func (f *fakeGSFantrax) GetMatchupWeekBounds(_, _ time.Time) (time.Time, time.Time, error) {

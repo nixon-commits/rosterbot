@@ -72,7 +72,7 @@ func TestBuildGSForecast_ConfirmedProbablesUseProjectedPoints(t *testing.T) {
 		return map[string]float64{"a": 20, "b": 5}[p.ID]
 	}
 
-	got, _ := buildGSForecast(sched, spNames, 5, today, day(2026, 7, 26), pts)
+	got, _ := buildGSForecast(sched, spNames, 5, today, day(2026, 7, 26), pts, nil)
 
 	if len(got) != 1 {
 		t.Fatalf("expected one forecast day, got %d", len(got))
@@ -105,7 +105,7 @@ func TestBuildGSForecast_CapsConfirmedAtActivePitcherSlots(t *testing.T) {
 		return map[string]float64{"1": 3, "2": 30, "3": 20}[p.ID]
 	}
 
-	got, _ := buildGSForecast(sched, spNames, 2, today, day(2026, 7, 26), pts)
+	got, _ := buildGSForecast(sched, spNames, 2, today, day(2026, 7, 26), pts, nil)
 
 	if len(got[0].ConfirmedStarters) != 2 {
 		t.Fatalf("expected cap at 2 slots, got %d", len(got[0].ConfirmedStarters))
@@ -132,7 +132,7 @@ func TestBuildGSForecast_NoProbablesEstimatesByRotation(t *testing.T) {
 	}
 
 	got, _ := buildGSForecast(sched, spNames, 5, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 0 })
+		func(fantrax.Player) float64 { return 0 }, nil)
 
 	if len(got[0].ConfirmedStarters) != 0 {
 		t.Errorf("no probables means no confirmed starters, got %v", got[0].ConfirmedStarters)
@@ -156,7 +156,7 @@ func TestBuildGSForecast_EstimateCapsAtActivePitcherSlots(t *testing.T) {
 	sched := &fakeSchedule{playing: map[string]map[string]bool{"2026-07-26": playing}}
 
 	got, _ := buildGSForecast(sched, spNames, 2, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 0 })
+		func(fantrax.Player) float64 { return 0 }, nil)
 
 	if got[0].Estimated != 2.0 {
 		t.Errorf("estimated = %v, want 2 (20/5 = 4 starts, capped at 2 P slots)", got[0].Estimated)
@@ -180,7 +180,7 @@ func TestBuildGSForecast_MoreSPsPlayingThanSlotsDoesNotUnderstate(t *testing.T) 
 	sched := &fakeSchedule{playing: map[string]map[string]bool{"2026-07-26": playing}}
 
 	got, _ := buildGSForecast(sched, spNames, 6, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 0 })
+		func(fantrax.Player) float64 { return 0 }, nil)
 
 	if got[0].Estimated != 7.0/5.0 {
 		t.Errorf("estimated = %v, want 1.4 (7 SPs playing / 5-man rotation, under the 6-slot cap)", got[0].Estimated)
@@ -192,7 +192,7 @@ func TestBuildGSForecast_MoreSPsPlayingThanSlotsDoesNotUnderstate(t *testing.T) 
 func TestBuildGSForecast_SpansTomorrowThroughWeekEnd(t *testing.T) {
 	today := day(2026, 7, 25)
 	got, _ := buildGSForecast(&fakeSchedule{}, nil, 5, today, day(2026, 7, 28),
-		func(fantrax.Player) float64 { return 0 })
+		func(fantrax.Player) float64 { return 0 }, nil)
 
 	want := []time.Time{day(2026, 7, 26), day(2026, 7, 27), day(2026, 7, 28)}
 	var gotDates []time.Time
@@ -207,7 +207,7 @@ func TestBuildGSForecast_SpansTomorrowThroughWeekEnd(t *testing.T) {
 func TestBuildGSForecast_WeekAlreadyOverIsEmpty(t *testing.T) {
 	today := day(2026, 7, 26)
 	got, _ := buildGSForecast(&fakeSchedule{}, nil, 5, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 0 })
+		func(fantrax.Player) float64 { return 0 }, nil)
 	if len(got) != 0 {
 		t.Errorf("no days remain after today, got %v", got)
 	}
@@ -251,7 +251,7 @@ func TestBuildGSForecast_UnannouncedTeamsStillEstimateWhenLeagueHasProbables(t *
 	}
 
 	got, _ := buildGSForecast(sched, spNames, 6, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 0 })
+		func(fantrax.Player) float64 { return 0 }, nil)
 
 	if len(got[0].ConfirmedStarters) != 0 {
 		t.Errorf("none of the announced probables are ours, got %v", got[0].ConfirmedStarters)
@@ -284,7 +284,7 @@ func TestBuildGSForecast_CombinesConfirmedAndEstimatedOnTheSameDay(t *testing.T)
 	}
 
 	got, _ := buildGSForecast(sched, spNames, 6, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 10 })
+		func(fantrax.Player) float64 { return 10 }, nil)
 
 	if len(got[0].ConfirmedStarters) != 2 {
 		t.Errorf("confirmed = %v, want the 2 announced SPs", got[0].ConfirmedStarters)
@@ -318,7 +318,7 @@ func TestBuildGSForecast_CombinedDayTotalCapsAtPitcherSlots(t *testing.T) {
 
 	// 2 confirmed + 20/5 = 4 estimated = 6, against 3 pitcher slots.
 	got, _ := buildGSForecast(sched, spNames, 3, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 10 })
+		func(fantrax.Player) float64 { return 10 }, nil)
 
 	total := float64(len(got[0].ConfirmedStarters)) + got[0].Estimated
 	if total != 3 {
@@ -344,7 +344,7 @@ func TestBuildGSForecast_OurSPOnAClubThatNamedSomeoneElseContributesNothing(t *t
 	}
 
 	got, _ := buildGSForecast(sched, spNames, 6, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 10 })
+		func(fantrax.Player) float64 { return 10 }, nil)
 
 	if len(got[0].ConfirmedStarters) != 0 || got[0].Estimated != 0 {
 		t.Errorf("club already named a different starter: got confirmed=%v estimated=%v, want both empty",
@@ -371,7 +371,7 @@ func TestBuildGSForecast_ProbablesFetchErrorIsFatal(t *testing.T) {
 	spNames := map[string]fantrax.Player{"our arm": activeSP("1", "Our Arm", "AAA")}
 
 	got, err := buildGSForecast(sched, spNames, 6, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 10 })
+		func(fantrax.Player) float64 { return 10 }, nil)
 
 	if err == nil {
 		t.Fatalf("want an error, got forecast %+v", got)
@@ -391,7 +391,7 @@ func TestBuildGSForecast_ScheduleFetchErrorIsFatal(t *testing.T) {
 	}
 
 	got, err := buildGSForecast(sched, nil, 6, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 10 })
+		func(fantrax.Player) float64 { return 10 }, nil)
 
 	if err == nil {
 		t.Fatalf("want an error, got forecast %+v", got)
@@ -411,7 +411,7 @@ func TestBuildGSForecast_StopsAtTheFirstUnreadableDay(t *testing.T) {
 	}}
 
 	if _, err := buildGSForecast(sched, nil, 6, today, day(2026, 7, 30),
-		func(fantrax.Player) float64 { return 0 }); err == nil {
+		func(fantrax.Player) float64 { return 0 }, nil); err == nil {
 		t.Fatal("want an error")
 	}
 	if sched.playingCalls != 1 {
@@ -431,7 +431,7 @@ func TestBuildGSForecast_HealthyDaysReportNoError(t *testing.T) {
 	spNames := map[string]fantrax.Player{"our arm": activeSP("1", "Our Arm", "AAA")}
 
 	if _, err := buildGSForecast(sched, spNames, 6, today, day(2026, 7, 26),
-		func(fantrax.Player) float64 { return 10 }); err != nil {
+		func(fantrax.Player) float64 { return 10 }, nil); err != nil {
 		t.Errorf("healthy day returned %v, want nil", err)
 	}
 }

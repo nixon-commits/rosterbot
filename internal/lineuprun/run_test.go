@@ -90,6 +90,9 @@ func (f *fakeLineupClient) GetGSLimits(_ string, _ fantrax.WeeklyPeriod) (*int, 
 func (f *fakeLineupClient) GetTeamGS(_, _ string, _ fantrax.ScoringPeriod, _, _ time.Time, _ int, _ bool) (int, []fantrax.PitcherStart, error) {
 	return f.usedGS, nil, nil
 }
+func (f *fakeLineupClient) GetTeamPitcherDays(_ string, _, _, _ time.Time, _ string, _ time.Duration) ([]fantrax.PitcherDay, error) {
+	return nil, nil
+}
 func (f *fakeLineupClient) GetRecentPitcherStats(_ fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error) {
 	return map[string]fantrax.RecentStat{}, nil
 }

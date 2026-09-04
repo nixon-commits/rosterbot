@@ -217,6 +217,7 @@ type LineupClient interface {
 	GetPitcherRosterForPeriod(period fantrax.DailyPeriod) ([]fantrax.Player, error)
 	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
 	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
+	GetTeamPitcherDays(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.PitcherDay, error)
 	GetRecentPitcherStats(currentPeriod fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error)
 	ApplyLineup(period fantrax.DailyPeriod, active []fantrax.PlayerSlot, reserve []string) error
 	InvalidatePeriodRosterCache(period fantrax.DailyPeriod) error
@@ -511,6 +512,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 			PeriodsErr:      periodsErr,
 			PitcherRoster:   pitcherRoster,
 			NumPitcherSlots: len(pitcherSlots),
+			NoCache:         opts.NoCache,
 			ProjPts: func(p fantrax.Player) float64 {
 				return pitcherProjectedPts(p, pitcherProjSrc, pitcherScoring)
 			},
