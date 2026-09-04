@@ -203,3 +203,140 @@ func TestBuildspec_GoCacheDirsArePinnedAndCached(t *testing.T) {
 		}
 	}
 }
+
+// The CI deploy retries a specific, self-clearing failure instead of dying
+// to it, and does NOT retry anything else.
+//
+// ConcurrentBuildLimit stays -1 (infra.go, rosterbot-7p1i/rosterbot-ill):
+// CodeBuild's limit THROTTLES the excess build rather than queueing it, so
+// raising it back above -1 would silently DISCARD a build with no record, no
+// log and no Pushover — worse than the race it would "fix". The real,
+// remaining problem is that nothing serializes two builds that both reach
+// `cdk deploy` on InfraStack within a few minutes of each other; the loser's
+// CloudFormation UpdateStack fails while the stack is still ..._IN_PROGRESS
+// from the winner, and that lock clears on its own within minutes. This test
+// pins that the deploy line routes through infra/cdk_deploy_retry.sh (rather
+// than a bare `cdk deploy`) and that the script names a bounded attempt
+// count and the signature list the retry decision is keyed on — not just
+// that SOME retrying happens, since a loop with no bound or an
+// unconditional retry would silently mask a real deploy failure forever.
+// The retry DECISION itself (does this specific canned output retry, does
+// that one not) is exercised as running shell code, not grepped text, by
+// TestIsConcurrentUpdateFailure_* and TestCdkDeployWithRetry_* in
+// cdk_deploy_retry_test.go.
+func TestBuildspec_RetriesCdkDeployOnConcurrentUpdate(t *testing.T) {
+	buildspecRaw, err := os.ReadFile("../buildspec.yml")
+	if err != nil {
+		t.Fatalf("read buildspec: %v", err)
+	}
+	buildspec := string(buildspecRaw)
+
+	deployLine := ""
+	for _, line := range strings.Split(buildspec, "\n") {
+		code, _, _ := strings.Cut(line, "#")
+		if strings.Contains(code, "cdk deploy") {
+			deployLine = strings.TrimSpace(code)
+			break
+		}
+	}
+	if deployLine == "" {
+		t.Fatal("buildspec.yml contains no `cdk deploy` line; this test is asserting against nothing")
+	}
+	if !strings.Contains(deployLine, "cdk_deploy_retry.sh") {
+		t.Fatalf("buildspec.yml's cdk deploy line does not route through cdk_deploy_retry.sh:\n\t%s\n"+
+			"a bare `cdk deploy` dies unretried on the transient stack-lock failure two builds "+
+			"landing minutes apart can both hit (rosterbot-udd)", deployLine)
+	}
+
+	scriptRaw, err := os.ReadFile("cdk_deploy_retry.sh")
+	if err != nil {
+		t.Fatalf("read cdk_deploy_retry.sh: %v", err)
+	}
+	script := string(scriptRaw)
+
+	if !strings.Contains(script, `CDK_DEPLOY_RETRY_MAX_ATTEMPTS="${CDK_DEPLOY_RETRY_MAX_ATTEMPTS:-5}"`) {
+		t.Error("cdk_deploy_retry.sh does not default CDK_DEPLOY_RETRY_MAX_ATTEMPTS to a bounded count; " +
+			"an unbounded retry on a genuinely stuck stack would hang the build forever instead of failing loudly")
+	}
+
+	// Every signature the brief and the live incidents named must be present
+	// literally — a rewrite that drops one narrows the retry silently, with
+	// no test failure anywhere else to catch it.
+	wantSignatures := []string{
+		"UPDATE_IN_PROGRESS",
+		"CREATE_IN_PROGRESS",
+		"_IN_PROGRESS state",
+		"is currently being updated",
+		"OperationInProgressException",
+		"ResourceConflictException",
+		"cannot be updated",
+		"can not be updated",
+	}
+	for _, sig := range wantSignatures {
+		if !strings.Contains(script, sig) {
+			t.Errorf("cdk_deploy_retry.sh's concurrent-update matcher does not mention %q; "+
+				"the CDK CLI surfaces CloudFormation's message TEXT (which varies) far more often "+
+				"than a stable exception class, so this signature must be matched literally", sig)
+		}
+	}
+
+	// The non-retry path must still propagate a real failure. Grep-only
+	// coverage of "the script exits nonzero somewhere" would pass on a
+	// script that swallows the final error; require the specific pattern
+	// that carries the deploy's own exit code out of the function.
+	if !strings.Contains(script, "return \"$rc\"") {
+		t.Error(`cdk_deploy_retry.sh does not appear to return the deploy's own exit code ($rc) on ` +
+			"a non-matching failure or exhausted retries; masking it with a fixed exit status would " +
+			"turn a real deploy failure into a misleading one")
+	}
+}
+
+// A missing or incomplete cdk-outputs.json fails the build with an explicit,
+// legible message naming what's missing — BEFORE the two python one-liners
+// that read DashboardBucketName / DashboardCdnId out of it, whose only
+// failure signal used to be a bare KeyError/FileNotFoundError traceback.
+func TestBuildspec_FailsExplicitlyOnMissingOutputs(t *testing.T) {
+	raw, err := os.ReadFile("../buildspec.yml")
+	if err != nil {
+		t.Fatalf("read buildspec: %v", err)
+	}
+	buildspec := string(raw)
+
+	checkIdx := strings.Index(buildspec, "cdk-outputs.json: not found")
+	if checkIdx == -1 {
+		t.Fatal("buildspec.yml has no explicit check naming a missing cdk-outputs.json; " +
+			"a missing file must fail with a message that says so, not a bare traceback")
+	}
+	if !strings.Contains(buildspec, "missing key(s)") {
+		t.Fatal("buildspec.yml's explicit outputs check does not name a missing key; " +
+			"DashboardBucketName/DashboardCdnId absent from InfraStack must fail with a message " +
+			"naming which key is missing")
+	}
+
+	firstReadIdx := strings.Index(buildspec, `json.load(open("cdk-outputs.json"))["InfraStack"]["DashboardBucketName"]`)
+	if firstReadIdx == -1 {
+		t.Fatal(`buildspec.yml no longer reads DashboardBucketName the expected way; update this test's needle`)
+	}
+	if checkIdx >= firstReadIdx {
+		t.Fatalf("the explicit missing-outputs check (offset %d) does not precede the first "+
+			"unguarded python read of cdk-outputs.json (offset %d); a missing file/key must fail "+
+			"at the explicit check, not three lines later as a bare traceback", checkIdx, firstReadIdx)
+	}
+
+	// The explicit check must actually run under CI (i.e. it isn't dead
+	// commented-out prose) and must gate on both required keys.
+	for _, key := range []string{"DashboardBucketName", "DashboardCdnId"} {
+		found := false
+		for _, line := range strings.Split(buildspec, "\n") {
+			code, _, _ := strings.Cut(line, "#")
+			if strings.Contains(code, key) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("buildspec.yml never references %q outside a comment; the explicit check must "+
+				"name both required keys", key)
+		}
+	}
+}

@@ -133,10 +133,47 @@ phases:
       # and no human inspects a CI deploy before it lands. Direct UpdateStack
       # still rolls back on failure; only the unread preview is dropped.
       # TestBuildspec_DeploysWithoutAChangeset pins it.
+      #
+      # Wrapped in cdk_deploy_retry.sh (rosterbot-udd): ConcurrentBuildLimit
+      # stays -1 (infra.go, rosterbot-7p1i/rosterbot-ill) because CodeBuild's
+      # limit THROTTLES the excess build rather than queueing it — a second
+      # build inside the limit is silently DISCARDED, never even recorded.
+      # The real, remaining problem is unserialized: two builds landing a few
+      # minutes apart both reach `cdk deploy` on InfraStack, and the loser's
+      # CloudFormation UpdateStack fails with the stack still
+      # UPDATE_IN_PROGRESS from the winner — a lock that clears on its own
+      # within a few minutes. cdk_deploy_retry.sh retries ONLY that specific,
+      # self-clearing signature (bounded attempts, backoff) and still exits
+      # non-zero on any other failure or once attempts are exhausted, so
+      # `set -e` here keeps failing the build loudly rather than trading one
+      # silent failure mode for another. See infra/cdk_deploy_retry.sh and
+      # TestBuildspec_RetriesCdkDeployOnConcurrentUpdate.
       - |
         set -e
-        cd infra && cdk deploy --all -c enableBuild=true --require-approval never --method=direct --outputs-file ../cdk-outputs.json
+        cd infra && bash cdk_deploy_retry.sh ../cdk-deploy.log -- cdk deploy --all -c enableBuild=true --require-approval never --method=direct --outputs-file ../cdk-outputs.json
         cd ..
+      # Fail EXPLICITLY, naming exactly what's missing, if the deploy above
+      # did not leave a usable outputs file (rosterbot-udd). Before this, a
+      # missing file or key surfaced three steps later as a bare
+      # KeyError/FileNotFoundError traceback out of the python one-liners
+      # below — legible only to someone who already suspected the deploy,
+      # not to whoever opens the log first.
+      - |
+        set -eu
+        python3 -c '
+        import json, sys
+        try:
+            with open("cdk-outputs.json") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            sys.exit("cdk-outputs.json: not found -- the deploy step above did not write an outputs file")
+        stack = data.get("InfraStack")
+        if stack is None:
+            sys.exit("cdk-outputs.json: no InfraStack key")
+        missing = [k for k in ("DashboardBucketName", "DashboardCdnId") if k not in stack]
+        if missing:
+            sys.exit("cdk-outputs.json InfraStack: missing key(s): " + ", ".join(missing))
+        '
       # Publish the static dashboard on every build, including the first build
       # that created its bucket and distribution above.
       - |

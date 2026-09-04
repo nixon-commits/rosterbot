@@ -1210,6 +1210,16 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			// successfully built commit, so a trigger that fails for a reason
 			// nobody predicted still surfaces. This one failed for a reason
 			// everybody thought was already fixed.
+			//
+			// The race two concurrent builds' `cdk deploy` can hit (both reach
+			// InfraStack within a few minutes of each other; the loser's
+			// UpdateStack fails while the stack is still ..._IN_PROGRESS from the
+			// winner) is now retried automatically at the deploy step itself —
+			// see buildspec.yml's post_build and infra/cdk_deploy_retry.sh
+			// (rosterbot-udd). That lock clears on its own within minutes, so the
+			// bounded retry there resolves most instances of this race without
+			// waiting on a human's next push; anything else still fails the build
+			// loudly, same as before.
 			ConcurrentBuildLimit: jsii.Number(-1),
 		})
 		// The other half of rosterbot-ill (set -e in the buildspec's cdk block, so a
