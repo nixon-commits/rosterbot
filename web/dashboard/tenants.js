@@ -7,6 +7,7 @@
 // connection error string).
 import { api, ApiError } from "./api.js";
 import { el, relativeTime, renderAuto } from "./render.js";
+import { CONNECT_CHIP, FAILURE_COPY } from "./connstate.js";
 
 const CONN_TONE = {
   verified: ["Connected", "badge-ok"],
@@ -319,22 +320,20 @@ function actionsCell(t, root, parked) {
 }
 
 // tenantRunsCard renders one tenant's full run ledger (GET
-// /v1/tenants/{id}/runs) and, on a row click, that run's captured output (GET
+// /v1/tenants/{id}/runs) and, on a row click, that run's detail — log tail,
+// exit code, connect verdict (GET /v1/tenants/{id}/runs/{runID},
+// rosterbot-iymz) — plus that run's captured output (GET
 // /v1/tenants/{id}/runs/{runID}/output) — the admin drill-down rosterbot-f0th
 // adds below the bounded Runs cell.
-//
-// There is no per-tenant run-DETAIL route (no log tail here, unlike runs.js's
-// own showDetail), so a clicked row shows only what the output route can
-// answer — this stays a small, additive card rather than a reimplementation of
-// runs.js's detail view.
 function tenantRunsCard(t) {
   const name = t.display_name || t.email || String(t.id);
   const c = el("section", "card");
   c.append(el("h2", null, `Runs — ${name}`));
 
   const list = el("div");
+  const detailSection = el("div");
   const outputSection = el("div");
-  c.append(list, outputSection);
+  c.append(list, detailSection, outputSection);
 
   api.tenantRuns(t.id).then((resp) => {
     const runs = resp.runs || [];
@@ -356,7 +355,10 @@ function tenantRunsCard(t) {
       statusTd.append(el("span", `badge badge-${run.status.toLowerCase()}`, run.status));
       tr.append(statusTd);
       tr.append(el("td", null, relativeTime(run.started_at)));
-      tr.addEventListener("click", () => loadTenantRunOutput(outputSection, t.id, run));
+      tr.addEventListener("click", () => {
+        loadTenantRunDetail(detailSection, t.id, run.id);
+        loadTenantRunOutput(outputSection, t.id, run);
+      });
       tbody.append(tr);
     }
     table.append(thead, tbody);
@@ -366,6 +368,59 @@ function tenantRunsCard(t) {
   });
 
   return c;
+}
+
+// loadTenantRunDetail fetches and renders one run's log tail, exit code and
+// connect verdict into detailSection. A failed or missing fetch degrades to an
+// empty section rather than an error banner: loadTenantRunOutput (called
+// alongside this from the same row click) still has something to show, and a
+// FAILED run's log tail is the whole point of a route that can fail to answer
+// for reasons unrelated to that run — an old ledger record predating this
+// route, or a store hiccup.
+async function loadTenantRunDetail(detailSection, tenantID, runID) {
+  detailSection.textContent = "";
+  try {
+    const detail = await api.tenantRunDetail(tenantID, runID);
+    const card = el("div", "card");
+    card.append(el("p", null,
+      `Exit code: ${detail.exit_code === null || detail.exit_code === undefined ? "—" : detail.exit_code}`));
+    const chip = tenantConnectChip(detail);
+    if (chip) {
+      const p = el("p");
+      p.append(chip);
+      card.append(p);
+    }
+    if (detail.log_tail) {
+      const pre = document.createElement("pre");
+      pre.textContent = detail.log_tail;
+      card.append(pre);
+    }
+    detailSection.append(card);
+  } catch {
+    // Silent: see the function comment. The output section fetched alongside
+    // this still renders on its own.
+  }
+}
+
+// tenantConnectChip mirrors runs.js's connectChip exactly (same connstate.js
+// vocabulary, same "absent means not attributable" contract) — duplicated
+// rather than imported because runs.js does not export it, and this card's
+// row shape (a tenant-scoped RunDetail) is otherwise identical to runs.js's
+// own detail view.
+function tenantConnectChip(detail) {
+  const c = detail.connect;
+  if (!c) return null;
+  const span = document.createElement("span");
+  if (c.verdict === "verified") {
+    span.className = "badge badge-ok";
+    span.textContent = "connected";
+    return span;
+  }
+  span.className = "badge badge-failed";
+  const why = c.last_error ? ": " + (CONNECT_CHIP[c.last_error] || c.last_error) : "";
+  span.textContent = "connection failed" + why;
+  if (c.last_error && FAILURE_COPY[c.last_error]) span.title = FAILURE_COPY[c.last_error];
+  return span;
 }
 
 // loadTenantRunOutput fetches and renders one run's captured output into

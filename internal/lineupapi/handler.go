@@ -148,6 +148,7 @@ type Config struct {
 //	POST   /v1/tenants/{id}/recovery             -> mint a re-enrollment link for an existing tenant
 //	DELETE /v1/tenants/{id}                      -> delete a tenant, releasing its email/team claims
 //	GET    /v1/tenants/{id}/runs                 -> that tenant's full run ledger (admin drill-down)
+//	GET    /v1/tenants/{id}/runs/{runID}         -> that tenant's detail for one run (log tail, connect verdict)
 //	GET    /v1/tenants/{id}/runs/{runID}/output  -> that tenant's captured stdout for one run
 //	POST   /v1/me/preferences                    -> update the caller's own auto_apply
 //	POST   /v1/connect                           -> store sealed Fantrax credentials
@@ -196,12 +197,14 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("POST /v1/tenants/{id}/recovery", cfg.handleTenantRecovery)
 	mux.HandleFunc("DELETE /v1/tenants/{id}", cfg.handleDeleteTenant)
 	// Admin drill-down (rosterbot-f0th, following the bounded row summary
-	// rosterbot-nejq put on GET /v1/tenants): the full ledger for one tenant
-	// and one of their runs' captured output. NESTED under /v1/tenants/{id}/
-	// so the adminOnlyRoutes prefix reaches them the same way it reaches the
-	// rest of this block — see TestTenantRuns_MemberForbidden and
-	// TestTenantRunOutput_MemberForbidden.
+	// rosterbot-nejq put on GET /v1/tenants): the full ledger for one tenant,
+	// one of their runs' detail (log tail, exit code, connect verdict —
+	// rosterbot-iymz), and that run's captured output. NESTED under
+	// /v1/tenants/{id}/ so the adminOnlyRoutes prefix reaches them the same
+	// way it reaches the rest of this block — see TestTenantRuns_MemberForbidden,
+	// TestTenantRun_MemberForbidden and TestTenantRunOutput_MemberForbidden.
 	mux.HandleFunc("GET /v1/tenants/{id}/runs", cfg.handleTenantRuns)
+	mux.HandleFunc("GET /v1/tenants/{id}/runs/{runID}", cfg.handleTenantRun)
 	mux.HandleFunc("GET /v1/tenants/{id}/runs/{runID}/output", cfg.handleTenantRunOutput)
 	mux.HandleFunc("POST /v1/me/preferences", cfg.handleSetPreferences)
 	mux.HandleFunc("POST /v1/connect", cfg.handleConnect)
