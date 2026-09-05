@@ -189,9 +189,11 @@ func TestAdjustedForLeague_LargerLeaguesDiscountLess(t *testing.T) {
 //
 // The 0.78 ceiling IS observed -- observation 14 is 24 assets deep, so its
 // 23rd and 24th assets are capped. The max(0, ...) floor on the base rate is
-// NOT observable: it needs a 48-team league and HKB's picker stops at 30
-// (out-of-range URL values fall back to 8). It is carried because HKB's own
-// client-side code carries it, and is marked as such.
+// NOT observable: the base only goes negative above a 48-team league (at
+// exactly 48 it merely reaches zero on its own, so the clamp isn't exercised
+// until 49+), and HKB's picker stops at 30 (out-of-range URL values fall back
+// to 8). It is carried because HKB's own client-side code carries it, and is
+// marked as such.
 func TestPackageDiscount_LadderIsPinned(t *testing.T) {
 	cases := []struct {
 		k, league int
@@ -207,8 +209,8 @@ func TestPackageDiscount_LadderIsPinned(t *testing.T) {
 		{21, 12, 0.78, "exactly at the ceiling"},
 		{22, 12, 0.78, "clamped by the ceiling"},
 		{40, 12, 0.78, "still clamped"},
-		{1, 48, 0.02, "base floors at zero -- read from HKB's code, not observable in their UI"},
-		{1, 60, 0.02, "and stays floored"},
+		{1, 48, 0.02, "base reaches zero here; the clamp does not yet bind"},
+		{1, 60, 0.02, "base goes negative here; the clamp binds -- read from HKB's code, not observable in their UI"},
 	}
 	for _, c := range cases {
 		if got := PackageDiscount(c.k, c.league); math.Abs(got-c.want) > 1e-9 {

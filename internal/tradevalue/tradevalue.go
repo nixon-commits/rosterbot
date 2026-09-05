@@ -21,9 +21,15 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 )
 
-// DefaultLeagueSize is the team count Adjusted() prices at. It is HKB's own
-// calculator default, which is what makes an adjusted figure here comparable
-// to the number a league mate reads off their screen.
+// DefaultLeagueSize is the team count Adjusted() prices at. Jon's own league
+// runs TEN teams (the season cache holds per-period snapshots for exactly ten
+// Fantrax team ids), not twelve — this constant is deliberately NOT that
+// number. It is HKB's own calculator default, so Adjusted() reproduces the
+// figure a league mate reads off HKB's own calculator without changing the
+// setting, rather than the figure that is locally accurate. The cost of that
+// choice: at 10 teams the base discount is 0.38, not 0.36 -- every non-top
+// asset is 2pp harder to trade than this constant implies. A caller that
+// wants the real count instead should use AdjustedForLeague.
 const DefaultLeagueSize = 12
 
 // The package-discount ladder, MEASURED against HKB's calculator on 2026-09-04
@@ -71,10 +77,12 @@ const (
 // high value player".
 //
 // The max(0, ...) floor on the base is the one term here NOT confirmed by
-// observation: it only bites at 48 teams or more, and HKB's picker stops at 30
-// (an out-of-range value in their URL falls back to 8, so it cannot be reached
-// that way either). It is carried because their client-side code carries it,
-// and it is flagged rather than quietly asserted.
+// observation: the unclamped base only goes negative above 48 teams (at
+// exactly 48 it already reaches zero on its own, so the clamp binds above 48,
+// not at 48), and HKB's picker stops at 30 (an out-of-range value in their URL
+// falls back to 8, so it cannot be reached that way either). It is carried
+// because their client-side code carries it, and it is flagged rather than
+// quietly asserted.
 func PackageDiscount(k, leagueSize int) float64 {
 	if k <= 0 {
 		return 0
