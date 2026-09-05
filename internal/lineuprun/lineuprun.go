@@ -528,6 +528,12 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		for _, line := range dec.Logs {
 			prog.Logf("%s", line)
 		}
+		// Notices go to out, not prog.Logf: Logf is verbose-only, and these are
+		// the lines (start-rate coverage, its soft-fail WARNING) that exist to
+		// keep a silent degradation visible in production. See GSDecision.Notices.
+		for _, line := range dec.Notices {
+			fmt.Fprintf(out, "  %s\n", line)
+		}
 		if dec.Alert != nil {
 			if perr := notify.Send(ctx, notify.Event{Kind: "alert", Title: dec.Alert.Title, Message: dec.Alert.Message}); perr != nil {
 				prog.Logf("WARNING: failed to record GS alert: %v", perr)
