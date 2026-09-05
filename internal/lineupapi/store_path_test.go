@@ -109,7 +109,7 @@ func TestFileStore_LiveKeyShapesStillRoundTrip(t *testing.T) {
 		ReportModelKey, ReportGapKey, ReportViewsKey,
 		"2026-09-02",                          // the dated lineup lineuprun publishes
 		"05p5r-2026-09-02",                    // ilStartMarkerKey: (player id, start date)
-		"2026-p21",                            // gsFloorMarkerKey: (season, weekly period)
+		"2026-p22-d2",                         // gsFloorMarkerKey: (season, weekly period, days left)
 		"stale-fangraphs-bat-depthcharts-ros", // staleMarkerKey over a cache key
 		"1136419849512345678",                 // a Sleeper transaction id (football trade markers)
 		"tm4x9",                               // a Fantrax team id (roster values)
