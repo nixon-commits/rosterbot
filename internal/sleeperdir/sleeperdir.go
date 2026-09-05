@@ -16,8 +16,8 @@ import (
 // client is the slice of *sleeper.Client this adapter uses, named as an
 // interface so the test can stub it without an httptest server.
 type client interface {
-	UserByName(username string) (*sleeper.User, error)
-	LeaguesForUser(userID, sport, season string) ([]sleeper.League, error)
+	UserByName(ctx context.Context, username string) (*sleeper.User, error)
+	LeaguesForUser(ctx context.Context, userID, sport, season string) ([]sleeper.League, error)
 }
 
 // Pin the real client against the interface here rather than leaving it to
@@ -46,23 +46,20 @@ func New(cacheDir string) *Directory {
 // answers "which team in this league is yours" and it saves the client a
 // second round trip when it stores the membership.
 //
-// The ctx is DROPPED, and the interface promising otherwise is why that is
-// worth saying out loud. internal/sleeper is deliberately non-context, like
-// internal/schedule — so a caller's cancellation, including an HTTP client
-// hanging up, reaches nothing here. The only bound is sleeper.Client's own 10s
-// timeout, applied per call: two sequential calls means a wedged Sleeper can
-// hold a request for ~20s and there is no way to cut it short. Threading a ctx
-// through means giving internal/sleeper context-aware methods, which is a
-// change to that package's shape rather than to this adapter.
-func (d *Directory) LeaguesForUsername(_ context.Context, username, sport, season string) ([]lineupapi.SleeperLeague, error) {
-	u, err := d.client.UserByName(username)
+// ctx now reaches both calls: internal/sleeper's HTTP methods are
+// context-aware (noctx compliance, rosterbot-6fpv), so a caller's
+// cancellation — including an HTTP client hanging up — cuts short whichever
+// of the two sequential requests is in flight instead of always waiting out
+// sleeper.Client's own 10s per-call timeout.
+func (d *Directory) LeaguesForUsername(ctx context.Context, username, sport, season string) ([]lineupapi.SleeperLeague, error) {
+	u, err := d.client.UserByName(ctx, username)
 	if err != nil {
 		if errors.Is(err, sleeper.ErrUserNotFound) {
 			return nil, lineupapi.ErrSleeperUserUnknown
 		}
 		return nil, err
 	}
-	ls, err := d.client.LeaguesForUser(u.UserID, sport, season)
+	ls, err := d.client.LeaguesForUser(ctx, u.UserID, sport, season)
 	if err != nil {
 		return nil, err
 	}

@@ -121,7 +121,8 @@ rosterbot optimize --dry-run
 rosterbot optimize --dry-run --dates 2026-04-01
 rosterbot optimize --dry-run --dates 2026-03-26:2026-03-28
 
-# All remaining days in the current matchup period (what the hourly job runs)
+# All remaining days in the current matchup period (what the once-daily
+# matchup pre-write job runs; the hourly job runs today only)
 rosterbot optimize --dry-run --matchup
 
 # Show the full hitter adjustment pipeline: base → blend → park → platoon → opp SP → final
@@ -232,12 +233,14 @@ covers, because 25 records is roughly a day and a half of the hourly lineup job
 reason only the tenant can fix exits 0 on purpose, so it is labelled by the
 connect task's own verdict rather than by its exit status.
 
-Each row's **Runs** button opens that tenant's full ledger and, on a row
-click, that run's captured output (`GET /v1/tenants/{id}/runs` and
-`GET /v1/tenants/{id}/runs/{runID}/output`) — the drill-down an operator
-reaches for once the bounded summary above flags a tenant. Both are nested
-under `/v1/tenants/{id}/`, inheriting the same admin-only gate, and resolve
-the named tenant's own stores rather than the caller's.
+Each row's **Runs** button opens that tenant's full ledger
+(`GET /v1/tenants/{id}/runs`) and, on a row click, that run's log tail, exit
+code and connect verdict (`GET /v1/tenants/{id}/runs/{runID}`, rosterbot-iymz)
+alongside its captured output (`GET /v1/tenants/{id}/runs/{runID}/output`) —
+the drill-down an operator reaches for once the bounded summary above flags a
+tenant. All three are nested under `/v1/tenants/{id}/`, inheriting the same
+admin-only gate, and resolve the named tenant's own stores rather than the
+caller's.
 
 The token is printed **once** and is not recoverable: only its SHA-256 is
 stored, so a leak of the identity table yields no usable links. The link is
@@ -436,12 +439,13 @@ The bot's game day, ordered by clock (times shown in ET for reading; the authori
 
 | When (ET) | Job | Command | Schedule (as configured) |
 |---|---|---|---|
-| Hourly, 11a–10p | Set the lineup | `optimize --matchup` | every hour 8am–7pm **PT** |
+| Hourly, 11a–10p | Set today's lineup | `optimize` | every hour 8am–7pm **PT** |
 | 6:30a | API version check | `version-check` | 10:30 UTC daily |
 | 7:00a | Prospects | `prospects` | 7am ET daily |
 | 8:00a | GS check | `gs-check` | 8am ET daily |
 | 9:00a | Waivers | `waivers` | 9am ET daily |
 | 9:30a | Grade projections | `grade` | 13:30 UTC daily |
+| 9:45a | Pre-write matchup week | `optimize --matchup` | 13:45 UTC daily |
 | 10:00a | Claims recap | `claims` | 10am ET daily |
 | 10:00a | Trades | `transactions` | 10am ET daily |
 | 10:00a | Archive | `archive` | 14:00 UTC daily |
@@ -449,6 +453,8 @@ The bot's game day, ordered by clock (times shown in ET for reading; the authori
 | 11:00a | Dashboard data | `projection-site --out report` | 15:00 UTC daily |
 | 7:00a Mon | Weekly recap site | `recap-site --out dist` | 7am ET Mondays |
 | 7:40p | Shadow capture | `shadow` | 23:40 UTC daily |
+
+The hourly `optimize` run is **today-only** — an hourly cadence can only legitimately learn anything new about today (late scratches, probables firming up), and re-deciding a future day's lineup every hour was pure churn (measured: 84% of lineup notifications were future-dated `--matchup` speculation re-decided the next hour, with individual players re-flipped 20-30+ times for one future date). The once-daily `optimize --matchup` pass pre-writes the rest of the current matchup week instead, ahead of the hourly window opening at 14:00 UTC.
 
 `entrypoint.sh` publishes the recap site from `./dist` to `SITE_BUCKET`, and the **public** dashboard data (`report/value.json`, `report/football.json` + `report/football-trades.json`) into `DASHBOARD_BUCKET`'s `report/` prefix — the same CloudFront distribution as the dashboard SPA. Any job can also be launched on demand as a one-off Fargate task (or via `POST /v1/jobs/{name}` — see below).
 

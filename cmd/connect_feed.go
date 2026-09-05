@@ -131,13 +131,17 @@ func connectFailureMessage(class string) string {
 //
 // Separated from recordConnectFailure so the routing decision is testable
 // without the network, and so the one place that decides WHO hears about a
-// failure is not also the place that knows how to send.
+// failure is not also the place that knows how to send. Its signature is the
+// fixed `func(string)` shape connectDeps.push carries (both here and in the
+// session ladder), so it has no request-scoped context to accept — this is
+// the outermost point, and context.Background() here is explicit rather than
+// threaded blindly deeper.
 func notifyOperator(message string) {
 	user, token := os.Getenv("PUSHOVER_USER_KEY"), os.Getenv("PUSHOVER_API_TOKEN")
 	if user == "" || token == "" {
 		return
 	}
-	if err := notify.SendPushover(user, token, "rosterbot: connect blocked", message); err != nil {
+	if err := notify.SendPushover(context.Background(), user, token, "rosterbot: connect blocked", message); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not alert the operator: %v\n", err)
 	}
 }

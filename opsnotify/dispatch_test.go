@@ -12,7 +12,7 @@ func capture(t *testing.T) *[]string {
 	t.Helper()
 	prev := send
 	var got []string
-	send = func(title, message string) error {
+	send = func(_ context.Context, title, message string) error {
 		got = append(got, title+"|"+message)
 		return nil
 	}

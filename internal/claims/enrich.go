@@ -1,6 +1,7 @@
 package claims
 
 import (
+	"context"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
@@ -59,13 +60,13 @@ func resolveAddedIDs(moves []Move, cacheDir string) {
 
 // enrichProjections fills ProjectedFPG for added players from FanGraphs
 // depthcharts projections, scored with the league weights. Best-effort.
-func enrichProjections(moves []Move, hitterWeights, pitcherWeights fantrax.ScoringWeights, cacheDir string, ttl time.Duration) {
-	bat, _, err := projections.LoadBattingProjections(projections.ProjectionDepthCharts, cacheDir, ttl)
+func enrichProjections(ctx context.Context, moves []Move, hitterWeights, pitcherWeights fantrax.ScoringWeights, cacheDir string, ttl time.Duration) {
+	bat, _, err := projections.LoadBattingProjections(ctx, projections.ProjectionDepthCharts, cacheDir, ttl)
 	if err != nil {
 		return
 	}
 	// Pitcher load is best-effort and independent; perr is checked per-player below.
-	pit, _, perr := projections.LoadPitcherProjections(projections.ProjectionDepthCharts, cacheDir, ttl)
+	pit, _, perr := projections.LoadPitcherProjections(ctx, projections.ProjectionDepthCharts, cacheDir, ttl)
 	for mi := range moves {
 		for pi := range moves[mi].Added {
 			p := &moves[mi].Added[pi]

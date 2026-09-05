@@ -55,24 +55,24 @@ func runFootballTrades(cmd *cobra.Command, args []string) error {
 	}
 	ctx := context.Background()
 
-	state, err := sc.State()
+	state, err := sc.State(ctx)
 	if err != nil {
 		return fmt.Errorf("sleeper state: %w", err)
 	}
-	rosters, err := sc.Rosters(cfg.SleeperLeagueID)
+	rosters, err := sc.Rosters(ctx, cfg.SleeperLeagueID)
 	if err != nil {
 		return fmt.Errorf("sleeper rosters: %w", err)
 	}
-	users, err := sc.Users(cfg.SleeperLeagueID)
+	users, err := sc.Users(ctx, cfg.SleeperLeagueID)
 	if err != nil {
 		return fmt.Errorf("sleeper users: %w", err)
 	}
-	players, err := sc.PlayersNFL()
+	players, err := sc.PlayersNFL(ctx)
 	if err != nil {
 		return fmt.Errorf("sleeper players: %w", err)
 	}
 
-	bundle, err := statsguy.LoadBundle(cacheDir, cacheTTL(statsguy.CacheTTL))
+	bundle, err := statsguy.LoadBundle(ctx, cacheDir, cacheTTL(statsguy.CacheTTL))
 	if err != nil {
 		return fmt.Errorf("statsguy bundle: %w", err)
 	}
@@ -81,7 +81,7 @@ func runFootballTrades(cmd *cobra.Command, args []string) error {
 
 	var trades []sleeper.Transaction
 	for _, week := range pollWeeks(state) {
-		txns, err := sc.Transactions(cfg.SleeperLeagueID, week)
+		txns, err := sc.Transactions(ctx, cfg.SleeperLeagueID, week)
 		if err != nil {
 			return fmt.Errorf("sleeper transactions (week %d): %w", week, err)
 		}

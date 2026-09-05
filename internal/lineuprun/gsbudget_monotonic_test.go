@@ -25,7 +25,7 @@ func TestComputeGSBudget_SpentStartsSurviveAPitcherBeingBenched(t *testing.T) {
 	}
 	ft := healthyGS()
 
-	morning := ComputeGSBudget(ft, sched, gsInputs())
+	morning := ComputeGSBudget(t.Context(), ft, sched, gsInputs())
 	if morning.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(morning))
 	}
@@ -35,7 +35,7 @@ func TestComputeGSBudget_SpentStartsSurviveAPitcherBeingBenched(t *testing.T) {
 	// start he already made has changed.
 	benched := gsInputs()
 	benched.PitcherRoster[0].Status = "Reserve"
-	evening := ComputeGSBudget(ft, sched, benched)
+	evening := ComputeGSBudget(t.Context(), ft, sched, benched)
 	if evening.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(evening))
 	}
@@ -57,7 +57,7 @@ func TestComputeGSBudget_SpentStartsSurviveAPitcherBeingBenched(t *testing.T) {
 func TestComputeGSBudget_WalkCoversThroughToday(t *testing.T) {
 	ft := healthyGS()
 
-	ComputeGSBudget(ft, &fakeSchedule{}, gsInputs())
+	ComputeGSBudget(t.Context(), ft, &fakeSchedule{}, gsInputs())
 
 	today := day(2026, 7, 25)
 	if !ft.gsFor.EndDate.Equal(today) {
@@ -92,7 +92,7 @@ func TestComputeGSBudget_UsedIgnoresLiveRosterStatus(t *testing.T) {
 			in := gsInputs()
 			tc.apply(&in.PitcherRoster[0])
 
-			got := ComputeGSBudget(healthyGS(), sched, in)
+			got := ComputeGSBudget(t.Context(), healthyGS(), sched, in)
 
 			if got.Budget == nil {
 				t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))

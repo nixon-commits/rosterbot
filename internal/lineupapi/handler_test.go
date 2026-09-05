@@ -142,7 +142,7 @@ func TestHandlerServesPublishedBytes(t *testing.T) {
 	body, _ := Marshal(Build(fakeInputs()))
 	h := Handler(Config{Token: "secret-token", Lineups: fakeStore{data: map[string][]byte{TodayKey: body}}})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/lineup/today", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/lineup/today", nil)
 	req.Header.Set("Authorization", "Bearer secret-token")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -172,7 +172,7 @@ func TestHandlerAuth(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/v1/lineup/today", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/lineup/today", nil)
 			if tc.header != "" {
 				req.Header.Set("Authorization", tc.header)
 			}
@@ -187,7 +187,7 @@ func TestHandlerAuth(t *testing.T) {
 
 func TestHandlerNotFoundWhenNoLineup(t *testing.T) {
 	h := Handler(Config{Token: "t", Lineups: fakeStore{data: map[string][]byte{}}})
-	req := httptest.NewRequest(http.MethodGet, "/v1/lineup/today", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/lineup/today", nil)
 	req.Header.Set("Authorization", "Bearer t")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -235,8 +235,8 @@ func (f *fakeJobs) Run(_ context.Context, _ UserID, command []string) (string, e
 	return f.id, nil
 }
 
-func do(h http.Handler, method, path string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, nil)
+func do(t *testing.T, h http.Handler, method, path string) *httptest.ResponseRecorder {
+	req := httptest.NewRequestWithContext(t.Context(), method, path, nil)
 	req.Header.Set("Authorization", "Bearer t")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -248,7 +248,7 @@ func TestRunsList(t *testing.T) {
 	h := Handler(Config{Token: "t", Runs: fakeRuns{runs: []Run{
 		{ID: "a", Command: "optimize --matchup", Status: "SUCCESS", ExitCode: &ec, StartedAt: "2026-06-17T19:00:00Z", EndedAt: "2026-06-17T19:00:30Z", Trigger: "schedule"},
 	}}})
-	rec := do(h, http.MethodGet, "/v1/runs")
+	rec := do(t, h, http.MethodGet, "/v1/runs")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -263,7 +263,7 @@ func TestRunsList(t *testing.T) {
 
 func TestRunDetailNotFound(t *testing.T) {
 	h := Handler(Config{Token: "t", Runs: fakeRuns{}})
-	if rec := do(h, http.MethodGet, "/v1/runs/missing"); rec.Code != http.StatusNotFound {
+	if rec := do(t, h, http.MethodGet, "/v1/runs/missing"); rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
@@ -272,7 +272,7 @@ func TestJobTriggerMapsCommand(t *testing.T) {
 	jobs := &fakeJobs{id: "task-123"}
 	h := Handler(Config{Token: "t", Jobs: jobs})
 
-	rec := do(h, http.MethodPost, "/v1/jobs/optimize")
+	rec := do(t, h, http.MethodPost, "/v1/jobs/optimize")
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", rec.Code)
 	}
@@ -330,7 +330,7 @@ func TestBuildJobArgs(t *testing.T) {
 
 func TestJobsSchemaEndpoint(t *testing.T) {
 	h := Handler(Config{Token: "t"}) // schema is static, no Jobs runner needed
-	rec := do(h, http.MethodGet, "/v1/jobs")
+	rec := do(t, h, http.MethodGet, "/v1/jobs")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -383,7 +383,7 @@ func TestJobsSchemaEndpoint(t *testing.T) {
 
 func TestJobTriggerUnknown(t *testing.T) {
 	h := Handler(Config{Token: "t", Jobs: &fakeJobs{}})
-	if rec := do(h, http.MethodPost, "/v1/jobs/nonsense"); rec.Code != http.StatusBadRequest {
+	if rec := do(t, h, http.MethodPost, "/v1/jobs/nonsense"); rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
@@ -421,7 +421,7 @@ func TestRunOutputRoundTripPerJob(t *testing.T) {
 
 	h := Handler(Config{Token: "t", Output: fakeOutput{data: samples}})
 	for id, want := range samples {
-		rec := do(h, http.MethodGet, "/v1/runs/"+id+"/output")
+		rec := do(t, h, http.MethodGet, "/v1/runs/"+id+"/output")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: status = %d, want 200", id, rec.Code)
 		}
@@ -436,14 +436,14 @@ func TestRunOutputRoundTripPerJob(t *testing.T) {
 
 func TestRunOutputNotFound(t *testing.T) {
 	h := Handler(Config{Token: "t", Output: fakeOutput{data: map[string][]byte{}}})
-	if rec := do(h, http.MethodGet, "/v1/runs/missing/output"); rec.Code != http.StatusNotFound {
+	if rec := do(t, h, http.MethodGet, "/v1/runs/missing/output"); rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 
 func TestRunOutputNotImplementedWhenNil(t *testing.T) {
 	h := Handler(Config{Token: "t"}) // no Output store wired
-	if rec := do(h, http.MethodGet, "/v1/runs/x/output"); rec.Code != http.StatusNotImplemented {
+	if rec := do(t, h, http.MethodGet, "/v1/runs/x/output"); rec.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d, want 501", rec.Code)
 	}
 }
@@ -461,7 +461,7 @@ func TestNotificationsList(t *testing.T) {
 	h := Handler(Config{Token: "t", Notifications: fakeNotifs{notifs: []Notification{
 		{ID: "1", Kind: "lineup", Title: "Lineup applied", Message: "2 changes", CreatedAt: "2026-06-17T21:00:41Z", RunID: "abc"},
 	}}})
-	rec := do(h, http.MethodGet, "/v1/notifications")
+	rec := do(t, h, http.MethodGet, "/v1/notifications")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -492,10 +492,10 @@ func TestKindFromTitle(t *testing.T) {
 
 func TestRunsNotImplementedWhenNil(t *testing.T) {
 	h := Handler(Config{Token: "t"}) // no Runs/Jobs wired (local serve)
-	if rec := do(h, http.MethodGet, "/v1/runs"); rec.Code != http.StatusNotImplemented {
+	if rec := do(t, h, http.MethodGet, "/v1/runs"); rec.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d, want 501", rec.Code)
 	}
-	if rec := do(h, http.MethodPost, "/v1/jobs/optimize"); rec.Code != http.StatusNotImplemented {
+	if rec := do(t, h, http.MethodPost, "/v1/jobs/optimize"); rec.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d, want 501", rec.Code)
 	}
 }
@@ -508,7 +508,7 @@ func TestHandleRunProgress(t *testing.T) {
 	h := Handler(Config{Token: "t", Progress: ps})
 
 	// present
-	rec := do(h, http.MethodGet, "/v1/runs/run123/progress")
+	rec := do(t, h, http.MethodGet, "/v1/runs/run123/progress")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"phase":"Roster"`) {
 		t.Fatalf("present: code=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -516,13 +516,13 @@ func TestHandleRunProgress(t *testing.T) {
 		t.Fatalf("present: content-type = %q, want application/json", ct)
 	}
 	// missing => 404
-	rec = do(h, http.MethodGet, "/v1/runs/nope/progress")
+	rec = do(t, h, http.MethodGet, "/v1/runs/nope/progress")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("missing: code=%d", rec.Code)
 	}
 	// not configured => 501
 	h2 := Handler(Config{Token: "t"})
-	rec = do(h2, http.MethodGet, "/v1/runs/x/progress")
+	rec = do(t, h2, http.MethodGet, "/v1/runs/x/progress")
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("nil store: code=%d", rec.Code)
 	}
@@ -599,7 +599,7 @@ func TestJobTrigger_RejectsWhenAlreadyRunning(t *testing.T) {
 	jobs := &fakeJobs{id: "should-not-launch"}
 	h := Handler(Config{Token: "t", Runs: runs, Jobs: jobs})
 
-	rec := do(h, http.MethodPost, "/v1/jobs/claims")
+	rec := do(t, h, http.MethodPost, "/v1/jobs/claims")
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", rec.Code)
 	}
@@ -616,7 +616,7 @@ func TestJobTrigger_AllowsWhenPriorRunFinished(t *testing.T) {
 	jobs := &fakeJobs{id: "task-456"}
 	h := Handler(Config{Token: "t", Runs: runs, Jobs: jobs})
 
-	rec := do(h, http.MethodPost, "/v1/jobs/claims")
+	rec := do(t, h, http.MethodPost, "/v1/jobs/claims")
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", rec.Code)
 	}
@@ -631,7 +631,7 @@ func TestHandlerServesPreview(t *testing.T) {
 	body, _ := Marshal(Build(fakeInputs()))
 	h := Handler(Config{Token: "t", Lineups: fakeStore{data: map[string][]byte{PreviewKey: body}}})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/lineup/preview", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/lineup/preview", nil)
 	req.Header.Set("Authorization", "Bearer t")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -648,7 +648,7 @@ func TestHandlerServesPreview(t *testing.T) {
 // answer rather than a fault. The client reads 404 as "no preview".
 func TestHandlerPreviewNotFoundWhenAbsent(t *testing.T) {
 	h := Handler(Config{Token: "t", Lineups: fakeStore{data: map[string][]byte{TodayKey: []byte("{}")}}})
-	req := httptest.NewRequest(http.MethodGet, "/v1/lineup/preview", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/lineup/preview", nil)
 	req.Header.Set("Authorization", "Bearer t")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -673,7 +673,7 @@ func TestHandlerPreviewAndTodayAreDistinct(t *testing.T) {
 		{"/v1/lineup/today", `{"date":"2026-07-24","projected_points":10}`},
 		{"/v1/lineup/preview", `{"date":"2026-07-24","projected_points":99}`},
 	} {
-		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tc.path, nil)
 		req.Header.Set("Authorization", "Bearer t")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -687,7 +687,7 @@ func TestHandlerPreviewAndTodayAreDistinct(t *testing.T) {
 // is not an unauthenticated read just because its content is hypothetical.
 func TestHandlerPreviewRequiresAuth(t *testing.T) {
 	h := Handler(Config{Token: "t", Lineups: fakeStore{data: map[string][]byte{PreviewKey: []byte("{}")}}})
-	req := httptest.NewRequest(http.MethodGet, "/v1/lineup/preview", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/lineup/preview", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {

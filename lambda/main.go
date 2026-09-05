@@ -280,12 +280,12 @@ func loadSSMParam(ctx context.Context, ssmc *ssm.Client, envVar, fallbackName st
 // replaying it through an in-memory recorder. Keeps the handler a plain
 // net/http handler shared with the local `serve` command.
 func adapt(h http.Handler) func(context.Context, events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
-	return func(_ context.Context, evt events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
+	return func(ctx context.Context, evt events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
 		target := evt.RawPath
 		if evt.RawQueryString != "" {
 			target += "?" + evt.RawQueryString
 		}
-		req := httptest.NewRequest(evt.RequestContext.HTTP.Method, target, strings.NewReader(evt.Body))
+		req := httptest.NewRequestWithContext(ctx, evt.RequestContext.HTTP.Method, target, strings.NewReader(evt.Body))
 		for k, v := range evt.Headers {
 			req.Header.Set(k, v)
 		}

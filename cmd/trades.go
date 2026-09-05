@@ -33,7 +33,7 @@ const executedLookback = 30 * 24 * time.Hour
 // Every failure below is the caller's to swallow. This is bolted onto the
 // lineup hot path and must never be able to take it down; the precedent is
 // cmd/grade.go writing lineup gaps.
-func captureTradeOffers(ft *fantrax.Client, cfg *config.Config, now time.Time) error {
+func captureTradeOffers(ctx context.Context, ft *fantrax.Client, cfg *config.Config, now time.Time) error {
 	pending, err := ft.GetPendingTrades()
 	if err != nil {
 		return fmt.Errorf("get pending trades: %w", err)
@@ -50,7 +50,7 @@ func captureTradeOffers(ft *fantrax.Client, cfg *config.Config, now time.Time) e
 		return fmt.Errorf("team %s not found in standings", cfg.TeamID)
 	}
 
-	hkbPlayers, err := hkb.GetPlayers(cacheDir)
+	hkbPlayers, err := hkb.GetPlayers(ctx, cacheDir)
 	if err != nil {
 		return fmt.Errorf("get HKB players: %w", err)
 	}

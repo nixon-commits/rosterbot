@@ -30,7 +30,7 @@ var errUserDirectoryDown = errors.New("user directory down")
 
 func rosterReq(t *testing.T, cfg Config, caller Caller) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/v1/roster/values", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/roster/values", nil)
 	req = req.WithContext(withCaller(req.Context(), caller))
 	rec := httptest.NewRecorder()
 	cfg.handleRosterValues(rec, req)

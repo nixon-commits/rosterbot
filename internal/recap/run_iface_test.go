@@ -89,7 +89,7 @@ func (f *fakeLeadersClient) GetFullPlayerPool() ([]models.PoolPlayer, error) {
 // before any statcast/statsapi network call).
 func TestBuildLeaders_EmptyRosteredNil(t *testing.T) {
 	f := &fakeLeadersClient{pool: []models.PoolPlayer{{FantasyTeamID: ""}}} // unrostered
-	woba, fip := buildLeaders(f, 2026, time.Now().UTC(), "", 0, 5)
+	woba, fip := buildLeaders(t.Context(), f, 2026, time.Now().UTC(), "", 0, 5)
 	if woba != nil || fip != nil {
 		t.Errorf("want nil leaders for empty rostered pool, got woba=%v fip=%v", woba, fip)
 	}
@@ -97,7 +97,7 @@ func TestBuildLeaders_EmptyRosteredNil(t *testing.T) {
 
 func TestBuildLeaders_PoolErrorNil(t *testing.T) {
 	f := &fakeLeadersClient{err: errors.New("boom")}
-	woba, fip := buildLeaders(f, 2026, time.Now().UTC(), "", 0, 5)
+	woba, fip := buildLeaders(t.Context(), f, 2026, time.Now().UTC(), "", 0, 5)
 	if woba != nil || fip != nil {
 		t.Errorf("want nil leaders on pool error, got woba=%v fip=%v", woba, fip)
 	}

@@ -140,7 +140,7 @@ func TestGetPlayers_ParsesNextData(t *testing.T) {
 	defer func() { fetchURL = origURL }()
 
 	tmpDir := t.TempDir()
-	players, err := GetPlayers(tmpDir)
+	players, err := GetPlayers(t.Context(), tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestGetPlayers_HTTPError(t *testing.T) {
 	defer func() { fetchURL = origURL }()
 
 	tmpDir := t.TempDir()
-	_, err := GetPlayers(tmpDir)
+	_, err := GetPlayers(t.Context(), tmpDir)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -210,7 +210,7 @@ func TestGetPlayers_NoNextData(t *testing.T) {
 	defer func() { fetchURL = origURL }()
 
 	tmpDir := t.TempDir()
-	_, err := GetPlayers(tmpDir)
+	_, err := GetPlayers(t.Context(), tmpDir)
 	if err == nil {
 		t.Fatal("expected error for missing __NEXT_DATA__, got nil")
 	}
@@ -230,7 +230,7 @@ func TestGetPlayers_UsesCache(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	_, err := GetPlayers(tmpDir)
+	_, err := GetPlayers(t.Context(), tmpDir)
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestGetPlayers_UsesCache(t *testing.T) {
 		t.Fatalf("expected 1 HTTP call, got %d", callCount)
 	}
 
-	_, err = GetPlayers(tmpDir)
+	_, err = GetPlayers(t.Context(), tmpDir)
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}

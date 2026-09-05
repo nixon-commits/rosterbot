@@ -49,28 +49,28 @@ func runFootballValues(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	league, err := sc.League(cfg.SleeperLeagueID)
+	league, err := sc.League(cmd.Context(), cfg.SleeperLeagueID)
 	if err != nil {
 		return fmt.Errorf("sleeper league: %w", err)
 	}
-	rosters, err := sc.Rosters(cfg.SleeperLeagueID)
+	rosters, err := sc.Rosters(cmd.Context(), cfg.SleeperLeagueID)
 	if err != nil {
 		return fmt.Errorf("sleeper rosters: %w", err)
 	}
-	users, err := sc.Users(cfg.SleeperLeagueID)
+	users, err := sc.Users(cmd.Context(), cfg.SleeperLeagueID)
 	if err != nil {
 		return fmt.Errorf("sleeper users: %w", err)
 	}
-	tradedPicks, err := sc.TradedPicks(cfg.SleeperLeagueID)
+	tradedPicks, err := sc.TradedPicks(cmd.Context(), cfg.SleeperLeagueID)
 	if err != nil {
 		return fmt.Errorf("sleeper traded picks: %w", err)
 	}
-	players, err := sc.PlayersNFL()
+	players, err := sc.PlayersNFL(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("sleeper players: %w", err)
 	}
 
-	bundle, err := statsguy.LoadBundle(cacheDir, cacheTTL(statsguy.CacheTTL))
+	bundle, err := statsguy.LoadBundle(cmd.Context(), cacheDir, cacheTTL(statsguy.CacheTTL))
 	if err != nil {
 		return fmt.Errorf("statsguy bundle: %w", err)
 	}

@@ -70,7 +70,7 @@ func Run(ctx context.Context, ft FantraxClient, today time.Time, opts Options) e
 	})
 
 	g.Go(func() error {
-		src, _, err := projections.LoadBattingProjections(projections.ProjectionSteamer, opts.CacheDir, projTTL)
+		src, _, err := projections.LoadBattingProjections(ctx, projections.ProjectionSteamer, opts.CacheDir, projTTL)
 		if err != nil {
 			log.Printf("WARNING: batting projections unavailable: %v", err)
 			return nil
@@ -80,7 +80,7 @@ func Run(ctx context.Context, ft FantraxClient, today time.Time, opts Options) e
 	})
 
 	g.Go(func() error {
-		src, _, err := projections.LoadPitcherProjections(projections.ProjectionSteamer, opts.CacheDir, projTTL)
+		src, _, err := projections.LoadPitcherProjections(ctx, projections.ProjectionSteamer, opts.CacheDir, projTTL)
 		if err != nil {
 			log.Printf("WARNING: pitcher projections unavailable: %v", err)
 			return nil
@@ -108,7 +108,7 @@ func Run(ctx context.Context, ft FantraxClient, today time.Time, opts Options) e
 	})
 
 	g.Go(func() error {
-		b, err := statcast.LoadBundle(opts.CacheDir, today.Year(), today, savantTTL)
+		b, err := statcast.LoadBundle(ctx, opts.CacheDir, today.Year(), today, savantTTL)
 		if err != nil {
 			log.Printf("WARNING: savant load failed: %v", err)
 			return nil

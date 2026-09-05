@@ -242,6 +242,27 @@ type Snapshot struct {
 	// history would read Estimated≈0 regardless, because the rotation-math
 	// branch was unreachable until rosterbot-1jvj merged.
 	GSForecast []GSForecastDay `json:"gs_forecast,omitempty"`
+	// HitterProjFetchedAt/PitcherProjFetchedAt are when this capture's
+	// projection INPUT was last fetched from FanGraphs, per role
+	// (projections.LoadResult.FetchedAt). GeneratedAt says when the snapshot
+	// was written; these say how old the numbers in it already were.
+	//
+	// The two can differ by days, silently. projections.fetchJSON's cache
+	// stale-fallback serves a previously-stored copy whenever the fetch fails,
+	// and during the FanGraphs Cloudflare challenge window (rosterbot-sagc)
+	// that is the normal outcome for a late-evening Shadow run: the capture
+	// looks perfectly fresh to the sameETDate guard while carrying
+	// three-day-old projections, which grading then compares against that
+	// day's real actuals. rosterbot-c61b excluded the three known dates by
+	// hand; this field is what lets RunProjectionAnalysis refuse the next one
+	// without a table (see SourceInputStale).
+	//
+	// ZERO MEANS UNKNOWN, not old — every snapshot written before this field
+	// existed carries it, as does any capture built from the CSV fallback or
+	// an undated cache entry. Such a day is graded exactly as before, the same
+	// concession a zero GeneratedAt gets.
+	HitterProjFetchedAt  time.Time `json:"hitter_proj_fetched_at,omitzero"`
+	PitcherProjFetchedAt time.Time `json:"pitcher_proj_fetched_at,omitzero"`
 }
 
 // GSForecastDay is one future day of the GS forecast as the gate saw it.
@@ -595,6 +616,69 @@ func (s *hindsightPitcherSource) GetPitcherPtsPerGame(name, _ string, _ fantrax.
 
 // --- Projection analysis ---
 
+// The values ProjectionDayResult.Source can take. They are constants because
+// three packages read them — this file's rollup and report, and cmd/grade.go's
+// write filter — and a day whose source a filter fails to recognise is written
+// into the Analysis Store as if it had graded cleanly, which is silent.
+const (
+	// SourceSnapshot is a day graded from its archived capture: the only
+	// source whose rows enter the rollup or the store.
+	SourceSnapshot = "snapshot"
+	// SourceMissing is a day with no snapshot at all (the producer never ran,
+	// or has not reached that day yet).
+	SourceMissing = "missing"
+	// SourceStale is a capture the day's own run never refreshed — a
+	// --matchup pre-write, per the sameETDate guard.
+	SourceStale = "stale"
+	// SourceNoData is a capture whose projection source had nothing for a
+	// role that day; its zero-point rows would grade as a wrong forecast
+	// rather than an outage.
+	SourceNoData = "no-data"
+	// SourceInputStale is a capture written on the day but built on
+	// projections older than StaleInputAfter — the stale-cache fallback
+	// serving a days-old copy into a fresh-looking snapshot (rosterbot-c61b).
+	SourceInputStale = "input-stale"
+)
+
+// Gradeable reports whether a day's rows may be graded — entered into the
+// accuracy rollup and written to the Analysis Store. Everything that is not a
+// clean snapshot is excluded, so a source added later is refused by default
+// rather than silently graded by every filter that predates it.
+func Gradeable(source string) bool { return source == SourceSnapshot }
+
+// StaleInputAfter is how old a capture's projection input may be, measured at
+// the moment the snapshot was written, before the day is refused for grading.
+//
+// It is ProjectionCacheTTL because that is the upstream's own cadence: a
+// healthy run always attempts a fresh fetch (GetWithStaleFallback ignores the
+// TTL on the way in), so the stamp on a good capture is minutes old, and
+// anything past a full refresh cycle means the fallback served a copy from a
+// previous day. It is deliberately not tighter — an hour's gap is ordinary
+// clock skew between the fetch and the write, not a stale input.
+const StaleInputAfter = projections.ProjectionCacheTTL
+
+// staleInput reports whether either role's projection input was already older
+// than StaleInputAfter when the snapshot was written.
+//
+// The judgement is DAY-LEVEL and covers both roles because the archive is one
+// file per date and ProjectionDayResult carries a single Source — the same
+// coarseness HittersNoData/PitchersNoData already accepts. Half-grading a day
+// would also mean publishing an accuracy figure computed over a silently
+// changed population, which is worse than losing the day.
+//
+// A zero GeneratedAt or a zero stamp is unjudgeable, never old.
+func staleInput(snap Snapshot) bool {
+	if snap.GeneratedAt.IsZero() {
+		return false
+	}
+	for _, at := range []time.Time{snap.HitterProjFetchedAt, snap.PitcherProjFetchedAt} {
+		if !at.IsZero() && snap.GeneratedAt.Sub(at) > StaleInputAfter {
+			return true
+		}
+	}
+	return false
+}
+
 // RunProjectionAnalysis grades projections against actual FPts for each day.
 // For each date, it first checks snapshotDir/<YYYY-MM-DD>.json. Rows found
 // there use "snapshot" as their source. Otherwise, the player is skipped
@@ -606,7 +690,7 @@ func RunProjectionAnalysis(days []fantrax.DayRoster, st SnapshotStore, snapshotD
 		if !snapOK {
 			results = append(results, ProjectionDayResult{
 				Date:   day.Date,
-				Source: "missing",
+				Source: SourceMissing,
 			})
 			continue
 		}
@@ -624,7 +708,22 @@ func RunProjectionAnalysis(days []fantrax.DayRoster, st SnapshotStore, snapshotD
 			!sameETDate(snap.GeneratedAt, day.Date) {
 			results = append(results, ProjectionDayResult{
 				Date:   day.Date,
-				Source: "stale",
+				Source: SourceStale,
+			})
+			continue
+		}
+		// Input-staleness guard — the mirror image of the one above. That one
+		// catches a capture the day's own run never refreshed; this one
+		// catches a capture the day's run DID write, over projections the
+		// cache's stale fallback had served from days earlier. Both compare
+		// something other than that day's forecast against that day's
+		// actuals, and only the second can be fresh-looking (rosterbot-c61b,
+		// where three Shadow nights inside the Cloudflare challenge window
+		// had to be excluded by hand after the fact).
+		if staleInput(snap) {
+			results = append(results, ProjectionDayResult{
+				Date:   day.Date,
+				Source: SourceInputStale,
 			})
 			continue
 		}
@@ -635,7 +734,7 @@ func RunProjectionAnalysis(days []fantrax.DayRoster, st SnapshotStore, snapshotD
 		if snap.HittersNoData || snap.PitchersNoData {
 			results = append(results, ProjectionDayResult{
 				Date:   day.Date,
-				Source: "no-data",
+				Source: SourceNoData,
 			})
 			continue
 		}
@@ -664,7 +763,7 @@ func RunProjectionAnalysis(days []fantrax.DayRoster, st SnapshotStore, snapshotD
 				Projected: archived.ProjPtsPerGame,
 				Actual:    p.FPts,
 				Diff:      p.FPts - archived.ProjPtsPerGame,
-				Source:    "snapshot",
+				Source:    SourceSnapshot,
 				IsPitcher: p.IsPitcher,
 				Deployed:  p.Active,
 				// Bucket from the snapshot's eligibility/role — the live-roster
@@ -680,7 +779,7 @@ func RunProjectionAnalysis(days []fantrax.DayRoster, st SnapshotStore, snapshotD
 			MAE:     mae,
 			Bias:    bias,
 			RMSE:    rmse,
-			Source:  "snapshot",
+			Source:  SourceSnapshot,
 		})
 	}
 	return results
@@ -1024,24 +1123,32 @@ func FormatReport(r Report) string {
 		fmt.Fprintln(&b, "Use --archive-projections on optimize to enable exact grading.")
 	}
 
-	// Excluded-day warning: stale (forecast never refreshed on the day) and
+	// Excluded-day warning: stale (forecast never refreshed on the day),
+	// stale-input (refreshed on the day, but over days-old projections) and
 	// missing days carry no graded player-days, so they silently shrink the
-	// sample. List them explicitly — a window dominated by stale/missing days
-	// means the accuracy numbers above are not trustworthy.
-	var stale, missing []string
+	// sample. List them explicitly — a window dominated by excluded days means
+	// the accuracy numbers above are not trustworthy. Each reason is named
+	// separately because they point at different broken things: a scheduler
+	// that stopped, an upstream that stopped, and a producer that never ran.
+	var stale, inputStale, missing []string
 	for _, d := range r.Projections {
 		switch d.Source {
-		case "stale":
+		case SourceStale:
 			stale = append(stale, d.Date.Format("2006-01-02"))
-		case "missing":
+		case SourceInputStale:
+			inputStale = append(inputStale, d.Date.Format("2006-01-02"))
+		case SourceMissing:
 			missing = append(missing, d.Date.Format("2006-01-02"))
 		}
 	}
-	if len(stale) > 0 || len(missing) > 0 {
-		fmt.Fprintf(&b, "\nExcluded from grading: %d stale, %d missing (of %d days).\n",
-			len(stale), len(missing), len(r.Projections))
+	if len(stale) > 0 || len(inputStale) > 0 || len(missing) > 0 {
+		fmt.Fprintf(&b, "\nExcluded from grading: %d stale, %d stale-input, %d missing (of %d days).\n",
+			len(stale), len(inputStale), len(missing), len(r.Projections))
 		if len(stale) > 0 {
 			fmt.Fprintf(&b, "  stale (forecast not refreshed on the day): %s\n", strings.Join(stale, ", "))
+		}
+		if len(inputStale) > 0 {
+			fmt.Fprintf(&b, "  stale-input (projections older than %s):   %s\n", durLabel(StaleInputAfter), strings.Join(inputStale, ", "))
 		}
 		if len(missing) > 0 {
 			fmt.Fprintf(&b, "  missing (no snapshot written):              %s\n", strings.Join(missing, ", "))
@@ -1049,6 +1156,16 @@ func FormatReport(r Report) string {
 	}
 
 	return b.String()
+}
+
+// durLabel prints a whole-hour duration as "24h" rather than Duration's own
+// "24h0m0s", so the report reads the threshold back from the constant instead
+// of restating it in prose that could drift from it.
+func durLabel(d time.Duration) string {
+	if d%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return d.String()
 }
 
 func truncate(s string, n int) string {

@@ -1,6 +1,7 @@
 package prospects
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,10 +31,14 @@ var ErrSourceUnavailable = errors.New("ranking source unavailable")
 // Free endpoint, no auth required.
 type FanGraphsRankingSource struct{}
 
-func (s *FanGraphsRankingSource) GetTopProspects(season int) ([]RankedProspect, error) {
+func (s *FanGraphsRankingSource) GetTopProspects(ctx context.Context, season int) ([]RankedProspect, error) {
 	url := fmt.Sprintf(fgProspectURL, season, season)
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fangraphs prospects request: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fangraphs prospects fetch: %w", err)
 	}
@@ -104,10 +109,10 @@ func isPitcherPosition(pos string) bool {
 var loadRankingsCacheDir = ".cache"
 
 // LoadRankings returns prospect rankings, using a file cache when fresh.
-func LoadRankings(source RankingSource, season int, cacheHours int) ([]RankedProspect, error) {
+func LoadRankings(ctx context.Context, source RankingSource, season int, cacheHours int) ([]RankedProspect, error) {
 	c := cache.New[[]RankedProspect](loadRankingsCacheDir, time.Duration(cacheHours)*time.Hour)
 	return c.Get("rankings", func() ([]RankedProspect, error) {
-		return source.GetTopProspects(season)
+		return source.GetTopProspects(ctx, season)
 	})
 }
 

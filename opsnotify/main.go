@@ -48,7 +48,7 @@ import (
 
 // send is the Pushover seam. Replaced in tests so handler tests never reach the
 // network; wired to the real sender in main once the SSM creds are read.
-var send = func(title, message string) error { return nil }
+var send = func(_ context.Context, title, message string) error { return nil }
 
 // ledger is the run-ledger reader, nil until main wires it (and in the
 // CodeBuild-only tests, which never touch the ECS path).
@@ -76,8 +76,8 @@ func main() {
 	// init failure so it surfaces in CloudWatch.
 	userKey := mustParam(ctx, ssmc, "/rosterbot/PUSHOVER_USER_KEY")
 	apiToken := mustParam(ctx, ssmc, "/rosterbot/PUSHOVER_API_TOKEN")
-	send = func(title, message string) error {
-		return pushover.Send(userKey, apiToken, title, message)
+	send = func(ctx context.Context, title, message string) error {
+		return pushover.Send(ctx, userKey, apiToken, title, message)
 	}
 
 	if bucket := os.Getenv("STATE_BUCKET"); bucket != "" {
@@ -135,7 +135,7 @@ func dispatch(ctx context.Context, raw json.RawMessage) error {
 			return err
 		}
 		title, body := formatBuild(ev)
-		return sendOrLog(title, body)
+		return sendOrLog(ctx, title, body)
 
 	case "ECS Task State Change":
 		return handleTask(ctx, env.Detail)
@@ -158,11 +158,11 @@ func dispatch(ctx context.Context, raw json.RawMessage) error {
 // sendOrLog sends unless the title is empty (the "stay quiet" signal), and
 // returns the error so EventBridge async-invoke retries rather than silently
 // swallowing a missed alert.
-func sendOrLog(title, body string) error {
+func sendOrLog(ctx context.Context, title, body string) error {
 	if title == "" {
 		return nil
 	}
-	if err := send(title, body); err != nil {
+	if err := send(ctx, title, body); err != nil {
 		log.Printf("send pushover: %v", err)
 		return err
 	}

@@ -1,11 +1,11 @@
 // Package sleeper is a read-only client for the public Sleeper fantasy
 // football API (no API key). It is a zero-dependency leaf beyond
 // internal/cache, mirroring internal/schedule's shape: URLs as vars for test
-// override, a Client struct with an optional CacheDir, plain (non-context)
-// method signatures.
+// override, a Client struct with an optional CacheDir.
 package sleeper
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,8 +44,12 @@ func NewClient() *Client {
 	return &Client{http: http.Client{Timeout: 10 * time.Second}}
 }
 
-func (c *Client) get(path string, out any) error {
-	resp, err := c.http.Get(baseURL + path)
+func (c *Client) get(ctx context.Context, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("sleeper GET %s: build request: %w", path, err)
+	}
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("sleeper GET %s: %w", path, err)
 	}
@@ -91,45 +95,45 @@ func checkKeyParts(parts ...string) error {
 }
 
 // League fetches a league's static configuration.
-func (c *Client) League(leagueID string) (*League, error) {
+func (c *Client) League(ctx context.Context, leagueID string) (*League, error) {
 	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-league", leagueID), RosterTTL, func() (*League, error) {
-		return c.fetchLeague(leagueID)
+		return c.fetchLeague(ctx, leagueID)
 	})
 }
 
-func (c *Client) fetchLeague(leagueID string) (*League, error) {
+func (c *Client) fetchLeague(ctx context.Context, leagueID string) (*League, error) {
 	var lg League
-	if err := c.get("/league/"+leagueID, &lg); err != nil {
+	if err := c.get(ctx, "/league/"+leagueID, &lg); err != nil {
 		return nil, err
 	}
 	return &lg, nil
 }
 
 // Rosters fetches every team's roster in the league.
-func (c *Client) Rosters(leagueID string) ([]Roster, error) {
+func (c *Client) Rosters(ctx context.Context, leagueID string) ([]Roster, error) {
 	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-rosters", leagueID), RosterTTL, func() ([]Roster, error) {
-		return c.fetchRosters(leagueID)
+		return c.fetchRosters(ctx, leagueID)
 	})
 }
 
-func (c *Client) fetchRosters(leagueID string) ([]Roster, error) {
+func (c *Client) fetchRosters(ctx context.Context, leagueID string) ([]Roster, error) {
 	var rosters []Roster
-	if err := c.get("/league/"+leagueID+"/rosters", &rosters); err != nil {
+	if err := c.get(ctx, "/league/"+leagueID+"/rosters", &rosters); err != nil {
 		return nil, err
 	}
 	return rosters, nil
 }
 
 // Users fetches every league member.
-func (c *Client) Users(leagueID string) ([]User, error) {
+func (c *Client) Users(ctx context.Context, leagueID string) ([]User, error) {
 	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-users", leagueID), RosterTTL, func() ([]User, error) {
-		return c.fetchUsers(leagueID)
+		return c.fetchUsers(ctx, leagueID)
 	})
 }
 
-func (c *Client) fetchUsers(leagueID string) ([]User, error) {
+func (c *Client) fetchUsers(ctx context.Context, leagueID string) ([]User, error) {
 	var users []User
-	if err := c.get("/league/"+leagueID+"/users", &users); err != nil {
+	if err := c.get(ctx, "/league/"+leagueID+"/users", &users); err != nil {
 		return nil, err
 	}
 	return users, nil
@@ -137,15 +141,15 @@ func (c *Client) fetchUsers(leagueID string) ([]User, error) {
 
 // TradedPicks fetches every draft pick that has changed hands from its
 // original owner.
-func (c *Client) TradedPicks(leagueID string) ([]TradedPick, error) {
+func (c *Client) TradedPicks(ctx context.Context, leagueID string) ([]TradedPick, error) {
 	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-traded-picks", leagueID), RosterTTL, func() ([]TradedPick, error) {
-		return c.fetchTradedPicks(leagueID)
+		return c.fetchTradedPicks(ctx, leagueID)
 	})
 }
 
-func (c *Client) fetchTradedPicks(leagueID string) ([]TradedPick, error) {
+func (c *Client) fetchTradedPicks(ctx context.Context, leagueID string) ([]TradedPick, error) {
 	var picks []TradedPick
-	if err := c.get("/league/"+leagueID+"/traded_picks", &picks); err != nil {
+	if err := c.get(ctx, "/league/"+leagueID+"/traded_picks", &picks); err != nil {
 		return nil, err
 	}
 	return picks, nil
@@ -153,30 +157,30 @@ func (c *Client) fetchTradedPicks(leagueID string) ([]TradedPick, error) {
 
 // Transactions fetches every transaction filed under the given week
 // ("round" in Sleeper's API — regular-season week number).
-func (c *Client) Transactions(leagueID string, week int) ([]Transaction, error) {
+func (c *Client) Transactions(ctx context.Context, leagueID string, week int) ([]Transaction, error) {
 	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-transactions", leagueID, strconv.Itoa(week)), RosterTTL, func() ([]Transaction, error) {
-		return c.fetchTransactions(leagueID, week)
+		return c.fetchTransactions(ctx, leagueID, week)
 	})
 }
 
-func (c *Client) fetchTransactions(leagueID string, week int) ([]Transaction, error) {
+func (c *Client) fetchTransactions(ctx context.Context, leagueID string, week int) ([]Transaction, error) {
 	var txns []Transaction
-	if err := c.get("/league/"+leagueID+"/transactions/"+strconv.Itoa(week), &txns); err != nil {
+	if err := c.get(ctx, "/league/"+leagueID+"/transactions/"+strconv.Itoa(week), &txns); err != nil {
 		return nil, err
 	}
 	return txns, nil
 }
 
 // State fetches the current NFL week/season.
-func (c *Client) State() (*NFLState, error) {
+func (c *Client) State(ctx context.Context) (*NFLState, error) {
 	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-state"), RosterTTL, func() (*NFLState, error) {
-		return c.fetchState()
+		return c.fetchState(ctx)
 	})
 }
 
-func (c *Client) fetchState() (*NFLState, error) {
+func (c *Client) fetchState(ctx context.Context) (*NFLState, error) {
 	var st NFLState
-	if err := c.get("/state/nfl", &st); err != nil {
+	if err := c.get(ctx, "/state/nfl", &st); err != nil {
 		return nil, err
 	}
 	return &st, nil
@@ -185,15 +189,15 @@ func (c *Client) fetchState() (*NFLState, error) {
 // PlayersNFL fetches the full NFL player dump (~14.6 MB, all sports). Always
 // cached at PlayersTTL when CacheDir is set — this must never be called in a
 // loop; callers should fetch it once per run and pass the map along.
-func (c *Client) PlayersNFL() (map[string]Player, error) {
+func (c *Client) PlayersNFL(ctx context.Context) (map[string]Player, error) {
 	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-players-nfl"), PlayersTTL, func() (map[string]Player, error) {
-		return c.fetchPlayersNFL()
+		return c.fetchPlayersNFL(ctx)
 	})
 }
 
-func (c *Client) fetchPlayersNFL() (map[string]Player, error) {
+func (c *Client) fetchPlayersNFL(ctx context.Context) (map[string]Player, error) {
 	var players map[string]Player
-	if err := c.get("/players/nfl", &players); err != nil {
+	if err := c.get(ctx, "/players/nfl", &players); err != nil {
 		return nil, err
 	}
 	return players, nil
@@ -209,18 +213,18 @@ func (c *Client) fetchPlayersNFL() (map[string]Player, error) {
 var ErrUserNotFound = errors.New("sleeper: no such user")
 
 // UserByName resolves a Sleeper username to its account.
-func (c *Client) UserByName(username string) (*User, error) {
+func (c *Client) UserByName(ctx context.Context, username string) (*User, error) {
 	if err := checkKeyParts(username); err != nil {
 		return nil, err
 	}
 	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-user", username), RosterTTL, func() (*User, error) {
-		return c.fetchUserByName(username)
+		return c.fetchUserByName(ctx, username)
 	})
 }
 
-func (c *Client) fetchUserByName(username string) (*User, error) {
+func (c *Client) fetchUserByName(ctx context.Context, username string) (*User, error) {
 	var u User
-	if err := c.get("/user/"+url.PathEscape(username), &u); err != nil {
+	if err := c.get(ctx, "/user/"+url.PathEscape(username), &u); err != nil {
 		return nil, err
 	}
 	if u.UserID == "" {
@@ -232,22 +236,22 @@ func (c *Client) fetchUserByName(username string) (*User, error) {
 // LeaguesForUser lists every league an account belongs to for one sport and
 // season. Sleeper scopes leagues by both, so a user id alone does not identify
 // a league set.
-func (c *Client) LeaguesForUser(userID, sport, season string) ([]League, error) {
+func (c *Client) LeaguesForUser(ctx context.Context, userID, sport, season string) ([]League, error) {
 	if err := checkKeyParts(userID, sport, season); err != nil {
 		return nil, err
 	}
 	return cache.GetOrFetch(c.CacheDir, cache.Key("sleeper-user-leagues", userID, sport, season), RosterTTL,
 		func() ([]League, error) {
-			return c.fetchLeaguesForUser(userID, sport, season)
+			return c.fetchLeaguesForUser(ctx, userID, sport, season)
 		})
 }
 
-func (c *Client) fetchLeaguesForUser(userID, sport, season string) ([]League, error) {
+func (c *Client) fetchLeaguesForUser(ctx context.Context, userID, sport, season string) ([]League, error) {
 	path := "/user/" + url.PathEscape(userID) +
 		"/leagues/" + url.PathEscape(sport) +
 		"/" + url.PathEscape(season)
 	var ls []League
-	if err := c.get(path, &ls); err != nil {
+	if err := c.get(ctx, path, &ls); err != nil {
 		return nil, err
 	}
 	return ls, nil

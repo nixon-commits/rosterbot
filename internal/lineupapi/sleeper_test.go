@@ -52,7 +52,7 @@ func TestSleeperLeaguesReturnsLeagues(t *testing.T) {
 	cfg := Config{SleeperDir: dir}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/v1/sleeper/leagues?username=jnixon", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/v1/sleeper/leagues?username=jnixon", nil)
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 	cfg.handleSleeperLeagues(rec, req)
 
@@ -81,7 +81,7 @@ func TestSleeperLeaguesHonoursExplicitSportAndSeason(t *testing.T) {
 	cfg := Config{SleeperDir: dir}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/v1/sleeper/leagues?username=x&sport=nba&season=2024", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/v1/sleeper/leagues?username=x&sport=nba&season=2024", nil)
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 	cfg.handleSleeperLeagues(rec, req)
 
@@ -93,7 +93,7 @@ func TestSleeperLeaguesHonoursExplicitSportAndSeason(t *testing.T) {
 func TestSleeperLeaguesRequiresUsername(t *testing.T) {
 	cfg := Config{SleeperDir: &fakeSleeperDir{}}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/v1/sleeper/leagues", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/v1/sleeper/leagues", nil)
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 	cfg.handleSleeperLeagues(rec, req)
 
@@ -105,7 +105,7 @@ func TestSleeperLeaguesRequiresUsername(t *testing.T) {
 func TestSleeperLeaguesUnknownUsernameIs404(t *testing.T) {
 	cfg := Config{SleeperDir: &fakeSleeperDir{err: ErrSleeperUserUnknown}}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/v1/sleeper/leagues?username=nobody", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/v1/sleeper/leagues?username=nobody", nil)
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 	cfg.handleSleeperLeagues(rec, req)
 
@@ -118,7 +118,7 @@ func TestSleeperLeaguesUnknownUsernameIs404(t *testing.T) {
 func TestSleeperLeaguesUpstreamFailureIs502(t *testing.T) {
 	cfg := Config{SleeperDir: &fakeSleeperDir{err: errors.New("boom")}}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/v1/sleeper/leagues?username=x", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/v1/sleeper/leagues?username=x", nil)
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 	cfg.handleSleeperLeagues(rec, req)
 
@@ -130,7 +130,7 @@ func TestSleeperLeaguesUpstreamFailureIs502(t *testing.T) {
 func TestSleeperLeaguesUnconfiguredIs501(t *testing.T) {
 	cfg := Config{}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/v1/sleeper/leagues?username=x", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/v1/sleeper/leagues?username=x", nil)
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 	cfg.handleSleeperLeagues(rec, req)
 
@@ -144,7 +144,7 @@ func TestSleeperLeaguesUnconfiguredIs501(t *testing.T) {
 func TestSleeperLeaguesRequiresPasskeySession(t *testing.T) {
 	cfg := Config{SleeperDir: &fakeSleeperDir{}}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/v1/sleeper/leagues?username=x", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/v1/sleeper/leagues?username=x", nil)
 	cfg.handleSleeperLeagues(rec, req)
 
 	if rec.Code != http.StatusForbidden {
@@ -153,8 +153,8 @@ func TestSleeperLeaguesRequiresPasskeySession(t *testing.T) {
 }
 
 // sleeperLeaguesReq builds an authenticated discovery request.
-func sleeperLeaguesReq(query string) *http.Request {
-	req := httptest.NewRequest("GET", "/v1/sleeper/leagues?"+query, nil)
+func sleeperLeaguesReq(t *testing.T, query string) *http.Request {
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/v1/sleeper/leagues?"+query, nil)
 	return req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 }
 
@@ -180,7 +180,7 @@ func TestSleeperLeaguesRejectsUnsafeParameters(t *testing.T) {
 		dir := &fakeSleeperDir{}
 		cfg := Config{SleeperDir: dir}
 		rec := httptest.NewRecorder()
-		cfg.handleSleeperLeagues(rec, sleeperLeaguesReq(query))
+		cfg.handleSleeperLeagues(rec, sleeperLeaguesReq(t, query))
 
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want 400 (body %s)", name, rec.Code, rec.Body)
@@ -199,7 +199,7 @@ func TestSleeperLeaguesTrimsBeforeDefaulting(t *testing.T) {
 	dir := &fakeSleeperDir{}
 	cfg := Config{SleeperDir: dir}
 	rec := httptest.NewRecorder()
-	cfg.handleSleeperLeagues(rec, sleeperLeaguesReq("username=x&sport=%20&season=%20%20"))
+	cfg.handleSleeperLeagues(rec, sleeperLeaguesReq(t, "username=x&sport=%20&season=%20%20"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
@@ -216,7 +216,7 @@ func TestSleeperLeaguesTrimsBeforeDefaulting(t *testing.T) {
 	dir = &fakeSleeperDir{}
 	cfg = Config{SleeperDir: dir}
 	rec = httptest.NewRecorder()
-	cfg.handleSleeperLeagues(rec, sleeperLeaguesReq("username=x&season=%202026%20"))
+	cfg.handleSleeperLeagues(rec, sleeperLeaguesReq(t, "username=x&season=%202026%20"))
 	if rec.Code != http.StatusOK || dir.gotSeas != "2026" {
 		t.Errorf("padded season: status %d, season %q; want 200 and 2026", rec.Code, dir.gotSeas)
 	}
@@ -228,7 +228,7 @@ func TestSleeperLeaguesAcceptsARealisticUsername(t *testing.T) {
 	dir := &fakeSleeperDir{}
 	cfg := Config{SleeperDir: dir}
 	rec := httptest.NewRecorder()
-	cfg.handleSleeperLeagues(rec, sleeperLeaguesReq("username=jon_nixon99&sport=nba&season=2024"))
+	cfg.handleSleeperLeagues(rec, sleeperLeaguesReq(t, "username=jon_nixon99&sport=nba&season=2024"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)

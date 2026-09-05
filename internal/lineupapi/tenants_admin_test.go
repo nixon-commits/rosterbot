@@ -42,7 +42,7 @@ func postJSON(t *testing.T, secret []byte, path, uid string, body string) *http.
 	} else {
 		rd = strings.NewReader(body)
 	}
-	r := httptest.NewRequest(http.MethodPost, path, rd)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, rd)
 	r.Header.Set("Content-Type", "application/json")
 	for _, c := range rec.Result().Cookies() {
 		r.AddCookie(c)
@@ -355,7 +355,7 @@ func deleteReq(t *testing.T, secret []byte, path, uid string) *http.Request {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	setSessionCookie(rec, secret, UserID(uid), 0, time.Now())
-	r := httptest.NewRequest(http.MethodDelete, path, nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, path, nil)
 	for _, c := range rec.Result().Cookies() {
 		r.AddCookie(c)
 	}

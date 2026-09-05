@@ -50,7 +50,7 @@ func TestTeamsPlayingOn_ParsesResponse(t *testing.T) {
 	defer func() { mlbScheduleURL = origURL }()
 
 	c := NewClient()
-	playing, err := c.TeamsPlayingOn(time.Now())
+	playing, err := c.TeamsPlayingOn(t.Context(), time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestGameVenues_ParsesResponse(t *testing.T) {
 	defer func() { mlbScheduleURL = origURL }()
 
 	c := NewClient()
-	venues, err := c.GameVenues(time.Now())
+	venues, err := c.GameVenues(t.Context(), time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestLockedTeams_LiveAndFinal(t *testing.T) {
 	defer func() { mlbScheduleURL = origURL }()
 
 	c := NewClient()
-	locked, err := c.LockedTeams(time.Now())
+	locked, err := c.LockedTeams(t.Context(), time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestTeamsPlayingOn_EmptySchedule(t *testing.T) {
 	defer func() { mlbScheduleURL = origURL }()
 
 	c := NewClient()
-	playing, err := c.TeamsPlayingOn(time.Now())
+	playing, err := c.TeamsPlayingOn(t.Context(), time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestBenchedPlayers_LineupsPosted(t *testing.T) {
 	}
 
 	c := NewClient()
-	benched, err := c.BenchedPlayers(time.Now(), roster)
+	benched, err := c.BenchedPlayers(t.Context(), time.Now(), roster)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestBenchedPlayers_LineupsNotPosted(t *testing.T) {
 	}
 
 	c := NewClient()
-	benched, err := c.BenchedPlayers(time.Now(), roster)
+	benched, err := c.BenchedPlayers(t.Context(), time.Now(), roster)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestBenchedPlayers_EmptyLineups(t *testing.T) {
 	}
 
 	c := NewClient()
-	benched, err := c.BenchedPlayers(time.Now(), roster)
+	benched, err := c.BenchedPlayers(t.Context(), time.Now(), roster)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -429,7 +429,7 @@ func TestAllGamesFinalOn(t *testing.T) {
 		{"status":{"abstractGameState":"Final","detailedState":"Final"}}
 	]}]}`)
 	mlbScheduleURL = srv.URL + "?date=%s"
-	if done, err := NewClient().AllGamesFinalOn(time.Now()); err != nil || !done {
+	if done, err := NewClient().AllGamesFinalOn(t.Context(), time.Now()); err != nil || !done {
 		t.Errorf("all-final: want true, got %v (err %v)", done, err)
 	}
 	srv.Close()
@@ -440,7 +440,7 @@ func TestAllGamesFinalOn(t *testing.T) {
 		{"status":{"abstractGameState":"Live","detailedState":"In Progress"}}
 	]}]}`)
 	mlbScheduleURL = srv.URL + "?date=%s"
-	if done, err := NewClient().AllGamesFinalOn(time.Now()); err != nil || done {
+	if done, err := NewClient().AllGamesFinalOn(t.Context(), time.Now()); err != nil || done {
 		t.Errorf("one-live: want false, got %v (err %v)", done, err)
 	}
 	srv.Close()
@@ -448,7 +448,7 @@ func TestAllGamesFinalOn(t *testing.T) {
 	// No games scheduled → vacuously done.
 	srv = serve(`{"dates":[]}`)
 	mlbScheduleURL = srv.URL + "?date=%s"
-	if done, err := NewClient().AllGamesFinalOn(time.Now()); err != nil || !done {
+	if done, err := NewClient().AllGamesFinalOn(t.Context(), time.Now()); err != nil || !done {
 		t.Errorf("no-games: want true, got %v (err %v)", done, err)
 	}
 	srv.Close()

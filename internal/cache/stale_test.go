@@ -225,3 +225,70 @@ func TestStaleFallback_DoesNotClaimAnAgeForAnUndatedCopy(t *testing.T) {
 		t.Fatalf("no fetched_at means no age to report; got %v", h.alerts)
 	}
 }
+
+// --- GetWithStaleFallbackAt: the timestamp the degraded read already knows ---
+//
+// The stale path has always had the envelope's fetched_at in hand (loadAnyAt
+// reads it to compute the age it prints) and threw it away at the return. That
+// is the one fact a downstream consumer needs to tell a fresh capture from one
+// built on a days-old copy, so the *At variant hands it back.
+
+func TestGetWithStaleFallbackAt_FreshFetchReportsTheTimeItWasStored(t *testing.T) {
+	h := newStaleHarness(t)
+	before := time.Now()
+
+	got, fetchedAt, err := h.cache.GetWithStaleFallbackAt("fangraphs-bat", func() (string, error) { return "fresh", nil })
+	if err != nil {
+		t.Fatalf("fresh fetch: %v", err)
+	}
+	if got != "fresh" {
+		t.Errorf("data = %q, want fresh", got)
+	}
+	if fetchedAt.Before(before) || fetchedAt.After(time.Now()) {
+		t.Errorf("fetchedAt = %v, want a stamp from this fetch (between %v and now)", fetchedAt, before)
+	}
+	// The reported stamp must be the one actually stored: a later reader of
+	// the same entry has to agree with what this caller recorded.
+	stale, stored, ok := h.cache.loadAnyAt("fangraphs-bat")
+	if !ok || stale != "fresh" {
+		t.Fatalf("entry not stored: ok=%v data=%q", ok, stale)
+	}
+	if !stored.Equal(fetchedAt) {
+		t.Errorf("reported fetchedAt %v != stored %v", fetchedAt, stored)
+	}
+}
+
+func TestGetWithStaleFallbackAt_StaleServeReportsTheCopysAge(t *testing.T) {
+	h := newStaleHarness(t)
+	old := time.Now().Add(-72 * time.Hour).Truncate(time.Second)
+	seedStale(t, h.store, "fangraphs-bat", old, "cached")
+
+	got, fetchedAt, err := h.cache.GetWithStaleFallbackAt("fangraphs-bat", failingFetch)
+	if err != nil {
+		t.Fatalf("stale fallback should not error: %v", err)
+	}
+	if got != "cached" {
+		t.Errorf("data = %q, want cached", got)
+	}
+	if !fetchedAt.Equal(old) {
+		t.Errorf("fetchedAt = %v, want the stale copy's stamp %v", fetchedAt, old)
+	}
+}
+
+func TestGetWithStaleFallbackAt_UndatedCopyReportsZero(t *testing.T) {
+	h := newStaleHarness(t)
+	// An entry written before the envelope carried a timestamp. Absence of
+	// evidence is not evidence: report zero rather than inventing an age.
+	seedStale(t, h.store, "fangraphs-bat", time.Time{}, "cached")
+
+	got, fetchedAt, err := h.cache.GetWithStaleFallbackAt("fangraphs-bat", failingFetch)
+	if err != nil {
+		t.Fatalf("stale fallback should not error: %v", err)
+	}
+	if got != "cached" {
+		t.Errorf("data = %q, want cached", got)
+	}
+	if !fetchedAt.IsZero() {
+		t.Errorf("fetchedAt = %v, want zero for an undated copy", fetchedAt)
+	}
+}

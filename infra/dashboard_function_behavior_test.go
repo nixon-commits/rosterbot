@@ -40,7 +40,7 @@ func TestDashboardFunction_BehavesCorrectly(t *testing.T) {
 		t.Fatalf("write driver: %v", err)
 	}
 
-	out, err := exec.Command(node, script).CombinedOutput()
+	out, err := exec.CommandContext(t.Context(), node, script).CombinedOutput()
 	if err != nil {
 		t.Fatalf("the viewer-request function does not behave as intended:\n%s", out)
 	}

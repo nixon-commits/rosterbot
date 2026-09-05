@@ -32,7 +32,7 @@ func TestProducersDoNotImportLineupapi(t *testing.T) {
 	}
 
 	for _, pkg := range producers {
-		out, err := exec.Command("go", "list", "-f", `{{join .Imports "\n"}}`, pkg).CombinedOutput()
+		out, err := exec.CommandContext(t.Context(), "go", "list", "-f", `{{join .Imports "\n"}}`, pkg).CombinedOutput()
 		if err != nil {
 			t.Fatalf("go list %s: %v\n%s", pkg, err, out)
 		}

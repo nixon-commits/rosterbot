@@ -88,7 +88,7 @@ func TestSessionAuth_EmptySecretFailsClosed(t *testing.T) {
 	forged := &http.Cookie{Name: sessionCookieName, Value: signSession(nil, "alice", 0, time.Now())}
 
 	get := func(cfg Config) int {
-		req := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/me", nil)
 		req.AddCookie(forged)
 		rec := httptest.NewRecorder()
 		Handler(cfg).ServeHTTP(rec, req)
@@ -109,7 +109,7 @@ func TestSessionAuth_EmptySecretFailsClosed(t *testing.T) {
 	// secret does authenticate, so the 401s above are about the empty key
 	// rather than about a session codec or user store that never works.
 	secret := []byte("test-secret")
-	live := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	live := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/me", nil)
 	live.AddCookie(&http.Cookie{Name: sessionCookieName, Value: signSession(secret, "alice", 0, time.Now())})
 	rec := httptest.NewRecorder()
 	Handler(Config{Token: "t", Users: users, SessionSecret: secret}).ServeHTTP(rec, live)

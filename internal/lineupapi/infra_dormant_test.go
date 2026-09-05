@@ -290,7 +290,7 @@ func TestInfraExemptsADormantTenantEndToEnd(t *testing.T) {
 	}}
 
 	h := Handler(Config{Token: "t", Infra: lister, Users: users, Connections: conns})
-	req := httptest.NewRequest(http.MethodGet, "/v1/infra", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/infra", nil)
 	req.Header.Set("Authorization", "Bearer t")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

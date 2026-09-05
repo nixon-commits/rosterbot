@@ -1,6 +1,7 @@
 package projections
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -141,9 +142,9 @@ type FanGraphsSource struct {
 }
 
 // fetchBattingRows fetches raw batting projection rows from the FanGraphs API.
-func fetchBattingRows() ([]fgRow, error) {
+func fetchBattingRows(ctx context.Context) ([]fgRow, error) {
 	var rows []fgRow
-	if err := fetchJSON(fangraphsBattingURL, "fangraphs", &rows); err != nil {
+	if err := fetchJSON(ctx, fangraphsBattingURL, "fangraphs", &rows); err != nil {
 		return nil, err
 	}
 	return rows, nil
@@ -187,8 +188,8 @@ func buildFanGraphsSource(rows []fgRow) *FanGraphsSource {
 }
 
 // NewFanGraphsSource fetches and parses the FanGraphs batting projections JSON.
-func NewFanGraphsSource() (*FanGraphsSource, error) {
-	rows, err := fetchBattingRows()
+func NewFanGraphsSource(ctx context.Context) (*FanGraphsSource, error) {
+	rows, err := fetchBattingRows(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -196,14 +197,20 @@ func NewFanGraphsSource() (*FanGraphsSource, error) {
 }
 
 // NewFanGraphsSourceCached is like NewFanGraphsSource but uses a file cache.
-func NewFanGraphsSourceCached(cacheDir string, ttl time.Duration) (*FanGraphsSource, error) {
+//
+// It also reports WHEN the rows it built from were fetched from FanGraphs.
+// That is not the same as when this call ran: the cache's stale fallback
+// serves a previously-stored copy whenever the fetch fails, and during the
+// Cloudflare challenge window (rosterbot-sagc) that copy can be days old with
+// nothing in the returned source to say so. Zero means unknown.
+func NewFanGraphsSourceCached(ctx context.Context, cacheDir string, ttl time.Duration) (*FanGraphsSource, time.Time, error) {
 	c := cache.New[[]fgRow](cacheDir, ttl)
 	key := cache.Key(keyFanGraphs, "bat", currentAPIType)
-	rows, err := c.GetWithStaleFallback(key, fetchBattingRows)
+	rows, fetchedAt, err := c.GetWithStaleFallbackAt(key, func() ([]fgRow, error) { return fetchBattingRows(ctx) })
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	return buildFanGraphsSource(rows), nil
+	return buildFanGraphsSource(rows), fetchedAt, nil
 }
 
 // NewFanGraphsSourceFromCSV loads batting projections from a local CSV file
@@ -341,12 +348,26 @@ type LoadResult struct {
 	FellBack bool   // True if RoS was tried but empty, and preseason was used instead
 	FromCSV  bool   // True if loaded from CSV as last resort
 	NoData   bool   // True if all sources failed; source is an empty stub
+	// FetchedAt is when the returned projections were last fetched from
+	// FanGraphs — the cache envelope's stamp, not the time of this call. A
+	// fresh fetch stamps it now; the cache's stale fallback reports the served
+	// copy's own age, which is the only way a consumer can tell a real capture
+	// from one built on a days-old copy served through the Cloudflare
+	// challenge window (rosterbot-c61b, rosterbot-sagc).
+	//
+	// ZERO MEANS UNKNOWN, never "ancient": the CSV fallback and the empty
+	// NoData stub have no upstream fetch behind them at all, and neither does
+	// a cache entry written before the envelope carried a timestamp. Every
+	// consumer must treat the zero value as "cannot judge" and grade as
+	// before — the same rule the sameETDate guard applies to a zero
+	// GeneratedAt.
+	FetchedAt time.Time
 }
 
 // LoadBattingProjections tries to load batting projections with RoS-first priority.
 // For base systems (e.g. "depthcharts"): RoS API → Preseason API → CSV.
 // For explicit RoS systems (e.g. "depthcharts-ros"): RoS API → CSV.
-func LoadBattingProjections(system, cacheDir string, ttl time.Duration) (*FanGraphsSource, LoadResult, error) {
+func LoadBattingProjections(ctx context.Context, system, cacheDir string, ttl time.Duration) (*FanGraphsSource, LoadResult, error) {
 	result := LoadResult{System: system}
 
 	// Build the list of systems to try via API.
@@ -364,7 +385,7 @@ func LoadBattingProjections(system, cacheDir string, ttl time.Duration) (*FanGra
 		if err := SetProjectionSystem(sys); err != nil {
 			continue
 		}
-		src, err := NewFanGraphsSourceCached(cacheDir, ttl)
+		src, fetchedAt, err := NewFanGraphsSourceCached(ctx, cacheDir, ttl)
 		if err != nil {
 			if i < len(systems)-1 {
 				continue
@@ -379,6 +400,7 @@ func LoadBattingProjections(system, cacheDir string, ttl time.Duration) (*FanGra
 			break
 		}
 		result.System = sys
+		result.FetchedAt = fetchedAt
 		return src, result, nil
 	}
 

@@ -371,31 +371,18 @@ func runGrade(cmd *cobra.Command, args []string) error {
 	bySystemDate := map[string]map[string][]analysis.GradeRow{}
 	for _, sys := range shadowSystems {
 		dir := systemSnapshotDir(shadowSnapshotRoot, sys)
-		results := backtest.RunProjectionAnalysis(days, snapStore, dir)
-		byDate := map[string][]analysis.GradeRow{}
-		for _, d := range results {
-			if d.Source == "missing" || d.Source == "stale" || d.Source == "no-data" {
-				// Forward-only: before the shadow command has captured a day,
-				// its snapshot is absent and the day is skipped, not graded.
-				// "no-data" means the system had a real outage that day (see
-				// Snapshot.HittersNoData/PitchersNoData) — same treatment.
+		byDate, excluded := gradeRowsByDate(backtest.RunProjectionAnalysis(days, snapStore, dir))
+		for _, e := range excluded {
+			// Only the stale-input refusals are announced. "missing" is the
+			// ordinary forward-only state of a day Shadow has not captured
+			// yet and would print on nearly every run; a stale INPUT is an
+			// upstream outage that silently degraded a capture, and the run
+			// that refuses it is the only place anyone would learn of it.
+			if e.Source != backtest.SourceInputStale {
 				continue
 			}
-			dt := d.Date.UTC().Format("2006-01-02")
-			for _, p := range d.Players {
-				byDate[dt] = append(byDate[dt], analysis.GradeRow{
-					Dt:        dt,
-					PlayerID:  p.PlayerID,
-					Name:      p.Name,
-					MLBTeam:   p.MLBTeam,
-					Projected: p.Projected,
-					Actual:    p.Actual,
-					Diff:      p.Diff,
-					Bucket:    p.Bucket,
-					IsPitcher: p.IsPitcher,
-					Source:    p.Source,
-				})
-			}
+			fmt.Fprintf(os.Stderr, "warning: %s %s not graded: capture's projection input was already older than %v when it was written\n",
+				sys, e.Dt, backtest.StaleInputAfter)
 		}
 		if len(byDate) > 0 {
 			bySystemDate[sys] = byDate
@@ -466,6 +453,54 @@ func runGrade(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: lineup gaps not written: %v\n", err)
 	}
 	return nil
+}
+
+// excludedDay names one date this run refused to grade, and why.
+type excludedDay struct {
+	Dt     string
+	Source string
+}
+
+// gradeRowsByDate turns one system's per-day analysis into the rows to write,
+// keyed by dt=, and names every day it refused.
+//
+// The refusal is the load-bearing half. The Analysis Store is append-only and
+// has no per-(day, system) delete, so a day written from a capture that should
+// never have been graded can only be taken back at READ time, by adding a row
+// to the hand-maintained analysis.Exclusions table — which is what
+// rosterbot-c61b had to do for three dates after the fact. Refusing the write
+// is what keeps that table from needing a new entry the next time the FanGraphs
+// Cloudflare window moves.
+//
+// backtest.Gradeable is asked rather than a list of bad sources restated here:
+// this filter and the report's excluded-day block must agree, and an unknown
+// source has to be refused by default, since a source this call site fails to
+// recognise is written into the store as if it had graded cleanly.
+func gradeRowsByDate(results []backtest.ProjectionDayResult) (map[string][]analysis.GradeRow, []excludedDay) {
+	byDate := map[string][]analysis.GradeRow{}
+	var excluded []excludedDay
+	for _, d := range results {
+		dt := d.Date.UTC().Format(gradeDateFmt)
+		if !backtest.Gradeable(d.Source) {
+			excluded = append(excluded, excludedDay{Dt: dt, Source: d.Source})
+			continue
+		}
+		for _, p := range d.Players {
+			byDate[dt] = append(byDate[dt], analysis.GradeRow{
+				Dt:        dt,
+				PlayerID:  p.PlayerID,
+				Name:      p.Name,
+				MLBTeam:   p.MLBTeam,
+				Projected: p.Projected,
+				Actual:    p.Actual,
+				Diff:      p.Diff,
+				Bucket:    p.Bucket,
+				IsPitcher: p.IsPitcher,
+				Source:    p.Source,
+			})
+		}
+	}
+	return byDate, excluded
 }
 
 // recordLineupGaps grades each day's applied lineup against hindsight and

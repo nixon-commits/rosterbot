@@ -45,12 +45,10 @@ type EmitInputs struct {
 	WriteSnapshots bool
 	SnapshotStore  backtest.SnapshotStore
 	SnapshotRoot   string
-	// HitterSystem/PitcherSystem are the RESOLVED systems the loads actually
-	// used (post RoS-first fallback), per role since rosterbot-5qvs.
-	HitterSystem   string
-	PitcherSystem  string
-	HittersNoData  bool
-	PitchersNoData bool
+	// Projections is what the run's two projection loads reported about
+	// themselves per role — resolved system, no-data, and upstream fetch time.
+	// Carried through to the archived snapshot verbatim.
+	Projections projInputs
 
 	// Lineup publication. A nil Publisher means "do not publish".
 	PublishLineup bool
@@ -128,7 +126,7 @@ func writeSnapshots(in EmitInputs) {
 		return
 	}
 	for _, dr := range in.Results {
-		if err := writeProjectionSnapshot(in.Out, dr, in.HitterSystem, in.PitcherSystem, in.SlotName, in.HittersNoData, in.PitchersNoData, in.SnapshotStore, in.SnapshotRoot); err != nil {
+		if err := writeProjectionSnapshot(in.Out, dr, in.Projections, in.SlotName, in.SnapshotStore, in.SnapshotRoot); err != nil {
 			fmt.Fprintf(in.Out, "  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)
 		}
 	}

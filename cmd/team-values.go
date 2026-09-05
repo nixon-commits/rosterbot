@@ -58,7 +58,7 @@ func runTeamValues(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	hkbPlayers, err := hkb.GetPlayers(cacheDir)
+	hkbPlayers, err := hkb.GetPlayers(cmd.Context(), cacheDir)
 	if err != nil {
 		return fmt.Errorf("get HKB players: %w", err)
 	}

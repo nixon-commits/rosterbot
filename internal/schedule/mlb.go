@@ -1,6 +1,7 @@
 package schedule
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -60,15 +61,15 @@ type schedulePayload struct {
 	} `json:"dates"`
 }
 
-func (c *Client) fetchSchedule(date time.Time) (*schedulePayload, error) {
+func (c *Client) fetchSchedule(ctx context.Context, date time.Time) (*schedulePayload, error) {
 	if c.CacheDir != "" && isPastDate(date) {
 		fc := cache.New[*schedulePayload](c.CacheDir, pastScheduleTTL)
 		key := cache.Key("mlb-schedule", date.Format("2006-01-02"))
 		return fc.Get(key, func() (*schedulePayload, error) {
-			return c.fetchScheduleUncached(date)
+			return c.fetchScheduleUncached(ctx, date)
 		})
 	}
-	return c.fetchScheduleUncached(date)
+	return c.fetchScheduleUncached(ctx, date)
 }
 
 // isPastDate reports whether date's UTC YMD is strictly before today's UTC
@@ -78,9 +79,13 @@ func isPastDate(date time.Time) bool {
 	return date.UTC().Format("2006-01-02") < time.Now().UTC().Format("2006-01-02")
 }
 
-func (c *Client) fetchScheduleUncached(date time.Time) (*schedulePayload, error) {
+func (c *Client) fetchScheduleUncached(ctx context.Context, date time.Time) (*schedulePayload, error) {
 	url := fmt.Sprintf(mlbScheduleURL, date.Format("2006-01-02"))
-	resp, err := c.http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("mlb schedule request: %w", err)
+	}
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("mlb schedule fetch: %w", err)
 	}
@@ -98,8 +103,8 @@ func (c *Client) fetchScheduleUncached(date time.Time) (*schedulePayload, error)
 }
 
 // TeamsPlayingOn returns the set of MLB team abbreviations with a game on the given date.
-func (c *Client) TeamsPlayingOn(date time.Time) (map[string]bool, error) {
-	payload, err := c.fetchSchedule(date)
+func (c *Client) TeamsPlayingOn(ctx context.Context, date time.Time) (map[string]bool, error) {
+	payload, err := c.fetchSchedule(ctx, date)
 	if err != nil {
 		return nil, err
 	}
@@ -118,8 +123,8 @@ func (c *Client) TeamsPlayingOn(date time.Time) (map[string]bool, error) {
 // for every game on the given date. A team that plays a doubleheader will
 // only have its last opponent in the map (good enough for award-style "facing
 // X" labels; we don't model doubleheaders elsewhere either).
-func (c *Client) OpponentsOn(date time.Time) (map[string]string, error) {
-	payload, err := c.fetchSchedule(date)
+func (c *Client) OpponentsOn(ctx context.Context, date time.Time) (map[string]string, error) {
+	payload, err := c.fetchSchedule(ctx, date)
 	if err != nil {
 		return nil, err
 	}
@@ -141,8 +146,8 @@ func (c *Client) OpponentsOn(date time.Time) (map[string]string, error) {
 
 // LockedTeams returns the set of teams whose game is currently in progress or final.
 // Players on these teams cannot be moved in Fantrax for that scoring period.
-func (c *Client) LockedTeams(date time.Time) (map[string]bool, error) {
-	payload, err := c.fetchSchedule(date)
+func (c *Client) LockedTeams(ctx context.Context, date time.Time) (map[string]bool, error) {
+	payload, err := c.fetchSchedule(ctx, date)
 	if err != nil {
 		return nil, err
 	}
@@ -166,8 +171,8 @@ func (c *Client) LockedTeams(date time.Time) (map[string]bool, error) {
 // Used to decide whether a matchup week ending today is actually over: the
 // Fantrax weekly "points" field is a running in-week score and can't tell us,
 // but the MLB schedule can.
-func (c *Client) AllGamesFinalOn(date time.Time) (bool, error) {
-	payload, err := c.fetchSchedule(date)
+func (c *Client) AllGamesFinalOn(ctx context.Context, date time.Time) (bool, error) {
+	payload, err := c.fetchSchedule(ctx, date)
 	if err != nil {
 		return false, err
 	}
@@ -224,9 +229,13 @@ type lineupsPayload struct {
 // abbreviation for rostered hitters. A player is only marked benched when
 // their team's game has lineups posted and the player is absent from the lineup.
 // If lineups are not yet posted for a game, no players from those teams are affected.
-func (c *Client) BenchedPlayers(date time.Time, rosterPlayers map[string]string) (map[string]bool, error) {
+func (c *Client) BenchedPlayers(ctx context.Context, date time.Time, rosterPlayers map[string]string) (map[string]bool, error) {
 	url := fmt.Sprintf(mlbLineupsURL, date.Format("2006-01-02"))
-	resp, err := c.http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("mlb lineups request: %w", err)
+	}
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("mlb lineups fetch: %w", err)
 	}
@@ -284,8 +293,8 @@ func (c *Client) BenchedPlayers(date time.Time, rosterPlayers map[string]string)
 
 // GameVenues returns a map of team abbreviation → home team abbreviation
 // for every team playing on the given date. The home team determines the park.
-func (c *Client) GameVenues(date time.Time) (map[string]string, error) {
-	payload, err := c.fetchSchedule(date)
+func (c *Client) GameVenues(ctx context.Context, date time.Time) (map[string]string, error) {
+	payload, err := c.fetchSchedule(ctx, date)
 	if err != nil {
 		return nil, err
 	}

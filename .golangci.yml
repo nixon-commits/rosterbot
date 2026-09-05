@@ -25,8 +25,8 @@ linters:
   # gate was introduced, except usetesting/copyloopvar (10 trivial
   # modernizations, all fixed in the same commit). They are enabled because
   # they cost nothing today and catch a real bug class later — not because they
-  # found something. nilerr and nolintlint are the exceptions and were added
-  # later with a known cost — see the note under the list.
+  # found something. nilerr, nolintlint and noctx are the exceptions and were
+  # added later with a known cost — see the notes under the list.
   enable:
     - bodyclose      # HTTP response bodies that are never closed
     - copyloopvar    # loop-variable copies made redundant by Go 1.22
@@ -35,6 +35,7 @@ linters:
     - makezero       # make([]T, n) then append — silently prepends n zeros
     - misspell       # common misspellings in comments and strings
     - nilerr         # returns a nil error on a branch guarded by err != nil
+    - noctx          # http.Get/PostForm/NewRequest, httptest.NewRequest, exec.Command without a context
     - nolintlint     # //nolint directives that are malformed, bare or stale
     - unconvert      # redundant type conversions
     - usetesting     # os.Chdir/os.Setenv in tests where t.Chdir/t.Setenv exist
@@ -64,6 +65,21 @@ linters:
   # load-bearing rather than decorative. Measured cost of bundling it: exactly
   # one annotation (internal/archive/archive.go's existing bare errcheck
   # directive gained a reason).
+  #
+  # noctx forbids the context-less shapes: http.Get/PostForm, an http.Client's
+  # .Get, http.NewRequest, httptest.NewRequest and exec.Command — each has a
+  # *WithContext / *Context sibling that takes a real context.Context instead
+  # of silently defaulting to context.Background() (rosterbot-6fpv). Deferred
+  # out of the linting-setup PR (rosterbot-ae74) because the 116 root-module
+  # findings it produced were real plumbing, not lint noise: ~19 production
+  # HTTP call sites needed a ctx threaded down from their nearest caller (a
+  # cobra RunE's cmd.Context(), or a ctx already in scope one or two frames up)
+  # and ~100 test/exec.Command sites needed t.Context(). Two production sites —
+  # internal/fantrax's GetScoringPeriodsAndTeams and fetchMLBGameLogUncached —
+  # stay on an explicit context.Background(), documented inline: *fantrax.Client
+  # is called from ~19 files with no ctx threaded through its method surface
+  # anywhere today, and ctx-enabling that surface for one leaf fetch each is a
+  # distinct, much larger effort than this pass.
 
   settings:
     nolintlint:

@@ -87,14 +87,13 @@ type TradeVerdict struct {
 // verdict can be stated.
 //
 // Deliberately two-branch, not tradevalue's three: baseball's Evaluate
-// compares a raw sum against a PackageDecay-adjusted sum and calls it
-// "too-close" when the two methods disagree. That decay constant is
-// explicitly NOT ported here -- it is documented as "an unmeasured prior,
-// not a measured value" fitted to one HKB observation (rosterbot-492 is open
-// to measure it properly), and StatsGuy's own /trades/evaluate applies none
-// (measured: 9361+1757=11118 exactly, a plain sum). With only one pricing
-// method, there is no second method to disagree with, so there is no
-// too-close state.
+// compares a raw sum against a package-discounted sum and calls it
+// "too-close" when the two methods disagree. That discount is explicitly NOT
+// ported here. It is HKB's penalty schedule -- measured exactly against their
+// calculator in rosterbot-492, but a measurement OF HKB, not of football --
+// and StatsGuy's own /trades/evaluate applies none (measured:
+// 9361+1757=11118 exactly, a plain sum). With only one pricing method, there
+// is no second method to disagree with, so there is no too-close state.
 //
 // It is NOT two-branch, though, and was never quite: TradeDeadEven is a third
 // outcome (rosterbot-h688). That is not a disagreement between methods — the

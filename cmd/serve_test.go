@@ -27,7 +27,7 @@ func TestServeMux_RoutesAPIAndStatic(t *testing.T) {
 
 	// Static file at "/" needs no auth — CloudFront's default behavior doesn't
 	// touch the Lambda either.
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -38,14 +38,14 @@ func TestServeMux_RoutesAPIAndStatic(t *testing.T) {
 	}
 
 	// /v1/* requires the bearer token, exactly like the deployed Lambda.
-	req = httptest.NewRequest(http.MethodGet, "/v1/jobs", nil)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/jobs", nil)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("GET /v1/jobs (no auth) = %d, want 401", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/jobs", nil)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/jobs", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -54,7 +54,7 @@ func TestServeMux_RoutesAPIAndStatic(t *testing.T) {
 	}
 
 	// Real local job runs write output under .lineup/outputs.
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/test-run/output", nil)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/runs/test-run/output", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -69,7 +69,7 @@ func TestServeMux_RoutesAPIAndStatic(t *testing.T) {
 func TestServeMux_NoWebDirConfigured(t *testing.T) {
 	mux := newServeMux("test-token", []byte("test-session-secret"), t.TempDir(), "")
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -86,7 +86,7 @@ func TestServeMux_AuthRoutesWork(t *testing.T) {
 	// loaded the single identity up front to build allowCredentials — so the
 	// server necessarily knew, before the user said anything, whether an account
 	// existed. Not revealing that is the improvement, not a regression.
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login/begin", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/login/begin", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -98,7 +98,7 @@ func TestServeMux_AuthRoutesWork(t *testing.T) {
 	// authorized enrolment against an identity model with no notion of whose
 	// account, which becomes a god token once there are several users. Enrolment
 	// goes through a user-scoped invite link or an existing session.
-	req = httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/register/begin", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)

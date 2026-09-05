@@ -1,6 +1,7 @@
 package backtest
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -62,16 +63,17 @@ var recencyWeights = []struct {
 // predating the graded days, or every window collapses to the same in-window
 // games. Production lineups are unaffected — this is backtest-only.
 func RunRecencyExperiment(
+	ctx context.Context,
 	ft ExperimentClient,
 	gradeDays []fantrax.DayRoster,
 	seriesDays []fantrax.DayRoster,
 	opts ExperimentOptions,
 ) (*ExperimentReport, error) {
-	hitters, err := runHitterRecency(ft, gradeDays, seriesDays, opts)
+	hitters, err := runHitterRecency(ctx, ft, gradeDays, seriesDays, opts)
 	if err != nil {
 		return nil, err
 	}
-	pitchers, err := runPitcherRecency(ft, gradeDays, seriesDays, opts)
+	pitchers, err := runPitcherRecency(ctx, ft, gradeDays, seriesDays, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -84,13 +86,14 @@ func RunRecencyExperiment(
 }
 
 func runHitterRecency(
+	ctx context.Context,
 	ft ExperimentClient,
 	gradeDays, seriesDays []fantrax.DayRoster,
 	opts ExperimentOptions,
 ) ([]VariantResult, error) {
 	// Base hitter projection source, shared across all variants. Mirrors the
 	// base-source construction in internal/lineuprun.
-	fgSrc, _, err := projections.LoadBattingProjections(opts.ProjectionSystem, opts.CacheDir, opts.ProjectionTTL)
+	fgSrc, _, err := projections.LoadBattingProjections(ctx, opts.ProjectionSystem, opts.CacheDir, opts.ProjectionTTL)
 	if err != nil {
 		return nil, fmt.Errorf("load base projections: %w", err)
 	}
@@ -129,11 +132,12 @@ func runHitterRecency(
 }
 
 func runPitcherRecency(
+	ctx context.Context,
 	ft ExperimentClient,
 	gradeDays, seriesDays []fantrax.DayRoster,
 	opts ExperimentOptions,
 ) ([]VariantResult, error) {
-	fgSrc, _, err := projections.LoadPitcherProjections(opts.ProjectionSystem, opts.CacheDir, opts.ProjectionTTL)
+	fgSrc, _, err := projections.LoadPitcherProjections(ctx, opts.ProjectionSystem, opts.CacheDir, opts.ProjectionTTL)
 	if err != nil {
 		return nil, fmt.Errorf("load base pitcher projections: %w", err)
 	}

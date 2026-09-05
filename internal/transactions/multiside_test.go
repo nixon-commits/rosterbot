@@ -79,10 +79,13 @@ func TestBuildTrade_SideOrderIsStableAcrossRuns(t *testing.T) {
 
 // Both sums agree here, so naming a winner is legitimate. This also pins the
 // two totals themselves: Total stays the plain raw sum it always was (existing
-// callers and tests depend on that), and Adjusted is the new decayed figure.
+// callers and tests depend on that), and Adjusted is the package-discounted
+// figure.
 func TestBuildTrade_ReportsRawAndAdjustedTotals(t *testing.T) {
 	// Alpha 5000 alone vs Beta 3000 + Gamma 1000 + Delta 400 = 4400 raw.
-	// Decayed: 5000 vs 3000 + .7(1000) + .49(400) = 3896 -- A leads on both.
+	// Discounted: 5000 vs 3000 + .62(1000) + .60(400) = 3860 -- A leads on
+	// both. (The discounted figure moved with rosterbot-492, which measured
+	// the ladder against HKB's calculator; the verdict did not.)
 	group := []models.Transaction{
 		{TradeGroupID: "g1", PlayerName: "Alpha Ace", ToTeamName: "Team A"},   // 5000
 		{TradeGroupID: "g1", PlayerName: "Beta Bat", ToTeamName: "Team B"},    // 3000
@@ -97,9 +100,9 @@ func TestBuildTrade_ReportsRawAndAdjustedTotals(t *testing.T) {
 	if got := byName["Team B"].Total; got != 4400 {
 		t.Fatalf("Team B raw = %d, want 4400", got)
 	}
-	// 3000 + 0.7*1000 + 0.49*400 = 3896
-	if got := byName["Team B"].Adjusted; got < 3895 || got > 3897 {
-		t.Errorf("Team B adjusted = %.1f, want ~3896", got)
+	// 3000 + 0.62*1000 + 0.60*400 = 3860
+	if got := byName["Team B"].Adjusted; got < 3859 || got > 3861 {
+		t.Errorf("Team B adjusted = %.1f, want ~3860", got)
 	}
 	// Single asset: adjusted == raw by construction.
 	if byName["Team A"].Adjusted != float64(byName["Team A"].Total) {
@@ -122,8 +125,8 @@ func TestBuildTrade_ReportsRawAndAdjustedTotals(t *testing.T) {
 // exactly as the tab does.
 func TestBuildTrade_WithholdsTheCallWhenTheTwoMethodsDisagree(t *testing.T) {
 	group := []models.Transaction{
-		// Raw: B leads 5500 to 5000. Adjusted: 3000 + .7(2500) = 4750, so A
-		// leads 5000 to 4750. Opposite winners.
+		// Raw: B leads 5500 to 5000. Adjusted: 3000 + .62(2500) = 4550, so A
+		// leads 5000 to 4550. Opposite winners.
 		{TradeGroupID: "g1", PlayerName: "Alpha Ace", ToTeamName: "Team A"},    // 5000
 		{TradeGroupID: "g1", PlayerName: "Beta Bat", ToTeamName: "Team B"},     // 3000
 		{TradeGroupID: "g1", PlayerName: "Epsilon Edge", ToTeamName: "Team B"}, // 2500
@@ -147,7 +150,7 @@ func TestBuildTrade_WithholdsTheCallWhenTheTwoMethodsDisagree(t *testing.T) {
 	}
 	// The multi-asset side must show both numbers; the single-asset side must
 	// not, since for it they are equal by construction.
-	if !strings.Contains(out, "adj 4,750") {
+	if !strings.Contains(out, "adj 4,550") {
 		t.Errorf("package side does not show its adjusted total:\n%s", out)
 	}
 	if strings.Count(out, "adj ") != 1 {

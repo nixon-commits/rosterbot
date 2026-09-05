@@ -1210,6 +1210,16 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			// successfully built commit, so a trigger that fails for a reason
 			// nobody predicted still surfaces. This one failed for a reason
 			// everybody thought was already fixed.
+			//
+			// The race two concurrent builds' `cdk deploy` can hit (both reach
+			// InfraStack within a few minutes of each other; the loser's
+			// UpdateStack fails while the stack is still ..._IN_PROGRESS from the
+			// winner) is now retried automatically at the deploy step itself —
+			// see buildspec.yml's post_build and infra/cdk_deploy_retry.sh
+			// (rosterbot-udd). That lock clears on its own within minutes, so the
+			// bounded retry there resolves most instances of this race without
+			// waiting on a human's next push; anything else still fails the build
+			// loudly, same as before.
 			ConcurrentBuildLimit: jsii.Number(-1),
 		})
 		// The other half of rosterbot-ill (set -e in the buildspec's cdk block, so a
@@ -1408,7 +1418,16 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		maxGap   time.Duration
 	}
 	jobs := []job{
-		{"Lineup", "cron(0 14-23,0-3 * * ? *)", jsii.Strings("optimize", "--matchup", "--archive-projections"), hourlyGap},
+		// TODAY ONLY (rosterbot-cem, design (b)). An hourly cadence can only
+		// legitimately learn anything NEW about today (late scratches,
+		// probables firming up) -- re-deciding a future day's lineup every
+		// hour is pure churn, not responsiveness. Measured from production
+		// notifications: only ~16% concerned today, the other ~84% were
+		// future-dated --matchup speculation re-decided the very next hour,
+		// and a single future date (2026-07-21) had Bohm flipped 32 times,
+		// Jeffers 29, Ward 29. The --matchup future-day pass moved to its own
+		// once-daily schedule, LineupMatchup, below.
+		{"Lineup", "cron(0 14-23,0-3 * * ? *)", jsii.Strings("optimize", "--archive-projections"), hourlyGap},
 		// Asserts the pinned Fantrax API version still passes Fantrax's gate.
 		// 10:30 UTC sits ahead of the first daily job (Prospects, 11:00) and well
 		// ahead of the hourly Lineup window (14:00-03:00), so a dead pin is known
@@ -1418,11 +1437,32 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		{"Prospects", "cron(0 11 * * ? *)", jsii.Strings("prospects"), dailyGap},
 		{"GsCheck", "cron(0 12 * * ? *)", jsii.Strings("gs-check"), dailyGap},
 		{"Waivers", "cron(0 13 * * ? *)", jsii.Strings("waivers"), dailyGap},
+		{"Grade", "cron(30 13 * * ? *)", jsii.Strings("grade"), dailyGap},
+		// Once-daily pre-write of the REST of the current matchup week
+		// (rosterbot-cem, design (b) -- the twin of the Lineup entry's
+		// today-only split above). This is the only place --matchup still
+		// runs: it writes/applies today plus every remaining day of the
+		// matchup period once, so those future-day snapshots exist ahead of
+		// game time, without the hourly job re-deciding them every hour.
+		// writeProjectionSnapshot (internal/lineuprun/snapshot.go) merges
+		// onto whatever is already archived per-date and never lets a Locked
+		// row regress, so this pre-write and the hourly today-only rewrite
+		// don't fight over the same date -- today's row here is simply
+		// superseded by the first hourly run at 14:00, and the sameETDate
+		// stale guard in backtest.go is what covers a future day that never
+		// gets refreshed again before it arrives.
+		//
+		// 13:45 UTC sits after Waivers (13:00) and Grade (13:30) and clears
+		// well before the hourly window opens at 14:00, so the day's future
+		// pre-writes land before the first today-only hourly run reads the
+		// roster. Like Shadow, it also has to dodge FanGraphs' Cloudflare
+		// challenge window (~17:00-03:00 UTC) -- 13:45 is inside the clean
+		// morning window.
+		{"LineupMatchup", "cron(45 13 * * ? *)", jsii.Strings("optimize", "--matchup", "--archive-projections"), dailyGap},
 		{"Transactions", "cron(0 14 * * ? *)", jsii.Strings("transactions"), dailyGap},
 		{"Claims", "cron(20 14 * * ? *)", jsii.Strings("claims"), dailyGap},
 		{"Recap", "cron(0 11 ? * MON *)", jsii.Strings("recap-site", "--out", "dist"), weeklyGap},
 		{"Backtest", "cron(0 12 ? * MON *)", jsii.Strings("backtest"), weeklyGap},
-		{"Grade", "cron(30 13 * * ? *)", jsii.Strings("grade"), dailyGap},
 		// SPLIT IN TWO (rosterbot-crq.14 follow-up). projection-site produces
 		// two unrelated kinds of artifact: the three PRIVATE per-tenant reports
 		// (model, gap, views) and the league-wide PUBLIC value.json /
@@ -1494,14 +1534,18 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// one per tenant per day — layout.Cache is deliberately NOT PerTenant for
 	// the same reason.
 	//
-	//	Lineup     applies to the tenant's own team; writes Lineup, Backtest,
-	//	           Trades and TradeOffers, all PerTenant.
-	//	Grade      writes Analysis and LineupGaps, both PerTenant.
-	//	Backtest   reads the tenant's own PerTenant Backtest snapshots.
-	//	Shadow     writes per-system snapshots under PerTenant Backtest.
-	//	Prospects  the non-obvious one — cmd/prospects.go has no TeamID in it,
-	//	           but internal/prospects/run.go calls ft.GetMinorsRoster(),
-	//	           which is team-scoped.
+	//	Lineup        applies to the tenant's own team; writes Lineup, Backtest,
+	//	              Trades and TradeOffers, all PerTenant.
+	//	LineupMatchup the daily --matchup pre-write (rosterbot-cem) is the same
+	//	              per-tenant roster/matchup-week read as Lineup, just once
+	//	              a day instead of hourly — it must fan out for the same
+	//	              reason.
+	//	Grade         writes Analysis and LineupGaps, both PerTenant.
+	//	Backtest      reads the tenant's own PerTenant Backtest snapshots.
+	//	Shadow        writes per-system snapshots under PerTenant Backtest.
+	//	Prospects     the non-obvious one — cmd/prospects.go has no TeamID in it,
+	//	              but internal/prospects/run.go calls ft.GetMinorsRoster(),
+	//	              which is team-scoped.
 	//
 	// ProjectionSite is deliberately ABSENT despite writing PerTenant Reports:
 	// it also publishes the league-wide PUBLIC report/value.json and
@@ -1512,7 +1556,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// Waivers, Transactions and GsCheck are league-wide as written — no team
 	// scoping at all — so they are singletons, not per-tenant jobs.
 	perTenantJobs := map[string]bool{
-		"Lineup": true, "Grade": true, "Backtest": true, "Shadow": true, "Prospects": true,
+		"Lineup": true, "LineupMatchup": true, "Grade": true, "Backtest": true, "Shadow": true, "Prospects": true,
 		// The private-reports half of projection-site. Its league-wide sibling
 		// (ProjectionSite) is deliberately absent — see the schedule table.
 		"ProjectionReports": true,

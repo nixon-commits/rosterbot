@@ -1,6 +1,8 @@
 package lineuprun
 
 import (
+	"context"
+
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/playername"
@@ -26,8 +28,8 @@ import (
 // That is the same call internal/claims makes when it enriches picked-up
 // players, and the opposite of LoadInputs' six fatal roster reads — those are
 // load-bearing inputs to the optimization itself.
-func LoadHKBMeta(cacheDir string) (map[string]lineupapi.Dynasty, error) {
-	players, err := hkb.GetPlayers(cacheDir)
+func LoadHKBMeta(ctx context.Context, cacheDir string) (map[string]lineupapi.Dynasty, error) {
+	players, err := hkb.GetPlayers(ctx, cacheDir)
 	if err != nil {
 		return nil, err
 	}

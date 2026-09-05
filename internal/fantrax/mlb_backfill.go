@@ -1,6 +1,7 @@
 package fantrax
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -320,9 +321,23 @@ func (c *Client) fetchMLBGameLog(mlbamID int, group string, season int) ([]mlbGa
 	})
 }
 
+// context.Background() is deliberate here, not an oversight: *Client's whole
+// exported surface (DailyFantasyPoints, MLBDailyFPts, GetTeamGS, ApplyLineup,
+// ...) is called from ~19 files across cmd/, internal/lineuprun,
+// internal/recap and internal/gscheck with no ctx threaded through any of
+// them today. Giving this one leaf fetch a real ctx would mean ctx-enabling
+// the entire Client method surface — ScheduleClient's rosterbot-6fpv-shaped
+// refactor, but an order of magnitude larger — which is out of scope for a
+// noctx lint-compliance pass. This is the outermost point that can name that
+// tradeoff, so the explicit Background() lives here rather than silently
+// deep inside http.Get.
 func fetchMLBGameLogUncached(mlbamID int, group string, season int) ([]mlbGameLogDay, error) {
 	url := fmt.Sprintf(mlbBackfillGameLogURL, mlbamID, group, season)
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build game log request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch game log: %w", err)
 	}

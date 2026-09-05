@@ -40,19 +40,52 @@ func installNotifyDispatcher() {
 	if sink := apnsSink(lineupapi.UserID(uid)); sink != nil {
 		d.Sinks = append(d.Sinks, sink)
 	}
-	// Cutover window only (see the spec's Cutover section): while this flag is
-	// set, every fantasy event also reaches Pushover, so APNs delivery can be
-	// confirmed against a channel known to work. Unsetting it completes the
-	// migration with no code change — and deliberately without touching
-	// PUSHOVER_USER_KEY, which the operator channel reads permanently.
-	if os.Getenv("PUSHOVER_FANTASY_DUAL_SEND") != "" {
-		if u, tkn := os.Getenv("PUSHOVER_USER_KEY"), os.Getenv("PUSHOVER_API_TOKEN"); u != "" && tkn != "" {
-			d.Sinks = append(d.Sinks, &notify.PushoverSink{UserKey: u, APIToken: tkn})
-		}
+	if sink := dualSendPushoverSink(uid); sink != nil {
+		d.Sinks = append(d.Sinks, sink)
 	}
 
 	notify.Default = d
 }
+
+// dualSendPushoverSink builds the cutover-window Pushover sink for uid, or
+// nil when the cutover flag or its credentials are absent (see the spec's
+// Cutover section: while PUSHOVER_FANTASY_DUAL_SEND is set, every fantasy
+// event also reaches Pushover, so APNs delivery can be confirmed against a
+// channel known to work; unsetting it completes the migration with no code
+// change — and deliberately without touching PUSHOVER_USER_KEY, which the
+// operator channel reads permanently).
+//
+// Split out of installNotifyDispatcher so a test can drive this exact
+// construction — including the TenantLabel field that is the entire content
+// of rosterbot-b1oh's fix — without also exercising installNotifyDispatcher's
+// statestore/APNs wiring. TestDualSendPushoverSink_TagsWithTheResolvedLabel
+// fails if the TenantLabel assignment below is ever dropped; before this
+// extraction nothing did (the tests for resolveTenantLabel/tenantLabelFrom
+// and for PushoverSink.Deliver both call their targets directly, bypassing
+// this call site entirely).
+func dualSendPushoverSink(uid string) notify.Sink {
+	if os.Getenv("PUSHOVER_FANTASY_DUAL_SEND") == "" {
+		return nil
+	}
+	u, tkn := os.Getenv("PUSHOVER_USER_KEY"), os.Getenv("PUSHOVER_API_TOKEN")
+	if u == "" || tkn == "" {
+		return nil
+	}
+	return &notify.PushoverSink{
+		UserKey:     u,
+		APIToken:    tkn,
+		TenantLabel: resolveTenantLabelFunc(context.Background(), uid),
+	}
+}
+
+// resolveTenantLabelFunc is the seam dualSendPushoverSink calls through.
+// Production leaves it at resolveTenantLabel; tests override it to prove the
+// resolved label is actually wired into PushoverSink.TenantLabel without
+// standing up a DynamoDB-backed identity store (resolveTenantLabel's own
+// non-empty-result path requires a live ddbuser.New lookup, which has no
+// hermetic double at this call site — mirrors the sendPushover seam in
+// internal/notify/sinks.go).
+var resolveTenantLabelFunc = resolveTenantLabel
 
 // apnsSink returns nil when APNs is not configured, which is the normal state
 // locally and in every test. All four inputs are required: the key pair to
@@ -84,4 +117,59 @@ func ddbPushDeviceStore(table string) (lineupapi.PushDeviceStore, error) {
 		return nil, err
 	}
 	return st, nil
+}
+
+// userLookup is the narrowest slice of the identity store resolveTenantLabel
+// needs. It is deliberately smaller than tenantDirectory (tenantcreds.go),
+// which also needs ConnectionStore to run a job as a tenant — this read only
+// decorates a notification title and never gates writing anywhere, so it has
+// no business requiring the connection half.
+type userLookup interface {
+	GetUser(ctx context.Context, id lineupapi.UserID) (*lineupapi.User, bool, error)
+}
+
+// resolveTenantLabel names the tenant a dual-send Pushover push should be
+// tagged with, for PushoverSink.TenantLabel (rosterbot-b1oh) — the minimum
+// per-tenant routing the bead's own text accepts in lieu of per-user Pushover
+// keys: every tenant's dual-send traffic still lands on the deployment's one
+// PUSHOVER_USER_KEY (the operator's phone), so a tester's push is tagged with
+// their name instead of reading as the operator's own team.
+//
+// It returns "" — untagged, today's byte-identical behaviour — whenever a tag
+// would be either meaningless or actively wrong:
+//   - uid is empty: a single-tenant/local-dev run has no tenant to tag.
+//   - uid IS the operator's own tenant (OPERATOR_USER_ID, see
+//     viewsReportBelongsHere in projection_scope.go for the same comparison
+//     used for a different report). The fix exists to stop OTHER tenants'
+//     pushes reading as the operator's; a tag on the operator's own pushes
+//     would just be noise on every message they already know is theirs.
+//   - IDENTITY_TABLE is unset: there is no directory to look the tenant up
+//     in, and this must not construct a store against an empty table name.
+//   - the lookup errors, the record is missing, or DisplayName is empty:
+//     nothing usable to tag with — refusing to guess matches the direction
+//     tenantRunConfig takes on its own read failure (act on what is known).
+func resolveTenantLabel(ctx context.Context, uid string) string {
+	if uid == "" || uid == os.Getenv("OPERATOR_USER_ID") {
+		return ""
+	}
+	table := os.Getenv("IDENTITY_TABLE")
+	if table == "" {
+		return ""
+	}
+	store, err := ddbuser.New(ctx, table)
+	if err != nil {
+		return ""
+	}
+	return tenantLabelFrom(ctx, store, lineupapi.UserID(uid))
+}
+
+// tenantLabelFrom does the actual directory read, split out from
+// resolveTenantLabel so the decision is testable against a stub rather than
+// DynamoDB.
+func tenantLabelFrom(ctx context.Context, dir userLookup, uid lineupapi.UserID) string {
+	u, ok, err := dir.GetUser(ctx, uid)
+	if err != nil || !ok {
+		return ""
+	}
+	return u.DisplayName
 }

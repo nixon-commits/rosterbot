@@ -1,6 +1,7 @@
 package lineuprun
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -57,38 +58,38 @@ type fakeDateSchedule struct {
 	hook func()
 }
 
-func (f *fakeDateSchedule) TeamsPlayingOn(d time.Time) (map[string]bool, error) {
+func (f *fakeDateSchedule) TeamsPlayingOn(ctx context.Context, d time.Time) (map[string]bool, error) {
 	if f.hook != nil {
 		f.hook()
 	}
 	if f.playingErr != nil {
 		return nil, f.playingErr
 	}
-	return f.fakeSchedule.TeamsPlayingOn(d)
+	return f.fakeSchedule.TeamsPlayingOn(ctx, d)
 }
 
-func (f *fakeDateSchedule) LockedTeams(d time.Time) (map[string]bool, error) {
+func (f *fakeDateSchedule) LockedTeams(ctx context.Context, d time.Time) (map[string]bool, error) {
 	if f.lockedErr != nil {
 		return nil, f.lockedErr
 	}
-	return f.fakeSchedule.LockedTeams(d)
+	return f.fakeSchedule.LockedTeams(ctx, d)
 }
 
-func (f *fakeDateSchedule) ProbableStarters(d time.Time) (map[string]string, error) {
+func (f *fakeDateSchedule) ProbableStarters(ctx context.Context, d time.Time) (map[string]string, error) {
 	if f.probablesErr != nil {
 		return nil, f.probablesErr
 	}
-	return f.fakeSchedule.ProbableStarters(d)
+	return f.fakeSchedule.ProbableStarters(ctx, d)
 }
 
-func (f *fakeDateSchedule) GameVenues(d time.Time) (map[string]string, error) {
+func (f *fakeDateSchedule) GameVenues(_ context.Context, d time.Time) (map[string]string, error) {
 	if f.venuesErr != nil {
 		return nil, f.venuesErr
 	}
 	return f.venues[d.Format("2006-01-02")], nil
 }
 
-func (f *fakeDateSchedule) BenchedPlayers(d time.Time, _ map[string]string) (map[string]bool, error) {
+func (f *fakeDateSchedule) BenchedPlayers(_ context.Context, d time.Time, _ map[string]string) (map[string]bool, error) {
 	if f.benchedErr != nil {
 		return nil, f.benchedErr
 	}
@@ -154,7 +155,7 @@ func TestOptimizeDates_ProducesOneResultPerDateInInputOrder(t *testing.T) {
 	sched.playing["2026-07-26"] = map[string]bool{"NYY": true}
 	sched.playing["2026-07-27"] = map[string]bool{"NYY": true}
 
-	got := OptimizeDates(healthyDateRoster(), sched, in)
+	got := OptimizeDates(t.Context(), healthyDateRoster(), sched, in)
 	if len(got) != 3 {
 		t.Fatalf("got %d results, want 3", len(got))
 	}
@@ -184,7 +185,7 @@ func TestOptimizeDates_OnlyFutureDatesFetchPeriodRosters(t *testing.T) {
 	ft := healthyDateRoster()
 	ft.periodRoster = in.HitterRoster
 
-	OptimizeDates(ft, sched, in)
+	OptimizeDates(t.Context(), ft, sched, in)
 
 	if ft.periodFetches != 1 {
 		t.Errorf("hitter period fetches = %d, want 1 (tomorrow only)", ft.periodFetches)
@@ -247,7 +248,7 @@ func TestOptimizeDates_UpstreamFailuresBecomeWarningsNotErrors(t *testing.T) {
 			}
 			tc.break_(sched, ft)
 
-			got := OptimizeDates(ft, sched, in)
+			got := OptimizeDates(t.Context(), ft, sched, in)
 			if len(got) != 1 {
 				t.Fatalf("got %d results, want 1", len(got))
 			}
@@ -285,7 +286,7 @@ func TestOptimizeDates_LockedTeamLocksActivesEvenWhenHurt(t *testing.T) {
 	sched := healthyDateSchedule()
 	sched.locked["2026-07-25"] = map[string]bool{"NYY": true}
 
-	got := OptimizeDates(healthyDateRoster(), sched, in)
+	got := OptimizeDates(t.Context(), healthyDateRoster(), sched, in)
 
 	locked := map[string]bool{}
 	for _, sp := range got[0].hitterResult.Scored {
@@ -317,7 +318,7 @@ func TestOptimizeDates_FutureDatesSkipLockAndBenchLookups(t *testing.T) {
 	sched.lockedErr = errors.New("should not be called")
 	sched.benchedErr = errors.New("should not be called")
 
-	got := OptimizeDates(healthyDateRoster(), sched, in)
+	got := OptimizeDates(t.Context(), healthyDateRoster(), sched, in)
 	if len(got[0].warnings) != 0 {
 		t.Errorf("future date consulted today-only lookups: %v", got[0].warnings)
 	}
@@ -336,7 +337,7 @@ func TestOptimizeDates_GSBudgetAppliesToTodayOnly(t *testing.T) {
 	ft := healthyDateRoster()
 	ft.periodRoster = in.PitcherRoster
 
-	got := OptimizeDates(ft, sched, in)
+	got := OptimizeDates(t.Context(), ft, sched, in)
 
 	starterOn := func(dr dateResult) bool {
 		for _, sp := range dr.pitcherResult.Scored {
@@ -359,13 +360,13 @@ func TestOptimizeDates_GSBudgetAppliesToTodayOnly(t *testing.T) {
 func TestOptimizeDates_PipelineDetailIsOptIn(t *testing.T) {
 	in := optimizeInputs()
 
-	off := OptimizeDates(healthyDateRoster(), healthyDateSchedule(), in)
+	off := OptimizeDates(t.Context(), healthyDateRoster(), healthyDateSchedule(), in)
 	if off[0].hitterPipelines != nil || off[0].pitcherPipelines != nil {
 		t.Error("pipeline detail should be absent without ShowPipeline")
 	}
 
 	in.ShowPipeline = true
-	on := OptimizeDates(healthyDateRoster(), healthyDateSchedule(), in)
+	on := OptimizeDates(t.Context(), healthyDateRoster(), healthyDateSchedule(), in)
 	if len(on[0].hitterPipelines) == 0 {
 		t.Error("expected hitter pipeline rows with ShowPipeline")
 	}
@@ -449,7 +450,7 @@ func TestOptimizeDates_RunsDatesConcurrently(t *testing.T) {
 	ft.periodFor["2026-07-28"] = 116
 	done := make(chan struct{})
 	go func() {
-		OptimizeDates(ft, sched, in)
+		OptimizeDates(t.Context(), ft, sched, in)
 		close(done)
 	}()
 

@@ -19,6 +19,14 @@ type Exclusion struct {
 
 // excludedGrades is the standing exclusion table.
 //
+// It should not need to grow. Since rosterbot-shku the snapshot records each
+// role's projection fetch time (backtest.Snapshot.HitterProjFetchedAt /
+// PitcherProjFetchedAt) and RunProjectionAnalysis refuses to grade a capture
+// whose input was already older than backtest.StaleInputAfter when it was
+// written, so a future Cloudflare window produces no rows to exclude rather
+// than rows to disown. This table remains the only remedy for the six
+// historical partitions below, which were written before that guard existed.
+//
 // Add an entry here -- never mutate or delete a row in the Analysis Store --
 // whenever a (date, system) partition is known to compare stale model input
 // against fresh actuals. Rewriting or marking the store itself needs its own

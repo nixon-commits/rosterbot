@@ -2,6 +2,7 @@ package fantrax
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -54,7 +55,14 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 		return nil, nil, nil, fmt.Errorf("marshal standings request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", standingsURL+"?leagueId="+c.leagueID, bytes.NewBuffer(jsonStr))
+	// context.Background() is deliberate: GetScoringPeriodsAndTeams is called
+	// from ~6 sites (cmd/team-values.go, cmd/trades.go, internal/recap,
+	// internal/lineuprun, internal/gscheck, and internally via
+	// GetSeasonDateRange's own ~8 callers) with no ctx threaded through
+	// *Client's method surface anywhere in the tree today — see the identical
+	// note on fetchMLBGameLogUncached in mlb_backfill.go for why ctx-enabling
+	// this whole surface is out of scope for a noctx lint-compliance pass.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, standingsURL+"?leagueId="+c.leagueID, bytes.NewBuffer(jsonStr))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("create standings request: %w", err)
 	}
@@ -134,16 +142,27 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 	return periods, teams, logos, nil
 }
 
-// playerGSSnapshot holds a pitcher's YTD GS, YTD fantasy points, name, MLB
+// PitcherSnapshotRow holds a pitcher's YTD GS, YTD fantasy points, name, MLB
 // team abbreviation, and active-slot status. Field names are exported so
 // the struct can round-trip through JSON when it's cached on disk.
-type playerGSSnapshot struct {
+//
+// It is exported so PitcherDayWalk — the pure kernel of the pitcher-day walk —
+// can be driven from outside this package by a diagnostic that reads frozen
+// snapshots off disk. That matters because the alternative is a harness that
+// re-derives what the walk derives, which is how a measurement ends up
+// describing an estimator nobody shipped (rosterbot-goht follow-up).
+type PitcherSnapshotRow struct {
 	GS      int     `json:"gs"`
 	FPts    float64 `json:"fpts"`
 	Name    string  `json:"name"`
 	MLBTeam string  `json:"mlb_team"`
 	Active  bool    `json:"active"`
 }
+
+// playerGSSnapshot is the package-internal spelling. An ALIAS rather than a
+// second type, so the cache envelope, the table parser and the exported kernel
+// are all literally the same struct and no conversion can drift.
+type playerGSSnapshot = PitcherSnapshotRow
 
 // PitcherStart records a single active-slot pitcher game start with its fantasy points.
 type PitcherStart struct {

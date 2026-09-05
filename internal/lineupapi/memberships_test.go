@@ -32,7 +32,7 @@ func TestListMembershipsIncludesProjectedFantrax(t *testing.T) {
 	cfg := Config{Users: store}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/v1/memberships", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/v1/memberships", nil)
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 	cfg.handleListMemberships(rec, req)
 
@@ -55,7 +55,7 @@ func TestAddMembershipStoresSleeperLeague(t *testing.T) {
 	cfg := Config{Users: store}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/v1/memberships",
+	req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/memberships",
 		strings.NewReader(`{"platform":"sleeper","league_id":"123","team_id":"456","display_name":"Dynasty"}`))
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 	cfg.handleAddMembership(rec, req)
@@ -89,7 +89,7 @@ func TestAddMembershipRefusesFantrax(t *testing.T) {
 	cfg := Config{Users: store}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/v1/memberships",
+	req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/memberships",
 		strings.NewReader(`{"platform":"fantrax","league_id":"L","team_id":"9"}`))
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 	cfg.handleAddMembership(rec, req)
@@ -106,7 +106,7 @@ func TestAddMembershipRefusesFantrax(t *testing.T) {
 func TestAddMembershipRequiresLeagueID(t *testing.T) {
 	cfg := Config{Users: membershipFixture(t, &User{ID: "u1"})}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/v1/memberships", strings.NewReader(`{"platform":"sleeper"}`))
+	req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/memberships", strings.NewReader(`{"platform":"sleeper"}`))
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 	cfg.handleAddMembership(rec, req)
 
@@ -122,7 +122,7 @@ func TestAddMembershipDuplicateIsConflict(t *testing.T) {
 	cfg := Config{Users: store}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/v1/memberships",
+	req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/memberships",
 		strings.NewReader(`{"platform":"sleeper","league_id":"123"}`))
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
 	cfg.handleAddMembership(rec, req)
@@ -141,7 +141,7 @@ func TestAddMembershipAllowsTheSameLeagueForTwoUsers(t *testing.T) {
 
 	for _, uid := range []UserID{"u1", "u2"} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest("POST", "/v1/memberships",
+		req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/memberships",
 			strings.NewReader(`{"platform":"sleeper","league_id":"123"}`))
 		req = req.WithContext(withCaller(req.Context(), Caller{UserID: uid}))
 		cfg.handleAddMembership(rec, req)
@@ -159,7 +159,7 @@ func TestDeleteMembershipRemovesIt(t *testing.T) {
 	cfg := Config{Users: store}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("DELETE", "/v1/memberships/sleeper/123", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "DELETE", "/v1/memberships/sleeper/123", nil)
 	req.SetPathValue("platform", "sleeper")
 	req.SetPathValue("leagueID", "123")
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
@@ -179,7 +179,7 @@ func TestDeleteMembershipRemovesIt(t *testing.T) {
 func TestDeleteMembershipAbsentIsNotAnError(t *testing.T) {
 	cfg := Config{Users: membershipFixture(t, &User{ID: "u1"})}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("DELETE", "/v1/memberships/sleeper/nope", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "DELETE", "/v1/memberships/sleeper/nope", nil)
 	req.SetPathValue("platform", "sleeper")
 	req.SetPathValue("leagueID", "nope")
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
@@ -193,7 +193,7 @@ func TestDeleteMembershipAbsentIsNotAnError(t *testing.T) {
 func TestDeleteMembershipRefusesFantrax(t *testing.T) {
 	cfg := Config{Users: membershipFixture(t, &User{ID: "u1", TeamID: "7"})}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("DELETE", "/v1/memberships/fantrax/L", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "DELETE", "/v1/memberships/fantrax/L", nil)
 	req.SetPathValue("platform", "fantrax")
 	req.SetPathValue("leagueID", "L")
 	req = req.WithContext(withCaller(req.Context(), Caller{UserID: "u1"}))
@@ -219,8 +219,8 @@ func TestMembershipRoutesAreNotAdminOnly(t *testing.T) {
 }
 
 // addMembershipReq builds a POST /v1/memberships request for the given caller.
-func addMembershipReq(uid UserID, body string) *http.Request {
-	req := httptest.NewRequest("POST", "/v1/memberships", strings.NewReader(body))
+func addMembershipReq(t *testing.T, uid UserID, body string) *http.Request {
+	req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/memberships", strings.NewReader(body))
 	return req.WithContext(withCaller(req.Context(), Caller{UserID: uid}))
 }
 
@@ -238,7 +238,7 @@ func TestAddMembershipRejectsOversizedFields(t *testing.T) {
 		store := membershipFixture(t, &User{ID: "u1"})
 		cfg := Config{Users: store}
 		rec := httptest.NewRecorder()
-		req := addMembershipReq("u1", body)
+		req := addMembershipReq(t, "u1", body)
 		cfg.handleAddMembership(rec, req)
 
 		if rec.Code != http.StatusBadRequest {
@@ -255,7 +255,7 @@ func TestAddMembershipRejectsOversizedFields(t *testing.T) {
 func TestAddMembershipAcceptsFieldsAtTheBound(t *testing.T) {
 	cfg := Config{Users: membershipFixture(t, &User{ID: "u1"})}
 	rec := httptest.NewRecorder()
-	cfg.handleAddMembership(rec, addMembershipReq("u1",
+	cfg.handleAddMembership(rec, addMembershipReq(t, "u1",
 		`{"platform":"sleeper","league_id":"`+strings.Repeat("1", maxLeagueIDLen)+
 			`","team_id":"`+strings.Repeat("4", maxTeamIDLen)+
 			`","display_name":"`+strings.Repeat("n", maxDisplayNameLen)+`"}`))
@@ -277,7 +277,7 @@ func TestAddMembershipCapsTheStoredList(t *testing.T) {
 	cfg := Config{Users: store}
 
 	rec := httptest.NewRecorder()
-	req := addMembershipReq("u1", `{"platform":"sleeper","league_id":"one-too-many"}`)
+	req := addMembershipReq(t, "u1", `{"platform":"sleeper","league_id":"one-too-many"}`)
 	cfg.handleAddMembership(rec, req)
 
 	if rec.Code != http.StatusConflict {
@@ -298,7 +298,7 @@ func TestAddMembershipAllowsTheLastSlotUnderTheCap(t *testing.T) {
 	cfg := Config{Users: membershipFixture(t, &User{ID: "u1", Memberships: full})}
 
 	rec := httptest.NewRecorder()
-	cfg.handleAddMembership(rec, addMembershipReq("u1",
+	cfg.handleAddMembership(rec, addMembershipReq(t, "u1",
 		`{"platform":"sleeper","league_id":"last"}`))
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
@@ -429,8 +429,8 @@ func (c *countingUserStore) PutUser(ctx context.Context, u *User) error {
 	return c.UserStore.PutUser(ctx, u)
 }
 
-func deleteMembershipReq(uid UserID, platform, leagueID string) *http.Request {
-	req := httptest.NewRequest("DELETE", "/v1/memberships/"+platform+"/"+leagueID, nil)
+func deleteMembershipReq(t *testing.T, uid UserID, platform, leagueID string) *http.Request {
+	req := httptest.NewRequestWithContext(t.Context(), "DELETE", "/v1/memberships/"+platform+"/"+leagueID, nil)
 	req.SetPathValue("platform", platform)
 	req.SetPathValue("leagueID", leagueID)
 	return req.WithContext(withCaller(req.Context(), Caller{UserID: uid}))
@@ -447,7 +447,7 @@ func TestDeleteMembershipAbsentDoesNotWrite(t *testing.T) {
 	cfg := Config{Users: store}
 
 	rec := httptest.NewRecorder()
-	cfg.handleDeleteMembership(rec, deleteMembershipReq("u1", "sleeper", "not-there"))
+	cfg.handleDeleteMembership(rec, deleteMembershipReq(t, "u1", "sleeper", "not-there"))
 
 	// Still a 200: an absent membership is a satisfied intent, not an error.
 	if rec.Code != http.StatusOK {
@@ -465,7 +465,7 @@ func TestDeleteMembershipAbsentDoesNotWrite(t *testing.T) {
 
 	// The counter is not vacuous: a delete that DOES remove something writes.
 	rec = httptest.NewRecorder()
-	cfg.handleDeleteMembership(rec, deleteMembershipReq("u1", "sleeper", "123"))
+	cfg.handleDeleteMembership(rec, deleteMembershipReq(t, "u1", "sleeper", "123"))
 	if rec.Code != http.StatusOK || store.puts != 1 {
 		t.Errorf("real delete: status %d, puts %d; want 200 and exactly one write",
 			rec.Code, store.puts)

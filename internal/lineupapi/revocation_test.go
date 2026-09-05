@@ -99,7 +99,7 @@ func signedReq(t *testing.T, secret []byte, method, path string, sub UserID, ver
 	t.Helper()
 	rec := httptest.NewRecorder()
 	setSessionCookie(rec, secret, sub, ver, time.Now())
-	r := httptest.NewRequest(method, path, nil)
+	r := httptest.NewRequestWithContext(t.Context(), method, path, nil)
 	for _, c := range rec.Result().Cookies() {
 		r.AddCookie(c)
 	}

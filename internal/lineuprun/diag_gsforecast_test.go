@@ -46,8 +46,8 @@ func TestDiagGSForecastAgainstLiveSchedule(t *testing.T) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	sched := schedule.NewClient()
 
-	forecast, err := buildGSForecast(sched, spNames, 6, today, weekEnd,
-		func(fantrax.Player) float64 { return 12 })
+	forecast, err := buildGSForecast(t.Context(), sched, spNames, 6, today, weekEnd,
+		func(fantrax.Player) float64 { return 12 }, nil)
 	if err != nil {
 		t.Fatalf("forecast failed: %v", err)
 	}
@@ -56,8 +56,8 @@ func TestDiagGSForecastAgainstLiveSchedule(t *testing.T) {
 	for _, f := range forecast {
 		// Re-derive the partition for the report; buildGSForecast keeps only
 		// the totals.
-		playing, _ := sched.TeamsPlayingOn(f.Date)
-		probs, _ := sched.ProbableStarters(f.Date)
+		playing, _ := sched.TeamsPlayingOn(t.Context(), f.Date)
+		probs, _ := sched.ProbableStarters(t.Context(), f.Date)
 		announced := map[string]bool{}
 		for _, tm := range probs {
 			announced[tm] = true

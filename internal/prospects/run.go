@@ -102,14 +102,14 @@ func hkbRanks(players []hkb.Player) map[string]int {
 // parallel, alongside any extra funcs the caller adds to the same errgroup
 // (e.g. available-prospects or the full player pool). The two ranking
 // fetches soft-fail with a WARNING; only an extra func's error is fatal.
-func fetchRankingSources(cfg config.Config, today time.Time, extra ...func() error) ([]RankedProspect, []hkb.Player, error) {
+func fetchRankingSources(ctx context.Context, cfg config.Config, today time.Time, extra ...func() error) ([]RankedProspect, []hkb.Player, error) {
 	var fgRankings []RankedProspect
 	var hkbPlayers []hkb.Player
 
 	g := new(errgroup.Group)
 
 	g.Go(func() error {
-		r, err := LoadRankings(&FanGraphsRankingSource{}, today.Year(), cfg.ProspectRankCacheHours)
+		r, err := LoadRankings(ctx, &FanGraphsRankingSource{}, today.Year(), cfg.ProspectRankCacheHours)
 		if err != nil {
 			log.Printf("WARNING: FanGraphs rankings failed: %v", err)
 			return nil
@@ -119,7 +119,7 @@ func fetchRankingSources(cfg config.Config, today time.Time, extra ...func() err
 	})
 
 	g.Go(func() error {
-		p, err := hkb.GetPlayers(".cache")
+		p, err := hkb.GetPlayers(ctx, ".cache")
 		if err != nil {
 			log.Printf("WARNING: HKB data failed: %v", err)
 			return nil
@@ -209,7 +209,7 @@ func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Confi
 
 	var availablePlayers []fantrax.Player
 
-	fgRankings, hkbPlayers, err := fetchRankingSources(cfg, today, func() error {
+	fgRankings, hkbPlayers, err := fetchRankingSources(ctx, cfg, today, func() error {
 		ap, err := ft.GetAvailableProspects()
 		if err != nil {
 			log.Printf("WARNING: failed to fetch available prospects: %v", err)
@@ -247,7 +247,7 @@ func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Confi
 
 	// Fetch alerts (both non-fatal on error)
 	var txnAlerts []ProspectAlert
-	ta, err := FetchTransactionAlerts(cursorDate, today, myMinors, rankingsMap, availableSet)
+	ta, err := FetchTransactionAlerts(ctx, cursorDate, today, myMinors, rankingsMap, availableSet)
 	if err != nil {
 		log.Printf("WARNING: transaction alerts failed: %v", err)
 	} else {
@@ -255,7 +255,7 @@ func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Confi
 	}
 
 	var perfAlerts []ProspectAlert
-	pa, perfCoverage, err := FetchPerformanceAlerts(minorsRoster, rankingsMap, today.Year(), cfg.ProspectRollingDays, cfg.ProspectMinGames)
+	pa, perfCoverage, err := FetchPerformanceAlerts(ctx, minorsRoster, rankingsMap, today.Year(), cfg.ProspectRollingDays, cfg.ProspectMinGames)
 	if err != nil {
 		log.Printf("WARNING: performance alerts failed: %v", err)
 	} else {
@@ -566,14 +566,14 @@ func printReport(r Report, roster []rosterRankEntry, sourceNames []string) {
 // ListAllProspects fetches all minors-eligible players in the league, cross-
 // references them against ranking sources, and prints a table showing each
 // player's rank and which fantasy team owns them.
-func ListAllProspects(ft *fantrax.Client, cfg config.Config, today time.Time) error {
+func ListAllProspects(ctx context.Context, ft *fantrax.Client, cfg config.Config, today time.Time) error {
 	if err := os.MkdirAll(".cache", 0o755); err != nil {
 		return fmt.Errorf("creating cache dir: %w", err)
 	}
 
 	var pool []models.PoolPlayer
 
-	fgRankings, hkbPlayers, err := fetchRankingSources(cfg, today, func() error {
+	fgRankings, hkbPlayers, err := fetchRankingSources(ctx, cfg, today, func() error {
 		p, err := ft.GetFullPlayerPool()
 		if err != nil {
 			return fmt.Errorf("fetching player pool: %w", err)

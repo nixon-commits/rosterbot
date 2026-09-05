@@ -532,6 +532,62 @@ func (cfg Config) handleTenantRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, RunsResponse{Runs: runs})
 }
 
+// handleTenantRun serves ONE TENANT's run detail — the admin drill-down GET
+// /v1/tenants/{id}/runs/{runID} (rosterbot-iymz, following rosterbot-f0th's
+// list and output routes). handleRunDetail already exists for the caller's
+// own ledger; this is its per-tenant twin, giving the card the log tail, exit
+// code and connect verdict a FAILED run needs that the bounded row summary on
+// GET /v1/tenants deliberately does not carry.
+//
+// Mirrors handleRunDetail exactly, resolved against the tenant named in the
+// path rather than the caller — same gating reasoning as handleTenantRuns and
+// handleTenantRunOutput above: nested under /v1/tenants/{id}/, registered
+// exclusively there, and tenantViewOf's call is authorized on that basis — see
+// tenantviewof_callers_test.go's allowedCallers.
+//
+// Uses cfg.tenantConnectRun, NOT cfg.lastConnectRun: the latter keys off
+// CallerFrom(ctx) (the admin caller), which would stamp the ADMIN's own
+// connect verdict onto every tenant's drill-down — the exact mis-attribution
+// connectrun.go's doc comment warns about and TestTenantRuns_AdminSeesTheNamedTenantsLedger's
+// sibling in tenant_run_detail_test.go pins for this route.
+func (cfg Config) handleTenantRun(w http.ResponseWriter, r *http.Request) {
+	if cfg.Users == nil {
+		writeErr(w, http.StatusNotImplemented, "user directory not configured")
+		return
+	}
+	id := UserID(r.PathValue("id"))
+	if !cfg.requireExistingTenant(w, r, id) {
+		return
+	}
+
+	view, ok := cfg.tenantViewOf(r.Context(), id)
+	if !ok {
+		writeErr(w, http.StatusServiceUnavailable, "could not resolve this account's data")
+		return
+	}
+	if view.Runs == nil {
+		writeErr(w, http.StatusNotImplemented, "run ledger not configured")
+		return
+	}
+	runID := r.PathValue("runID")
+	detail, ok, err := view.Runs.Get(r.Context(), runID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "run ledger unavailable")
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "run not found")
+		return
+	}
+	// Copied before annotating, same as handleRunDetail: the store may hand
+	// back a pointer into state it retains.
+	out := *detail
+	if lr := cfg.tenantConnectRun(r.Context(), id, []Run{out.Run}); lr != nil {
+		applyConnectOutcome(&out.Run, lr)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // handleTenantRunOutput serves ONE TENANT's captured stdout for one run — the
 // admin drill-down GET /v1/tenants/{id}/runs/{runID}/output (rosterbot-f0th).
 // Mirrors handleRunOutput exactly, resolved against the tenant named in the

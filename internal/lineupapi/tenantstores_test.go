@@ -39,8 +39,8 @@ func (m memBlob) Publish(_ context.Context, key string, data []byte) error {
 
 // sessionFor builds a request carrying an authorized caller, bypassing the
 // cookie machinery so this file tests store SELECTION rather than auth.
-func sessionFor(uid UserID) *http.Request {
-	r := httptest.NewRequest(http.MethodGet, "/v1/lineup/today", nil)
+func sessionFor(t *testing.T, uid UserID) *http.Request {
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/lineup/today", nil)
 	return r.WithContext(withCaller(r.Context(), Caller{UserID: uid, Role: RoleMember}))
 }
 
@@ -55,7 +55,7 @@ func TestTenantView_ServesTheCallersOwnData(t *testing.T) {
 	cfg := Config{Tenants: perTenantBlobs{}}
 
 	for _, uid := range []UserID{"alice", "bob"} {
-		v, ok := cfg.tenantView(sessionFor(uid).Context())
+		v, ok := cfg.tenantView(sessionFor(t, uid).Context())
 		if !ok {
 			t.Fatalf("%s: tenantView refused", uid)
 		}
@@ -82,7 +82,7 @@ func TestTenantView_ProviderFailureDoesNotFallBack(t *testing.T) {
 		Lineups: memBlob{TodayKey: []byte(`{"owner":"operator"}`)},
 	}
 
-	v, ok := cfg.tenantView(sessionFor("alice").Context())
+	v, ok := cfg.tenantView(sessionFor(t, "alice").Context())
 	if ok {
 		t.Fatal("a failed tenant resolution was reported as usable")
 	}
@@ -117,7 +117,7 @@ func TestLineupRoute_IsScopedToTheCaller(t *testing.T) {
 	h := Handler(cfg)
 
 	for _, uid := range []UserID{"alice", "bob"} {
-		r := httptest.NewRequest(http.MethodGet, "/v1/lineup/today", nil)
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/lineup/today", nil)
 		r = r.WithContext(withCaller(r.Context(), Caller{UserID: uid, Role: RoleMember}))
 		rec := httptest.NewRecorder()
 		// Call the handler directly: Handler's gate resolves its own caller from

@@ -41,6 +41,13 @@ type fakeLineupClient struct {
 	periods            []fantrax.ScoringPeriod
 	gsMin, gsMax       *int
 	usedGS             int
+
+	// pitcherDayCalls counts GetTeamPitcherDaysWithStatus invocations — the
+	// start-rate history walk. It exists to prove StartRateCache actually
+	// dedupes that walk across a Run (see
+	// TestRun_PrefilledStartRateCacheSkipsTheHistoryWalk): nothing else here
+	// distinguishes "measured once" from "measured every call".
+	pitcherDayCalls int
 }
 
 func (f *fakeLineupClient) copyOf(ps []fantrax.Player) []fantrax.Player {
@@ -89,6 +96,12 @@ func (f *fakeLineupClient) GetGSLimits(_ string, _ fantrax.WeeklyPeriod) (*int, 
 }
 func (f *fakeLineupClient) GetTeamGS(_, _ string, _ fantrax.ScoringPeriod, _, _ time.Time, _ int, _ bool) (int, []fantrax.PitcherStart, error) {
 	return f.usedGS, nil, nil
+}
+func (f *fakeLineupClient) GetTeamPitcherDaysWithStatus(_ string, _, _, _ time.Time, _ string, _ time.Duration) ([]fantrax.PitcherDay, error) {
+	f.mu.Lock()
+	f.pitcherDayCalls++
+	f.mu.Unlock()
+	return nil, nil
 }
 func (f *fakeLineupClient) GetRecentPitcherStats(_ fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error) {
 	return map[string]fantrax.RecentStat{}, nil
@@ -141,16 +154,16 @@ func (f *fakeLineupClient) InvalidatePeriodRosterCache(period fantrax.DailyPerio
 // network-hitting dependency (see the Options doc).
 func withFakeDeps(o Options, bat *projections.FanGraphsSource, pit *projections.FanGraphsPitcherSource, sched ScheduleClient) Options {
 	o.Schedule = sched
-	o.LoadBattingProjections = func(system string, _ string, _ time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
+	o.LoadBattingProjections = func(_ context.Context, system string, _ string, _ time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
 		return bat, projections.LoadResult{System: system}, nil
 	}
-	o.LoadPitcherProjections = func(system string, _ string, _ time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
+	o.LoadPitcherProjections = func(_ context.Context, system string, _ string, _ time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
 		return pit, projections.LoadResult{System: system}, nil
 	}
 	o.FetchHandedness = func(map[string]int, string, time.Duration) (map[string]string, map[string]string, error) {
 		return map[string]string{}, map[string]string{}, nil
 	}
-	o.LoadHKBMeta = func(string) (map[string]lineupapi.Dynasty, error) {
+	o.LoadHKBMeta = func(context.Context, string) (map[string]lineupapi.Dynasty, error) {
 		return map[string]lineupapi.Dynasty{}, nil
 	}
 	return o
@@ -307,13 +320,13 @@ func TestRun_UsesPerRoleProjectionSystems(t *testing.T) {
 	}, bat, pit, sched)
 	var gotBat, gotPit string
 	origBat, origPit := opts.LoadBattingProjections, opts.LoadPitcherProjections
-	opts.LoadBattingProjections = func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
+	opts.LoadBattingProjections = func(ctx context.Context, system, cacheDir string, ttl time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
 		gotBat = system
-		return origBat(system, cacheDir, ttl)
+		return origBat(ctx, system, cacheDir, ttl)
 	}
-	opts.LoadPitcherProjections = func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
+	opts.LoadPitcherProjections = func(ctx context.Context, system, cacheDir string, ttl time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
 		gotPit = system
-		return origPit(system, cacheDir, ttl)
+		return origPit(ctx, system, cacheDir, ttl)
 	}
 
 	cfg := &config.Config{LeagueID: "lg1", TeamID: "team1", DryRun: true,
@@ -354,7 +367,9 @@ func TestDisplayNameFor(t *testing.T) {
 // and the alert reaching Run's output with the marker store consulted under a
 // key carrying the period ComputeGSBudget resolved.
 func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
-	today := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	// Thursday: three days left, which is gsFloorMaxDaysLeft — the first day
+	// the 150-week replay found the projection informative.
+	today := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
 	weekStart := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	weekEnd := time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC)
 	gsMin, gsMax := 10, 12
@@ -387,15 +402,13 @@ func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
 		{Name: "Lone Starter", Team: "BOS", Proj: projections.PitcherProjection{G: 30, IP: 180, K: 200}},
 	})
 
-	// Thu 27 and Fri 28 nobody of ours plays at all — the empty days the alert
-	// has to name. Sat 29 and Sun 30 our one SP's club plays and has named
-	// nobody, which is 0.2 estimated starts each: nowhere near the six the
-	// floor still needs.
+	// Fri 28 and Sat 29 nobody of ours plays at all — the empty days the alert
+	// has to name. Sun 30 our one SP's club plays and has named nobody, which
+	// is 0.2 estimated starts: nowhere near the six the floor still needs.
 	sched := &fakeDateSchedule{
 		fakeSchedule: fakeSchedule{
 			playing: map[string]map[string]bool{
 				today.Format("2006-01-02"): {"NYY": true, "BOS": true},
-				"2026-08-29":               {"BOS": true},
 				"2026-08-30":               {"BOS": true},
 			},
 		},
@@ -445,7 +458,7 @@ func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
 	if !strings.Contains(got, "=== GS Floor Risk ===") {
 		t.Fatalf("a week four starts into a ten-start minimum did not raise the alert.\n%s", got)
 	}
-	for _, day := range []string{"Thu Aug 27", "Fri Aug 28"} {
+	for _, day := range []string{"Fri Aug 28", "Sat Aug 29"} {
 		if !strings.Contains(got, day) {
 			t.Errorf("alert does not name the empty day %s — the actionable half.\n%s", day, got)
 		}
@@ -470,5 +483,89 @@ func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
 	if len(markers.getKeys) != 1 || markers.getKeys[0] != "2026-p21" {
 		t.Errorf("marker store consulted with %v, want exactly [2026-p21] — "+
 			"Options.GSFloorMarkers is not reaching the dedup check", markers.getKeys)
+	}
+}
+
+// TestRun_PrefilledStartRateCacheSkipsTheHistoryWalk pins the wiring that lets
+// nothing here catch a regression: Options.StartRates only ever gets threaded
+// into GSInputs.StartRates (lineuprun.go) and consulted inside ComputeGSBudget
+// (gsbudget.go) — delete either line and every other test in this package
+// stays green, because StartRateCache.get(measure) falls back to calling
+// measure() on a nil receiver, which is exactly what "not wired" looks like
+// from the outside.
+//
+// A cache is "pre-filled" here by calling its own get once, ahead of Run, with
+// a stub measure that never touches the fake client — mirroring what
+// `shadow`'s first per-system pass would have already done by the time a
+// later pass reuses the same *StartRateCache. If Run is actually consulting
+// that cache, its own walk must never run: pitcherDayCalls stays 0.
+func TestRun_PrefilledStartRateCacheSkipsTheHistoryWalk(t *testing.T) {
+	today := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
+	weekStart := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	weekEnd := time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC)
+	gsMin, gsMax := 10, 12
+
+	ft := &fakeLineupClient{
+		hitters: []fantrax.Player{
+			{ID: "h1", Name: "Only Bat", MLBTeam: "NYY", Positions: []string{"012"}, Status: "Active", RosterPosition: "014"},
+		},
+		pitchers: []fantrax.Player{
+			{ID: "p1", Name: "Lone Starter", MLBTeam: "BOS", Positions: []string{"015"}, PosShortNames: "SP", Status: "Active", RosterPosition: "017"},
+		},
+		seasonStart: time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC),
+		seasonEnd:   time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC),
+		period:      155,
+
+		weekStart: weekStart,
+		weekEnd:   weekEnd,
+		periods: []fantrax.ScoringPeriod{
+			{Number: 21, StartDate: weekStart, EndDate: weekEnd},
+		},
+		gsMin:  &gsMin,
+		gsMax:  &gsMax,
+		usedGS: 4,
+	}
+
+	bat := projections.NewFanGraphsSourceFromEntries([]projections.SourceEntry{
+		{Name: "Only Bat", Team: "NYY", Proj: projections.Projection{G: 100, HR: 20}},
+	})
+	pit := projections.NewFanGraphsPitcherSourceFromEntries([]projections.PitcherSourceEntry{
+		{Name: "Lone Starter", Team: "BOS", Proj: projections.PitcherProjection{G: 30, IP: 180, K: 200}},
+	})
+	sched := &fakeDateSchedule{}
+
+	cache := NewStartRateCache()
+	// Pre-fill: measure() here is the stand-in for an earlier pass's real
+	// walk. It must never be called again by the Run below.
+	if _, err := cache.get(func() (startRateResult, error) {
+		return startRateResult{Rate: map[string]float64{"lone starter": 0.15}}, nil
+	}); err != nil {
+		t.Fatalf("priming the cache: %v", err)
+	}
+
+	var out bytes.Buffer
+	cfg := &config.Config{
+		LeagueID: "lg1", TeamID: "team1",
+		DryRun: false, AutoApply: true,
+		GSTrackingEnabled: true,
+		Dates:             []time.Time{today},
+	}
+	opts := withFakeDeps(Options{
+		Today:         today,
+		HitterSystem:  "depthcharts",
+		PitcherSystem: "depthcharts",
+		StartRates:    cache,
+		Out:           &out,
+	}, bat, pit, sched)
+
+	if _, err := Run(context.Background(), ft, cfg, opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if ft.pitcherDayCalls != 0 {
+		t.Errorf("pitcherDayCalls = %d, want 0 — a pre-filled StartRateCache must not "+
+			"trigger a fresh history walk; either the Options.StartRates -> GSInputs.StartRates "+
+			"wiring in lineuprun.go or the StartRates.get consult in gsbudget.go is not reaching "+
+			"this call.\n%s", ft.pitcherDayCalls, out.String())
 	}
 }

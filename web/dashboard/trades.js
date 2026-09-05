@@ -2,11 +2,11 @@
 //
 // Answers one question: should I take this offer? Each offer shows both sides
 // priced against HKB dynasty values two ways — a plain sum, and a sum that
-// discounts every asset after the best (internal/tradevalue.PackageDecay) —
-// and states a verdict only when the two agree. When they disagree the trade
-// is inside the model's own uncertainty and the tab says so instead of
-// picking a side. That is not pedantry: on the 2-for-1 that motivated this
-// feature the two methods name opposite winners.
+// discounts every asset after the best (internal/tradevalue.PackageDiscount) —
+// and states a verdict only when the two agree. When they disagree, which side
+// won depends entirely on whether you charge that discount, and the tab says
+// so instead of picking a side. That is not pedantry: on the 2-for-1 that
+// motivated this feature the two methods name opposite winners.
 //
 // Rows are built with createElement/textContent rather than interpolated into
 // innerHTML. Player and team names come from Fantrax and HKB, and render.js's
@@ -82,8 +82,8 @@ function verdictExplain(v, myTeam) {
         `Each side is priced twice. Raw value is a straight sum of HKB dynasty ` +
         `values. Adjusted value discounts every asset after the best one, because ` +
         `a package of good players is worth less than their sum.\n\nHere the two ` +
-        `methods name opposite winners, so the trade sits inside the model's own ` +
-        `uncertainty and no verdict is stated. A single number would have been ` +
+        `methods name opposite winners, so which side won depends entirely on ` +
+        `whether that discount is charged, and no verdict is stated. A single number would have been ` +
         `confidently wrong — on the 2-for-1 that prompted this feature, raw ` +
         `favoured one side by 12.7% while adjusted favoured the other.`,
     };

@@ -1,6 +1,7 @@
 package hkb
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -94,14 +95,18 @@ var nextDataRe = regexp.MustCompile(`(?s)<script id="__NEXT_DATA__"[^>]*>(.*?)</
 
 // GetPlayers returns all HKB players, using a file cache with 8h TTL.
 // This is the single entry point for all HKB data consumers.
-func GetPlayers(cacheDir string) ([]Player, error) {
+func GetPlayers(ctx context.Context, cacheDir string) ([]Player, error) {
 	c := cache.New[[]Player](cacheDir, 8*time.Hour)
-	return c.Get("hkb-players", fetchPlayers)
+	return c.Get("hkb-players", func() ([]Player, error) { return fetchPlayers(ctx) })
 }
 
-func fetchPlayers() ([]Player, error) {
+func fetchPlayers(ctx context.Context) ([]Player, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(fetchURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("hkb request: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("hkb fetch: %w", err)
 	}

@@ -1,6 +1,7 @@
 package statsguy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,15 +36,15 @@ type picksResponse struct {
 
 // LoadBundle fetches both StatsGuy slices (cached at ttl) and returns the
 // joined Bundle.
-func LoadBundle(cacheDir string, ttl time.Duration) (*Bundle, error) {
+func LoadBundle(ctx context.Context, cacheDir string, ttl time.Duration) (*Bundle, error) {
 	playersC := cache.New[playersResponse](cacheDir, ttl)
-	players, err := playersC.Get(cache.Key("statsguy-players"), fetchPlayers)
+	players, err := playersC.Get(cache.Key("statsguy-players"), func() (playersResponse, error) { return fetchPlayers(ctx) })
 	if err != nil {
 		return nil, fmt.Errorf("statsguy players: %w", err)
 	}
 
 	picksC := cache.New[picksResponse](cacheDir, ttl)
-	picks, err := picksC.Get(cache.Key("statsguy-picks"), fetchPicks)
+	picks, err := picksC.Get(cache.Key("statsguy-picks"), func() (picksResponse, error) { return fetchPicks(ctx) })
 	if err != nil {
 		return nil, fmt.Errorf("statsguy picks: %w", err)
 	}
@@ -56,25 +57,29 @@ func LoadBundle(cacheDir string, ttl time.Duration) (*Bundle, error) {
 	return bundle, nil
 }
 
-func fetchPlayers() (playersResponse, error) {
+func fetchPlayers(ctx context.Context) (playersResponse, error) {
 	var out playersResponse
-	if err := getJSON(baseURL+"/api/v1/players", &out); err != nil {
+	if err := getJSON(ctx, baseURL+"/api/v1/players", &out); err != nil {
 		return playersResponse{}, err
 	}
 	return out, nil
 }
 
-func fetchPicks() (picksResponse, error) {
+func fetchPicks(ctx context.Context) (picksResponse, error) {
 	var out picksResponse
-	if err := getJSON(baseURL+"/api/v1/picks", &out); err != nil {
+	if err := getJSON(ctx, baseURL+"/api/v1/picks", &out); err != nil {
 		return picksResponse{}, err
 	}
 	return out, nil
 }
 
-func getJSON(url string, out any) error {
+func getJSON(ctx context.Context, url string, out any) error {
 	client := &http.Client{Timeout: httpTimeout}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("GET %s: build request: %w", url, err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", url, err)
 	}

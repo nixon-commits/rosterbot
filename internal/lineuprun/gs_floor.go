@@ -19,33 +19,95 @@ const gsFloorEps = 1e-9
 // gsFloorEstimateCredit is the share of the rotation-math estimate this trigger
 // counts as supply against the weekly GS minimum.
 //
-// It is the one knob that decides whether the alert is useful or muted, and it
-// is an UNMEASURED PRIOR — the same standing as applyGSGate's certaintyMargin,
-// and it must not be read as a fitted value.
+// It is 1.0 — no discount — and that is a MEASURED result, not an omission.
 //
-// What bounds it is a two-sided constraint from the only two periods with
-// recorded shape (audit 2026-08-26). Period 21 finished comfortably clear of
-// its minimum — margin roughly +3 starts at mid-week — and must NOT fire, which
-// puts a floor under the credit: too heavy a discount shrinks supply until a
-// healthy week looks short, and an alert that fires on a healthy week gets
-// muted, which costs more than the gap it was filling. Period 20 finished
-// exactly ON its floor (10/10) with a margin near +0.2 at the comparable point
-// and MUST fire, which puts a ceiling on it: crediting the estimate in full
-// leaves a week that finishes on the floor indistinguishable from one that
-// clears it. Those two bracket the credit into roughly [0.6, 0.95]; 0.8 sits in
-// the middle rather than on either edge.
+// It used to be 0.8, bracketed by hand against the only two periods with
+// recorded shape: Period 21, which finished roughly +3 clear and must not fire,
+// put a floor under it, and Period 20, which finished exactly on its floor at
+// 10/10, put a ceiling on it. That bracketing was done when buildGSForecast
+// priced every unannounced SP at a flat 1-in-5 — an estimate measured, over 150
+// team-weeks, to over-forecast by +4.56 starts a week. The credit was a
+// hand-rolled correction for that bias. The estimator now carries its own
+// correction (rosterbot-goht and its follow-up: bias +0.76), and applying both
+// discounts the same over-confidence twice.
 //
-// Confirmed starts are deliberately NOT discounted. A club that has named one
-// of our pitchers is as certain as today is, and the whole reason this trigger
-// can wait is that the estimate collapses into confirmations as the week runs
-// down — discounting the confirmations too would flatten exactly the signal the
-// alert reads.
+// The replay says exactly that. Over 150 Monday-anchored team-weeks — the 15
+// Mondays 2026-03-30..2026-07-06 across ten teams, which is every week whose
+// own days AND whose trailing rate window are fully cached — taking a week
+// that finished UNDER the 10-start floor as the positive and counting one
+// alert per week (the marker keys on (season, weekly period), so a week raises
+// at most one):
 //
-// The sweep this wants is rosterbot-xsm's shape but on the floor side, and it
-// cannot be run yet: gs_floor and gs_forecast only started reaching the
-// projection snapshots in Period 21, so the first gradeable week is 2026-08-31.
-// Until then this is a prior, not a result. Filed as rosterbot-1tia.
-const gsFloorEstimateCredit = 0.8
+// That Monday range is NOT the cache's span (2026-03-25..08-16), and the
+// difference matters: the weeks diagWeeks drops are the LATE-season ones —
+// 07-13 and 08-10 lose the week itself, 07-20/07-27/08-03 lose their trailing
+// window to the All-Star-break schedule gap — so the sweep below is fitted on
+// the season's first fifteen weeks, where fewer pitchers have cleared
+// gsStartRateMinOpportunities and the estimator therefore sits closer to the
+// flat fallback than it does in September.
+//
+//	rule                                  alerts  precision  recall
+//	flat estimate, credit 0.8, max 4        43      0.442     0.760   <- baseline
+//	weighted, credit 0.6, max 4            121      0.198     0.960
+//	weighted, credit 0.7, max 4            100      0.220     0.880
+//	weighted, credit 0.8, max 4             87      0.253     0.880
+//	weighted, credit 0.9, max 4             72      0.292     0.840
+//	weighted, credit 1.0, max 5             57      0.386     0.880
+//	weighted, credit 1.0, max 4             51      0.392     0.800
+//	weighted, credit 1.0, max 3             45      0.422     0.760   <- chosen
+//
+// EVERY FIGURE ABOVE IS A LOWER BOUND ON PRODUCTION'S TRUE ALERT RATE, NOT A
+// POINT ESTIMATE, and the direction is worth being exact about. The replay
+// credits "today" with the day's REALISED active-slot starts — known only in
+// hindsight — while production's GSBudget.TodayUnsettled credits only
+// CONFIRMED-AND-UNLOCKED probables and collapses to 0 the instant those games
+// lock, which is most of the day (see internal/optimizer.GSBudget and
+// todayUnsettledStarts in gsbudget.go). Realised is always >= that unlocked
+// subset, so this replay's Need reads lower than production's ever does at
+// the moment it evaluates, and the rule fires here LESS often than it would
+// against the identical week in production. Crediting today with 0 instead —
+// production's own worst case, reached before anything locks — the same
+// sweep reads 97/150 at precision 0.227 for the chosen rule (credit 1.0, max
+// 3) and 129/150 at precision 0.194 for "credit 0.8 alongside the corrected
+// estimator" below. The RANKING is unchanged under both extremes: credit 1.0
+// / max 3 is still the best of the group either way, which is the
+// load-bearing fact this constant's choice rests on. TestDiagGSFloorSweep
+// prints both readings for every row so a re-run shows the bracket rather
+// than the single, understated number an earlier version of this comment
+// quoted.
+//
+// Leaving the credit at 0.8 alongside the corrected estimator would have fired
+// on 87 of 150 weeks — 58% of them, at precision 0.253 against a 16.7% base
+// rate. An alert that speaks on more than half of all weeks is one nobody
+// reads, which is the failure mode gsFloorMaxDaysLeft was already introduced to
+// avoid. Every maxDaysLeft in the sweep reads its best precision at credit 1.0,
+// so the choice is not close.
+//
+// WHAT THE SWEEP DOES NOT SHOW, stated plainly because an earlier version of
+// this comment claimed the opposite: NO weighted setting beats the flat
+// baseline's precision. The stated criterion — best precision at recall at
+// least the baseline's 0.760 — selects credit 1.0 / max 3, which ties that
+// recall exactly at precision 0.422 against 0.442. Scoring "at or under the
+// floor" instead — the event a manager arguably cares about, since a week that
+// lands on the floor is one rained-out turn from missing it — it reads
+// precision 0.644 / recall 0.630 against the baseline's 0.674 / 0.630: the same
+// recall again, at slightly lower precision. So the honest summary is that on
+// THIS alert the two rules are a wash, and the earlier claim of superiority on
+// both readings was an artefact of a harness that re-derived the estimator's
+// inputs. The corrected estimator is carried for the GATE, where it moves 35.9%
+// of decisions and where an over-forecast of +4.56 starts a week is a real
+// cost; on the floor trigger it neither helps nor harms, and the credit is what
+// keeps it from harming.
+//
+// Confirmed starts are deliberately NOT discounted, and at a credit of 1.0
+// nothing else is either — which makes this constant a no-op multiplier today.
+// It is kept because it is the parameter the sweep moves, and because deleting
+// it would leave the absence of a discount looking like an oversight rather
+// than a finding. The sweep is TestDiagGSFloorSweep; rosterbot-1tia asked for
+// exactly this measurement on the premise that it could not be run until
+// Period 21's snapshots accumulated, and that premise has moved: the frozen
+// per-day roster snapshots replay it over the whole season without them.
+const gsFloorEstimateCredit = 1.0
 
 // gsFloorMinDaysLeft is the fewest remaining days on which the alert will still
 // fire. Below it the alert is not merely noisy but useless: the only lever the
@@ -55,49 +117,81 @@ const gsFloorEstimateCredit = 0.8
 // problem that can no longer be acted on, which is how a channel gets muted.
 const gsFloorMinDaysLeft = 2
 
-// gsFloorMaxDaysLeft is the MOST remaining days on which the alert will fire,
-// and it exists because the trigger was measured firing on a healthy week.
+// gsFloorMaxDaysLeft is the MOST remaining days on which the alert will fire.
 //
-// Supply is counted from TOMORROW onward, never from today: today's starts land
-// in GSBudget.Used the moment Fantrax settles them, and nothing at this seam
-// separates a settled start from a pending one — the ambiguity that made the
-// old live-roster count diverge every evening (rosterbot-cg8l). That exclusion
-// is right, but before GSBudget.TodayUnsettled (rosterbot-ogtq) it left the
-// projection missing exactly today's starts, and that omission was WORST at the
-// start of a week, where Need is simultaneously at its maximum because Used is
-// still zero. TodayUnsettled now credits today's confirmed-but-unlocked
-// probables against Need in evaluateGSFloor, so that gap is closed for the
-// confirmed subset; only the estimated-for-today subset and the brief
-// locked-but-not-yet-settled window remain uncredited here.
+// It exists because the trigger was measured firing on a healthy week, and it
+// is 3 because the 150-week replay says every earlier day it admits adds alerts
+// faster than it adds true positives:
 //
-// Measured against the real Period 21 snapshots (.backtest/.../2026-08-24..27,
-// the first week to carry gs_floor/gs_forecast), BEFORE TodayUnsettled existed.
-// Monday's own forecast read confirmed 3 + estimated 7.4, so Supply was 8.92
-// against a Need of the full floor, 10 — a 1.08 shortfall on a week that
-// finished roughly +3 CLEAR, which is the bead's designated must-not-fire case.
-// The Lineup cron runs hourly 14:00-03:00 UTC, so Used stays 0 through every
-// daytime run before that evening's games settle: the false alert was not an
-// edge case but a near certainty every Monday, and per-period dedup means it
-// would spend the one alert that week was ever going to get. That arithmetic
-// has not been re-measured against the corrected Need formula, so 4 may now be
-// more conservative than the corrected projection needs.
+//	max   alerts   TP   precision   recall
+//	3       45     19     0.422      0.760
+//	4       51     20     0.392      0.800
+//	5       57     22     0.386      0.880
 //
-// The projection itself is NOT wrong — Used + undiscounted supply reads 13.40
-// on both Monday and Tuesday, matching the audit's own ~13.4 figure exactly.
-// Only its split into "banked" and "still to come" is uninformative this early.
-// So the guard refuses to evaluate rather than reweighting anything, the same
-// choice periodIsVolatile makes for a scoring period that is still settling.
+// Under the criterion gsFloorEstimateCredit states — the best precision at
+// recall at least the flat baseline's 0.760 — all three qualify and 3 wins.
+// Widening to 4 buys six alerts and one true positive; to 5, twelve and three.
 //
-// 4 rather than 5 because Tuesday is not safe: at DaysLeft 5 the same real week
-// reads -0.12, inside the noise of firing. DaysLeft 4 reads -2.36 and Thursday
-// -2.60. Firing from Wednesday still leaves four days to claim a starter, which
-// is what gsFloorMinDaysLeft says the alert is for.
+// These three rows are the same today-credit=realised readings gsFloorEstimateCredit
+// documents, and carry the same caveat: they are a LOWER BOUND on production's
+// alert rate, not a point. See that constant's comment for the today-credit=0
+// bracket (97/150 at max 3) and why the ranking does not move between the two.
 //
-// The cost is real and worth stating: a week that is already doomed on Monday
-// is not announced until Wednesday. That is the deliberate trade — a muted
-// channel is worth less than the gap it was filling, and a Monday alert that is
-// wrong most weeks mutes the channel.
-const gsFloorMaxDaysLeft = 4
+// THE VALUE OF THIS CONSTANT IS SENSITIVE TO THE REPLAY SAMPLE, which is worth
+// knowing before anyone re-runs the sweep and reads a different answer. On an
+// intermediate version of the harness — schedule map normalized and the
+// trailing window clamped at the opener, but weeks whose 28-day window
+// straddles the cache's All-Star-break schedule gap still included — the sample
+// is 180 weeks, those 30 unmeasurable weeks silently compute the FLAT estimate
+// under a "weighted" label, and the table reads 3 → 0.423/0.710 and 4 →
+// 0.397/0.742, which selects 4 instead. Excluding a week the estimator cannot
+// be evaluated on is the same correction as clamping the window, one cause
+// further along; diagWeeks now gates on it. Any future re-run must confirm the
+// "priced NOBODY" line in TestDiagStartRateWeeklyCalibration before trusting
+// the table under it.
+//
+// The hand-audited week points the same way, and is quoted rather than
+// re-derived: Period 21 is not replayable from the frozen cache (see below), so
+// its recorded Tuesday margin of −0.12 and Wednesday margin of −2.36 are
+// readings of the PRE-correction rule, at credit 0.8 over the flat estimate.
+// They are evidence about the shape of an early week — Tuesday sits inside
+// firing noise on a week that finished roughly +3 clear — and not about this
+// constant's value under the corrected estimator.
+//
+// WHY the early week is uninformative. Supply is counted from TOMORROW onward,
+// never from today: today's starts land in GSBudget.Used the moment Fantrax
+// settles them, and nothing at this seam separates a settled start from a
+// pending one — the ambiguity that made the old live-roster count diverge every
+// evening (rosterbot-cg8l). GSBudget.TodayUnsettled (rosterbot-ogtq) credits
+// today's confirmed-but-unlocked probables against Need in evaluateGSFloor, so
+// the gap is closed for the confirmed subset; the estimated-for-today subset
+// and the brief locked-but-not-yet-settled window remain uncredited, and both
+// omissions are worst at the start of a week, where Need is simultaneously at
+// its maximum because Used is still zero.
+//
+// The originally recorded case still holds and is worth keeping, because it is
+// the one week whose shape was audited by hand rather than replayed. Period 21
+// (.backtest/.../2026-08-24..27, the first week to carry gs_floor/gs_forecast)
+// read confirmed 3 + estimated 7.4 on its Monday, so at credit 0.8 Supply was
+// 8.92 against a Need of the full floor, 10 — a 1.08 shortfall on a week that
+// finished roughly +3 CLEAR. The Lineup cron runs hourly 14:00-03:00 UTC, so
+// Used stays 0 through every daytime run before that evening's games settle:
+// the false alert was not an edge case but a near certainty every Monday, and
+// per-period dedup means it would have spent the one alert that week was ever
+// going to get.
+//
+// Those two weeks CANNOT be replayed from the cache and were not: the MLB
+// schedule on disk stops at 2026-08-16 and the per-day pitcher-GS snapshots at
+// daily period 152 (2026-08-23), so Period 20 has rosters but no schedule and
+// Period 21 has neither. They survive as fixtures in
+// TestEvaluateGSFloor_PinsTheSweptFloorConstants, built from the audited
+// numbers above; the constants themselves are chosen by the season-long replay.
+//
+// The cost of the bound is real and worth stating: a week that is already
+// doomed on Monday is not announced until Thursday. That is the deliberate
+// trade — a Monday alert that is wrong most weeks mutes the channel, and
+// gsFloorMinDaysLeft says two days is still enough to act.
+const gsFloorMaxDaysLeft = 3
 
 // gsFloorFinding is the decision the trigger reached, separated from sending it
 // so the whole rule is testable as a pure function over a *GSBudget — no
@@ -129,6 +223,24 @@ type gsFloorFinding struct {
 	WeekEnd            time.Time
 }
 
+// gsFloorParams are the trigger's two tunable constants, taken as a value so a
+// diagnostic can replay the SHIPPED rule under alternatives rather than
+// re-implementing it. Production never constructs one by hand:
+// shippedGSFloorParams is the only source.
+type gsFloorParams struct {
+	EstimateCredit float64
+	MinDaysLeft    int
+	MaxDaysLeft    int
+}
+
+func shippedGSFloorParams() gsFloorParams {
+	return gsFloorParams{
+		EstimateCredit: gsFloorEstimateCredit,
+		MinDaysLeft:    gsFloorMinDaysLeft,
+		MaxDaysLeft:    gsFloorMaxDaysLeft,
+	}
+}
+
 // evaluateGSFloor decides whether this matchup week is projected to finish
 // under the league's weekly game-start minimum while there is still time to act.
 //
@@ -145,7 +257,8 @@ type gsFloorFinding struct {
 // An earlier version of this comment claimed the early week was self-protecting
 // because "six days of unannounced clubs comfortably covers any ordinary
 // shortfall". Real Period 21 data disproved that — six days covered 8.92
-// against a Need of 10 — which is why the upper bound exists at all.
+// against a Need of 10 — which is why the upper bound exists at all, and the
+// 150-week replay behind gsFloorMaxDaysLeft says the same thing in aggregate.
 //
 // That same collapse is what makes the empty days NAMEABLE, and the two are the
 // same fact seen twice. A day cannot be known empty in advance: on both
@@ -153,6 +266,10 @@ type gsFloorFinding struct {
 // ball, which is invisible until those clubs name someone. The alert therefore
 // becomes possible at exactly the moment it becomes specific.
 func evaluateGSFloor(b *optimizer.GSBudget) gsFloorFinding {
+	return evaluateGSFloorWith(b, shippedGSFloorParams())
+}
+
+func evaluateGSFloorWith(b *optimizer.GSBudget, p gsFloorParams) gsFloorFinding {
 	var f gsFloorFinding
 	if b == nil {
 		return f
@@ -189,7 +306,7 @@ func evaluateGSFloor(b *optimizer.GSBudget) gsFloorFinding {
 			continue
 		}
 		f.DaysLeft++
-		f.Supply += float64(len(d.ConfirmedStarters)) + gsFloorEstimateCredit*d.Estimated
+		f.Supply += float64(len(d.ConfirmedStarters)) + p.EstimateCredit*d.Estimated
 
 		if len(d.ConfirmedStarters) > 0 {
 			continue
@@ -207,7 +324,7 @@ func evaluateGSFloor(b *optimizer.GSBudget) gsFloorFinding {
 	// 0 both when no minimum is configured and when the week has already
 	// reached it, and neither is worth a word.
 	f.Fires = f.Need > 0 &&
-		f.DaysLeft >= gsFloorMinDaysLeft && f.DaysLeft <= gsFloorMaxDaysLeft &&
+		f.DaysLeft >= p.MinDaysLeft && f.DaysLeft <= p.MaxDaysLeft &&
 		f.Shortfall > gsFloorEps
 	return f
 }

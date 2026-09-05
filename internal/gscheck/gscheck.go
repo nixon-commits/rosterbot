@@ -197,7 +197,7 @@ func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error 
 		msg := fmt.Sprintf("gs-check: live GS limit fetch failed for period %d (%v) — could not run violation check", period.Number, gerr)
 		fmt.Println(msg)
 		if cfg.PushoverUserKey != "" && cfg.PushoverAPIToken != "" {
-			if perr := notify.SendPushover(cfg.PushoverUserKey, cfg.PushoverAPIToken, "gs-check: GS limit fetch failed", msg); perr != nil {
+			if perr := notify.SendPushover(ctx, cfg.PushoverUserKey, cfg.PushoverAPIToken, "gs-check: GS limit fetch failed", msg); perr != nil {
 				fmt.Printf("WARNING: failed to send failure Pushover: %v\n", perr)
 			}
 		}
@@ -342,7 +342,7 @@ func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error 
 	// silence for the whole league over an S3 hiccup unrelated to Pushover's
 	// health. This way the worst case of either half failing is a duplicate
 	// on the rerun, never a missed alert (rosterbot-chs's direction).
-	if err := notify.SendPushover(cfg.PushoverGroupKey, cfg.PushoverAPIToken, "Fantrax GS Alert", shortSummary); err != nil {
+	if err := notify.SendPushover(ctx, cfg.PushoverGroupKey, cfg.PushoverAPIToken, "Fantrax GS Alert", shortSummary); err != nil {
 		return fmt.Errorf("send pushover: %w", err)
 	}
 	fmt.Println("Pushover notification sent.")

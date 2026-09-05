@@ -19,7 +19,7 @@ import (
 //
 //	go test -tags diag -run TestDiagHKBJoin -v ./internal/lineuprun/
 func TestDiagHKBJoin(t *testing.T) {
-	players, err := hkb.GetPlayers(".cache")
+	players, err := hkb.GetPlayers(t.Context(), ".cache")
 	if err != nil {
 		t.Fatalf("hkb: %v", err)
 	}

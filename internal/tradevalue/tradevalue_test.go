@@ -32,9 +32,15 @@ func approx(t *testing.T, got, want, tol float64, what string) {
 // (1391) and Emmet Sheehan (1234) for Kyle Harrison (2292).
 //
 // Raw says the 2-for-1 favors Intentional Balk by 333. Adjusted reprices the
-// two-asset side at 1391 + 0.70(1234) = 2254.8 and hands it to Yordan's
-// Schlong by 37. A tab that reported either number alone would state a
-// confident verdict that the other method contradicts.
+// two-asset side at 1391 + 0.62(1234) = 2156.08 and hands it to Yordan's
+// Schlong. A tab that reported either number alone would state a confident
+// verdict that the other method contradicts.
+//
+// The adjusted figure moved with rosterbot-492 -- the measured ladder keeps
+// 0.62 of the second asset where the old unmeasured 0.70 kept more, so the
+// margin widened from 37 to 136. The VERDICT is unchanged, which is the point:
+// the two methods still name opposite winners, and this trade was always
+// too-close-to-call rather than close because of where 0.70 happened to sit.
 func TestEvaluate_LiveTwoForOne_MethodsDisagree_IsTooClose(t *testing.T) {
 	ib := player("Intentional Balk", "Gage Jump", 1391, "Emmet Sheehan", 1234)
 	ys := player("Yordan's Schlong", "Kyle Harrison", 2292)
@@ -42,7 +48,7 @@ func TestEvaluate_LiveTwoForOne_MethodsDisagree_IsTooClose(t *testing.T) {
 	if got := ib.Raw(); got != 2625 {
 		t.Errorf("Intentional Balk raw = %d, want 2625", got)
 	}
-	approx(t, ib.Adjusted(), 2254.8, 0.1, "Intentional Balk adjusted")
+	approx(t, ib.Adjusted(), 2156.08, 0.01, "Intentional Balk adjusted")
 	if got := ys.Raw(); got != 2292 {
 		t.Errorf("Yordan's Schlong raw = %d, want 2292", got)
 	}
@@ -148,16 +154,18 @@ func TestEvaluate_ThreeSidedTrade_NoSideIsDropped(t *testing.T) {
 	approx(t, v.RawPct, math.Abs(3000-200)/((3000+200)/2)*100, 0.01, "RawPct")
 }
 
-// The decay is fitted to this exact observation from HKB's calculator; if
-// the constant is ever changed, this test is the record of what it was
-// calibrated against.
-func TestAdjusted_ReproducesTheHKBObservationTheDecayWasFittedTo(t *testing.T) {
+// The single observation the old geometric decay was fitted to, kept as the
+// historical record. The measured ladder still lands on it -- 589 + 0.62(540) +
+// 0.60(366) = 1143.4 against HKB's reported 1144 -- which is exactly why one
+// point could not adjudicate anything: both curves pass through it, and they
+// diverge by 38% elsewhere. The observation set that CAN adjudicate is
+// testdata/hkb_calculator_2026-09-04.csv (see hkb_calibration_test.go).
+func TestAdjusted_StillReproducesTheOriginalSingleObservation(t *testing.T) {
 	s := player("T", "Ritchie", 589, "Rodriguez-Cruz", 540, "McGreevy", 366)
 	if got := s.Raw(); got != 1495 {
 		t.Fatalf("Raw = %d, want 1495", got)
 	}
-	// HKB reported 1144 for this package. 0.2% residual.
-	approx(t, s.Adjusted(), 1144, 5, "Adjusted")
+	approx(t, s.Adjusted(), 1143.4, 0.01, "Adjusted")
 }
 
 // HKB reports "a 91.6% value difference" for 3079 against 1144. Matching
@@ -225,7 +233,8 @@ func TestEvaluate_AllSidesWorthZero_IsNotAVerdict(t *testing.T) {
 // the losing side of the coin toss the bead's own measurement never saw.
 func TestEvaluate_RawTieSeparatedByAdjusted_IsTooClose(t *testing.T) {
 	// Both sides total 600 raw. Alpha carries it in one asset, Beta splits it
-	// across two, so PackageDecay separates them: 600 vs 300 + 300(0.70) = 510.
+	// across two, so the package discount separates them: 600 vs
+	// 300 + 300(0.62) = 486.
 	alpha := Side{Team: "Alpha", Assets: []Asset{{Name: "a1", Value: 600, Priced: true}}}
 	beta := Side{Team: "Beta", Assets: []Asset{
 		{Name: "b1", Value: 300, Priced: true},

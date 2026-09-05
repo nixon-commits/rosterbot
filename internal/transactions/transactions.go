@@ -30,8 +30,8 @@ type TradeSide struct {
 	Players  []TradePlayer
 
 	// Total is the plain sum of HKB values; Adjusted discounts every asset
-	// after the best by tradevalue.PackageDecay. Both are reported because on
-	// live offers they disagree about who wins -- see Trade.Verdict.
+	// after the best by tradevalue.PackageDiscount. Both are reported because
+	// on live offers they disagree about who wins -- see Trade.Verdict.
 	Total    int
 	Adjusted float64
 }
@@ -104,7 +104,7 @@ func CheckTrades(ctx context.Context, ft TradeClient, cacheDir string, dryRun bo
 		return nil
 	}
 
-	players, err := hkb.GetPlayers(cacheDir)
+	players, err := hkb.GetPlayers(ctx, cacheDir)
 	if err != nil {
 		return fmt.Errorf("get HKB players: %w", err)
 	}

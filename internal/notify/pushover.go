@@ -1,6 +1,10 @@
 package notify
 
-import "github.com/nixon-commits/rosterbot/internal/pushover"
+import (
+	"context"
+
+	"github.com/nixon-commits/rosterbot/internal/pushover"
+)
 
 // SendPushover sends a push notification via the Pushover API. The HTTP
 // client itself lives in the stdlib-only internal/pushover leaf so the
@@ -21,6 +25,6 @@ import "github.com/nixon-commits/rosterbot/internal/pushover"
 // reintroduce a feed write inside a delivery function, because a record that
 // exists only when delivery was attempted vanishes exactly when delivery
 // breaks.
-func SendPushover(userKey, apiToken, title, message string) error {
-	return pushover.Send(userKey, apiToken, title, message)
+func SendPushover(ctx context.Context, userKey, apiToken, title, message string) error {
+	return pushover.Send(ctx, userKey, apiToken, title, message)
 }

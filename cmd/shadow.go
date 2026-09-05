@@ -82,6 +82,14 @@ func runShadow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("snapshot store: %w", err)
 	}
 
+	// One start-rate table for every system. The trailing-history walk reads
+	// settled snapshots for one team over one fixed window and depends on
+	// nothing that varies between these four passes, so measuring it per pass
+	// would repeat 57 snapshot reads and 28 schedule reads four times — and,
+	// on a cold cache, four times the 200 ms Fantrax throttle the walk pays
+	// once per day it reads.
+	startRates := lineuprun.NewStartRateCache()
+
 	for _, sys := range shadowSystems {
 		if err := projections.SetProjectionSystem(sys); err != nil {
 			return err
@@ -104,6 +112,7 @@ func runShadow(cmd *cobra.Command, args []string) error {
 			Out:               os.Stdout,
 			NoCache:           noCache,
 			Verbose:           verbose,
+			StartRates:        startRates,
 		}
 		res, err := lineuprun.Run(cmd.Context(), ft, cfg, opts)
 		if err != nil {
@@ -129,7 +138,7 @@ func runShadow(cmd *cobra.Command, args []string) error {
 		userKey := os.Getenv("PUSHOVER_USER_KEY")
 		apiToken := os.Getenv("PUSHOVER_API_TOKEN")
 		if userKey != "" && apiToken != "" {
-			if err := notify.SendPushover(userKey, apiToken, "Shadow: projection system status changed", msg); err != nil {
+			if err := notify.SendPushover(cmd.Context(), userKey, apiToken, "Shadow: projection system status changed", msg); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: shadow no-data Pushover failed: %v\n", err)
 			}
 		}

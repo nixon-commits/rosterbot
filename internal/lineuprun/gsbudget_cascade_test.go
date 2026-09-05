@@ -9,7 +9,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 )
 
-// fakeGSFantrax is the three-method Fantrax surface the cascade needs. Each
+// fakeGSFantrax is the four-method Fantrax surface the cascade needs. Each
 // step can be failed independently so every disable path gets its own test —
 // the branch ordering here is load-bearing and was previously untested
 // (rosterbot-32a criterion 2).
@@ -34,6 +34,26 @@ type fakeGSFantrax struct {
 
 	limitCalls   int
 	limitsForPer fantrax.WeeklyPeriod
+
+	// pitcherDays feeds the start-rate history read; pitcherDaysErr fails it.
+	// A nil slice with a nil error is an honest "nothing settled yet", which is
+	// what every pre-existing cascade test wants: no history means every SP is
+	// priced at the flat rate and the forecast is unchanged.
+	pitcherDays    []fantrax.PitcherDay
+	pitcherDaysErr error
+	pitcherDayFrom time.Time
+	pitcherDayTo   time.Time
+	// pitcherDayCalls counts invocations of the history walk itself, which is
+	// the only way to observe whether a *StartRateCache actually deduped it —
+	// pitcherDayFrom/To only records the LAST call's arguments and cannot tell
+	// one call from two identical ones.
+	pitcherDayCalls int
+}
+
+func (f *fakeGSFantrax) GetTeamPitcherDaysWithStatus(_ string, start, end, _ time.Time, _ string, _ time.Duration) ([]fantrax.PitcherDay, error) {
+	f.pitcherDayCalls++
+	f.pitcherDayFrom, f.pitcherDayTo = start, end
+	return f.pitcherDays, f.pitcherDaysErr
 }
 
 func (f *fakeGSFantrax) GetMatchupWeekBounds(_, _ time.Time) (time.Time, time.Time, error) {
@@ -97,7 +117,7 @@ func TestComputeGSBudget_HealthyPathBuildsBudget(t *testing.T) {
 	}
 	ft := healthyGS()
 
-	got := ComputeGSBudget(ft, sched, gsInputs())
+	got := ComputeGSBudget(t.Context(), ft, sched, gsInputs())
 
 	if got.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
@@ -195,7 +215,7 @@ func TestComputeGSBudget_DisablePaths(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&in)
 			}
-			got := ComputeGSBudget(tc.client(), &fakeSchedule{}, in)
+			got := ComputeGSBudget(t.Context(), tc.client(), &fakeSchedule{}, in)
 
 			if got.Budget != nil {
 				t.Errorf("expected the gate disabled, got budget %+v", got.Budget)
@@ -224,7 +244,7 @@ func TestComputeGSBudget_LiveLimitFailureAlertsAndDoesNotFallBack(t *testing.T) 
 	ft := healthyGS()
 	ft.limitErr = errors.New("503 from fantrax")
 
-	got := ComputeGSBudget(ft, &fakeSchedule{}, gsInputs())
+	got := ComputeGSBudget(t.Context(), ft, &fakeSchedule{}, gsInputs())
 
 	if got.Budget != nil {
 		t.Fatalf("must not fall back to any limit, got %+v", got.Budget)
@@ -251,7 +271,7 @@ func TestComputeGSBudget_ReturnsTheAlertRatherThanSendingIt(t *testing.T) {
 	ft := healthyGS()
 	ft.limitErr = errors.New("down")
 
-	got := ComputeGSBudget(ft, &fakeSchedule{}, gsInputs())
+	got := ComputeGSBudget(t.Context(), ft, &fakeSchedule{}, gsInputs())
 	if got.Alert == nil {
 		t.Fatal("expected an alert to be requested")
 	}
@@ -269,7 +289,7 @@ func TestComputeGSBudget_EarlyFailureSkipsLaterFetches(t *testing.T) {
 	ft := healthyGS()
 	ft.weekErr = errors.New("bounds down")
 
-	ComputeGSBudget(ft, &fakeSchedule{}, gsInputs())
+	ComputeGSBudget(t.Context(), ft, &fakeSchedule{}, gsInputs())
 
 	if ft.limitCalls != 0 {
 		t.Errorf("GetGSLimits called %d times after an earlier failure — the cascade should short-circuit", ft.limitCalls)
@@ -289,7 +309,7 @@ func TestComputeGSBudget_ForecastScheduleFailureDisablesGate(t *testing.T) {
 		playingErr: map[string]error{"2026-07-26": errors.New("statsapi timeout")},
 	}
 
-	d := ComputeGSBudget(healthyGS(), sched, gsInputs())
+	d := ComputeGSBudget(t.Context(), healthyGS(), sched, gsInputs())
 
 	if d.Budget != nil {
 		t.Errorf("Budget = %+v, want nil — an unverifiable forecast must disable the gate", d.Budget)
@@ -310,7 +330,7 @@ func TestComputeGSBudget_ForecastProbablesFailureDisablesGate(t *testing.T) {
 		probablesErr: map[string]error{"2026-07-26": errors.New("statsapi 503")},
 	}
 
-	d := ComputeGSBudget(healthyGS(), sched, gsInputs())
+	d := ComputeGSBudget(t.Context(), healthyGS(), sched, gsInputs())
 
 	if d.Budget != nil {
 		t.Errorf("Budget = %+v, want nil", d.Budget)
@@ -329,7 +349,7 @@ func TestComputeGSBudget_ForecastProbablesFailureDisablesGate(t *testing.T) {
 // periods while the only component that knew the floor existed (gs-check)
 // reported it the day AFTER the period closed.
 func TestComputeGSBudget_CarriesTheLiveFloor(t *testing.T) {
-	d := ComputeGSBudget(healthyGS(), &fakeSchedule{}, gsInputs())
+	d := ComputeGSBudget(t.Context(), healthyGS(), &fakeSchedule{}, gsInputs())
 	if d.Budget == nil {
 		t.Fatal("budget should be built")
 	}
@@ -349,7 +369,7 @@ func TestComputeGSBudget_CarriesTheLiveFloor(t *testing.T) {
 func TestComputeGSBudget_MissingFloorDoesNotDisableTheGate(t *testing.T) {
 	f := healthyGS()
 	f.limitMin = nil
-	d := ComputeGSBudget(f, &fakeSchedule{}, gsInputs())
+	d := ComputeGSBudget(t.Context(), f, &fakeSchedule{}, gsInputs())
 	if d.Budget == nil {
 		t.Fatal("a missing GS minimum must NOT disable the gate")
 	}
@@ -383,7 +403,7 @@ func TestComputeGSBudget_CountsTodaysUnlockedProbablesAsUnsettled(t *testing.T) 
 		},
 	}
 
-	got := ComputeGSBudget(healthyGS(), sched, gsInputs())
+	got := ComputeGSBudget(t.Context(), healthyGS(), sched, gsInputs())
 
 	if got.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
@@ -410,7 +430,7 @@ func TestComputeGSBudget_LockedProbablesAreAlreadySettled(t *testing.T) {
 		activeSP("b", "Second Arm", "NYY"),
 	}
 
-	got := ComputeGSBudget(healthyGS(), sched, in)
+	got := ComputeGSBudget(t.Context(), healthyGS(), sched, in)
 
 	if got.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
@@ -429,7 +449,7 @@ func TestComputeGSBudget_TodaysProbablesFailureDegradesToNoCredit(t *testing.T) 
 		probablesErr: map[string]error{"2026-07-25": errors.New("statsapi 503")},
 	}
 
-	got := ComputeGSBudget(healthyGS(), sched, gsInputs())
+	got := ComputeGSBudget(t.Context(), healthyGS(), sched, gsInputs())
 
 	if got.Budget == nil {
 		t.Fatalf("a probables blip for today must not disable the gate. logs:\n%s", logsJoined(got))
@@ -461,7 +481,7 @@ func TestComputeGSBudget_ReserveConfirmedStarterIsNotCredited(t *testing.T) {
 		reserveSP("b", "Second Arm", "NYY"),
 	}
 
-	got := ComputeGSBudget(healthyGS(), sched, in)
+	got := ComputeGSBudget(t.Context(), healthyGS(), sched, in)
 
 	if got.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
@@ -493,7 +513,7 @@ func TestComputeGSBudget_TodayUnsettledCapsAtPitcherSlots(t *testing.T) {
 		activeSP("c", "Third Arm", "BOS"),
 	}
 
-	got := ComputeGSBudget(healthyGS(), sched, in)
+	got := ComputeGSBudget(t.Context(), healthyGS(), sched, in)
 
 	if got.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
@@ -502,4 +522,41 @@ func TestComputeGSBudget_TodayUnsettledCapsAtPitcherSlots(t *testing.T) {
 		t.Errorf("TodayUnsettled = %d, want 2 — capped at NumPitcherSlots even though 3 active SPs are confirmed",
 			got.Budget.TodayUnsettled)
 	}
+}
+
+// TestComputeGSBudget_StartRateCacheDedupesTheHistoryWalk pins the wiring
+// nothing else here catches: nothing about the budget's OUTPUT changes
+// whether or not in.StartRates.get consults a shared cache, so a regression
+// that dropped the `in.StartRates.get(...)` call in favour of calling
+// computeStartRates directly would pass every other test in this file while
+// silently paying for the walk on every call.
+func TestComputeGSBudget_StartRateCacheDedupesTheHistoryWalk(t *testing.T) {
+	sched := &fakeSchedule{}
+
+	t.Run("shared cache measures once across two calls", func(t *testing.T) {
+		ft := healthyGS()
+		in := gsInputs()
+		in.StartRates = NewStartRateCache()
+
+		ComputeGSBudget(t.Context(), ft, sched, in)
+		ComputeGSBudget(t.Context(), ft, sched, in)
+
+		if ft.pitcherDayCalls != 1 {
+			t.Errorf("pitcherDayCalls = %d, want 1 — a shared *StartRateCache must dedupe "+
+				"the history walk across both calls", ft.pitcherDayCalls)
+		}
+	})
+
+	t.Run("nil StartRates measures every call", func(t *testing.T) {
+		ft := healthyGS()
+		in := gsInputs() // StartRates left nil: the ordinary single-Run path.
+
+		ComputeGSBudget(t.Context(), ft, sched, in)
+		ComputeGSBudget(t.Context(), ft, sched, in)
+
+		if ft.pitcherDayCalls != 2 {
+			t.Errorf("pitcherDayCalls = %d, want 2 — a nil StartRateCache must measure "+
+				"fresh every call", ft.pitcherDayCalls)
+		}
+	})
 }

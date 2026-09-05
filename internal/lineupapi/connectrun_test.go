@@ -280,7 +280,7 @@ func TestRunsList_BearerTokenGetsNoChip(t *testing.T) {
 		{ID: "task-1", Command: "connect --user alice", Status: "SUCCESS"},
 	}, nil, conns)
 
-	r := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/runs", nil)
 	r.Header.Set("Authorization", "Bearer "+testToken)
 	code, resp := decodeRuns(t, h, r)
 	if code != http.StatusOK {

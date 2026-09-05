@@ -314,7 +314,7 @@ func TestFetchPerformanceAlerts_ReportsAnUnresolvedProspectAndStillSkipsHim(t *t
 		minorsProspect("Jackson Holliday"),
 		minorsProspect("Jamie Arnold"),
 	}
-	alerts, cov, err := FetchPerformanceAlerts(prospects, nil, 2026, 14, 5)
+	alerts, cov, err := FetchPerformanceAlerts(t.Context(), prospects, nil, 2026, 14, 5)
 	if err != nil {
 		t.Fatalf("unresolved names must not fail the scan: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestFetchPerformanceAlerts_ReportsCoverageWhenEveryProspectResolves(t *test
 	// clean roster and a dead resolver are indistinguishable.
 	statsapiStub(t, map[string]int{"Jackson Holliday": 808080})
 
-	_, cov, err := FetchPerformanceAlerts([]fantrax.Player{minorsProspect("Jackson Holliday")}, nil, 2026, 14, 5)
+	_, cov, err := FetchPerformanceAlerts(t.Context(), []fantrax.Player{minorsProspect("Jackson Holliday")}, nil, 2026, 14, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestFetchPerformanceAlerts_SortsUnresolvedNames(t *testing.T) {
 		minorsProspect("Jamie Arnold"),
 		minorsProspect("Mick Middleton"),
 	}
-	_, cov, err := FetchPerformanceAlerts(prospects, nil, 2026, 14, 5)
+	_, cov, err := FetchPerformanceAlerts(t.Context(), prospects, nil, 2026, 14, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestFetchPerformanceAlerts_SortsUnresolvedNames(t *testing.T) {
 func TestFetchPerformanceAlerts_ReportsAProspectWhoseGameLogFailed(t *testing.T) {
 	statsapiStub(t, map[string]int{"Jackson Holliday": 808080}, gameLogsFail)
 
-	alerts, cov, err := FetchPerformanceAlerts(
+	alerts, cov, err := FetchPerformanceAlerts(t.Context(),
 		[]fantrax.Player{minorsProspect("Jackson Holliday")}, nil, 2026, 14, 5)
 	if err != nil {
 		t.Fatalf("a failed game log must not fail the scan: %v", err)
@@ -429,7 +429,7 @@ func TestFetchPerformanceAlerts_ReportsAProspectWhoseGameLogFailed(t *testing.T)
 func TestFetchPerformanceAlerts_CountsTheTwoDropsSeparately(t *testing.T) {
 	statsapiStub(t, map[string]int{"Jackson Holliday": 808080}, gameLogsFail)
 
-	_, cov, err := FetchPerformanceAlerts([]fantrax.Player{
+	_, cov, err := FetchPerformanceAlerts(t.Context(), []fantrax.Player{
 		minorsProspect("Jackson Holliday"), // resolves, game log 500s
 		minorsProspect("Jamie Arnold"),     // never resolves
 	}, nil, 2026, 14, 5)
@@ -503,7 +503,7 @@ func TestFetchPerformanceAlerts_PrefersActiveNamesakeOverRetired(t *testing.T) {
 	performanceCacheDir = t.TempDir()
 	defer func() { mlbGameLogURL, performanceCacheDir = origLog, origDir }()
 
-	_, cov, err := FetchPerformanceAlerts([]fantrax.Player{minorsProspect("Jose Altuve")}, nil, 2026, 14, 5)
+	_, cov, err := FetchPerformanceAlerts(t.Context(), []fantrax.Player{minorsProspect("Jose Altuve")}, nil, 2026, 14, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -554,7 +554,7 @@ func TestFetchPerformanceAlerts_UnresolvedNameNeverFetchesAGameLog(t *testing.T)
 	performanceCacheDir = t.TempDir()
 	defer func() { mlbGameLogURL, performanceCacheDir = origLog, origDir }()
 
-	alerts, cov, err := FetchPerformanceAlerts([]fantrax.Player{minorsProspect("Nobody Findable")}, nil, 2026, 14, 5)
+	alerts, cov, err := FetchPerformanceAlerts(t.Context(), []fantrax.Player{minorsProspect("Nobody Findable")}, nil, 2026, 14, 5)
 	if err != nil {
 		t.Fatalf("an unresolvable name must not fail the scan: %v", err)
 	}

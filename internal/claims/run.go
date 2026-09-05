@@ -67,7 +67,7 @@ func Run(ctx context.Context, ft ClaimsClient, today time.Time, opts Options) er
 
 	players := opts.HKBPlayers
 	if players == nil {
-		players, err = hkb.GetPlayers(opts.CacheDir)
+		players, err = hkb.GetPlayers(ctx, opts.CacheDir)
 		if err != nil {
 			return fmt.Errorf("get HKB players: %w", err)
 		}
@@ -83,7 +83,7 @@ func Run(ctx context.Context, ft ClaimsClient, today time.Time, opts Options) er
 	// Enrichment: MLBAM IDs, Statcast signals, projections (all best-effort).
 	resolveAddedIDs(moves, opts.CacheDir)
 	if !opts.NoSignals {
-		if bundle, berr := statcast.LoadBundle(opts.CacheDir, today.Year(), today, statcast.CacheTTL); berr == nil {
+		if bundle, berr := statcast.LoadBundle(ctx, opts.CacheDir, today.Year(), today, statcast.CacheTTL); berr == nil {
 			EnrichSignals(moves, bundle, statcast.DefaultThresholds())
 		} else {
 			log.Printf("WARNING: signal enrichment skipped: %v", berr)
@@ -93,7 +93,7 @@ func Run(ctx context.Context, ft ClaimsClient, today time.Time, opts Options) er
 		hw, herr := wp.GetScoringWeights()
 		pw, perr := wp.GetPitcherScoringWeights()
 		if herr == nil && perr == nil {
-			enrichProjections(moves, hw, pw, opts.CacheDir, projections.ProjectionCacheTTL)
+			enrichProjections(ctx, moves, hw, pw, opts.CacheDir, projections.ProjectionCacheTTL)
 		} else {
 			log.Printf("WARNING: projection scoring skipped: %v / %v", herr, perr)
 		}

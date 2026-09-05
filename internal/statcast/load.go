@@ -2,6 +2,7 @@ package statcast
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -42,7 +43,7 @@ const savantHTTPTimeout = 30 * time.Second
 // the combined Statcast Bundle keyed by MLBAM ID. Any individual fetch failure
 // is logged and the corresponding map is left empty — callers continue with the
 // signals they have.
-func LoadBundle(cacheDir string, year int, today time.Time, ttl time.Duration) (*Bundle, error) {
+func LoadBundle(ctx context.Context, cacheDir string, year int, today time.Time, ttl time.Duration) (*Bundle, error) {
 	end := today.AddDate(0, 0, -1)
 	start14 := end.AddDate(0, 0, -13)
 	start30 := end.AddDate(0, 0, -29)
@@ -57,23 +58,23 @@ func LoadBundle(cacheDir string, year int, today time.Time, ttl time.Duration) (
 	}
 
 	loadSlice(cacheDir, ttl, cache.Key(keySavant, "hit", "exp", strconv.Itoa(year)), func() ([]HitterRow, error) {
-		return fetchHitterExp(fmt.Sprintf(savantHitterExpURL, year))
+		return fetchHitterExp(ctx, fmt.Sprintf(savantHitterExpURL, year))
 	}, func(r HitterRow) int { return r.MLBAMID }, bundle.HitterExp, "hit-exp")
 
 	loadSlice(cacheDir, ttl, cache.Key(keySavant, "hit", "sc", strconv.Itoa(year)), func() ([]HitterStatcastRow, error) {
-		return fetchHitterSC(fmt.Sprintf(savantHitterSCURL, year))
+		return fetchHitterSC(ctx, fmt.Sprintf(savantHitterSCURL, year))
 	}, func(r HitterStatcastRow) int { return r.MLBAMID }, bundle.HitterSC, "hit-sc")
 
 	loadSlice(cacheDir, ttl, cache.Key(keySavant, "hit", "exp14", strconv.Itoa(year), dateKey), func() ([]HitterRow, error) {
-		return fetchHitterExp(fmt.Sprintf(savantHitterExp14dURL, year, start14.Format("2006-01-02"), end.Format("2006-01-02")))
+		return fetchHitterExp(ctx, fmt.Sprintf(savantHitterExp14dURL, year, start14.Format("2006-01-02"), end.Format("2006-01-02")))
 	}, func(r HitterRow) int { return r.MLBAMID }, bundle.HitterExp14d, "hit-exp14")
 
 	loadSlice(cacheDir, ttl, cache.Key(keySavant, "pit", "exp", strconv.Itoa(year)), func() ([]PitcherRow, error) {
-		return fetchPitcherExp(fmt.Sprintf(savantPitcherExpURL, year))
+		return fetchPitcherExp(ctx, fmt.Sprintf(savantPitcherExpURL, year))
 	}, func(r PitcherRow) int { return r.MLBAMID }, bundle.PitcherExp, "pit-exp")
 
 	loadSlice(cacheDir, ttl, cache.Key(keySavant, "pit", "exp30", strconv.Itoa(year), dateKey), func() ([]PitcherRow, error) {
-		return fetchPitcherExp(fmt.Sprintf(savantPitcherExp30URL, year, start30.Format("2006-01-02"), end.Format("2006-01-02")))
+		return fetchPitcherExp(ctx, fmt.Sprintf(savantPitcherExp30URL, year, start30.Format("2006-01-02"), end.Format("2006-01-02")))
 	}, func(r PitcherRow) int { return r.MLBAMID }, bundle.PitcherExp30d, "pit-exp30")
 
 	return bundle, nil
@@ -97,9 +98,13 @@ func loadSlice[T any](cacheDir string, ttl time.Duration, key string, fetch func
 // fetchCSV does a GET, parses the first row as a header, and returns
 // (header columnIndex map, all subsequent rows, error). Strips a UTF-8 BOM
 // if present — Savant ships CSVs prefixed with EF BB BF.
-func fetchCSV(url string) (map[string]int, [][]string, error) {
+func fetchCSV(ctx context.Context, url string) (map[string]int, [][]string, error) {
 	client := &http.Client{Timeout: savantHTTPTimeout}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("savant request %s: %w", url, err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("savant fetch %s: %w", url, err)
 	}
@@ -166,8 +171,8 @@ func cellInt(record []string, idx int) int {
 // Required columns (looked up by lowercase name with reasonable aliases):
 //
 //	player_id, pa, woba, est_woba (xwOBA).
-func fetchHitterExp(url string) ([]HitterRow, error) {
-	col, rows, err := fetchCSV(url)
+func fetchHitterExp(ctx context.Context, url string) ([]HitterRow, error) {
+	col, rows, err := fetchCSV(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -195,8 +200,8 @@ func fetchHitterExp(url string) ([]HitterRow, error) {
 }
 
 // fetchHitterSC parses the hitter Statcast quality-of-contact CSV.
-func fetchHitterSC(url string) ([]HitterStatcastRow, error) {
-	col, rows, err := fetchCSV(url)
+func fetchHitterSC(ctx context.Context, url string) ([]HitterStatcastRow, error) {
+	col, rows, err := fetchCSV(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -224,8 +229,8 @@ func fetchHitterSC(url string) ([]HitterStatcastRow, error) {
 }
 
 // fetchPitcherExp parses the pitcher expected_statistics CSV.
-func fetchPitcherExp(url string) ([]PitcherRow, error) {
-	col, rows, err := fetchCSV(url)
+func fetchPitcherExp(ctx context.Context, url string) ([]PitcherRow, error) {
+	col, rows, err := fetchCSV(ctx, url)
 	if err != nil {
 		return nil, err
 	}

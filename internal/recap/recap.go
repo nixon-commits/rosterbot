@@ -1,6 +1,7 @@
 package recap
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -50,7 +51,7 @@ type RecapClient interface {
 // Run pulls the data for the matchup week, aggregates per-team performance,
 // computes awards, and returns a Recap. The returned struct is the data model
 // the renderer consumes.
-func Run(ft RecapClient, opts Options) (*Recap, error) {
+func Run(ctx context.Context, ft RecapClient, opts Options) (*Recap, error) {
 	if opts.WeekEnd.Before(opts.WeekStart) {
 		return nil, fmt.Errorf("week end %s before start %s",
 			opts.WeekEnd.Format("2006-01-02"), opts.WeekStart.Format("2006-01-02"))
@@ -134,7 +135,7 @@ func Run(ft RecapClient, opts Options) (*Recap, error) {
 	// Attach each start's opponent via the MLB schedule. One fetch per unique
 	// date in the week. Soft-fail if the schedule API is unreachable — the
 	// label just won't render.
-	annotateOpponents(allStarts, opts.CacheDir)
+	annotateOpponents(ctx, allStarts, opts.CacheDir)
 
 	// Pivot per-team daily home/away actuals keyed by team for WP curves.
 	teamDailyByID := dailyByTeam(results)
@@ -191,7 +192,7 @@ func Run(ft RecapClient, opts Options) (*Recap, error) {
 	// League-wide season-to-date rate-stat leaders across all rostered players.
 	// Soft-fails to nil internally; the section is omitted when empty.
 	awards.WOBALeaders, awards.FIPLeaders = buildLeaders(
-		ft, opts.WeekEnd.Year(), time.Now().UTC(), opts.CacheDir, opts.CacheTTL, opts.TopPlayers)
+		ctx, ft, opts.WeekEnd.Year(), time.Now().UTC(), opts.CacheDir, opts.CacheTTL, opts.TopPlayers)
 
 	// Season-to-date team means feed the WP simulation so the curve isn't
 	// look-ahead biased by the very week we're plotting. Fall back to the
@@ -346,7 +347,7 @@ func extractActivePlayerLines(days []fantrax.DayRoster, ownerTeam, ownerTeamID s
 // schedules are persisted to cacheDir (key `mlb-schedule-<YYYY-MM-DD>`) so
 // rebuilds reuse them. Soft-fails silently — a missing opponent just renders
 // blank.
-func annotateOpponents(starts []PitcherStartLine, cacheDir string) {
+func annotateOpponents(ctx context.Context, starts []PitcherStartLine, cacheDir string) {
 	if len(starts) == 0 {
 		return
 	}
@@ -361,7 +362,7 @@ func annotateOpponents(starts []PitcherStartLine, cacheDir string) {
 		key := s.Date.Format("2006-01-02")
 		opp, fetched := cache[key]
 		if !fetched {
-			if got, err := sched.OpponentsOn(s.Date); err == nil {
+			if got, err := sched.OpponentsOn(ctx, s.Date); err == nil {
 				opp = got
 			}
 			cache[key] = opp

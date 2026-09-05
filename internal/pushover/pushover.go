@@ -11,6 +11,7 @@
 package pushover
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,7 +23,7 @@ import (
 // MaxMessageLen are truncated on a rune boundary with a trailing ellipsis —
 // the never-should-fire backstop behind callers that budget whole blocks via
 // Builder before sending.
-func Send(userKey, apiToken, title, message string) error {
+func Send(ctx context.Context, userKey, apiToken, title, message string) error {
 	message = Truncate(message)
 
 	data := url.Values{
@@ -34,7 +35,13 @@ func Send(userKey, apiToken, title, message string) error {
 		"html":     {"1"},
 	}
 
-	resp, err := http.PostForm("https://api.pushover.net/1/messages.json", data)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.pushover.net/1/messages.json", strings.NewReader(data.Encode()))
+	if err != nil {
+		return fmt.Errorf("build pushover request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("send pushover request: %w", err)
 	}

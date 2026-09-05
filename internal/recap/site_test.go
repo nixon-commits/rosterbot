@@ -1,6 +1,7 @@
 package recap
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -25,7 +26,7 @@ type fakeChecker struct {
 	err  error
 }
 
-func (f fakeChecker) AllGamesFinalOn(time.Time) (bool, error) { return f.done, f.err }
+func (f fakeChecker) AllGamesFinalOn(context.Context, time.Time) (bool, error) { return f.done, f.err }
 
 func ymd(s string) time.Time {
 	t, _ := time.Parse("2006-01-02", s)
@@ -41,7 +42,7 @@ func TestCompletedMatchupWeeks(t *testing.T) {
 	today := ymd("2026-06-07")
 
 	t.Run("today's games not all final → exclude today's week", func(t *testing.T) {
-		got, err := completedMatchupWeeks(weeks, fakeChecker{done: false}, today)
+		got, err := completedMatchupWeeks(t.Context(), weeks, fakeChecker{done: false}, today)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -51,7 +52,7 @@ func TestCompletedMatchupWeeks(t *testing.T) {
 	})
 
 	t.Run("today's games all final → include today's week", func(t *testing.T) {
-		got, err := completedMatchupWeeks(weeks, fakeChecker{done: true}, today)
+		got, err := completedMatchupWeeks(t.Context(), weeks, fakeChecker{done: true}, today)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +62,7 @@ func TestCompletedMatchupWeeks(t *testing.T) {
 	})
 
 	t.Run("schedule error → conservatively exclude today's week", func(t *testing.T) {
-		got, err := completedMatchupWeeks(weeks, fakeChecker{err: errBoom}, today)
+		got, err := completedMatchupWeeks(t.Context(), weeks, fakeChecker{err: errBoom}, today)
 		if err != nil {
 			t.Fatal(err)
 		}

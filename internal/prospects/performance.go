@@ -1,6 +1,7 @@
 package prospects
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -54,17 +55,21 @@ type gameLogEntry struct {
 	HA  int // hits allowed
 }
 
-func fetchGameLogs(playerID int, group string, season int) ([]gameLogEntry, error) {
+func fetchGameLogs(ctx context.Context, playerID int, group string, season int) ([]gameLogEntry, error) {
 	fc := cache.New[[]gameLogEntry](performanceCacheDir, gameLogTTL)
 	key := cache.Key("mlb-game-logs", strconv.Itoa(playerID), group, strconv.Itoa(season))
 	return fc.Get(key, func() ([]gameLogEntry, error) {
-		return fetchGameLogsUncached(playerID, group, season)
+		return fetchGameLogsUncached(ctx, playerID, group, season)
 	})
 }
 
-func fetchGameLogsUncached(playerID int, group string, season int) ([]gameLogEntry, error) {
+func fetchGameLogsUncached(ctx context.Context, playerID int, group string, season int) ([]gameLogEntry, error) {
 	url := fmt.Sprintf(mlbGameLogURL, playerID, group, season)
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building game logs request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching game logs: %w", err)
 	}
@@ -335,7 +340,7 @@ func (c PerformanceCoverage) String() string {
 // hard failure cannot reach the caller unnoticed. Coverage is built and
 // returned before that error is consulted, because a run that failed part-way
 // still covered whatever it covered.
-func FetchPerformanceAlerts(prospects []fantrax.Player, rankings map[string]int, season, rollingDays, minGames int) ([]ProspectAlert, PerformanceCoverage, error) {
+func FetchPerformanceAlerts(ctx context.Context, prospects []fantrax.Player, rankings map[string]int, season, rollingDays, minGames int) ([]ProspectAlert, PerformanceCoverage, error) {
 	var mu sync.Mutex
 	var alerts []ProspectAlert
 	var unresolved, noGameLog []string
@@ -392,7 +397,7 @@ func FetchPerformanceAlerts(prospects []fantrax.Player, rankings map[string]int,
 				group = "pitching"
 			}
 
-			logs, err := fetchGameLogs(id, group, season)
+			logs, err := fetchGameLogs(ctx, id, group, season)
 			if err != nil {
 				// Soft for the same reason the unresolved branch is: one bad
 				// game log must not fail the job. But it is a DIFFERENT drop

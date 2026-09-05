@@ -130,13 +130,35 @@ func (c *FileCache[T]) Get(key string, fetch func() (T, error)) (T, error) {
 // exists, so a transient upstream outage never causes a hard error.
 // Only errors if the fetch fails AND there is no cached file at all.
 func (c *FileCache[T]) GetWithStaleFallback(key string, fetch func() (T, error)) (T, error) {
+	data, _, err := c.GetWithStaleFallbackAt(key, fetch)
+	return data, err
+}
+
+// GetWithStaleFallbackAt is GetWithStaleFallback plus the one fact the
+// degraded path already computes and used to discard: WHEN the data it
+// returns was actually fetched from upstream. On the fresh path that is the
+// stamp this call just stored; on the stale path it is the served copy's
+// envelope timestamp — the same value the age in the "stale cache" line is
+// derived from.
+//
+// It exists because "we served something" and "we served today's data" are
+// different facts, and only the caller can act on the difference: a
+// projection capture built on a three-day-old copy is later graded against
+// fresh actuals, which is the rosterbot-c61b failure this timestamp lets a
+// consumer detect structurally instead of via a hand-maintained date table.
+//
+// A zero time means UNKNOWN, never "old": an entry written before the
+// envelope carried a timestamp has no age, and inventing one would report a
+// non-event as an outage — the same rule stale.go applies before alerting.
+func (c *FileCache[T]) GetWithStaleFallbackAt(key string, fetch func() (T, error)) (T, time.Time, error) {
 	data, err := fetch()
 	if err == nil {
 		reportRecovery(key)
-		if saveErr := c.save(key, data); saveErr != nil {
+		now := time.Now()
+		if saveErr := c.saveAt(key, data, now); saveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to save cache %s: %v\n", key, saveErr)
 		}
-		return data, nil
+		return data, now, nil
 	}
 
 	// Fresh fetch failed — serve any stale cached value.
@@ -144,10 +166,10 @@ func (c *FileCache[T]) GetWithStaleFallback(key string, fetch func() (T, error))
 		age := time.Since(fetchedAt)
 		fmt.Fprintf(os.Stderr, "⚠️ stale cache: %s (%s old) (%v)\n", key, roundAge(age), err)
 		reportStale(key, fetchedAt, age, err)
-		return stale, nil
+		return stale, fetchedAt, nil
 	}
 
-	return data, err
+	return data, time.Time{}, err
 }
 
 // loadAnyAt reads a cached entry ignoring TTL expiry, returning the timestamp
@@ -195,7 +217,14 @@ func (c *FileCache[T]) load(key string) (T, bool) {
 }
 
 func (c *FileCache[T]) save(key string, data T) error {
-	env := envelope[T]{FetchedAt: time.Now(), Data: data}
+	return c.saveAt(key, data, time.Now())
+}
+
+// saveAt writes the entry stamped at an explicit time. Split out so a caller
+// that reports the stamp back (GetWithStaleFallbackAt) reports the value it
+// actually stored rather than a second, slightly later reading of the clock.
+func (c *FileCache[T]) saveAt(key string, data T, fetchedAt time.Time) error {
+	env := envelope[T]{FetchedAt: fetchedAt, Data: data}
 	b, err := json.MarshalIndent(env, "", "  ")
 	if err != nil {
 		return err

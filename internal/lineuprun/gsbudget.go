@@ -1,6 +1,7 @@
 package lineuprun
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -14,8 +15,8 @@ import (
 // *schedule.Client satisfies it; a map-backed fake satisfies it in tests, which
 // is what makes this logic exercisable without network (rosterbot-6rv).
 type gsScheduleClient interface {
-	TeamsPlayingOn(date time.Time) (map[string]bool, error)
-	ProbableStarters(date time.Time) (map[string]string, error)
+	TeamsPlayingOn(ctx context.Context, date time.Time) (map[string]bool, error)
+	ProbableStarters(ctx context.Context, date time.Time) (map[string]string, error)
 }
 
 // gsFantraxClient is the Fantrax surface the GS-budget fetch cascade needs.
@@ -25,6 +26,7 @@ type gsFantraxClient interface {
 	GetMatchupWeekBounds(date, seasonStart time.Time) (weekStart, weekEnd time.Time, err error)
 	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
 	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
+	GetTeamPitcherDaysWithStatus(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.PitcherDay, error)
 }
 
 // RotationSize is the standard starting rotation depth used to estimate how
@@ -45,9 +47,19 @@ type GSInputs struct {
 	PitcherRoster   []fantrax.Player
 	NumPitcherSlots int
 
+	// NoCache mirrors the persistent --no-cache flag. It reaches only the
+	// start-rate history read, whose per-period snapshots are the one thing
+	// this phase fetches that is cacheable at all.
+	NoCache bool
+
 	// ProjPts values a pitcher for the forecast's value ranking. Injected so
 	// the phase never has to build a projection source.
 	ProjPts func(fantrax.Player) float64
+
+	// StartRates, when non-nil, shares one trailing-history walk across
+	// several ComputeGSBudget calls. Nil is the ordinary case and simply
+	// measures.
+	StartRates *StartRateCache
 }
 
 // GSAlert is a Pushover the phase decided is warranted but did not send.
@@ -100,7 +112,7 @@ func (d *GSDecision) logf(format string, args ...any) {
 // pitcher usage silently is the failure mode worth being noisy about — and
 // disables the gate. A configured max of nil is different: Fantrax simply is
 // not tracking GS for that period, so there is nothing to gate and no alert.
-func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GSDecision {
+func ComputeGSBudget(ctx context.Context, ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GSDecision {
 	var d GSDecision
 
 	// A zero season start means the season-range lookup failed upstream; there
@@ -192,12 +204,47 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 	}
 
 	spNames := rosterSPNames(in.PitcherRoster)
+
+	// Per-pitcher start rates. The read is SOFT, and the asymmetry against the
+	// schedule seam below is the point rather than an inconsistency: a lost
+	// schedule moves the forecast in an UNKNOWN direction (confirmed starts
+	// worth 1.0 each drop out while settled clubs get promoted into the
+	// estimate at ~0.2 each), whereas a lost history has exactly one effect —
+	// every SP reverts to the flat rate, which is the behaviour that shipped
+	// all season. Degrading to the status quo ante is never worse than the
+	// status quo ante, so it must not disable a gate that would otherwise run.
+	rates, rateErr := in.StartRates.get(func() (startRateResult, error) {
+		return computeStartRates(ctx, ft, sched, in.TeamID, in.SeasonStart, in.Today,
+			cacheTTL(in.NoCache, fantrax.PastPeriodTTL))
+	})
+	if rateErr != nil {
+		d.logf("WARNING: start-rate history unavailable (%v) — every SP priced at the flat %.2f",
+			rateErr, 1/RotationSize)
+	}
+	cov := summariseStartRates(rates, spNames)
+	// Printed unconditionally, including the all-flat case, on the same
+	// reasoning as the "gs floor check:" and "il-start check:" lines. A
+	// weighting that silently stopped matching any pitcher would forecast
+	// exactly what the flat divisor forecasts, and nothing else in the output
+	// would say so.
+	//
+	// The median and the two fall-back reasons are what make the line able to
+	// answer the question it exists for. "6 of 11 priced" reads identically
+	// whether those six rest on a month of history or on the one day each was
+	// first seen, and before gsStartRateMinOpportunities the second case was
+	// real: 301 of the 2255 prices the 150-week replay issued rested on
+	// under one rotation turn of history.
+	d.logf("GS start rates: %d of %d rostered SPs priced from their own %d-day active-slot history (median %d opportunities), %d at the flat %.2f (%d under the %d-opportunity minimum, %d with no history)",
+		cov.Priced, len(spNames), gsStartRateWindow, cov.MedianOpps,
+		cov.BelowMin+cov.NoHistory, 1/RotationSize,
+		cov.BelowMin, gsStartRateMinOpportunities, cov.NoHistory)
+
 	// The forecast is the last step of the cascade and obeys the same rule as
 	// every step before it: no gate beats a gate running on a number nobody can
 	// vouch for. Unlike the GS-limit fetch this raises no Pushover — a statsapi
 	// blip is transient and self-healing on the next hourly run, where a
 	// Fantrax config read that stops working is not.
-	forecast, fcErr := buildGSForecast(sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts)
+	forecast, fcErr := buildGSForecast(ctx, sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts, rates.Rate)
 	if fcErr != nil {
 		d.logf("WARNING: %v — GS limit disabled", fcErr)
 		return d
@@ -208,7 +255,7 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 	// credit rather than disabling the gate: zero reproduces the pre-fix
 	// arithmetic exactly, which reads a shortfall louder than the truth and
 	// never quieter, and this correction only ever feeds a report.
-	todayUnsettled, tuErr := todayUnsettledStarts(sched, spNames, in.NumPitcherSlots, in.Today)
+	todayUnsettled, tuErr := todayUnsettledStarts(ctx, sched, spNames, in.NumPitcherSlots, in.Today)
 	if tuErr != nil {
 		d.logf("WARNING: today's probables unavailable (%v) — floor shortfall may read high", tuErr)
 	}
@@ -242,7 +289,11 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 //     projected points so the gate can rank across the week by value rather
 //     than by count;
 //   - club plays but has not named anyone yet → rotation-math demand, since a
-//     start is coming from that club and we do not yet know whose;
+//     start is coming from that club and we do not yet know whose. Each such
+//     pitcher contributes his OWN measured active-slot start rate rather than a
+//     flat 1-in-5 (see computeStartRates and rosterbot-goht); with no history
+//     he contributes exactly 1/RotationSize, so the pre-weighting arithmetic is
+//     the default rather than a special case;
 //   - club plays and named someone else → nothing, the day is settled for us;
 //   - club does not play → nothing.
 //
@@ -277,11 +328,13 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 // does not. The cost is bounded by cadence rather than by severity: the lineup
 // job runs hourly, so a statsapi blip costs one run's gate.
 func buildGSForecast(
+	ctx context.Context,
 	sched gsScheduleClient,
 	spNames map[string]fantrax.Player,
 	numPSlots int,
 	today, weekEnd time.Time,
 	projPts func(fantrax.Player) float64,
+	startRate map[string]float64,
 ) ([]optimizer.DayForecast, error) {
 	var forecast []optimizer.DayForecast
 	for d := today.AddDate(0, 0, 1); !d.After(weekEnd); d = d.AddDate(0, 0, 1) {
@@ -291,11 +344,11 @@ func buildGSForecast(
 		// nothing to learn from the remaining days once the week's total is
 		// already disqualified, and no reason to spend more round-trips on a
 		// seam that just failed.
-		playing, err := sched.TeamsPlayingOn(d)
+		playing, err := sched.TeamsPlayingOn(ctx, d)
 		if err != nil {
 			return nil, fmt.Errorf("schedule unavailable for %s: %w", ds, err)
 		}
-		probs, err := sched.ProbableStarters(d)
+		probs, err := sched.ProbableStarters(ctx, d)
 		if err != nil {
 			return nil, fmt.Errorf("probable starters unavailable for %s: %w", ds, err)
 		}
@@ -307,15 +360,38 @@ func buildGSForecast(
 		}
 
 		df := optimizer.DayForecast{Date: d}
-		var unannouncedSPs float64
-		for _, p := range spNames {
+		// The unannounced bucket is split in two, and the split is what keeps
+		// the no-history path EXACT. Pitchers with no measured rate are
+		// counted and divided once, reproducing the old unannouncedSPs/
+		// RotationSize expression bit for bit; only pitchers with a measured
+		// rate are summed. Summing 1/RotationSize n times instead would drift
+		// in the last bits (3 × 0.2 = 0.6000000000000001), which is a change
+		// nobody asked for on every roster that has no history at all.
+		var flatSPs float64
+		var measured []float64
+		for key, p := range spNames {
 			if playername.MatchProbable(p.Name, p.MLBTeam, probs) == playername.ConfirmedStarter {
 				df.ConfirmedStarters = append(df.ConfirmedStarters, projPts(p))
 				continue
 			}
 			if playing[p.MLBTeam] && !announced[p.MLBTeam] {
-				unannouncedSPs++
+				if r, ok := startRate[key]; ok {
+					measured = append(measured, r)
+					continue
+				}
+				flatSPs++
 			}
+		}
+		// Sorted before summing for the same reason ConfirmedStarters is
+		// sorted below: spNames is a map, so the append order is Go's
+		// randomized iteration order, and floating-point addition is not
+		// associative. Without this, two runs on identical inputs could
+		// produce Estimated values differing in the last bits — which this
+		// package owes not to do (see the Idempotency section of CLAUDE.md).
+		sort.Float64s(measured)
+		unannouncedDemand := flatSPs / RotationSize
+		for _, r := range measured {
+			unannouncedDemand += r
 		}
 
 		// Sorted unconditionally, not only when the cap binds: spNames is a
@@ -344,7 +420,7 @@ func buildGSForecast(
 		// claimed slots, so the estimate may only fill what they left. Capping
 		// each regime at numPSlots separately would forecast up to 2x the
 		// starts the roster can physically field.
-		df.Estimated = max(min(unannouncedSPs/RotationSize,
+		df.Estimated = max(min(unannouncedDemand,
 			float64(numPSlots-len(df.ConfirmedStarters))), 0)
 
 		forecast = append(forecast, df)
@@ -378,8 +454,8 @@ func buildGSForecast(
 // be invisible to every current consumer (all four guard on Date.After(Today)),
 // but it would make a today row appear in the archived gs_forecast snapshots
 // and quietly change what backtest grades.
-func todayUnsettledStarts(sched gsScheduleClient, spNames map[string]fantrax.Player, numPSlots int, today time.Time) (int, error) {
-	probs, err := sched.ProbableStarters(today)
+func todayUnsettledStarts(ctx context.Context, sched gsScheduleClient, spNames map[string]fantrax.Player, numPSlots int, today time.Time) (int, error) {
+	probs, err := sched.ProbableStarters(ctx, today)
 	if err != nil {
 		return 0, err
 	}

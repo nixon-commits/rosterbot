@@ -29,7 +29,7 @@ func runProspects(cmd *cobra.Command, args []string) error {
 	}
 
 	if listAll {
-		return prospects.ListAllProspects(ft, *cfg, today)
+		return prospects.ListAllProspects(cmd.Context(), ft, *cfg, today)
 	}
 
 	return prospects.RunProspectReport(cmd.Context(), ft, *cfg, today)

@@ -142,7 +142,7 @@ func connectBody(t *testing.T, user, pass string) *strings.Reader {
 func TestConnect_TokenCallerIsRefused(t *testing.T) {
 	h, conns, jobs, _ := connectFixture(t, "team-7")
 
-	r := httptest.NewRequest(http.MethodPost, "/v1/connect", connectBody(t, "u", "p"))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/connect", connectBody(t, "u", "p"))
 	r.Header.Set("Authorization", "Bearer "+testToken)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
@@ -195,7 +195,7 @@ func TestConnect_BodyOverTheSizeCapIsRefused(t *testing.T) {
 	huge := strings.Repeat("x", 9<<10) // > the 8 KiB cap
 	r := reqWithSession(t, http.MethodPost, "/v1/connect", "alice", 0)
 	r.Body = http.NoBody
-	r2 := httptest.NewRequest(http.MethodPost, "/v1/connect", connectBody(t, "alice", huge))
+	r2 := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/connect", connectBody(t, "alice", huge))
 	r2.Header = r.Header
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r2)
@@ -221,7 +221,7 @@ func TestConnect_MissingCredentialsAreRefused(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, conns, jobs, sealer := connectFixture(t, "team-7")
-			r := httptest.NewRequest(http.MethodPost, "/v1/connect", connectBody(t, tc.user, tc.pass))
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/connect", connectBody(t, tc.user, tc.pass))
 			r.Header = reqWithSession(t, http.MethodPost, "/v1/connect", "alice", 0).Header
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, r)
@@ -250,7 +250,7 @@ func TestConnect_MissingCredentialsAreRefused(t *testing.T) {
 func TestConnect_HappyPathWritesPendingAndReturnsRunID(t *testing.T) {
 	h, conns, jobs, sealer := connectFixture(t, "team-7")
 
-	r := httptest.NewRequest(http.MethodPost, "/v1/connect", connectBody(t, "alice@fantrax", "hunter2"))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/connect", connectBody(t, "alice@fantrax", "hunter2"))
 	r.Header = reqWithSession(t, http.MethodPost, "/v1/connect", "alice", 0).Header
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
@@ -308,7 +308,7 @@ func TestConnect_HappyPathWritesPendingAndReturnsRunID(t *testing.T) {
 func TestConnect_WritesTheRecordBeforeLaunchingTheTask(t *testing.T) {
 	h, _, jobs, _ := connectFixture(t, "team-7")
 
-	r := httptest.NewRequest(http.MethodPost, "/v1/connect", connectBody(t, "u", "p"))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/connect", connectBody(t, "u", "p"))
 	r.Header = reqWithSession(t, http.MethodPost, "/v1/connect", "alice", 0).Header
 	h.ServeHTTP(httptest.NewRecorder(), r)
 
@@ -328,7 +328,7 @@ func TestConnect_StoreFailureDoesNotLaunchTheTask(t *testing.T) {
 	h, conns, jobs, _ := connectFixture(t, "team-7")
 	conns.err = errors.New("dynamo unavailable")
 
-	r := httptest.NewRequest(http.MethodPost, "/v1/connect", connectBody(t, "u", "p"))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/connect", connectBody(t, "u", "p"))
 	r.Header = reqWithSession(t, http.MethodPost, "/v1/connect", "alice", 0).Header
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
@@ -368,7 +368,7 @@ func TestConnect_LaunchesTheTaskAsTheCaller(t *testing.T) {
 	// Mirror TestConnect_BodyOverTheSizeCapIsRefused: build the request with the
 	// real body, then borrow the session headers.
 	sess := reqWithSession(t, http.MethodPost, "/v1/connect", "alice", 0)
-	r := httptest.NewRequest(http.MethodPost, "/v1/connect", connectBody(t, "u", "p"))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/connect", connectBody(t, "u", "p"))
 	r.Header = sess.Header
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)

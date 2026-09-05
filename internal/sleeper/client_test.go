@@ -31,7 +31,7 @@ func TestLeagueParsesResponse(t *testing.T) {
 	defer func() { baseURL = orig }()
 
 	c := NewClient()
-	lg, err := c.League("1312135439800356864")
+	lg, err := c.League(t.Context(), "1312135439800356864")
 	if err != nil {
 		t.Fatalf("League: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestLeagueErrorsOnNon200(t *testing.T) {
 	defer func() { baseURL = orig }()
 
 	c := NewClient()
-	if _, err := c.League("nope"); err == nil {
+	if _, err := c.League(t.Context(), "nope"); err == nil {
 		t.Fatal("League: expected error on 404, got nil")
 	}
 }
@@ -80,7 +80,7 @@ func TestRostersParsesResponse(t *testing.T) {
 	defer func() { baseURL = orig }()
 
 	c := NewClient()
-	rosters, err := c.Rosters("lg1")
+	rosters, err := c.Rosters(t.Context(), "lg1")
 	if err != nil {
 		t.Fatalf("Rosters: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestUsersParsesResponse(t *testing.T) {
 	defer func() { baseURL = orig }()
 
 	c := NewClient()
-	users, err := c.Users("lg1")
+	users, err := c.Users(t.Context(), "lg1")
 	if err != nil {
 		t.Fatalf("Users: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestTradedPicksParsesResponse(t *testing.T) {
 	defer func() { baseURL = orig }()
 
 	c := NewClient()
-	picks, err := c.TradedPicks("lg1")
+	picks, err := c.TradedPicks(t.Context(), "lg1")
 	if err != nil {
 		t.Fatalf("TradedPicks: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestTransactionsParsesResponseAndWeekPath(t *testing.T) {
 	defer func() { baseURL = orig }()
 
 	c := NewClient()
-	txns, err := c.Transactions("lg1", 3)
+	txns, err := c.Transactions(t.Context(), "lg1", 3)
 	if err != nil {
 		t.Fatalf("Transactions: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestStateParsesResponse(t *testing.T) {
 	defer func() { baseURL = orig }()
 
 	c := NewClient()
-	st, err := c.State()
+	st, err := c.State(t.Context())
 	if err != nil {
 		t.Fatalf("State: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestPlayersNFLParsesResponseAndCaches(t *testing.T) {
 	c := NewClient()
 	c.CacheDir = t.TempDir()
 
-	players, err := c.PlayersNFL()
+	players, err := c.PlayersNFL(t.Context())
 	if err != nil {
 		t.Fatalf("PlayersNFL: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestPlayersNFLParsesResponseAndCaches(t *testing.T) {
 	}
 
 	// Second call within TTL must hit the cache, never the server.
-	if _, err := c.PlayersNFL(); err != nil {
+	if _, err := c.PlayersNFL(t.Context()); err != nil {
 		t.Fatalf("PlayersNFL (cached): %v", err)
 	}
 	if calls != 1 {
@@ -241,7 +241,7 @@ func TestUserByNameParsesResponse(t *testing.T) {
 	baseURL = srv.URL
 	defer func() { baseURL = orig }()
 
-	u, err := NewClient().UserByName("jnixon")
+	u, err := NewClient().UserByName(t.Context(), "jnixon")
 	if err != nil {
 		t.Fatalf("UserByName: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestUserByNameUnknownUsernameIsNotFound(t *testing.T) {
 	baseURL = srv.URL
 	defer func() { baseURL = orig }()
 
-	if _, err := NewClient().UserByName("nobody"); !errors.Is(err, ErrUserNotFound) {
+	if _, err := NewClient().UserByName(t.Context(), "nobody"); !errors.Is(err, ErrUserNotFound) {
 		t.Errorf("err = %v, want ErrUserNotFound", err)
 	}
 }
@@ -282,7 +282,7 @@ func TestUserByNameNotFoundStatusIsAlsoNotFound(t *testing.T) {
 	baseURL = srv.URL
 	defer func() { baseURL = orig }()
 
-	if _, err := NewClient().UserByName("nobody"); err == nil {
+	if _, err := NewClient().UserByName(t.Context(), "nobody"); err == nil {
 		t.Error("err = nil, want an error for a 404")
 	}
 }
@@ -302,7 +302,7 @@ func TestLeaguesForUserParsesResponse(t *testing.T) {
 	baseURL = srv.URL
 	defer func() { baseURL = orig }()
 
-	ls, err := NewClient().LeaguesForUser("456", "nfl", "2026")
+	ls, err := NewClient().LeaguesForUser(t.Context(), "456", "nfl", "2026")
 	if err != nil {
 		t.Fatalf("LeaguesForUser: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestUserByNameEscapesUsername(t *testing.T) {
 	baseURL = srv.URL
 	defer func() { baseURL = orig }()
 
-	if _, err := NewClient().UserByName("a b"); err != nil {
+	if _, err := NewClient().UserByName(t.Context(), "a b"); err != nil {
 		t.Fatalf("UserByName: %v", err)
 	}
 	if gotPath != "/user/a%20b" {
@@ -358,7 +358,7 @@ func TestUserByNameRejectsPathTraversal(t *testing.T) {
 	c.CacheDir = filepath.Join(outside, "cache")
 
 	for _, username := range []string{"../pwned", "a/b", `a\b`, "/../../pwned"} {
-		if _, err := c.UserByName(username); !errors.Is(err, ErrInvalidArgument) {
+		if _, err := c.UserByName(t.Context(), username); !errors.Is(err, ErrInvalidArgument) {
 			t.Errorf("UserByName(%q) = %v, want ErrInvalidArgument", username, err)
 		}
 	}
@@ -379,7 +379,7 @@ func TestLeaguesForUserRejectsPathTraversal(t *testing.T) {
 		{"456", "../pwned", "2026"},
 		{"456", "nfl", "../pwned"},
 	} {
-		if _, err := c.LeaguesForUser(args[0], args[1], args[2]); !errors.Is(err, ErrInvalidArgument) {
+		if _, err := c.LeaguesForUser(t.Context(), args[0], args[1], args[2]); !errors.Is(err, ErrInvalidArgument) {
 			t.Errorf("LeaguesForUser%v = %v, want ErrInvalidArgument", args, err)
 		}
 	}

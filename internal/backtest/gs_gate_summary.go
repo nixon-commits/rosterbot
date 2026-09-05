@@ -73,6 +73,14 @@ type GateDay struct {
 // DaysStale instead of DaysWithSnapshot and also contribute nothing, since a
 // stale --matchup pre-write always carries GSSuppressed=false and would
 // otherwise be misread as a fully-measured, suppression-free day.
+//
+// A stale INPUT (SourceInputStale) is deliberately NOT excluded here, and the
+// asymmetry with RunProjectionAnalysis is the point. Grading asks how good the
+// projections turned out to be, so a capture built on days-old numbers answers
+// a question nobody asked. This summary asks what the gate DID, and the gate
+// really did run on those numbers — suppressing those days would hide real
+// decisions the roster actually lived with. The same reasoning covers
+// SummarizeRosterShape, which reports deployment rather than accuracy.
 func SummarizeGSGate(st SnapshotStore, dir string, dates []time.Time) GateSummary {
 	sum := GateSummary{Days: len(dates)}
 	for _, d := range dates {

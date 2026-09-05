@@ -63,8 +63,8 @@ func (o outputFor) GetOutput(_ context.Context, runID string) ([]byte, bool, err
 
 // runReq builds an authorized request for one of the /v1/runs routes, with the
 // {id} wildcard already resolved the way the mux would.
-func runReq(target, id string, caller Caller) *http.Request {
-	r := httptest.NewRequest(http.MethodGet, target, nil)
+func runReq(t *testing.T, target, id string, caller Caller) *http.Request {
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, nil)
 	if id != "" {
 		r.SetPathValue("id", id)
 	}
@@ -83,7 +83,7 @@ func TestRuns_IgnoresATenantQueryParam(t *testing.T) {
 
 	t.Run("list", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		cfg.handleRuns(rec, runReq("/v1/runs?tenant=alice", "", bob))
+		cfg.handleRuns(rec, runReq(t, "/v1/runs?tenant=alice", "", bob))
 		assertBobNotAlice(t, rec, "r-bob", "r-alice")
 	})
 
@@ -91,7 +91,7 @@ func TestRuns_IgnoresATenantQueryParam(t *testing.T) {
 		// bob asks for ALICE's run id while naming her tenant. The honest
 		// answer is 404: that run is not in his ledger.
 		rec := httptest.NewRecorder()
-		cfg.handleRunDetail(rec, runReq("/v1/runs/r-alice?tenant=alice", "r-alice", bob))
+		cfg.handleRunDetail(rec, runReq(t, "/v1/runs/r-alice?tenant=alice", "r-alice", bob))
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("GET /v1/runs/r-alice?tenant=alice as bob = %d, want 404: %s",
 				rec.Code, rec.Body)
@@ -102,7 +102,7 @@ func TestRuns_IgnoresATenantQueryParam(t *testing.T) {
 		// The positive control: the route works at all for his own run, so the
 		// 404 above is a refusal and not a broken fixture.
 		rec = httptest.NewRecorder()
-		cfg.handleRunDetail(rec, runReq("/v1/runs/r-bob", "r-bob", bob))
+		cfg.handleRunDetail(rec, runReq(t, "/v1/runs/r-bob", "r-bob", bob))
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "log-of-r-bob") {
 			t.Fatalf("bob's own run detail = %d %s", rec.Code, rec.Body)
 		}
@@ -110,7 +110,7 @@ func TestRuns_IgnoresATenantQueryParam(t *testing.T) {
 
 	t.Run("output", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		cfg.handleRunOutput(rec, runReq("/v1/runs/r-alice/output?tenant=alice", "r-alice", bob))
+		cfg.handleRunOutput(rec, runReq(t, "/v1/runs/r-alice/output?tenant=alice", "r-alice", bob))
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("GET /v1/runs/r-alice/output?tenant=alice as bob = %d, want 404: %s",
 				rec.Code, rec.Body)
@@ -119,7 +119,7 @@ func TestRuns_IgnoresATenantQueryParam(t *testing.T) {
 			t.Errorf("alice's captured stdout leaked to bob: %s", rec.Body)
 		}
 		rec = httptest.NewRecorder()
-		cfg.handleRunOutput(rec, runReq("/v1/runs/r-bob/output", "r-bob", bob))
+		cfg.handleRunOutput(rec, runReq(t, "/v1/runs/r-bob/output", "r-bob", bob))
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "output-of-r-bob") {
 			t.Fatalf("bob's own run output = %d %s", rec.Code, rec.Body)
 		}

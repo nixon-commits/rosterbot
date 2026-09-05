@@ -46,7 +46,7 @@ func runRecapSite(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Building recap site to %s (today=%s)...\n",
 		recapSiteOut, today.Format("2006-01-02"))
 
-	if err := recap.RunSite(ft, recap.SiteOptions{
+	if err := recap.RunSite(cmd.Context(), ft, recap.SiteOptions{
 		OutDir: recapSiteOut,
 		Today:  today,
 		Recap: recap.Options{
@@ -60,7 +60,7 @@ func runRecapSite(cmd *cobra.Command, args []string) error {
 
 	if recapSiteOpen {
 		index := filepath.Join(recapSiteOut, "index.html")
-		if err := openInBrowser(index); err != nil {
+		if err := openInBrowser(cmd.Context(), index); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		}
 	}

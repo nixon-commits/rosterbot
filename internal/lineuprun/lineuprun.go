@@ -91,6 +91,13 @@ type Options struct {
 	// typed store; the store owns the root, this names the partition.
 	SnapshotRoot string
 
+	// StartRates, when non-nil, shares one per-pitcher start-rate walk across
+	// several Run calls. `shadow` sets it once and passes the same pointer to
+	// each of its four per-system passes, which read identical settled history
+	// off an identical roster and date; see StartRateCache. Nil measures per
+	// Run, which is what the ordinary hourly optimize does.
+	StartRates *StartRateCache
+
 	// PublishLineupFlag force-publishes today's read-only API lineup JSON
 	// even in dry-run (mirrors --publish-lineup).
 	PublishLineupFlag bool
@@ -150,8 +157,8 @@ type Options struct {
 	// global — so tests that inject these must not run t.Parallel() against
 	// each other; when internal/projections someday takes the system as a real
 	// parameter, only these defaults change, not Run or any fake.
-	LoadBattingProjections func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error)
-	LoadPitcherProjections func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error)
+	LoadBattingProjections func(ctx context.Context, system, cacheDir string, ttl time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error)
+	LoadPitcherProjections func(ctx context.Context, system, cacheDir string, ttl time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error)
 
 	// FetchHandedness resolves MLBAM IDs to bats/throws for matchup
 	// adjustments. Nil defaults to projections.FetchMLBHandednessCached — the
@@ -162,7 +169,7 @@ type Options struct {
 	// lineup JSON. Nil defaults to this package's LoadHKBMeta. Like the
 	// enrichment itself it is only ever called when Publisher is non-nil, so a
 	// test that leaves Publisher nil never needs to fake it.
-	LoadHKBMeta func(cacheDir string) (map[string]lineupapi.Dynasty, error)
+	LoadHKBMeta func(ctx context.Context, cacheDir string) (map[string]lineupapi.Dynasty, error)
 
 	// Out is where the run's human-readable output goes — the per-date board,
 	// the planned-moves block, the warning lines and the apply log. The caller
@@ -217,6 +224,7 @@ type LineupClient interface {
 	GetPitcherRosterForPeriod(period fantrax.DailyPeriod) ([]fantrax.Player, error)
 	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
 	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
+	GetTeamPitcherDaysWithStatus(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.PitcherDay, error)
 	GetRecentPitcherStats(currentPeriod fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error)
 	ApplyLineup(period fantrax.DailyPeriod, active []fantrax.PlayerSlot, reserve []string) error
 	InvalidatePeriodRosterCache(period fantrax.DailyPeriod) error
@@ -303,7 +311,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	}
 
 	// --- Load projections early to determine system for header ---
-	fgSrc, batLoadResult, err := opts.LoadBattingProjections(opts.HitterSystem, cacheDir, projTTL)
+	fgSrc, batLoadResult, err := opts.LoadBattingProjections(ctx, opts.HitterSystem, cacheDir, projTTL)
 	if err != nil {
 		msg := fmt.Sprintf("batting projections unavailable: %v", err)
 		sendOptimizeNotify(ctx, msg)
@@ -312,7 +320,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	if batLoadResult.NoData {
 		prog.Logf("WARNING: batting projections unavailable — running on schedule + recent stats only")
 	}
-	fgPitSrc, pitLoadResult, err := opts.LoadPitcherProjections(opts.PitcherSystem, cacheDir, projTTL)
+	fgPitSrc, pitLoadResult, err := opts.LoadPitcherProjections(ctx, opts.PitcherSystem, cacheDir, projTTL)
 	if err != nil {
 		msg := fmt.Sprintf("pitching projections unavailable: %v", err)
 		sendOptimizeNotify(ctx, msg)
@@ -353,7 +361,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 			fmt.Fprintln(out)
 		}
 
-		reportILStarts(ilStartInputs{
+		reportILStarts(ctx, ilStartInputs{
 			Roster:  fullRoster,
 			Sched:   schedClient,
 			Today:   today,
@@ -503,7 +511,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	if cfg.GSTrackingEnabled {
 		prog.Start("GS budget")
 
-		dec := ComputeGSBudget(ft, schedClient, GSInputs{
+		dec := ComputeGSBudget(ctx, ft, schedClient, GSInputs{
 			TeamID:          cfg.TeamID,
 			Today:           today,
 			SeasonStart:     seasonStart,
@@ -511,6 +519,8 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 			PeriodsErr:      periodsErr,
 			PitcherRoster:   pitcherRoster,
 			NumPitcherSlots: len(pitcherSlots),
+			NoCache:         opts.NoCache,
+			StartRates:      opts.StartRates,
 			ProjPts: func(p fantrax.Player) float64 {
 				return pitcherProjectedPts(p, pitcherProjSrc, pitcherScoring)
 			},
@@ -599,7 +609,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 
 	// --- Optimize every date in parallel ---
 	prog.Start("Optimize")
-	results := OptimizeDates(ft, schedClient, OptimizeInputs{
+	results := OptimizeDates(ctx, ft, schedClient, OptimizeInputs{
 		Dates:             dates,
 		Today:             today,
 		SeasonStart:       seasonStart,
@@ -634,7 +644,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	var hkbMeta map[string]lineupapi.Dynasty
 	if opts.Publisher != nil {
 		var err error
-		if hkbMeta, err = opts.LoadHKBMeta(cacheDir); err != nil {
+		if hkbMeta, err = opts.LoadHKBMeta(ctx, cacheDir); err != nil {
 			prog.Logf("WARNING: HKB values unavailable — publishing lineup without age/value: %v", err)
 		}
 	}
@@ -654,15 +664,24 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		WriteSnapshots: opts.WriteSnapshots,
 		SnapshotStore:  opts.SnapshotStore,
 		SnapshotRoot:   opts.SnapshotRoot,
-		HitterSystem:   batLoadResult.System,
-		PitcherSystem:  pitLoadResult.System,
-		HittersNoData:  batLoadResult.NoData,
-		PitchersNoData: pitLoadResult.NoData,
-		PublishLineup:  opts.PublishLineupFlag,
-		Publisher:      opts.Publisher,
-		HKB:            hkbMeta,
-		Cfg:            cfg,
-		Out:            out,
+		Projections: projInputs{
+			HitterSystem:   batLoadResult.System,
+			PitcherSystem:  pitLoadResult.System,
+			HittersNoData:  batLoadResult.NoData,
+			PitchersNoData: pitLoadResult.NoData,
+			// The one fact the snapshot could not previously record: how old
+			// these projections already were when the run scored with them.
+			// A capture built on the cache's stale fallback is otherwise
+			// indistinguishable from a fresh one at grade time
+			// (rosterbot-c61b).
+			HitterFetchedAt:  batLoadResult.FetchedAt,
+			PitcherFetchedAt: pitLoadResult.FetchedAt,
+		},
+		PublishLineup: opts.PublishLineupFlag,
+		Publisher:     opts.Publisher,
+		HKB:           hkbMeta,
+		Cfg:           cfg,
+		Out:           out,
 		Notify: func(message string) {
 			sendOptimizeNotify(ctx, message)
 		},

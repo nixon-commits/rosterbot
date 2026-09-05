@@ -29,7 +29,7 @@ func TestFanGraphsPitcherSource_PitcherInfo(t *testing.T) {
 	fangraphsPitchingURL = srv.URL
 	defer func() { fangraphsPitchingURL = old }()
 
-	src, err := NewFanGraphsPitcherSource()
+	src, err := NewFanGraphsPitcherSource(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,9 @@
 package prospects
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // AlertKind classifies the prospect alert.
 type AlertKind string
@@ -64,5 +67,5 @@ type Report struct {
 // RankingSource provides prospect ranking data.
 // Implementations: FanGraphsRankingSource.
 type RankingSource interface {
-	GetTopProspects(season int) ([]RankedProspect, error)
+	GetTopProspects(ctx context.Context, season int) ([]RankedProspect, error)
 }
