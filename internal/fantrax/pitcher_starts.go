@@ -5,6 +5,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/pmurley/go-fantrax/auth_client"
+
 	"github.com/nixon-commits/rosterbot/internal/cache"
 )
 
@@ -84,18 +86,28 @@ type PitcherRosterMeta struct {
 // "3" and "9" are two ways of not being on the major-league roster at all. A
 // rate denominator has to drop the second pair and keep the first.
 //
-// StatusReserve has NO READER anywhere in the tree, and that is deliberate: it
-// completes the vocabulary the other three are read against, so "available"
-// spells out as both of its values rather than as one value and an implied
-// remainder. The cost is that nothing would fail if its value rotted — an
-// exported constant with no reader is invisible to the unused-code linters and
-// to every test — so treat it as documentation, not as a checked fact. The
-// moment something reads it, that stops being true and a test should pin it.
+// They are ALIASES of auth_client's own constants rather than a second copy of
+// the digits. The upstream vocabulary already exists, is already the source
+// this package parses, and three of its four members are already read here (see
+// apply_lineup.go). Two spellings of one vocabulary inside one package is the
+// drift this repo names a single source of truth to avoid — internal/teams,
+// internal/positions, internal/playername — and here the drift would be silent
+// in the worst direction: a StatusIL that stopped matching would quietly widen
+// the start-rate denominator back to the pre-rosterbot-goht bug rather than
+// fail anything.
+//
+// The one deliberate divergence is the NAME: upstream calls "3" StatusIR, and
+// the rest of this tree says IL (roster.CheckILStarters, layout.ILStarts, the
+// Fantrax UI's own slot label). The alias is where that rename is stated, so it
+// is one line to read and one line to delete if upstream ever renames it too.
+// StatusActive and StatusReserve carry no local reader; they complete the
+// vocabulary the other two are read against, and the alias means their values
+// cannot rot independently of the ones that are read.
 const (
-	StatusActive  = "1"
-	StatusReserve = "2"
-	StatusIL      = "3"
-	StatusMinors  = "9"
+	StatusActive  = auth_client.StatusActive
+	StatusReserve = auth_client.StatusReserve
+	StatusIL      = auth_client.StatusIR
+	StatusMinors  = auth_client.StatusMinors
 )
 
 // PitcherDayWalk is the pure kernel of the pitcher-day walk: it carries the

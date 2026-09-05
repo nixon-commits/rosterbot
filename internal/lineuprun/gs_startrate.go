@@ -321,10 +321,17 @@ func tallyStartRates(days []fantrax.PitcherDay, playingOn map[string]map[string]
 // reads — once per ComputeGSBudget, i.e. once per Run. Every one of them is
 // cached: the snapshots at PastPeriodTTL (a settled period is immutable) and
 // the schedules at internal/schedule's 30-day past-date TTL, which is what
-// fixes the window at 28. Warm, an hourly run pays one new day. Cold — a fresh
-// container with an empty cache — it is 85 upstream reads, of which the 57
-// Fantrax ones are throttled 200 ms apart, so worst case is roughly 11 s added
-// to a single run.
+// fixes the window at 28.
+//
+// Warm, an hourly run pays a HANDFUL of re-reads rather than exactly one new
+// day: snapshotTTL narrows the current period and the last recentPeriodLookback
+// (3) closed ones to todayTTL (15 m), and the window ends yesterday, so the
+// three most recent days re-fetch both snapshots each hour — six reads, of
+// which two are the genuinely new day. Cold — a fresh container with an empty
+// cache — it is 85 upstream reads. The 200 ms Fantrax throttle fires once per
+// DAY of the walk, not once per read (teamPitcherDays sleeps at the bottom of
+// the per-day loop when either fetch hit the network, and the baseline day is
+// outside that loop), so it adds 28 x 200 ms ~= 5.6 s to a single run.
 // `shadow` calls Run once per RoS system, and Options.StartRates is what stops
 // that repeating this walk four times over identical inputs.
 func computeStartRates(
@@ -444,9 +451,12 @@ func NewStartRateCache() *StartRateCache { return &StartRateCache{} }
 // The measurement's ERROR is memoized alongside its result, deliberately. The
 // failure this guards is a walk over settled snapshots that just failed for
 // every pass at once; retrying it three more times inside one `shadow` run
-// would pay the whole cost again to reach the same answer, and would report the
-// warning four times. A nil receiver measures every time, which is the
-// behaviour of the ordinary single-Run path.
+// would pay the whole cost again to reach the same answer. It does NOT quieten
+// the warning: the memoized error is returned to each pass and ComputeGSBudget
+// logs "start-rate history unavailable" on every non-nil error, so the operator
+// sees it once per pass either way — which is the right behaviour, since each
+// pass really did price every SP flat. A nil receiver measures every time,
+// which is the behaviour of the ordinary single-Run path.
 func (c *StartRateCache) get(measure func() (startRateResult, error)) (startRateResult, error) {
 	if c == nil {
 		return measure()

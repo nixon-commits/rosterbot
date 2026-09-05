@@ -3,6 +3,8 @@ package fantrax
 import (
 	"testing"
 	"time"
+
+	"github.com/pmurley/go-fantrax/auth_client"
 )
 
 // The day walk has to report ROSTER PRESENCE, not just starts, because the
@@ -113,6 +115,31 @@ func TestGetTeamPitcherStarts_IsTheStartedSubsetOfTheDayWalk(t *testing.T) {
 	}
 	if len(starts) != 1 || starts[0].PitcherName != "Ace" {
 		t.Fatalf("want exactly Ace's active-slot start, got %+v", starts)
+	}
+}
+
+// The four status constants are aliases of auth_client's, which is what stops
+// this package carrying a second, drift-prone copy of one vocabulary — the same
+// package already reads auth_client.StatusActive and StatusReserve in
+// apply_lineup.go. This pins both halves of that: the wire digits Fantrax
+// actually sends (a rename upstream is fine, a value change is not, and a
+// StatusIL that stopped meaning "3" would silently widen the start-rate
+// denominator rather than fail anything), and the deliberate IL-for-IR rename,
+// which is the one place the two vocabularies diverge.
+func TestStatusConstants_AliasUpstreamAndPinTheWireDigits(t *testing.T) {
+	for _, tc := range []struct{ name, got, want string }{
+		{"active", StatusActive, "1"},
+		{"reserve", StatusReserve, "2"},
+		{"il", StatusIL, "3"},
+		{"minors", StatusMinors, "9"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("Status%s = %q, want %q — Fantrax's own wire value", tc.name, tc.got, tc.want)
+		}
+	}
+	if StatusIL != auth_client.StatusIR {
+		t.Errorf("StatusIL = %q, auth_client.StatusIR = %q — the alias is the only place that rename is stated",
+			StatusIL, auth_client.StatusIR)
 	}
 }
 

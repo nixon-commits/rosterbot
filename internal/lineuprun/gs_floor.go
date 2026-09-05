@@ -31,11 +31,20 @@ const gsFloorEps = 1e-9
 // correction (rosterbot-goht and its follow-up: bias +0.76), and applying both
 // discounts the same over-confidence twice.
 //
-// The replay says exactly that. Over 150 Monday-anchored team-weeks from ten
-// teams (2026-03-25..08-16 — every week whose own days AND whose trailing rate
-// window are fully cached), taking a week that finished UNDER the 10-start
-// floor as the positive and counting one alert per week (the marker keys on
-// (season, weekly period), so a week raises at most one):
+// The replay says exactly that. Over 150 Monday-anchored team-weeks — the 15
+// Mondays 2026-03-30..2026-07-06 across ten teams, which is every week whose
+// own days AND whose trailing rate window are fully cached — taking a week
+// that finished UNDER the 10-start floor as the positive and counting one
+// alert per week (the marker keys on (season, weekly period), so a week raises
+// at most one):
+//
+// That Monday range is NOT the cache's span (2026-03-25..08-16), and the
+// difference matters: the weeks diagWeeks drops are the LATE-season ones —
+// 07-13 and 08-10 lose the week itself, 07-20/07-27/08-03 lose their trailing
+// window to the All-Star-break schedule gap — so the sweep below is fitted on
+// the season's first fifteen weeks, where fewer pitchers have cleared
+// gsStartRateMinOpportunities and the estimator therefore sits closer to the
+// flat fallback than it does in September.
 //
 //	rule                                  alerts  precision  recall
 //	flat estimate, credit 0.8, max 4        43      0.442     0.760   <- baseline
