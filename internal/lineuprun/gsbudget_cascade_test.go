@@ -45,7 +45,7 @@ type fakeGSFantrax struct {
 	pitcherDayTo   time.Time
 }
 
-func (f *fakeGSFantrax) GetTeamPitcherDays(_ string, start, end, _ time.Time, _ string, _ time.Duration) ([]fantrax.PitcherDay, error) {
+func (f *fakeGSFantrax) GetTeamPitcherDaysWithStatus(_ string, start, end, _ time.Time, _ string, _ time.Duration) ([]fantrax.PitcherDay, error) {
 	f.pitcherDayFrom, f.pitcherDayTo = start, end
 	return f.pitcherDays, f.pitcherDaysErr
 }

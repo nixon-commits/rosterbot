@@ -82,6 +82,13 @@ func runShadow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("snapshot store: %w", err)
 	}
 
+	// One start-rate table for every system. The trailing-history walk reads
+	// settled snapshots for one team over one fixed window and depends on
+	// nothing that varies between these four passes, so measuring it per pass
+	// would repeat 58 snapshot reads and 28 schedule reads four times — and,
+	// on a cold cache, four times the 200 ms Fantrax throttle on each of them.
+	startRates := lineuprun.NewStartRateCache()
+
 	for _, sys := range shadowSystems {
 		if err := projections.SetProjectionSystem(sys); err != nil {
 			return err
@@ -104,6 +111,7 @@ func runShadow(cmd *cobra.Command, args []string) error {
 			Out:               os.Stdout,
 			NoCache:           noCache,
 			Verbose:           verbose,
+			StartRates:        startRates,
 		}
 		res, err := lineuprun.Run(cmd.Context(), ft, cfg, opts)
 		if err != nil {

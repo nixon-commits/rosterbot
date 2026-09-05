@@ -90,7 +90,7 @@ func (f *fakeLineupClient) GetGSLimits(_ string, _ fantrax.WeeklyPeriod) (*int, 
 func (f *fakeLineupClient) GetTeamGS(_, _ string, _ fantrax.ScoringPeriod, _, _ time.Time, _ int, _ bool) (int, []fantrax.PitcherStart, error) {
 	return f.usedGS, nil, nil
 }
-func (f *fakeLineupClient) GetTeamPitcherDays(_ string, _, _, _ time.Time, _ string, _ time.Duration) ([]fantrax.PitcherDay, error) {
+func (f *fakeLineupClient) GetTeamPitcherDaysWithStatus(_ string, _, _, _ time.Time, _ string, _ time.Duration) ([]fantrax.PitcherDay, error) {
 	return nil, nil
 }
 func (f *fakeLineupClient) GetRecentPitcherStats(_ fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error) {
@@ -357,7 +357,9 @@ func TestDisplayNameFor(t *testing.T) {
 // and the alert reaching Run's output with the marker store consulted under a
 // key carrying the period ComputeGSBudget resolved.
 func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
-	today := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	// Thursday: three days left, which is gsFloorMaxDaysLeft — the first day
+	// the 180-week replay found the projection informative.
+	today := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
 	weekStart := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	weekEnd := time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC)
 	gsMin, gsMax := 10, 12
@@ -390,15 +392,13 @@ func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
 		{Name: "Lone Starter", Team: "BOS", Proj: projections.PitcherProjection{G: 30, IP: 180, K: 200}},
 	})
 
-	// Thu 27 and Fri 28 nobody of ours plays at all — the empty days the alert
-	// has to name. Sat 29 and Sun 30 our one SP's club plays and has named
-	// nobody, which is 0.2 estimated starts each: nowhere near the six the
-	// floor still needs.
+	// Fri 28 and Sat 29 nobody of ours plays at all — the empty days the alert
+	// has to name. Sun 30 our one SP's club plays and has named nobody, which
+	// is 0.2 estimated starts: nowhere near the six the floor still needs.
 	sched := &fakeDateSchedule{
 		fakeSchedule: fakeSchedule{
 			playing: map[string]map[string]bool{
 				today.Format("2006-01-02"): {"NYY": true, "BOS": true},
-				"2026-08-29":               {"BOS": true},
 				"2026-08-30":               {"BOS": true},
 			},
 		},
@@ -448,7 +448,7 @@ func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
 	if !strings.Contains(got, "=== GS Floor Risk ===") {
 		t.Fatalf("a week four starts into a ten-start minimum did not raise the alert.\n%s", got)
 	}
-	for _, day := range []string{"Thu Aug 27", "Fri Aug 28"} {
+	for _, day := range []string{"Fri Aug 28", "Sat Aug 29"} {
 		if !strings.Contains(got, day) {
 			t.Errorf("alert does not name the empty day %s — the actionable half.\n%s", day, got)
 		}

@@ -91,6 +91,13 @@ type Options struct {
 	// typed store; the store owns the root, this names the partition.
 	SnapshotRoot string
 
+	// StartRates, when non-nil, shares one per-pitcher start-rate walk across
+	// several Run calls. `shadow` sets it once and passes the same pointer to
+	// each of its four per-system passes, which read identical settled history
+	// off an identical roster and date; see StartRateCache. Nil measures per
+	// Run, which is what the ordinary hourly optimize does.
+	StartRates *StartRateCache
+
 	// PublishLineupFlag force-publishes today's read-only API lineup JSON
 	// even in dry-run (mirrors --publish-lineup).
 	PublishLineupFlag bool
@@ -217,7 +224,7 @@ type LineupClient interface {
 	GetPitcherRosterForPeriod(period fantrax.DailyPeriod) ([]fantrax.Player, error)
 	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
 	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
-	GetTeamPitcherDays(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.PitcherDay, error)
+	GetTeamPitcherDaysWithStatus(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.PitcherDay, error)
 	GetRecentPitcherStats(currentPeriod fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error)
 	ApplyLineup(period fantrax.DailyPeriod, active []fantrax.PlayerSlot, reserve []string) error
 	InvalidatePeriodRosterCache(period fantrax.DailyPeriod) error
@@ -513,6 +520,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 			PitcherRoster:   pitcherRoster,
 			NumPitcherSlots: len(pitcherSlots),
 			NoCache:         opts.NoCache,
+			StartRates:      opts.StartRates,
 			ProjPts: func(p fantrax.Player) float64 {
 				return pitcherProjectedPts(p, pitcherProjSrc, pitcherScoring)
 			},

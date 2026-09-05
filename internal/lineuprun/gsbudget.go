@@ -26,7 +26,7 @@ type gsFantraxClient interface {
 	GetMatchupWeekBounds(date, seasonStart time.Time) (weekStart, weekEnd time.Time, err error)
 	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
 	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
-	GetTeamPitcherDays(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.PitcherDay, error)
+	GetTeamPitcherDaysWithStatus(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.PitcherDay, error)
 }
 
 // RotationSize is the standard starting rotation depth used to estimate how
@@ -55,6 +55,11 @@ type GSInputs struct {
 	// ProjPts values a pitcher for the forecast's value ranking. Injected so
 	// the phase never has to build a projection source.
 	ProjPts func(fantrax.Player) float64
+
+	// StartRates, when non-nil, shares one trailing-history walk across
+	// several ComputeGSBudget calls. Nil is the ordinary case and simply
+	// measures.
+	StartRates *StartRateCache
 }
 
 // GSAlert is a Pushover the phase decided is warranted but did not send.
@@ -208,32 +213,38 @@ func ComputeGSBudget(ctx context.Context, ft gsFantraxClient, sched gsScheduleCl
 	// every SP reverts to the flat rate, which is the behaviour that shipped
 	// all season. Degrading to the status quo ante is never worse than the
 	// status quo ante, so it must not disable a gate that would otherwise run.
-	rates, rateErr := computeStartRates(ctx, ft, sched, in.TeamID, in.SeasonStart, in.Today,
-		cacheTTL(in.NoCache, fantrax.PastPeriodTTL))
+	rates, rateErr := in.StartRates.get(func() (startRateResult, error) {
+		return computeStartRates(ctx, ft, sched, in.TeamID, in.SeasonStart, in.Today,
+			cacheTTL(in.NoCache, fantrax.PastPeriodTTL))
+	})
 	if rateErr != nil {
 		d.logf("WARNING: start-rate history unavailable (%v) — every SP priced at the flat %.2f",
 			rateErr, 1/RotationSize)
 	}
-	priced := 0
-	for key := range spNames {
-		if _, ok := rates[key]; ok {
-			priced++
-		}
-	}
+	cov := summariseStartRates(rates, spNames)
 	// Printed unconditionally, including the all-flat case, on the same
 	// reasoning as the "gs floor check:" and "il-start check:" lines. A
 	// weighting that silently stopped matching any pitcher would forecast
 	// exactly what the flat divisor forecasts, and nothing else in the output
 	// would say so.
-	d.logf("GS start rates: %d of %d rostered SPs priced from their own %d-day active-slot history, %d at the flat %.2f",
-		priced, len(spNames), gsStartRateWindow, len(spNames)-priced, 1/RotationSize)
+	//
+	// The median and the two fall-back reasons are what make the line able to
+	// answer the question it exists for. "6 of 11 priced" reads identically
+	// whether those six rest on a month of history or on the one day each was
+	// first seen, and before gsStartRateMinOpportunities the second case was
+	// real: 113 of the 1560 prices the season-long replay issued rested on
+	// under one rotation turn of history.
+	d.logf("GS start rates: %d of %d rostered SPs priced from their own %d-day active-slot history (median %d opportunities), %d at the flat %.2f (%d under the %d-opportunity minimum, %d with no history)",
+		cov.Priced, len(spNames), gsStartRateWindow, cov.MedianOpps,
+		cov.BelowMin+cov.NoHistory, 1/RotationSize,
+		cov.BelowMin, gsStartRateMinOpportunities, cov.NoHistory)
 
 	// The forecast is the last step of the cascade and obeys the same rule as
 	// every step before it: no gate beats a gate running on a number nobody can
 	// vouch for. Unlike the GS-limit fetch this raises no Pushover — a statsapi
 	// blip is transient and self-healing on the next hourly run, where a
 	// Fantrax config read that stops working is not.
-	forecast, fcErr := buildGSForecast(ctx, sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts, rates)
+	forecast, fcErr := buildGSForecast(ctx, sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts, rates.Rate)
 	if fcErr != nil {
 		d.logf("WARNING: %v — GS limit disabled", fcErr)
 		return d
