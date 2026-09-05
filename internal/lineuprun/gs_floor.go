@@ -25,38 +25,50 @@ const gsFloorEps = 1e-9
 // recorded shape: Period 21, which finished roughly +3 clear and must not fire,
 // put a floor under it, and Period 20, which finished exactly on its floor at
 // 10/10, put a ceiling on it. That bracketing was done when buildGSForecast
-// priced every unannounced SP at a flat 1-in-5 — an estimate measured, over 180
-// team-weeks, to over-forecast by +3.60 starts a week. The credit was a
+// priced every unannounced SP at a flat 1-in-5 — an estimate measured, over 150
+// team-weeks, to over-forecast by +4.56 starts a week. The credit was a
 // hand-rolled correction for that bias. The estimator now carries its own
-// correction (rosterbot-goht and its follow-up: bias +1.13), and applying both
+// correction (rosterbot-goht and its follow-up: bias +0.76), and applying both
 // discounts the same over-confidence twice.
 //
-// The replay says exactly that. Over 180 Monday-anchored team-weeks from ten
-// teams (2026-03-25..08-16), taking a week that finished UNDER the 10-start
+// The replay says exactly that. Over 150 Monday-anchored team-weeks from ten
+// teams (2026-03-25..08-16 — every week whose own days AND whose trailing rate
+// window are fully cached), taking a week that finished UNDER the 10-start
 // floor as the positive and counting one alert per week (the marker keys on
 // (season, weekly period), so a week raises at most one):
 //
 //	rule                                  alerts  precision  recall
-//	flat estimate, credit 0.8, max 4        63      0.381     0.774   <- what shipped
-//	weighted, credit 0.6, max 4            140      0.214     0.968
-//	weighted, credit 0.7, max 4            121      0.231     0.903
-//	weighted, credit 0.8, max 4            104      0.250     0.839
-//	weighted, credit 0.9, max 4             85      0.294     0.806
-//	weighted, credit 1.0, max 4             63      0.381     0.774
-//	weighted, credit 1.0, max 3             59      0.407     0.774   <- chosen
+//	flat estimate, credit 0.8, max 4        43      0.442     0.760   <- baseline
+//	weighted, credit 0.6, max 4            121      0.198     0.960
+//	weighted, credit 0.7, max 4            100      0.220     0.880
+//	weighted, credit 0.8, max 4             87      0.253     0.880
+//	weighted, credit 0.9, max 4             72      0.292     0.840
+//	weighted, credit 1.0, max 5             57      0.386     0.880
+//	weighted, credit 1.0, max 4             51      0.392     0.800
+//	weighted, credit 1.0, max 3             45      0.422     0.760   <- chosen
 //
 // Leaving the credit at 0.8 alongside the corrected estimator would have fired
-// on 104 of 180 weeks — 58% of them, at precision 0.250 against a 17.2% base
-// rate. An alert that speaks on three weeks in five is one nobody reads, which
-// is the failure mode gsFloorMaxDaysLeft was already introduced to avoid.
+// on 87 of 150 weeks — 58% of them, at precision 0.253 against a 16.7% base
+// rate. An alert that speaks on more than half of all weeks is one nobody
+// reads, which is the failure mode gsFloorMaxDaysLeft was already introduced to
+// avoid. Every maxDaysLeft in the sweep reads its best precision at credit 1.0,
+// so the choice is not close.
 //
-// Period 20 is a boundary case worth naming: it finished exactly ON the floor,
-// which is not a violation under the stated ground truth. Scoring "at or under
-// the floor" instead — the event a manager arguably cares about, since a week
-// that lands on the floor is one rained-out turn from missing it — the chosen
-// rule reads precision 0.695 / recall 0.719 against the shipped baseline's
-// 0.635 / 0.702, so it is better on both readings rather than only on the
-// strict one.
+// WHAT THE SWEEP DOES NOT SHOW, stated plainly because an earlier version of
+// this comment claimed the opposite: NO weighted setting beats the flat
+// baseline's precision. The stated criterion — best precision at recall at
+// least the baseline's 0.760 — selects credit 1.0 / max 3, which ties that
+// recall exactly at precision 0.422 against 0.442. Scoring "at or under the
+// floor" instead — the event a manager arguably cares about, since a week that
+// lands on the floor is one rained-out turn from missing it — it reads
+// precision 0.644 / recall 0.630 against the baseline's 0.674 / 0.630: the same
+// recall again, at slightly lower precision. So the honest summary is that on
+// THIS alert the two rules are a wash, and the earlier claim of superiority on
+// both readings was an artefact of a harness that re-derived the estimator's
+// inputs. The corrected estimator is carried for the GATE, where it moves 35.9%
+// of decisions and where an over-forecast of +4.56 starts a week is a real
+// cost; on the floor trigger it neither helps nor harms, and the credit is what
+// keeps it from harming.
 //
 // Confirmed starts are deliberately NOT discounted, and at a credit of 1.0
 // nothing else is either — which makes this constant a no-op multiplier today.
@@ -79,17 +91,38 @@ const gsFloorMinDaysLeft = 2
 // gsFloorMaxDaysLeft is the MOST remaining days on which the alert will fire.
 //
 // It exists because the trigger was measured firing on a healthy week, and it
-// is 3 because the same 180-week replay says every earlier day it admits adds
-// alerts without adding true positives:
+// is 3 because the 150-week replay says every earlier day it admits adds alerts
+// faster than it adds true positives:
 //
 //	max   alerts   TP   precision   recall
-//	3       59     24     0.407      0.774
-//	4       63     24     0.381      0.774
-//	5       73     25     0.342      0.806
+//	3       45     19     0.422      0.760
+//	4       51     20     0.392      0.800
+//	5       57     22     0.386      0.880
 //
-// Widening from 3 to 4 buys four more alerts and not one more true positive;
-// widening to 5 buys ten more and one. That is the early-week blindness the
-// original bound was reasoned about from a single week, now measured over 180.
+// Under the criterion gsFloorEstimateCredit states — the best precision at
+// recall at least the flat baseline's 0.760 — all three qualify and 3 wins.
+// Widening to 4 buys six alerts and one true positive; to 5, twelve and three.
+//
+// THE VALUE OF THIS CONSTANT IS SENSITIVE TO THE REPLAY SAMPLE, which is worth
+// knowing before anyone re-runs the sweep and reads a different answer. On an
+// intermediate version of the harness — schedule map normalized and the
+// trailing window clamped at the opener, but weeks whose 28-day window
+// straddles the cache's All-Star-break schedule gap still included — the sample
+// is 180 weeks, those 30 unmeasurable weeks silently compute the FLAT estimate
+// under a "weighted" label, and the table reads 3 → 0.423/0.710 and 4 →
+// 0.397/0.742, which selects 4 instead. Excluding a week the estimator cannot
+// be evaluated on is the same correction as clamping the window, one cause
+// further along; diagWeeks now gates on it. Any future re-run must confirm the
+// "priced NOBODY" line in TestDiagStartRateWeeklyCalibration before trusting
+// the table under it.
+//
+// The hand-audited week points the same way, and is quoted rather than
+// re-derived: Period 21 is not replayable from the frozen cache (see below), so
+// its recorded Tuesday margin of −0.12 and Wednesday margin of −2.36 are
+// readings of the PRE-correction rule, at credit 0.8 over the flat estimate.
+// They are evidence about the shape of an early week — Tuesday sits inside
+// firing noise on a week that finished roughly +3 clear — and not about this
+// constant's value under the corrected estimator.
 //
 // WHY the early week is uninformative. Supply is counted from TOMORROW onward,
 // never from today: today's starts land in GSBudget.Used the moment Fantrax
@@ -191,7 +224,7 @@ func shippedGSFloorParams() gsFloorParams {
 // because "six days of unannounced clubs comfortably covers any ordinary
 // shortfall". Real Period 21 data disproved that — six days covered 8.92
 // against a Need of 10 — which is why the upper bound exists at all, and the
-// 180-week replay behind gsFloorMaxDaysLeft says the same thing in aggregate.
+// 150-week replay behind gsFloorMaxDaysLeft says the same thing in aggregate.
 //
 // That same collapse is what makes the empty days NAMEABLE, and the two are the
 // same fact seen twice. A day cannot be known empty in advance: on both

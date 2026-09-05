@@ -21,26 +21,33 @@ import (
 // oldest days from statsapi on every hourly run forever.
 //
 // AN EARLIER VERSION OF THIS COMMENT CLAIMED THE MEASUREMENT WAS FLAT ACROSS
-// WINDOW LENGTHS. It is not. Replayed over 180 complete team-weeks with the
-// corrected tally below, whole-week forecast MAE is monotone in the window:
+// WINDOW LENGTHS. It is not. Replayed over 150 complete team-weeks with the
+// corrected tally below, whole-week forecast MAE rises with the window:
 //
 //	window   bias    MAE
-//	14      +0.69   1.94
-//	21      +0.96   2.22
-//	28      +1.13   2.39
-//	45      +1.49   2.70
+//	14      +0.86   1.64
+//	21      +0.78   1.66
+//	28      +0.76   1.72
+//	45      +0.76   1.76
 //
-// (flat 1/5, for scale: +3.60 / 3.70.) Shorter is better, and materially so —
-// the 14-vs-28 gap is ten times any of the prior/guard/cap differences swept
-// below. The window is deliberately NOT re-chosen here. Two reasons: a 14-day
-// window prices a pitcher on under three rotation turns, and the guard that
-// makes a short sample safe is the very thing this change introduces, so
-// sweeping both at once would leave neither attributable; and the replay runs
-// in the open announcement regime (see TestDiagStartRateDecisionReplay), where
-// the estimate carries the whole week rather than the unannounced remainder it
-// carries in production, so a responsiveness advantage may be partly an
-// artefact of the harness. The trend is recorded here rather than acted on,
-// which is the honest state of it.
+// (flat 1/5, for scale: +4.56 / 4.58.) Shorter looks better on MAE, which is
+// monotone here; BIAS is not, and it runs the other way — it FALLS with the
+// window and then flattens at +0.76, so a shorter window trades calibration for
+// dispersion rather than dominating. The size of the MAE gain is also worth
+// stating precisely, because an earlier version of this comment claimed it was
+// "ten times" the sweep's: 14-vs-28 is 0.08 of MAE against a spread of 0.28
+// across the whole prior/guard/cap sweep below (1.47..1.75 at prior 2), so it
+// is roughly a THIRD of them, not an order of magnitude above.
+//
+// The window is deliberately NOT re-chosen here. Two reasons: a 14-day window
+// prices a pitcher on under three rotation turns, and the guard that makes a
+// short sample safe is the very thing this change introduces, so sweeping both
+// at once would leave neither attributable; and the replay runs in the open
+// announcement regime (see TestDiagStartRateDecisionReplay), where the estimate
+// carries the whole week rather than the unannounced remainder it carries in
+// production, so a responsiveness advantage may be partly an artefact of the
+// harness. The trend is recorded here rather than acted on, which is the honest
+// state of it.
 const gsStartRateWindow = 28
 
 // gsStartRatePrior is the strength of the shrinkage prior, in pseudo-
@@ -57,10 +64,10 @@ const gsStartRateWindow = 28
 // 2 is deliberately weak, and it is now the SECOND line of defence rather than
 // the only one: gsStartRateMinOpportunities refuses to price a pitcher at all
 // below one rotation turn of history, which is where an unshrunk estimator does
-// its real damage. Swept over the same 180 team-weeks with that guard and the
-// cap in place, prior 2 reads bias +1.13 / MAE 2.39 and prior 5 reads +1.40 /
-// 2.42 — the heavier prior is worse on both, because shrinking toward 0.20
-// pulls every measured pitcher up toward a rate 93.8% of them do not reach.
+// its real damage. Swept over the same 150 team-weeks with that guard and the
+// cap in place, prior 2 reads bias +0.76 / MAE 1.72 and prior 5 reads +1.21 /
+// 1.88 — the heavier prior is worse on both, because shrinking toward 0.20
+// pulls every measured pitcher up toward a rate 94.1% of them do not reach.
 const gsStartRatePrior = 2.0
 
 // gsStartRateMinOpportunities is the fewest club-game-days of history on which
@@ -68,28 +75,33 @@ const gsStartRatePrior = 2.0
 // flat 1/RotationSize, exactly as if he had no history at all.
 //
 // It exists because a shrinkage prior of 2 is not a sample-size guard. Without
-// it the estimator issued rates no rotation can produce: over the 180-week
-// replay, 35 of the 1560 prices it handed the forecast exceeded 0.25 — one turn
-// in four club-games — against a season-long observed maximum, over full
-// samples, of 0.216. A pitcher seen once on a day he started read 0.467; a
-// rotation regular acquired five days ago who had not yet taken the ball read
-// 0.057, under a third of flat. Neither number is a measurement of anything.
+// it the estimator issued rates no rotation can produce: over the 150-week
+// replay, 104 of the 2255 prices it handed the forecast exceeded 0.25 — one
+// turn in four club-games — against a season-long observed maximum, over full
+// samples, of 0.216. A pitcher seen once on a day he started reads 0.467; a
+// rotation regular seen on four club-game-days who had not yet taken the ball
+// reads 0.067, a third of flat. Neither number is a measurement of anything.
 //
 // 5 is one rotation turn: the smallest window in which a genuine every-fifth-
 // day starter is expected to have started once, and therefore the smallest
 // window in which "he has not started" is evidence rather than absence of it.
-// The sweep agrees without settling it on its own — whole-week MAE is 2.39 at
-// minOpps 0, 3 and 5 alike and 2.40 at 8 — so the guard is chosen on the
-// physical argument and on what it removes: impossible prices fall 35 → 27 →
-// 19 → 5 across those four settings, and 113 of the 1560 prices disappear
-// between 0 and 5 because they rested on under a turn of history.
+//
+// The sweep does NOT choose it and is not claimed to: whole-week MAE is 1.61 at
+// minOpps 0 and 1.72 at 5, so the guard COSTS 0.11 of MAE and 0.28 of bias. It
+// is chosen on the physical argument and on what it removes — impossible prices
+// fall 104 → 90 → 26 → 8 across the four settings, and 301 of the 2255 prices
+// disappear between 0 and 5 because they rested on under a turn of history. The
+// trade is deliberate: the prices it deletes are the ones with no sample behind
+// them, and an estimator that is slightly worse on average while refusing to
+// state a rate it cannot know is the right shape for a gate that spends a
+// weekly budget on the strength of it.
 //
 //	prior  minOpps  cap    bias    MAE   meanPred  >0.25
-//	2      0        0.25  +1.02   2.39    12.04    0/1560 (35 uncapped)
-//	2      3        0.25  +1.05   2.39    12.07    0/1512 (27 uncapped)
-//	2      5        0.25  +1.13   2.39    12.14    0/1447 (19 uncapped)
-//	2      8        0.25  +1.14   2.40    12.16    0/1382 ( 5 uncapped)
-//	5      5        0.25  +1.40   2.42    12.42    0/1447 ( 4 uncapped)
+//	2      0        0.25  +0.48   1.61    11.53    0/2255 (104 uncapped)
+//	2      3        0.25  +0.53   1.60    11.58    0/2169 ( 90 uncapped)
+//	2      5        0.25  +0.76   1.72    11.82    0/1954 ( 26 uncapped)
+//	2      8        0.25  +0.81   1.75    11.86    0/1860 (  8 uncapped)
+//	5      5        0.25  +1.21   1.88    12.27    0/1954 (  9 uncapped)
 const gsStartRateMinOpportunities = 5
 
 // gsStartRateCap is the highest rate this estimator will report: one turn in
@@ -101,18 +113,24 @@ const gsStartRateMinOpportunities = 5
 // samples read above it (Aaron Civale 0.216 on 37 opportunities, Gerrit Cole
 // 0.215 on 65, Eury Perez 0.214 on 98). Rotations are not rigid: an off-day
 // lets a club skip its fifth starter, and the arms that benefit are exactly
-// the aces the gate most needs priced correctly. A 0.20 cap clips 8.3% of all
-// prices the replay issues (120 of 1447) and buys 0.06 starts of weekly bias
-// and nothing at all in MAE.
+// the aces the gate most needs priced correctly.
+//
+// The measurement mildly PREFERS 0.20 and is not followed, which is worth
+// stating rather than burying: a 0.20 cap reads bias +0.60 / MAE 1.64 against
+// 0.25's +0.76 / 1.72. It buys that by clipping 227 of the 1954 prices the
+// replay issues (11.6%) — every one of them a pitcher measured above one turn
+// in five — so the accuracy is bought precisely by under-pricing the arms whose
+// turns the gate is deciding about. An estimator that is right on average
+// because it is wrong about the aces is the wrong trade here.
 //
 // 0.25 is the tightest bound no real rotation crosses — a four-man rotation,
 // which no modern club runs for long — so anything above it is a short sample
-// or a snapshot artefact rather than a pitcher. It removes 19 of those 1447
-// prices at no measurable calibration cost (MAE 2.39 capped against 2.38
-// uncapped, bias +1.13 either way).
+// or a snapshot artefact rather than a pitcher. It removes 26 of those 1954
+// prices at no measurable calibration cost (MAE 1.72 capped against 1.72
+// uncapped, bias +0.76 against +0.78).
 //
 // The cap and the minimum-opportunity guard overlap on purpose. The guard
-// removes most of the wild rates (35 prices above 0.25 without it, 19 with);
+// removes most of the wild rates (104 prices above 0.25 without it, 26 with);
 // the cap bounds whatever survives. Both fail in the same direction — toward
 // the flat rate that shipped all season — which is the only direction this
 // estimator is allowed to be wrong in.
@@ -248,13 +266,13 @@ func tallyStartRates(days []fantrax.PitcherDay, playingOn map[string]map[string]
 // member one turn in five. Measured against every frozen per-day Fantrax
 // snapshot on disk (2026-03-25..08-16, all ten league teams), the per-pitcher
 // rate is nothing like uniform and the flat divisor is not even centred: over
-// the 160 pitcher-seasons with at least 20 club-game-day opportunities, mean
-// 0.129, sd 0.057, p10 0.032, p25 0.093, median 0.141, p90 0.191, max 0.216 —
-// so 1/5 sits above every pitcher measured and 26.2% convert at under half of
-// it. The forecast was biased, not merely noisy: predicting each of 180
-// Monday-anchored team-weeks from its own Monday, the flat divisor forecast
-// 14.62 starts against 11.02 realised (bias +3.60, MAE 3.70) where this
-// estimator forecasts 12.14 (bias +1.13, MAE 2.39).
+// the 169 pitcher-seasons with at least 20 club-game-day opportunities, mean
+// 0.129, sd 0.057, p10 0.031, p25 0.093, median 0.140, p90 0.191, max 0.216 —
+// so 1/5 sits above 94.1% of them and 26.0% convert at under half of it. The
+// forecast was biased, not merely noisy: predicting each of 150 Monday-anchored
+// team-weeks from its own Monday, the flat divisor forecast 15.61 starts
+// against 11.05 realised (bias +4.56, MAE 4.58) where this estimator forecasts
+// 11.82 (bias +0.76, MAE 1.72).
 //
 // The harness is internal/lineuprun/diag_startrate_test.go (build tag `diag`);
 // it drives fantrax.PitcherDayWalk and tallyStartRates, so what it reports is
@@ -295,15 +313,18 @@ func tallyStartRates(days []fantrax.PitcherDay, playingOn map[string]map[string]
 // demand, which suppresses less; the flat divisor's error ran the other way and
 // by three times as much.
 //
-// ROUND TRIPS. One roster-stats read and one pitcher-GS read per day of the
-// window plus a baseline day, so 2×(gsStartRateWindow+1) = 58 snapshot reads,
-// alongside gsStartRateWindow = 28 schedule reads — once per ComputeGSBudget,
-// i.e. once per Run. Every one of them is cached: the snapshots at
-// PastPeriodTTL (a settled period is immutable) and the schedules at
-// internal/schedule's 30-day past-date TTL, which is what fixes the window at
-// 28. Warm, an hourly run pays one new day. Cold — a fresh container with an
-// empty cache — it is 86 upstream reads, of which the 58 Fantrax ones are
-// throttled 200 ms apart, so worst case is roughly 12 s added to a single run.
+// ROUND TRIPS, counted rather than estimated. One pitcher-GS read and one
+// roster-stats read per day of the window, plus a baseline day that reads the
+// pitcher-GS snapshot ONLY — teamPitcherDays' roster-meta join sits inside the
+// per-day loop and the baseline never enters it. So 29 pitcher-GS reads and 28
+// roster-stats reads, 57 snapshots, alongside gsStartRateWindow = 28 schedule
+// reads — once per ComputeGSBudget, i.e. once per Run. Every one of them is
+// cached: the snapshots at PastPeriodTTL (a settled period is immutable) and
+// the schedules at internal/schedule's 30-day past-date TTL, which is what
+// fixes the window at 28. Warm, an hourly run pays one new day. Cold — a fresh
+// container with an empty cache — it is 85 upstream reads, of which the 57
+// Fantrax ones are throttled 200 ms apart, so worst case is roughly 11 s added
+// to a single run.
 // `shadow` calls Run once per RoS system, and Options.StartRates is what stops
 // that repeating this walk four times over identical inputs.
 func computeStartRates(
@@ -394,16 +415,20 @@ func summariseStartRates(res startRateResult, spNames map[string]fantrax.Player)
 //
 // It exists for `shadow`, which calls Run once per rest-of-season projection
 // system — four passes over the same team, the same date and the same settled
-// history. The walk costs 58 snapshot reads plus 28 schedule reads and depends
+// history. The walk costs 57 snapshot reads plus 28 schedule reads and depends
 // on nothing that varies between those passes, so repeating it four times buys
 // nothing. Warm that is four times the cache traffic; cold it is four times the
 // upstream, including four times the 200 ms Fantrax throttle.
 //
-// A caller-owned value rather than package-level state, so two concurrent Runs
-// in one process cannot silently share a table measured for a different team.
-// The zero value is not usable — use NewStartRateCache — and a nil
-// *StartRateCache is a valid "do not share", which is what the ordinary
-// single-Run path passes.
+// IT IS KEYED ON NOTHING, and the caller owns the consequence. Nothing is
+// shared by default — a nil *StartRateCache is a valid "do not share", which is
+// what the ordinary single-Run path passes, and the zero value is not usable
+// (use NewStartRateCache). But one cache handed to Runs for two different
+// teams, dates or windows serves the FIRST measurement to all of them, with
+// nothing logged and a wrong forecast at the end of it. The contract is
+// therefore on the caller: share one only across Runs whose team, `today` and
+// window are identical, which is exactly and only what `shadow` does. A future
+// per-tenant in-process fan-out must construct one per tenant.
 type StartRateCache struct {
 	mu     sync.Mutex
 	filled bool

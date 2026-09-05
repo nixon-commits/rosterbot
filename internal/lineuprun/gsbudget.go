@@ -232,7 +232,7 @@ func ComputeGSBudget(ctx context.Context, ft gsFantraxClient, sched gsScheduleCl
 	// answer the question it exists for. "6 of 11 priced" reads identically
 	// whether those six rest on a month of history or on the one day each was
 	// first seen, and before gsStartRateMinOpportunities the second case was
-	// real: 113 of the 1560 prices the season-long replay issued rested on
+	// real: 301 of the 2255 prices the 150-week replay issued rested on
 	// under one rotation turn of history.
 	d.logf("GS start rates: %d of %d rostered SPs priced from their own %d-day active-slot history (median %d opportunities), %d at the flat %.2f (%d under the %d-opportunity minimum, %d with no history)",
 		cov.Priced, len(spNames), gsStartRateWindow, cov.MedianOpps,

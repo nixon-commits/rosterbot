@@ -13,7 +13,7 @@ import (
 
 // The Thursday both reference weeks are measured from. Every fixture below
 // runs Friday..Sunday so "three days left" — gsFloorMaxDaysLeft, the first day
-// the 180-week replay found the projection informative — is the shared starting
+// the 150-week replay found the projection informative — is the shared starting
 // point.
 var gsFloorToday = time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
 
@@ -86,8 +86,8 @@ func TestEvaluateGSFloor_FiresOnAWeekTrackingUnderTheFloor(t *testing.T) {
 //
 // That double discount is exactly what the sweep removed: the 0.8 was a
 // hand-rolled correction for a flat estimator measured to over-forecast by
-// +3.60 starts a week, and the estimator now corrects itself (+1.13). Keeping
-// both fired on 104 of 180 replayed weeks at precision 0.250 (see
+// +4.56 starts a week, and the estimator now corrects itself (+0.76). Keeping
+// both fired on 87 of 150 replayed weeks at precision 0.253 (see
 // gsFloorEstimateCredit).
 func TestEvaluateGSFloor_CreditsTheEstimateInFull(t *testing.T) {
 	b := gsFloorBudget(10, 12, 5,
@@ -530,8 +530,8 @@ func TestEvaluateGSFloor_FiresOnlyInsideTheDayWindow(t *testing.T) {
 		{1, false, "below gsFloorMinDaysLeft: nothing can be claimed and started"},
 		{2, true, "exactly gsFloorMinDaysLeft — the last day the alert is still actionable"},
 		{3, true, "exactly gsFloorMaxDaysLeft — the first day the projection is informative"},
-		{4, false, "above gsFloorMaxDaysLeft: the replay found this day adds 4 alerts and 0 true positives"},
-		{5, false, "above gsFloorMaxDaysLeft: 10 more alerts, 1 more true positive"},
+		{4, false, "above gsFloorMaxDaysLeft: the replay buys 6 more alerts here and 1 more true positive"},
+		{5, false, "above gsFloorMaxDaysLeft: 12 more alerts, 3 more true positives, worse precision"},
 		{6, false, "week start: Used is still zero while today's starts are excluded from supply"},
 	} {
 		f := evaluateGSFloor(shortWeek(tc.daysLeft))
@@ -591,8 +591,8 @@ func TestEvaluateGSFloor_StillFiresOnAGenuinelyShortMidweek(t *testing.T) {
 // the week ever said (rosterbot-ogtq).
 //
 // The forecast the run recorded came from the FLAT estimator (0.8, 1.8, 2.0,
-// 2.0). The shipped estimator produces 81.9% of that, measured over the same
-// 180-week replay, so the fixture carries the converted figures — the shape of
+// 2.0). The shipped estimator produces 74.5% of that, measured over the same
+// 150-week replay, so the fixture carries the converted figures — the shape of
 // the recorded week in the units the trigger now reads.
 func TestEvaluateGSFloor_TodaysUnsettledStartsAreCreditedAgainstNeed(t *testing.T) {
 	b := gsFloorBudget(10, 12, 2, period22Days()...)
@@ -603,13 +603,13 @@ func TestEvaluateGSFloor_TodaysUnsettledStartsAreCreditedAgainstNeed(t *testing.
 	if f.Need != 6 {
 		t.Errorf("Need = %d, want 6 (floor 10 - used 2 - today's 2 confirmed)", f.Need)
 	}
-	if got := f.Shortfall; got < 0.55 || got > 0.63 {
-		t.Errorf("Shortfall = %.2f, want ~0.59 — production reported 2.7 by dropping today entirely", got)
+	if got := f.Shortfall; got < 1.04 || got > 1.12 {
+		t.Errorf("Shortfall = %.2f, want ~1.08 — production reported 2.7 by dropping today entirely", got)
 	}
-	// It does NOT fire, and that is the narrowed window rather than the
-	// arithmetic: this run was the Wednesday, four days out, and
-	// gsFloorMaxDaysLeft is now 3. The same week alerts on the Thursday
-	// instead, which is what the sweep says is the first informative day.
+	// It does NOT fire, and that is the day window rather than the arithmetic:
+	// this run was the Wednesday, four days out, and gsFloorMaxDaysLeft is 3.
+	// The same week alerts on the Thursday instead, which is what the sweep
+	// says is the first informative day.
 	if f.Fires {
 		t.Errorf("fired %d days out; gsFloorMaxDaysLeft is %d", f.DaysLeft, gsFloorMaxDaysLeft)
 	}
@@ -623,13 +623,13 @@ func TestEvaluateGSFloor_TodaysUnsettledStartsAreCreditedAgainstNeed(t *testing.
 
 // period22Days is the forecast the 2026-09-02T14:01Z run recorded, converted
 // from the flat estimator that produced it into the units the shipped one
-// reports (x0.819, the measured ratio over 1,080 in-week decision points).
+// reports (x0.745, the measured ratio over 900 in-week decision points).
 func period22Days() []optimizer.DayForecast {
 	return []optimizer.DayForecast{
-		fc(1, nil, 0.66),
-		fc(2, nil, 1.47),
-		fc(3, nil, 1.64),
-		fc(4, nil, 1.64),
+		fc(1, nil, 0.60),
+		fc(2, nil, 1.34),
+		fc(3, nil, 1.49),
+		fc(4, nil, 1.49),
 	}
 }
 
@@ -682,8 +682,8 @@ func TestEvaluateGSFloor_TodayCreditCannotDriveNeedNegative(t *testing.T) {
 // The message states its own arithmetic, so every term it nets off has to be
 // visible in it. Once today's confirmed starts are credited against Need, a
 // message reporting only "used" and "more expected" no longer adds up to the
-// shortfall it quotes: Period 22's real numbers would read "2 used, 5.4 more
-// expected ... about 0.6 short" and invite the reader to compute 2.6.
+// shortfall it quotes: Period 22's real numbers would read "2 used, 4.9 more
+// expected ... about 1.1 short" and invite the reader to compute 3.1.
 func TestGSFloorMessage_AccountsForTodaysStartsInItsArithmetic(t *testing.T) {
 	b := gsFloorBudget(10, 12, 2, period22Days()...)
 	b.TodayUnsettled = 2
@@ -691,9 +691,9 @@ func TestGSFloorMessage_AccountsForTodaysStartsInItsArithmetic(t *testing.T) {
 	msg := gsFloorMessage(evaluateGSFloor(b))
 
 	if !strings.Contains(msg, "2 starting today") {
-		t.Errorf("message hides the term that makes it add up (used 2 + today 2 + supply 5.4 vs floor 10):\n%s", msg)
+		t.Errorf("message hides the term that makes it add up (used 2 + today 2 + supply 4.9 vs floor 10):\n%s", msg)
 	}
-	if !strings.Contains(msg, "0.6 short") {
+	if !strings.Contains(msg, "1.1 short") {
 		t.Errorf("message should quote the corrected shortfall:\n%s", msg)
 	}
 }
@@ -729,14 +729,14 @@ func TestReportGSFloor_CoverageLineShowsTodaysCredit(t *testing.T) {
 
 // The two constants the rosterbot-goht follow-up re-derived, pinned as
 // fixtures so a revert fails here rather than quietly restoring a trigger that
-// fires on three weeks in five.
+// fires on more than half of all weeks.
 //
 // The bead's two designated weeks CANNOT be replayed from the frozen cache and
 // were not: the MLB schedule on disk stops at 2026-08-16 and the per-day
 // pitcher-GS snapshots at daily period 152 (2026-08-23), so Period 20 has
 // rosters but no schedule and Period 21 has neither. What survives of them is
 // the audited arithmetic recorded in gs_floor.go, and that is what the first
-// two cases below encode. The constants themselves are chosen by the 180-week
+// two cases below encode. The constants themselves are chosen by the 150-week
 // replay in TestDiagGSFloorSweep; the last two cases encode what that replay
 // found at each edge.
 func TestEvaluateGSFloor_PinsTheSweptFloorConstants(t *testing.T) {
@@ -768,8 +768,9 @@ func TestEvaluateGSFloor_PinsTheSweptFloorConstants(t *testing.T) {
 	}
 
 	// The day bound, from both sides. A genuinely short week must speak at
-	// three days left and must NOT at four: the replay found the fourth day
-	// adds four alerts and not one true positive.
+	// three days left and must NOT at four: on the corrected 150-week replay
+	// max 3 carries the best precision of every setting that reaches the flat
+	// baseline's recall, and the fourth day buys six alerts and one TP.
 	shortAt := func(days int) *optimizer.GSBudget {
 		fcs := make([]optimizer.DayForecast, 0, days)
 		for i := 1; i <= days; i++ {
@@ -784,6 +785,6 @@ func TestEvaluateGSFloor_PinsTheSweptFloorConstants(t *testing.T) {
 		t.Errorf("stayed quiet three days out on a week needing %d more with %.2f coming", f.Need, f.Supply)
 	}
 	if f := evaluateGSFloor(shortAt(4)); f.Fires {
-		t.Error("fired four days out; the replay says that day adds alerts and no true positives")
+		t.Error("fired four days out; the corrected replay puts the best precision at max 3, and Period 21's Tuesday sat inside firing noise on a healthy week")
 	}
 }

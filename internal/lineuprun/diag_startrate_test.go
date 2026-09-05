@@ -15,6 +15,17 @@
 // shipped (see tallyStartRates' comment); nothing here may re-derive a number
 // the production path already knows how to compute.
 //
+// THE RULE APPLIES TO THE INPUTS TOO, which is where it was broken a second
+// time. Sharing the row derivation and the tally with production is not enough
+// if the two things fed into them are rebuilt by hand: the first corrected
+// version of this file built its schedule map from RAW statsapi abbreviations
+// (production normalizes through internal/teams, so ARI and CHW pitcher-days
+// silently never matched — 880 of them) and let the trailing window run off the
+// front of the season without the clamp computeStartRates applies (so 40 of the
+// 180 replayed team-weeks measured as though the weighting did not exist). Both
+// moved every published number materially, and neither was visible as an error.
+// If a value here has a production spelling, use the production spelling.
+//
 // It is build-tagged `diag` and reads only from a local Fantrax cache
 // directory, so it never runs in CI, never authenticates, and never touches an
 // upstream. Run it with:
@@ -39,6 +50,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/optimizer"
 	"github.com/nixon-commits/rosterbot/internal/projections"
+	"github.com/nixon-commits/rosterbot/internal/teams"
 )
 
 // diagEnvelope mirrors internal/cache's on-disk envelope.
@@ -89,6 +101,10 @@ type diagCache struct {
 	dateOf   map[int]time.Time
 
 	limit, floor, slots int
+
+	// spanFirst/spanLast memoize span(), which ratesOver now consults on every
+	// call to clamp its window at the opener.
+	spanFirst, spanLast time.Time
 }
 
 func diagLoad(t *testing.T, dir string) *diagCache {
@@ -137,11 +153,17 @@ func diagLoad(t *testing.T, dir string) *diagCache {
 		if !diagRead(p, &sched) {
 			continue
 		}
+		// teams.Normalize, exactly as internal/schedule's TeamsPlayingOn does
+		// on the same field. It is not cosmetic: PitcherDay.MLBTeam is already
+		// normalized (playerGSFromTables), so a raw statsapi abbreviation here
+		// would silently never match for the clubs the two spellings disagree
+		// about — measured over this cache, 880 SP pitcher-days (465 ARI, 415
+		// CHW) that production counts and an un-normalized harness drops.
 		clubs := map[string]bool{}
 		for _, d := range sched.Dates {
 			for _, g := range d.Games {
-				clubs[g.Teams.Away.Team.Abbreviation] = true
-				clubs[g.Teams.Home.Team.Abbreviation] = true
+				clubs[teams.Normalize(g.Teams.Away.Team.Abbreviation)] = true
+				clubs[teams.Normalize(g.Teams.Home.Team.Abbreviation)] = true
 			}
 		}
 		c.playing[ds] = clubs
@@ -181,6 +203,20 @@ func diagLoad(t *testing.T, dir string) *diagCache {
 			c.roster[team] = map[int]map[string]fantrax.PitcherRosterMeta{}
 		}
 		c.roster[team][period] = meta
+	}
+
+	// The schedule map is joined against PitcherDay.MLBTeam, which is already
+	// canonical, so an un-normalized club here is not a mismatch anyone sees —
+	// it is a whole club's pitcher-days silently absent from the denominator.
+	// Assert the property rather than trusting the call above to stay correct.
+	for ds, clubs := range c.playing {
+		for club := range clubs {
+			if teams.Normalize(club) != club {
+				t.Fatalf("schedule for %s carries the un-normalized club %q (canonical %q); "+
+					"every pitcher-day for it would silently drop out of the tally",
+					ds, club, teams.Normalize(club))
+			}
+		}
 	}
 
 	c.limit, c.floor = diagGSLimits(dir)
@@ -256,12 +292,36 @@ func (c *diagCache) rates(team string, today time.Time, p startRateParams) start
 // ratesOver is rates with the window length as a parameter, for the window
 // sweep. Everything else — the walk, the tally, the filters — is the shipped
 // code either way.
+//
+// The window START IS CLAMPED to the season opener, exactly as
+// computeStartRates clamps it. Without the clamp the walk asks for days before
+// the opener, pitcherDays refuses the whole window the moment any day is
+// missing, and every Monday inside the first gsStartRateWindow days of the
+// season measures as if the weighting did not exist — 40 of this cache's 180
+// team-weeks, dragging every "weighted" row toward the flat baseline it is
+// being compared against.
 func (c *diagCache) ratesOver(team string, today time.Time, window int, p startRateParams) startRateResult {
-	days := c.pitcherDays(team, today.AddDate(0, 0, -window), today.AddDate(0, 0, -1))
+	start, end, ok := c.rateWindow(today, window)
+	if !ok {
+		return startRateResult{}
+	}
+	days := c.pitcherDays(team, start, end)
 	if days == nil {
 		return startRateResult{}
 	}
 	return tallyStartRates(days, c.playing, p)
+}
+
+// rateWindow is computeStartRates' own window arithmetic: the trailing `window`
+// days ending yesterday, clamped at the season opener, and not-ok when that
+// leaves nothing (opening day and the day after).
+func (c *diagCache) rateWindow(today time.Time, window int) (start, end time.Time, ok bool) {
+	start = today.AddDate(0, 0, -window)
+	if seasonStart, _ := c.span(); !seasonStart.IsZero() && start.Before(seasonStart) {
+		start = seasonStart
+	}
+	end = today.AddDate(0, 0, -1)
+	return start, end, !end.Before(start)
 }
 
 func diagGSLimits(dir string) (limit, floor int) {
@@ -318,6 +378,9 @@ func diagCacheDir(t *testing.T) string {
 // derived rather than assumed, so a cache with a different span measures its
 // own span.
 func (c *diagCache) span() (first, last time.Time) {
+	if !c.spanFirst.IsZero() {
+		return c.spanFirst, c.spanLast
+	}
 	dates := make([]string, 0, len(c.playing))
 	for ds := range c.playing {
 		if _, ok := c.periodOf[ds]; ok {
@@ -330,7 +393,8 @@ func (c *diagCache) span() (first, last time.Time) {
 	}
 	first, _ = time.Parse("2006-01-02", dates[0])
 	last, _ = time.Parse("2006-01-02", dates[len(dates)-1])
-	return first.UTC(), last.UTC()
+	c.spanFirst, c.spanLast = first.UTC(), last.UTC()
+	return c.spanFirst, c.spanLast
 }
 
 // --- dispersion -------------------------------------------------------------
@@ -464,6 +528,21 @@ func (w diagWeek) totalRealised() int {
 
 // diagWeeks reconstructs every complete Monday-anchored team-week for which
 // the whole week AND the whole trailing rate window are cached.
+//
+// THE TRAILING-WINDOW CHECK IS NOT DECORATION, and this comment used to promise
+// it without doing it. pitcherDays refuses a partially-cached window — correct,
+// since a short window silently inflates every rate — and the refusal surfaces
+// as an EMPTY rate table, which every caller here reads as "price everyone
+// flat". So a week the harness could not measure was measured as the flat
+// baseline and then reported as the weighted estimator, dragging one toward the
+// other. Measured on this cache, 30 of 180 weeks (three Mondays across a
+// July/August snapshot gap) were doing that. Gating on the SHIPPED window means
+// every row of the window sweep compares the same weeks.
+//
+// A week whose window IS readable but prices nobody is kept, and the difference
+// matters: the season's opening Monday has four days of history and nothing
+// clears gsStartRateMinOpportunities, which is a real production state and an
+// honest all-flat week rather than an unobserved one.
 func diagWeeks(c *diagCache) []diagWeek {
 	first, last := c.span()
 	var out []diagWeek
@@ -483,6 +562,11 @@ func diagWeeks(c *diagCache) []diagWeek {
 				week.days = append(week.days, day)
 			}
 			if !ok {
+				continue
+			}
+			// The trailing rate window has to be readable too, or this week
+			// measures as flat under every parameter setting.
+			if ws, we, wok := c.rateWindow(d, gsStartRateWindow); !wok || c.pitcherDays(team, ws, we) == nil {
 				continue
 			}
 			// One walk over the week gives both the realised starts and the
@@ -562,6 +646,26 @@ func TestDiagStartRateWeeklyCalibration(t *testing.T) {
 	n := float64(len(weeks))
 	t.Logf("realised active-slot starts per week: mean %.2f", actualMean/n)
 	t.Logf("flat 1/5: predicted bias %+.2f  MAE %.2f", flatBias/n, flatMAE/n)
+
+	// Weeks whose trailing window produced NOTHING are measured as if the
+	// weighting did not exist, so they drag every weighted row toward the flat
+	// baseline it is being compared against. Reported unconditionally, zero
+	// included: before ratesOver clamped its window at the opener this read 40
+	// of 180 and nothing in the output said so.
+	empty := 0
+	emptyOn := map[string]int{}
+	for _, w := range weeks {
+		if len(c.rates(w.team, w.start, shippedStartRateParams()).Rate) == 0 {
+			empty++
+			emptyOn[w.start.Format("2006-01-02")]++
+		}
+	}
+	emptyDates := make([]string, 0, len(emptyOn))
+	for ds := range emptyOn {
+		emptyDates = append(emptyDates, fmt.Sprintf("%s×%d", ds, emptyOn[ds]))
+	}
+	sort.Strings(emptyDates)
+	t.Logf("team-weeks whose trailing window priced NOBODY: %d of %d %v", empty, len(weeks), emptyDates)
 
 	// Window sweep first, at the shipped prior/guard/cap, because the window is
 	// the one constant fixed by an engineering fact (internal/schedule's 30-day

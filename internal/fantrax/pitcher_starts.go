@@ -83,6 +83,14 @@ type PitcherRosterMeta struct {
 // two ways of being AVAILABLE (a bench arm can be activated tomorrow), while
 // "3" and "9" are two ways of not being on the major-league roster at all. A
 // rate denominator has to drop the second pair and keep the first.
+//
+// StatusReserve has NO READER anywhere in the tree, and that is deliberate: it
+// completes the vocabulary the other three are read against, so "available"
+// spells out as both of its values rather than as one value and an implied
+// remainder. The cost is that nothing would fail if its value rotted — an
+// exported constant with no reader is invisible to the unused-code linters and
+// to every test — so treat it as documentation, not as a checked fact. The
+// moment something reads it, that stops being true and a test should pin it.
 const (
 	StatusActive  = "1"
 	StatusReserve = "2"

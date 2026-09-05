@@ -358,7 +358,7 @@ func TestDisplayNameFor(t *testing.T) {
 // key carrying the period ComputeGSBudget resolved.
 func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
 	// Thursday: three days left, which is gsFloorMaxDaysLeft — the first day
-	// the 180-week replay found the projection informative.
+	// the 150-week replay found the projection informative.
 	today := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
 	weekStart := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	weekEnd := time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC)

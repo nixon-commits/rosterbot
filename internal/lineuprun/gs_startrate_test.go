@@ -250,9 +250,15 @@ func TestComputeStartRates_ShortHistoryFallsBackToFlat(t *testing.T) {
 	rows := rostered("Ace Pitcher", "LAD", window, 3)
 	// One day on the roster, and he started it — the 0.467 case.
 	rows = append(rows, pitcherDay("One Day Wonder", "LAD", window[13], true))
-	// Five days and no start yet — the "rotation regular acquired last week"
-	// case that used to be priced at a third of flat.
+	// FOUR days and no start yet — one below gsStartRateMinOpportunities, so
+	// this is the guard's boundary from the refusing side: the "rotation
+	// regular acquired last week" case that used to be priced at 0.067, a
+	// third of flat, on no evidence at all.
 	rows = append(rows, rostered("New Regular", "LAD", window[10:14])...)
+	// Exactly gsStartRateMinOpportunities and no start — the boundary from the
+	// other side, which must be PRICED. Without it the guard could be widened
+	// by one and the suite would stay green.
+	rows = append(rows, rostered("Just Enough", "LAD", window[9:14])...)
 
 	ft := &fakeGSFantrax{pitcherDays: rows}
 	sched := scheduleFor([]string{"LAD"}, window...)
@@ -274,6 +280,14 @@ func TestComputeStartRates_ShortHistoryFallsBackToFlat(t *testing.T) {
 	}
 	if _, ok := res.Rate["ace pitcher"]; !ok {
 		t.Error("a pitcher with a full window of history must still be priced")
+	}
+	if got := res.Opportunities["just enough"]; got != gsStartRateMinOpportunities {
+		t.Fatalf("fixture built %d opportunities, want exactly the guard's %d",
+			got, gsStartRateMinOpportunities)
+	}
+	if _, ok := res.Rate["just enough"]; !ok {
+		t.Errorf("a pitcher on exactly %d opportunities must be priced; the guard is a minimum, not a threshold to clear",
+			gsStartRateMinOpportunities)
 	}
 }
 
