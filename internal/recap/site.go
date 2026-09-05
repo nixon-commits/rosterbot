@@ -1,6 +1,7 @@
 package recap
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ type SiteOptions struct {
 // `week-NN.html`, plus duplicates the latest week as `index.html` so the
 // site root serves the most recent recap. Each rendered page includes a
 // dropdown navigation linking to all other completed weeks.
-func RunSite(ft SiteClient, sopts SiteOptions) error {
+func RunSite(ctx context.Context, ft SiteClient, sopts SiteOptions) error {
 	if sopts.OutDir == "" {
 		return fmt.Errorf("OutDir is required")
 	}
@@ -41,7 +42,7 @@ func RunSite(ft SiteClient, sopts SiteOptions) error {
 
 	sched := schedule.NewClient()
 	sched.CacheDir = sopts.Recap.CacheDir
-	completed, err := completedMatchupWeeks(ft, sched, sopts.Today)
+	completed, err := completedMatchupWeeks(ctx, ft, sched, sopts.Today)
 	if err != nil {
 		return err
 	}
@@ -78,7 +79,7 @@ func RunSite(ft SiteClient, sopts SiteOptions) error {
 		fmt.Fprintf(os.Stderr, "  building week %d (%s..%s)\n",
 			w.n, w.start.Format("2006-01-02"), w.end.Format("2006-01-02"))
 
-		r, err := Run(ft, weekOpts)
+		r, err := Run(ctx, ft, weekOpts)
 		if err != nil {
 			return fmt.Errorf("week %d: %w", w.n, err)
 		}
@@ -133,7 +134,7 @@ type matchupWeek struct {
 // Satisfied by *schedule.Client; narrowed to an interface so the week-cutoff
 // logic is unit-testable without network.
 type dayCompletionChecker interface {
-	AllGamesFinalOn(date time.Time) (bool, error)
+	AllGamesFinalOn(ctx context.Context, date time.Time) (bool, error)
 }
 
 // matchupWeekProvider yields the [start, end] bounds of the n-th matchup week,
@@ -159,7 +160,7 @@ type SiteClient interface {
 // is a running in-week score and can't signal closure, but the MLB schedule
 // can. On a schedule lookup error the same-day week is conservatively excluded
 // (treated as still in progress). Sorted ascending.
-func completedMatchupWeeks(weeks matchupWeekProvider, sched dayCompletionChecker, today time.Time) ([]matchupWeek, error) {
+func completedMatchupWeeks(ctx context.Context, weeks matchupWeekProvider, sched dayCompletionChecker, today time.Time) ([]matchupWeek, error) {
 	todayYMD := today.Format("2006-01-02")
 	var out []matchupWeek
 	for n := 1; ; n++ {
@@ -175,7 +176,7 @@ func completedMatchupWeeks(weeks matchupWeekProvider, sched dayCompletionChecker
 		case weYMD < todayYMD:
 			out = append(out, matchupWeek{n: n, start: ws, end: we})
 		case weYMD == todayYMD:
-			if done, err := sched.AllGamesFinalOn(we); err == nil && done {
+			if done, err := sched.AllGamesFinalOn(ctx, we); err == nil && done {
 				out = append(out, matchupWeek{n: n, start: ws, end: we})
 			}
 		}

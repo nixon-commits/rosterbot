@@ -216,13 +216,13 @@ func jsonPost(t *testing.T, path string, body map[string]any, cookies []*http.Co
 	t.Helper()
 	var r *http.Request
 	if body == nil {
-		r = httptest.NewRequest(http.MethodPost, path, nil)
+		r = httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, nil)
 	} else {
 		raw, err := json.Marshal(body)
 		if err != nil {
 			t.Fatal(err)
 		}
-		r = httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(raw)))
+		r = httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(string(raw)))
 		r.Header.Set("Content-Type", "application/json")
 	}
 	for _, c := range cookies {

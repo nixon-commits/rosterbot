@@ -1,6 +1,7 @@
 package lineuprun
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -14,8 +15,8 @@ import (
 // *schedule.Client satisfies it; a map-backed fake satisfies it in tests, which
 // is what makes this logic exercisable without network (rosterbot-6rv).
 type gsScheduleClient interface {
-	TeamsPlayingOn(date time.Time) (map[string]bool, error)
-	ProbableStarters(date time.Time) (map[string]string, error)
+	TeamsPlayingOn(ctx context.Context, date time.Time) (map[string]bool, error)
+	ProbableStarters(ctx context.Context, date time.Time) (map[string]string, error)
 }
 
 // gsFantraxClient is the Fantrax surface the GS-budget fetch cascade needs.
@@ -106,7 +107,7 @@ func (d *GSDecision) logf(format string, args ...any) {
 // pitcher usage silently is the failure mode worth being noisy about — and
 // disables the gate. A configured max of nil is different: Fantrax simply is
 // not tracking GS for that period, so there is nothing to gate and no alert.
-func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GSDecision {
+func ComputeGSBudget(ctx context.Context, ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GSDecision {
 	var d GSDecision
 
 	// A zero season start means the season-range lookup failed upstream; there
@@ -207,7 +208,7 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 	// every SP reverts to the flat rate, which is the behaviour that shipped
 	// all season. Degrading to the status quo ante is never worse than the
 	// status quo ante, so it must not disable a gate that would otherwise run.
-	rates, rateErr := computeStartRates(ft, sched, in.TeamID, in.SeasonStart, in.Today,
+	rates, rateErr := computeStartRates(ctx, ft, sched, in.TeamID, in.SeasonStart, in.Today,
 		cacheTTL(in.NoCache, fantrax.PastPeriodTTL))
 	if rateErr != nil {
 		d.logf("WARNING: start-rate history unavailable (%v) — every SP priced at the flat %.2f",
@@ -232,7 +233,7 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 	// vouch for. Unlike the GS-limit fetch this raises no Pushover — a statsapi
 	// blip is transient and self-healing on the next hourly run, where a
 	// Fantrax config read that stops working is not.
-	forecast, fcErr := buildGSForecast(sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts, rates)
+	forecast, fcErr := buildGSForecast(ctx, sched, spNames, in.NumPitcherSlots, in.Today, weekEnd, in.ProjPts, rates)
 	if fcErr != nil {
 		d.logf("WARNING: %v — GS limit disabled", fcErr)
 		return d
@@ -243,7 +244,7 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 	// credit rather than disabling the gate: zero reproduces the pre-fix
 	// arithmetic exactly, which reads a shortfall louder than the truth and
 	// never quieter, and this correction only ever feeds a report.
-	todayUnsettled, tuErr := todayUnsettledStarts(sched, spNames, in.NumPitcherSlots, in.Today)
+	todayUnsettled, tuErr := todayUnsettledStarts(ctx, sched, spNames, in.NumPitcherSlots, in.Today)
 	if tuErr != nil {
 		d.logf("WARNING: today's probables unavailable (%v) — floor shortfall may read high", tuErr)
 	}
@@ -316,6 +317,7 @@ func ComputeGSBudget(ft gsFantraxClient, sched gsScheduleClient, in GSInputs) GS
 // does not. The cost is bounded by cadence rather than by severity: the lineup
 // job runs hourly, so a statsapi blip costs one run's gate.
 func buildGSForecast(
+	ctx context.Context,
 	sched gsScheduleClient,
 	spNames map[string]fantrax.Player,
 	numPSlots int,
@@ -331,11 +333,11 @@ func buildGSForecast(
 		// nothing to learn from the remaining days once the week's total is
 		// already disqualified, and no reason to spend more round-trips on a
 		// seam that just failed.
-		playing, err := sched.TeamsPlayingOn(d)
+		playing, err := sched.TeamsPlayingOn(ctx, d)
 		if err != nil {
 			return nil, fmt.Errorf("schedule unavailable for %s: %w", ds, err)
 		}
-		probs, err := sched.ProbableStarters(d)
+		probs, err := sched.ProbableStarters(ctx, d)
 		if err != nil {
 			return nil, fmt.Errorf("probable starters unavailable for %s: %w", ds, err)
 		}
@@ -441,8 +443,8 @@ func buildGSForecast(
 // be invisible to every current consumer (all four guard on Date.After(Today)),
 // but it would make a today row appear in the archived gs_forecast snapshots
 // and quietly change what backtest grades.
-func todayUnsettledStarts(sched gsScheduleClient, spNames map[string]fantrax.Player, numPSlots int, today time.Time) (int, error) {
-	probs, err := sched.ProbableStarters(today)
+func todayUnsettledStarts(ctx context.Context, sched gsScheduleClient, spNames map[string]fantrax.Player, numPSlots int, today time.Time) (int, error) {
+	probs, err := sched.ProbableStarters(ctx, today)
 	if err != nil {
 		return 0, err
 	}

@@ -144,7 +144,11 @@ func initShared() error {
 	userKey, apiToken := os.Getenv("PUSHOVER_USER_KEY"), os.Getenv("PUSHOVER_API_TOKEN")
 	if userKey != "" && apiToken != "" {
 		cache.Notify = func(title, message string) {
-			if err := notify.SendPushover(userKey, apiToken, title, message); err != nil {
+			// cache.Notify's signature is fixed (no request scope reaches a
+			// stale-fallback callback fired from deep inside internal/cache),
+			// so context.Background() is the honest choice at this outermost
+			// point rather than threading one through the cache package.
+			if err := notify.SendPushover(context.Background(), userKey, apiToken, title, message); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: cache notify push failed: %v\n", err)
 			}
 		}

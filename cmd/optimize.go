@@ -165,7 +165,7 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 	// Soft-fail, deliberately after Run and outside its error path: applying
 	// the lineup is this command's job and a trades hiccup must not fail a run
 	// that already wrote the lineup. Same rule as cmd/grade.go's lineup gaps.
-	if err := captureTradeOffers(ft, cfg, time.Now()); err != nil {
+	if err := captureTradeOffers(cmd.Context(), ft, cfg, time.Now()); err != nil {
 		warn("optimize: pending trade offers not captured: %v", err)
 	}
 	return nil

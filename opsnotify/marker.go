@@ -109,7 +109,7 @@ func send1(ctx context.Context, m *markerStore, a alert) error {
 	if a.title == "" {
 		return nil
 	}
-	if err := sendOrLog(a.title, a.body); err != nil {
+	if err := sendOrLog(ctx, a.title, a.body); err != nil {
 		return err
 	}
 	m.record(a.key, a.note)

@@ -111,7 +111,7 @@ func TestComputeGSBudget_HealthyPathBuildsBudget(t *testing.T) {
 	}
 	ft := healthyGS()
 
-	got := ComputeGSBudget(ft, sched, gsInputs())
+	got := ComputeGSBudget(t.Context(), ft, sched, gsInputs())
 
 	if got.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
@@ -209,7 +209,7 @@ func TestComputeGSBudget_DisablePaths(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&in)
 			}
-			got := ComputeGSBudget(tc.client(), &fakeSchedule{}, in)
+			got := ComputeGSBudget(t.Context(), tc.client(), &fakeSchedule{}, in)
 
 			if got.Budget != nil {
 				t.Errorf("expected the gate disabled, got budget %+v", got.Budget)
@@ -238,7 +238,7 @@ func TestComputeGSBudget_LiveLimitFailureAlertsAndDoesNotFallBack(t *testing.T) 
 	ft := healthyGS()
 	ft.limitErr = errors.New("503 from fantrax")
 
-	got := ComputeGSBudget(ft, &fakeSchedule{}, gsInputs())
+	got := ComputeGSBudget(t.Context(), ft, &fakeSchedule{}, gsInputs())
 
 	if got.Budget != nil {
 		t.Fatalf("must not fall back to any limit, got %+v", got.Budget)
@@ -265,7 +265,7 @@ func TestComputeGSBudget_ReturnsTheAlertRatherThanSendingIt(t *testing.T) {
 	ft := healthyGS()
 	ft.limitErr = errors.New("down")
 
-	got := ComputeGSBudget(ft, &fakeSchedule{}, gsInputs())
+	got := ComputeGSBudget(t.Context(), ft, &fakeSchedule{}, gsInputs())
 	if got.Alert == nil {
 		t.Fatal("expected an alert to be requested")
 	}
@@ -283,7 +283,7 @@ func TestComputeGSBudget_EarlyFailureSkipsLaterFetches(t *testing.T) {
 	ft := healthyGS()
 	ft.weekErr = errors.New("bounds down")
 
-	ComputeGSBudget(ft, &fakeSchedule{}, gsInputs())
+	ComputeGSBudget(t.Context(), ft, &fakeSchedule{}, gsInputs())
 
 	if ft.limitCalls != 0 {
 		t.Errorf("GetGSLimits called %d times after an earlier failure — the cascade should short-circuit", ft.limitCalls)
@@ -303,7 +303,7 @@ func TestComputeGSBudget_ForecastScheduleFailureDisablesGate(t *testing.T) {
 		playingErr: map[string]error{"2026-07-26": errors.New("statsapi timeout")},
 	}
 
-	d := ComputeGSBudget(healthyGS(), sched, gsInputs())
+	d := ComputeGSBudget(t.Context(), healthyGS(), sched, gsInputs())
 
 	if d.Budget != nil {
 		t.Errorf("Budget = %+v, want nil — an unverifiable forecast must disable the gate", d.Budget)
@@ -324,7 +324,7 @@ func TestComputeGSBudget_ForecastProbablesFailureDisablesGate(t *testing.T) {
 		probablesErr: map[string]error{"2026-07-26": errors.New("statsapi 503")},
 	}
 
-	d := ComputeGSBudget(healthyGS(), sched, gsInputs())
+	d := ComputeGSBudget(t.Context(), healthyGS(), sched, gsInputs())
 
 	if d.Budget != nil {
 		t.Errorf("Budget = %+v, want nil", d.Budget)
@@ -343,7 +343,7 @@ func TestComputeGSBudget_ForecastProbablesFailureDisablesGate(t *testing.T) {
 // periods while the only component that knew the floor existed (gs-check)
 // reported it the day AFTER the period closed.
 func TestComputeGSBudget_CarriesTheLiveFloor(t *testing.T) {
-	d := ComputeGSBudget(healthyGS(), &fakeSchedule{}, gsInputs())
+	d := ComputeGSBudget(t.Context(), healthyGS(), &fakeSchedule{}, gsInputs())
 	if d.Budget == nil {
 		t.Fatal("budget should be built")
 	}
@@ -363,7 +363,7 @@ func TestComputeGSBudget_CarriesTheLiveFloor(t *testing.T) {
 func TestComputeGSBudget_MissingFloorDoesNotDisableTheGate(t *testing.T) {
 	f := healthyGS()
 	f.limitMin = nil
-	d := ComputeGSBudget(f, &fakeSchedule{}, gsInputs())
+	d := ComputeGSBudget(t.Context(), f, &fakeSchedule{}, gsInputs())
 	if d.Budget == nil {
 		t.Fatal("a missing GS minimum must NOT disable the gate")
 	}
@@ -397,7 +397,7 @@ func TestComputeGSBudget_CountsTodaysUnlockedProbablesAsUnsettled(t *testing.T) 
 		},
 	}
 
-	got := ComputeGSBudget(healthyGS(), sched, gsInputs())
+	got := ComputeGSBudget(t.Context(), healthyGS(), sched, gsInputs())
 
 	if got.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
@@ -424,7 +424,7 @@ func TestComputeGSBudget_LockedProbablesAreAlreadySettled(t *testing.T) {
 		activeSP("b", "Second Arm", "NYY"),
 	}
 
-	got := ComputeGSBudget(healthyGS(), sched, in)
+	got := ComputeGSBudget(t.Context(), healthyGS(), sched, in)
 
 	if got.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
@@ -443,7 +443,7 @@ func TestComputeGSBudget_TodaysProbablesFailureDegradesToNoCredit(t *testing.T) 
 		probablesErr: map[string]error{"2026-07-25": errors.New("statsapi 503")},
 	}
 
-	got := ComputeGSBudget(healthyGS(), sched, gsInputs())
+	got := ComputeGSBudget(t.Context(), healthyGS(), sched, gsInputs())
 
 	if got.Budget == nil {
 		t.Fatalf("a probables blip for today must not disable the gate. logs:\n%s", logsJoined(got))
@@ -475,7 +475,7 @@ func TestComputeGSBudget_ReserveConfirmedStarterIsNotCredited(t *testing.T) {
 		reserveSP("b", "Second Arm", "NYY"),
 	}
 
-	got := ComputeGSBudget(healthyGS(), sched, in)
+	got := ComputeGSBudget(t.Context(), healthyGS(), sched, in)
 
 	if got.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))
@@ -507,7 +507,7 @@ func TestComputeGSBudget_TodayUnsettledCapsAtPitcherSlots(t *testing.T) {
 		activeSP("c", "Third Arm", "BOS"),
 	}
 
-	got := ComputeGSBudget(healthyGS(), sched, in)
+	got := ComputeGSBudget(t.Context(), healthyGS(), sched, in)
 
 	if got.Budget == nil {
 		t.Fatalf("expected a budget, got disabled. logs:\n%s", logsJoined(got))

@@ -20,7 +20,7 @@ const ilStartLookahead = 1
 // ilStartSchedule is the probable-starter surface this check needs.
 // *schedule.Client satisfies it; a map-backed fake satisfies it in tests.
 type ilStartSchedule interface {
-	ProbableStarters(date time.Time) (map[string]string, error)
+	ProbableStarters(ctx context.Context, date time.Time) (map[string]string, error)
 }
 
 type ilStartInputs struct {
@@ -52,7 +52,7 @@ type ilStartInputs struct {
 //
 // Every failure here is soft. This runs inside the hourly lineup job, and a
 // statsapi hiccup or an unreachable marker store must never take that down.
-func reportILStarts(in ilStartInputs) {
+func reportILStarts(ctx context.Context, in ilStartInputs) {
 	var (
 		found        []roster.ILStart
 		mismatches   []string
@@ -60,7 +60,7 @@ func reportILStarts(in ilStartInputs) {
 	)
 	for i := 0; i <= ilStartLookahead; i++ {
 		date := in.Today.AddDate(0, 0, i)
-		probables, err := in.Sched.ProbableStarters(date)
+		probables, err := in.Sched.ProbableStarters(ctx, date)
 		if err != nil {
 			fmt.Fprintf(in.Out, "  il-start check: probables unavailable for %s: %v\n",
 				date.Format("2006-01-02"), err)
@@ -95,7 +95,6 @@ func reportILStarts(in ilStartInputs) {
 	}
 
 	fmt.Fprintln(in.Out, "\n=== IL Players With An Announced Start ===")
-	ctx := context.Background()
 	m := alertmarker.New(in.Markers, alertmarker.WithLogf(func(format string, args ...any) {
 		fmt.Fprintf(in.Out, "  il-start check: "+format+"\n", args...)
 	}))

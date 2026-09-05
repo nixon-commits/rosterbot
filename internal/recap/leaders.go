@@ -1,6 +1,7 @@
 package recap
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -48,7 +49,7 @@ type leadersClient interface {
 // leaderboards across all rostered players. Soft-fails to nil on any data
 // error — the leaderboards are nice-to-have, the rest of the recap still
 // renders.
-func buildLeaders(ft leadersClient, year int, today time.Time, cacheDir string, cacheTTL time.Duration, n int) (wobaLeaders, fipLeaders []LeaderLine) {
+func buildLeaders(ctx context.Context, ft leadersClient, year int, today time.Time, cacheDir string, cacheTTL time.Duration, n int) (wobaLeaders, fipLeaders []LeaderLine) {
 	pool, err := ft.GetFullPlayerPool()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: league leaders (player pool): %v\n", err)
@@ -70,7 +71,7 @@ func buildLeaders(ft leadersClient, year int, today time.Time, cacheDir string, 
 	}
 
 	// Hitters → season wOBA via the Savant expected-stats CSV (qualified only).
-	if savant, err := statcast.LoadBundle(cacheDir, year, today, cacheTTL); err != nil {
+	if savant, err := statcast.LoadBundle(ctx, cacheDir, year, today, cacheTTL); err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: league leaders (savant): %v\n", err)
 	} else {
 		wobaLeaders = computeWOBALeaders(rostered, resolved, savant, n)
@@ -78,7 +79,7 @@ func buildLeaders(ft leadersClient, year int, today time.Time, cacheDir string, 
 
 	// Pitchers → season-to-date actual FIP from MLB statsapi.
 	pitcherIDs := pitcherMLBAMIDs(rostered, resolved)
-	if stats, err := fetchSeasonPitching(pitcherIDs, year); err != nil {
+	if stats, err := fetchSeasonPitching(ctx, pitcherIDs, year); err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: league leaders (pitching): %v\n", err)
 	} else {
 		fipLeaders = computeFIPLeaders(rostered, resolved, stats, n)
@@ -245,7 +246,7 @@ func pitcherMLBAMIDs(rostered []models.PoolPlayer, resolved *playername.Resolved
 
 // fetchSeasonPitching pulls season-to-date pitching splits for the given MLBAM
 // IDs from statsapi, chunked to keep URLs short. Returns id → season line.
-func fetchSeasonPitching(ids []int, year int) (map[int]pitchSeason, error) {
+func fetchSeasonPitching(ctx context.Context, ids []int, year int) (map[int]pitchSeason, error) {
 	out := make(map[int]pitchSeason, len(ids))
 	const chunk = 100
 	for i := 0; i < len(ids); i += chunk {
@@ -258,15 +259,19 @@ func fetchSeasonPitching(ids []int, year int) (map[int]pitchSeason, error) {
 			parts = append(parts, strconv.Itoa(id))
 		}
 		url := fmt.Sprintf(mlbSeasonPitchingURL, strings.Join(parts, ","), year)
-		if err := fetchPitchingChunk(url, out); err != nil {
+		if err := fetchPitchingChunk(ctx, url, out); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
 }
 
-func fetchPitchingChunk(url string, out map[int]pitchSeason) error {
-	resp, err := http.Get(url)
+func fetchPitchingChunk(ctx context.Context, url string, out map[int]pitchSeason) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}

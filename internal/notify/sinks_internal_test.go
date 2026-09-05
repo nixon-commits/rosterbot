@@ -35,7 +35,7 @@ func TestPushoverSinkDeliver_AppliesTheTenantLabel(t *testing.T) {
 	defer func() { sendPushover = orig }()
 
 	var gotTitle string
-	sendPushover = func(_, _, title, _ string) error {
+	sendPushover = func(_ context.Context, _, _, title, _ string) error {
 		gotTitle = title
 		return nil
 	}
@@ -58,7 +58,7 @@ func TestPushoverSinkDeliver_NoLabelLeavesTitleUnchanged(t *testing.T) {
 	defer func() { sendPushover = orig }()
 
 	var gotTitle string
-	sendPushover = func(_, _, title, _ string) error {
+	sendPushover = func(_ context.Context, _, _, title, _ string) error {
 		gotTitle = title
 		return nil
 	}

@@ -67,7 +67,7 @@ func TestIsConcurrentUpdateFailure_MatchesKnownSignatures(t *testing.T) {
 				t.Fatalf("write logfile: %v", err)
 			}
 			runner := writeScratchScript(t, dir, fmt.Sprintf("check-%d.sh", i), checkMatchScript)
-			cmd := exec.Command("bash", runner, scriptPath, logfile)
+			cmd := exec.CommandContext(t.Context(), "bash", runner, scriptPath, logfile)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Errorf("is_concurrent_update_failure did not match %q (should have): %v\noutput: %s", text, err, out)
@@ -98,7 +98,7 @@ func TestIsConcurrentUpdateFailure_DoesNotMatchUnrelatedFailures(t *testing.T) {
 				t.Fatalf("write logfile: %v", err)
 			}
 			runner := writeScratchScript(t, dir, fmt.Sprintf("check-%d.sh", i), checkMatchScript)
-			cmd := exec.Command("bash", runner, scriptPath, logfile)
+			cmd := exec.CommandContext(t.Context(), "bash", runner, scriptPath, logfile)
 			out, err := cmd.CombinedOutput()
 			if err == nil {
 				t.Errorf("is_concurrent_update_failure matched %q (should not have)\noutput: %s", text, out)
@@ -150,7 +150,7 @@ func TestCdkDeployRetry_RetriesOnConcurrentUpdateThenSucceeds(t *testing.T) {
 	counter := filepath.Join(dir, "counter")
 	logfile := filepath.Join(dir, "deploy.log")
 
-	cmd := exec.Command("bash", scriptPath, logfile, "--",
+	cmd := exec.CommandContext(t.Context(), "bash", scriptPath, logfile, "--",
 		"bash", fakeCdk, counter, "2", "Resource is in UPDATE_IN_PROGRESS state and can not be updated")
 	cmd.Env = append(os.Environ(),
 		"CDK_DEPLOY_RETRY_MAX_ATTEMPTS=5",
@@ -184,7 +184,7 @@ func TestCdkDeployRetry_DoesNotRetryNonMatchingFailure(t *testing.T) {
 	counter := filepath.Join(dir, "counter")
 	logfile := filepath.Join(dir, "deploy.log")
 
-	cmd := exec.Command("bash", scriptPath, logfile, "--",
+	cmd := exec.CommandContext(t.Context(), "bash", scriptPath, logfile, "--",
 		"bash", fakeCdk, counter, "3", "Error: template validation failed: unresolved parameter Foo")
 	cmd.Env = append(os.Environ(),
 		"CDK_DEPLOY_RETRY_MAX_ATTEMPTS=5",
@@ -215,7 +215,7 @@ func TestCdkDeployRetry_ExhaustsBoundedAttempts(t *testing.T) {
 
 	// succeed_after=100 so the fake deploy never actually succeeds within
 	// the 3 attempts this test allows.
-	cmd := exec.Command("bash", scriptPath, logfile, "--",
+	cmd := exec.CommandContext(t.Context(), "bash", scriptPath, logfile, "--",
 		"bash", fakeCdk, counter, "100", "UPDATE_IN_PROGRESS")
 	cmd.Env = append(os.Environ(),
 		"CDK_DEPLOY_RETRY_MAX_ATTEMPTS=3",

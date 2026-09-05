@@ -53,7 +53,7 @@ func TestProbableStarters_ParsesResponse(t *testing.T) {
 	defer func() { mlbProbablePitcherURL = origURL }()
 
 	c := NewClient()
-	starters, err := c.ProbableStarters(time.Now())
+	starters, err := c.ProbableStarters(t.Context(), time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestProbableStarters_EmptySchedule(t *testing.T) {
 	defer func() { mlbProbablePitcherURL = origURL }()
 
 	c := NewClient()
-	starters, err := c.ProbableStarters(time.Now())
+	starters, err := c.ProbableStarters(t.Context(), time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestProbableStarters_CacheStickiness_PreservesDroppedTeam(t *testing.T) {
 	c.CacheDir = t.TempDir()
 	date := time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)
 
-	first, err := c.ProbableStarters(date)
+	first, err := c.ProbableStarters(t.Context(), date)
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestProbableStarters_CacheStickiness_PreservesDroppedTeam(t *testing.T) {
 
 	// Second call: API drops Burns/CIN.
 	delete(apiProbables, "chase burns")
-	second, err := c.ProbableStarters(date)
+	second, err := c.ProbableStarters(t.Context(), date)
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestProbableStarters_CacheStickiness_ScratchOverridesCache(t *testing.T) {
 	c.CacheDir = t.TempDir()
 	date := time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)
 
-	if _, err := c.ProbableStarters(date); err != nil {
+	if _, err := c.ProbableStarters(t.Context(), date); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 
@@ -179,7 +179,7 @@ func TestProbableStarters_CacheStickiness_ScratchOverridesCache(t *testing.T) {
 	delete(apiProbables, "chase burns")
 	apiProbables["hunter greene"] = "CIN"
 
-	second, err := c.ProbableStarters(date)
+	second, err := c.ProbableStarters(t.Context(), date)
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
@@ -218,11 +218,11 @@ func TestProbableStarters_CacheStickiness_FallbackOnAPIFailure(t *testing.T) {
 	c.CacheDir = t.TempDir()
 	date := time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)
 
-	if _, err := c.ProbableStarters(date); err != nil {
+	if _, err := c.ProbableStarters(t.Context(), date); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 
-	second, err := c.ProbableStarters(date)
+	second, err := c.ProbableStarters(t.Context(), date)
 	if err != nil {
 		t.Fatalf("second call (API 500) should fall back to cache, got error: %v", err)
 	}

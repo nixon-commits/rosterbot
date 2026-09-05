@@ -1,8 +1,10 @@
 package schedule
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -23,8 +25,8 @@ var mlbProbablePitcherURL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&
 // a game in the pre-game window.
 //
 // Returns an empty map (not an error) when no data is available.
-func (c *Client) ProbableStarters(date time.Time) (map[string]string, error) {
-	apiResult, err := c.fetchProbableStarters(date)
+func (c *Client) ProbableStarters(ctx context.Context, date time.Time) (map[string]string, error) {
+	apiResult, err := c.fetchProbableStarters(ctx, date)
 	if err != nil {
 		if cached, ok := c.loadProbablesCache(date); ok && len(cached) > 0 {
 			return cached, nil
@@ -58,9 +60,13 @@ func (c *Client) ProbableStarters(date time.Time) (map[string]string, error) {
 	return merged, nil
 }
 
-func (c *Client) fetchProbableStarters(date time.Time) (map[string]string, error) {
+func (c *Client) fetchProbableStarters(ctx context.Context, date time.Time) (map[string]string, error) {
 	url := fmt.Sprintf(mlbProbablePitcherURL, date.Format("2006-01-02"))
-	resp, err := c.http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("mlb probable pitchers request: %w", err)
+	}
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("mlb probable pitchers fetch: %w", err)
 	}

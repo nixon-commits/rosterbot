@@ -37,7 +37,7 @@ func TestFetchTransactionAlerts_CalledUpOnMyTeam(t *testing.T) {
 	from := time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC)
 
-	alerts, err := FetchTransactionAlerts(from, to, myMinors, rankings, nil)
+	alerts, err := FetchTransactionAlerts(t.Context(), from, to, myMinors, rankings, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestFetchTransactionAlerts_FreeAgentBuzz(t *testing.T) {
 
 	// With available set — player IS a free agent.
 	available := map[string]bool{"jasson dominguez": true}
-	alerts, err := FetchTransactionAlerts(
+	alerts, err := FetchTransactionAlerts(t.Context(),
 		time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC),
 		myMinors, rankings, available,
@@ -132,7 +132,7 @@ func TestFetchTransactionAlerts_FreeAgentBuzz_Owned(t *testing.T) {
 	rankings := map[string]int{"jasson dominguez": 8}
 	available := map[string]bool{} // not in available = owned
 
-	alerts, err := FetchTransactionAlerts(
+	alerts, err := FetchTransactionAlerts(t.Context(),
 		time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC),
 		myMinors, rankings, available,
@@ -176,7 +176,7 @@ func TestFetchTransactionAlerts_OptionedLowPriority(t *testing.T) {
 
 	myMinors := map[string]bool{"spencer torkelson": true}
 
-	alerts, err := FetchTransactionAlerts(
+	alerts, err := FetchTransactionAlerts(t.Context(),
 		time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC),
 		myMinors, nil, nil,
@@ -203,7 +203,7 @@ func TestFetchTransactionAlerts_EmptyResponse(t *testing.T) {
 	mlbTransactionsURL = srv.URL + "?startDate=%s&endDate=%s"
 	defer func() { mlbTransactionsURL = origURL }()
 
-	alerts, err := FetchTransactionAlerts(
+	alerts, err := FetchTransactionAlerts(t.Context(),
 		time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 3, 22, 0, 0, 0, 0, time.UTC),
 		nil, nil, nil,

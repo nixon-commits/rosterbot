@@ -150,8 +150,8 @@ type Options struct {
 	// global — so tests that inject these must not run t.Parallel() against
 	// each other; when internal/projections someday takes the system as a real
 	// parameter, only these defaults change, not Run or any fake.
-	LoadBattingProjections func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error)
-	LoadPitcherProjections func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error)
+	LoadBattingProjections func(ctx context.Context, system, cacheDir string, ttl time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error)
+	LoadPitcherProjections func(ctx context.Context, system, cacheDir string, ttl time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error)
 
 	// FetchHandedness resolves MLBAM IDs to bats/throws for matchup
 	// adjustments. Nil defaults to projections.FetchMLBHandednessCached — the
@@ -162,7 +162,7 @@ type Options struct {
 	// lineup JSON. Nil defaults to this package's LoadHKBMeta. Like the
 	// enrichment itself it is only ever called when Publisher is non-nil, so a
 	// test that leaves Publisher nil never needs to fake it.
-	LoadHKBMeta func(cacheDir string) (map[string]lineupapi.Dynasty, error)
+	LoadHKBMeta func(ctx context.Context, cacheDir string) (map[string]lineupapi.Dynasty, error)
 
 	// Out is where the run's human-readable output goes — the per-date board,
 	// the planned-moves block, the warning lines and the apply log. The caller
@@ -304,7 +304,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	}
 
 	// --- Load projections early to determine system for header ---
-	fgSrc, batLoadResult, err := opts.LoadBattingProjections(opts.HitterSystem, cacheDir, projTTL)
+	fgSrc, batLoadResult, err := opts.LoadBattingProjections(ctx, opts.HitterSystem, cacheDir, projTTL)
 	if err != nil {
 		msg := fmt.Sprintf("batting projections unavailable: %v", err)
 		sendOptimizeNotify(ctx, msg)
@@ -313,7 +313,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	if batLoadResult.NoData {
 		prog.Logf("WARNING: batting projections unavailable — running on schedule + recent stats only")
 	}
-	fgPitSrc, pitLoadResult, err := opts.LoadPitcherProjections(opts.PitcherSystem, cacheDir, projTTL)
+	fgPitSrc, pitLoadResult, err := opts.LoadPitcherProjections(ctx, opts.PitcherSystem, cacheDir, projTTL)
 	if err != nil {
 		msg := fmt.Sprintf("pitching projections unavailable: %v", err)
 		sendOptimizeNotify(ctx, msg)
@@ -354,7 +354,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 			fmt.Fprintln(out)
 		}
 
-		reportILStarts(ilStartInputs{
+		reportILStarts(ctx, ilStartInputs{
 			Roster:  fullRoster,
 			Sched:   schedClient,
 			Today:   today,
@@ -504,7 +504,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	if cfg.GSTrackingEnabled {
 		prog.Start("GS budget")
 
-		dec := ComputeGSBudget(ft, schedClient, GSInputs{
+		dec := ComputeGSBudget(ctx, ft, schedClient, GSInputs{
 			TeamID:          cfg.TeamID,
 			Today:           today,
 			SeasonStart:     seasonStart,
@@ -601,7 +601,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 
 	// --- Optimize every date in parallel ---
 	prog.Start("Optimize")
-	results := OptimizeDates(ft, schedClient, OptimizeInputs{
+	results := OptimizeDates(ctx, ft, schedClient, OptimizeInputs{
 		Dates:             dates,
 		Today:             today,
 		SeasonStart:       seasonStart,
@@ -636,7 +636,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	var hkbMeta map[string]lineupapi.Dynasty
 	if opts.Publisher != nil {
 		var err error
-		if hkbMeta, err = opts.LoadHKBMeta(cacheDir); err != nil {
+		if hkbMeta, err = opts.LoadHKBMeta(ctx, cacheDir); err != nil {
 			prog.Logf("WARNING: HKB values unavailable — publishing lineup without age/value: %v", err)
 		}
 	}

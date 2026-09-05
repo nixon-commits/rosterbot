@@ -227,7 +227,7 @@ func TestLoginFinish_SucceedsEndToEnd(t *testing.T) {
 				t.Fatal("login/finish set no session cookie")
 			}
 			listRec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/v1/auth/passkeys", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/auth/passkeys", nil)
 			for _, c := range session {
 				req.AddCookie(c)
 			}

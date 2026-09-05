@@ -51,7 +51,7 @@ func TestComputeStartRates_DenominatorIsClubGameDaysWhileRostered(t *testing.T) 
 	}}
 	sched := scheduleFor([]string{"LAD"}, window...)
 
-	rates, err := computeStartRates(ft, sched, "t1", seasonStart, today, 0)
+	rates, err := computeStartRates(t.Context(), ft, sched, "t1", seasonStart, today, 0)
 	if err != nil {
 		t.Fatalf("computeStartRates: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestComputeStartRates_ClubOffDaysAreNotOpportunities(t *testing.T) {
 	sched.playing[window[0].Format("2006-01-02")] = map[string]bool{"NYY": true}
 	sched.playing[window[3].Format("2006-01-02")] = map[string]bool{"NYY": true}
 
-	rates, err := computeStartRates(ft, sched, "t1", seasonStart, today, 0)
+	rates, err := computeStartRates(t.Context(), ft, sched, "t1", seasonStart, today, 0)
 	if err != nil {
 		t.Fatalf("computeStartRates: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestComputeStartRates_NoOpportunitiesMeansAbsentNotZero(t *testing.T) {
 	// COL never plays in the window.
 	sched := scheduleFor([]string{"LAD"}, day(2026, 7, 21), d, day(2026, 7, 23), day(2026, 7, 24))
 
-	rates, err := computeStartRates(ft, sched, "t1", seasonStart, today, 0)
+	rates, err := computeStartRates(t.Context(), ft, sched, "t1", seasonStart, today, 0)
 	if err != nil {
 		t.Fatalf("computeStartRates: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestComputeStartRates_ScheduleFailureAbortsRatherThanInflating(t *testing.T
 	sched := scheduleFor([]string{"LAD"}, window...)
 	sched.playingErr = map[string]error{window[2].Format("2006-01-02"): errors.New("statsapi down")}
 
-	rates, err := computeStartRates(ft, sched, "t1", seasonStart, today, 0)
+	rates, err := computeStartRates(t.Context(), ft, sched, "t1", seasonStart, today, 0)
 	if err == nil {
 		t.Fatalf("want an error, got rates %v", rates)
 	}
@@ -161,7 +161,7 @@ func TestComputeStartRates_ScheduleFailureAbortsRatherThanInflating(t *testing.T
 
 func TestComputeStartRates_HistoryFailureIsReported(t *testing.T) {
 	ft := &fakeGSFantrax{pitcherDaysErr: errors.New("fantrax 500")}
-	_, err := computeStartRates(ft, scheduleFor(nil), "t1", day(2026, 7, 21), day(2026, 7, 25), 0)
+	_, err := computeStartRates(t.Context(), ft, scheduleFor(nil), "t1", day(2026, 7, 21), day(2026, 7, 25), 0)
 	if err == nil {
 		t.Fatal("want an error from a failed day walk")
 	}
@@ -172,7 +172,7 @@ func TestComputeStartRates_HistoryFailureIsReported(t *testing.T) {
 // nothing is logged as broken.
 func TestComputeStartRates_NoSettledHistoryIsNotAnError(t *testing.T) {
 	seasonStart := day(2026, 3, 25)
-	rates, err := computeStartRates(&fakeGSFantrax{}, scheduleFor(nil), "t1", seasonStart, seasonStart, 0)
+	rates, err := computeStartRates(t.Context(), &fakeGSFantrax{}, scheduleFor(nil), "t1", seasonStart, seasonStart, 0)
 	if err != nil {
 		t.Fatalf("opening day must not error: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestBuildGSForecast_WeightsTheEstimateByEachPitchersOwnStartRate(t *testing
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := buildGSForecast(sched, spNames, 6, today, tomorrow, pts, tc.rates)
+			got, err := buildGSForecast(t.Context(), sched, spNames, 6, today, tomorrow, pts, tc.rates)
 			if err != nil {
 				t.Fatalf("buildGSForecast: %v", err)
 			}
@@ -265,7 +265,7 @@ func TestBuildGSForecast_NoMeasuredRateReproducesTheFlatDivisorExactly(t *testin
 	pts := func(fantrax.Player) float64 { return 0 }
 
 	for _, rates := range []map[string]float64{nil, {}} {
-		got, err := buildGSForecast(sched, spNames, 6, today, tomorrow, pts, rates)
+		got, err := buildGSForecast(t.Context(), sched, spNames, 6, today, tomorrow, pts, rates)
 		if err != nil {
 			t.Fatalf("buildGSForecast: %v", err)
 		}
@@ -294,7 +294,7 @@ func TestBuildGSForecast_WeightedEstimateStillCapsAtRemainingSlots(t *testing.T)
 	// Implausibly high rates, so only the cap can hold the number down.
 	rates := map[string]float64{"a": 0.9, "b": 0.9, "c": 0.9}
 
-	got, err := buildGSForecast(sched, spNames, 2, today, tomorrow, func(fantrax.Player) float64 { return 0 }, rates)
+	got, err := buildGSForecast(t.Context(), sched, spNames, 2, today, tomorrow, func(fantrax.Player) float64 { return 0 }, rates)
 	if err != nil {
 		t.Fatalf("buildGSForecast: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestComputeGSBudget_StartRateFailureDoesNotDisableTheGate(t *testing.T) {
 		pitcherDaysErr: errors.New("fantrax 500"),
 	}
 
-	d := ComputeGSBudget(ft, sched, gsInputsForRateTest(sched))
+	d := ComputeGSBudget(t.Context(), ft, sched, gsInputsForRateTest(sched))
 	if d.Budget == nil {
 		t.Fatal("a failed start-rate read must not disable the gate")
 	}
@@ -376,7 +376,7 @@ func TestComputeGSBudget_StartRateCoverageLineReportsPricedPitchers(t *testing.T
 		},
 	}
 
-	d := ComputeGSBudget(ft, sched, gsInputsForRateTest(sched))
+	d := ComputeGSBudget(t.Context(), ft, sched, gsInputsForRateTest(sched))
 	if d.Budget == nil {
 		t.Fatal("gate unexpectedly disabled")
 	}

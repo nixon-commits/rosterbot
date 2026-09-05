@@ -1,6 +1,7 @@
 package lineuprun
 
 import (
+	"context"
 	"reflect"
 	"testing"
 	"time"
@@ -55,16 +56,16 @@ func TestOptionsWithDefaults(t *testing.T) {
 
 	t.Run("populated fields pass through unchanged", func(t *testing.T) {
 		fakeSched := &fakeDateSchedule{}
-		bat := func(string, string, time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
+		bat := func(context.Context, string, string, time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
 			return nil, projections.LoadResult{}, nil
 		}
-		pit := func(string, string, time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
+		pit := func(context.Context, string, string, time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
 			return nil, projections.LoadResult{}, nil
 		}
 		hand := func(map[string]int, string, time.Duration) (map[string]string, map[string]string, error) {
 			return nil, nil, nil
 		}
-		hkb := func(string) (map[string]lineupapi.Dynasty, error) { return nil, nil }
+		hkb := func(context.Context, string) (map[string]lineupapi.Dynasty, error) { return nil, nil }
 
 		o := Options{
 			Schedule:               fakeSched,

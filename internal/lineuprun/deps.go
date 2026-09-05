@@ -1,6 +1,7 @@
 package lineuprun
 
 import (
+	"context"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/projections"
@@ -18,11 +19,11 @@ import (
 //
 // *schedule.Client satisfies it structurally, and so does a map-backed fake.
 type ScheduleClient interface {
-	TeamsPlayingOn(date time.Time) (map[string]bool, error)
-	LockedTeams(date time.Time) (map[string]bool, error)
-	ProbableStarters(date time.Time) (map[string]string, error)
-	GameVenues(date time.Time) (map[string]string, error)
-	BenchedPlayers(date time.Time, rosterNames map[string]string) (map[string]bool, error)
+	TeamsPlayingOn(ctx context.Context, date time.Time) (map[string]bool, error)
+	LockedTeams(ctx context.Context, date time.Time) (map[string]bool, error)
+	ProbableStarters(ctx context.Context, date time.Time) (map[string]string, error)
+	GameVenues(ctx context.Context, date time.Time) (map[string]string, error)
+	BenchedPlayers(ctx context.Context, date time.Time, rosterNames map[string]string) (map[string]bool, error)
 }
 
 // withDefaults returns a copy of o with every nil dependency field replaced

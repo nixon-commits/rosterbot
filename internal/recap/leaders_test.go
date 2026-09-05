@@ -233,7 +233,7 @@ func TestFetchSeasonPitching(t *testing.T) {
 	mlbSeasonPitchingURL = srv.URL + "?ids=%s&season=%d"
 	defer func() { mlbSeasonPitchingURL = orig }()
 
-	stats, err := fetchSeasonPitching([]int{1, 2}, 2026)
+	stats, err := fetchSeasonPitching(t.Context(), []int{1, 2}, 2026)
 	if err != nil {
 		t.Fatal(err)
 	}

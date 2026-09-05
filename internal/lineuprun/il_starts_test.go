@@ -19,7 +19,7 @@ type fakeProbables struct {
 	err    error
 }
 
-func (f fakeProbables) ProbableStarters(date time.Time) (map[string]string, error) {
+func (f fakeProbables) ProbableStarters(_ context.Context, date time.Time) (map[string]string, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -75,7 +75,7 @@ func TestReportILStarts_SendsAndMarksOnce(t *testing.T) {
 	markers := newFakeMarkers()
 	var sent []string
 
-	reportILStarts(ilStartInputs{
+	reportILStarts(t.Context(), ilStartInputs{
 		Roster:  ilRoster(),
 		Sched:   probablesToday(),
 		Today:   ilToday,
@@ -105,8 +105,8 @@ func TestReportILStarts_SecondRunIsSilent(t *testing.T) {
 		Roster: ilRoster(), Sched: probablesToday(), Today: ilToday,
 		Markers: markers, Notify: notify, Out: io.Discard,
 	}
-	reportILStarts(in)
-	reportILStarts(in)
+	reportILStarts(t.Context(), in)
+	reportILStarts(t.Context(), in)
 
 	if len(sent) != 1 {
 		t.Fatalf("expected the second run to be silent, got %d notifications", len(sent))
@@ -117,7 +117,7 @@ func TestReportILStarts_SecondRunIsSilent(t *testing.T) {
 func TestReportILStarts_FailedSendIsNotMarked(t *testing.T) {
 	markers := newFakeMarkers()
 
-	reportILStarts(ilStartInputs{
+	reportILStarts(t.Context(), ilStartInputs{
 		Roster: ilRoster(), Sched: probablesToday(), Today: ilToday,
 		Markers: markers,
 		Notify:  func(string) error { return errors.New("pushover unreachable") },
@@ -134,7 +134,7 @@ func TestReportILStarts_DryRunNeitherSendsNorMarks(t *testing.T) {
 	markers := newFakeMarkers()
 	var sent []string
 
-	reportILStarts(ilStartInputs{
+	reportILStarts(t.Context(), ilStartInputs{
 		Roster: ilRoster(), Sched: probablesToday(), Today: ilToday,
 		Markers: markers,
 		Notify:  func(m string) error { sent = append(sent, m); return nil },
@@ -156,7 +156,7 @@ func TestReportILStarts_MarkerReadFailureStillSends(t *testing.T) {
 	markers.getErr = errors.New("s3 unavailable")
 	var sent []string
 
-	reportILStarts(ilStartInputs{
+	reportILStarts(t.Context(), ilStartInputs{
 		Roster: ilRoster(), Sched: probablesToday(), Today: ilToday,
 		Markers: markers,
 		Notify:  func(m string) error { sent = append(sent, m); return nil },
@@ -173,7 +173,7 @@ func TestReportILStarts_CoversTomorrow(t *testing.T) {
 	markers := newFakeMarkers()
 	var sent []string
 
-	reportILStarts(ilStartInputs{
+	reportILStarts(t.Context(), ilStartInputs{
 		Roster: ilRoster(),
 		Sched: fakeProbables{byDate: map[string]map[string]string{
 			"2026-08-17": {"jacob degrom": "TEX"},
@@ -196,7 +196,7 @@ func TestReportILStarts_CoversTomorrow(t *testing.T) {
 func TestReportILStarts_ScheduleErrorIsSoft(t *testing.T) {
 	markers := newFakeMarkers()
 
-	reportILStarts(ilStartInputs{
+	reportILStarts(t.Context(), ilStartInputs{
 		Roster:  ilRoster(),
 		Sched:   fakeProbables{err: errors.New("statsapi down")},
 		Today:   ilToday,
@@ -212,7 +212,7 @@ func TestReportILStarts_ScheduleErrorIsSoft(t *testing.T) {
 func TestReportILStarts_PrintsCoverageEvenWhenNothingFires(t *testing.T) {
 	var buf strings.Builder
 
-	reportILStarts(ilStartInputs{
+	reportILStarts(t.Context(), ilStartInputs{
 		Roster: []fantrax.Player{
 			{ID: "h1", Name: "Bobby Witt Jr.", MLBTeam: "KC", Status: "Active"},
 			{ID: "p1", Name: "Jacob deGrom", MLBTeam: "TEX", Status: "Injured Reserve"},
@@ -243,7 +243,7 @@ func TestReportILStarts_PrintsCoverageEvenWhenNothingFires(t *testing.T) {
 func TestReportILStarts_NilMarkerStoreDoesNotPanic(t *testing.T) {
 	var sent []string
 
-	reportILStarts(ilStartInputs{
+	reportILStarts(t.Context(), ilStartInputs{
 		Roster: ilRoster(), Sched: probablesToday(), Today: ilToday,
 		Markers: nil,
 		Notify:  func(m string) error { sent = append(sent, m); return nil },

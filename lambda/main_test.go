@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -31,7 +32,7 @@ func TestAdapt_RequestCookiesReachHandler(t *testing.T) {
 		},
 	}
 
-	if _, err := adapt(fake)(nil, evt); err != nil {
+	if _, err := adapt(fake)(t.Context(), evt); err != nil {
 		t.Fatalf("adapt returned error: %v", err)
 	}
 	if !sawCookie {
@@ -64,7 +65,7 @@ func TestAdapt_RequestCookiesJoinedWithMultiple(t *testing.T) {
 		},
 	}
 
-	if _, err := adapt(fake)(nil, evt); err != nil {
+	if _, err := adapt(fake)(t.Context(), evt); err != nil {
 		t.Fatalf("adapt returned error: %v", err)
 	}
 	if !gotFoo || !gotBaz {
@@ -91,7 +92,7 @@ func TestAdapt_ResponseCookiesReturned(t *testing.T) {
 		},
 	}
 
-	resp, err := adapt(fake)(nil, evt)
+	resp, err := adapt(fake)(t.Context(), evt)
 	if err != nil {
 		t.Fatalf("adapt returned error: %v", err)
 	}
@@ -127,11 +128,47 @@ func TestAdapt_ResponseMultipleCookiesReturned(t *testing.T) {
 		},
 	}
 
-	resp, err := adapt(fake)(nil, evt)
+	resp, err := adapt(fake)(t.Context(), evt)
 	if err != nil {
 		t.Fatalf("adapt returned error: %v", err)
 	}
 	if len(resp.Cookies) != 2 {
 		t.Fatalf("response.Cookies = %v, want 2 entries", resp.Cookies)
+	}
+}
+
+// TestAdapt_InvocationContextReachesHandler pins the noctx fix (rosterbot-6fpv):
+// adapt used to build the replayed *http.Request with the bare
+// httptest.NewRequest, which stamps context.Background() and silently drops
+// whatever ctx the Lambda runtime handed the invocation — a wedged handler
+// could never be cancelled by the platform's own deadline. A value placed on
+// the invocation ctx before calling adapt must be visible to the handler
+// through r.Context(), which is only true when adapt threads that ctx into
+// httptest.NewRequestWithContext instead of discarding it.
+func TestAdapt_InvocationContextReachesHandler(t *testing.T) {
+	type ctxKey string
+	const key ctxKey = "rosterbot-6fpv-probe"
+
+	var sawValue any
+	fake := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawValue = r.Context().Value(key)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	evt := events.LambdaFunctionURLRequest{
+		RawPath: "/v1/whatever",
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: http.MethodGet,
+			},
+		},
+	}
+
+	ctx := context.WithValue(t.Context(), key, "present")
+	if _, err := adapt(fake)(ctx, evt); err != nil {
+		t.Fatalf("adapt returned error: %v", err)
+	}
+	if sawValue != "present" {
+		t.Fatalf("handler saw ctx value %v, want %q — the invocation ctx did not reach the handler", sawValue, "present")
 	}
 }

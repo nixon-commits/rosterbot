@@ -30,7 +30,7 @@ func TestFetchJSON_RetriesThroughAnIntermittentCloudflareChallenge(t *testing.T)
 	defer srv.Close()
 
 	var rows []fgRow
-	if err := fetchJSON(srv.URL, "test", &rows); err != nil {
+	if err := fetchJSON(t.Context(), srv.URL, "test", &rows); err != nil {
 		t.Fatalf("a challenge that clears on retry must not fail the fetch: %v", err)
 	}
 	if calls != 3 {
@@ -51,7 +51,7 @@ func TestFetchJSON_DoesNotRetryAStatusThatWillNotChange(t *testing.T) {
 	defer srv.Close()
 
 	var rows []fgRow
-	if err := fetchJSON(srv.URL, "test", &rows); err == nil {
+	if err := fetchJSON(t.Context(), srv.URL, "test", &rows); err == nil {
 		t.Fatal("a 404 is an error, not a blip")
 	}
 	if calls != 1 {
@@ -69,7 +69,7 @@ func TestFetchJSON_ReportsTheLastStatusAfterExhaustingRetries(t *testing.T) {
 	defer srv.Close()
 
 	var rows []fgRow
-	err := fetchJSON(srv.URL, "test", &rows)
+	err := fetchJSON(t.Context(), srv.URL, "test", &rows)
 	if err == nil {
 		t.Fatal("want an error once retries are exhausted")
 	}

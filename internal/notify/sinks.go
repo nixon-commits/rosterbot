@@ -131,8 +131,8 @@ type PushoverSink struct {
 
 func (p *PushoverSink) Name() string { return "pushover" }
 
-func (p *PushoverSink) Deliver(_ context.Context, e Event, _ string) error {
-	return sendPushover(p.UserKey, p.APIToken, tagTitle(p.TenantLabel, e.Title), e.Message)
+func (p *PushoverSink) Deliver(ctx context.Context, e Event, _ string) error {
+	return sendPushover(ctx, p.UserKey, p.APIToken, tagTitle(p.TenantLabel, e.Title), e.Message)
 }
 
 // sendPushover is the seam Deliver calls through. Production leaves it at

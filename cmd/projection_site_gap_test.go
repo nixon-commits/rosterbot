@@ -15,7 +15,7 @@ import (
 // doGet runs one request through the API handler, optionally authenticated.
 func doGet(t *testing.T, h http.Handler, path, auth string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
 	if auth != "" {
 		req.Header.Set("Authorization", auth)
 	}

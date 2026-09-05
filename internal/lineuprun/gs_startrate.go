@@ -1,6 +1,7 @@
 package lineuprun
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -87,6 +88,7 @@ const gsStartRatePrior = 2.0
 // Both errors under-forecast demand, which suppresses less; the flat divisor's
 // error ran the other way and by four times as much.
 func computeStartRates(
+	ctx context.Context,
 	ft gsFantraxClient,
 	sched gsScheduleClient,
 	teamID string,
@@ -119,7 +121,7 @@ func computeStartRates(
 	// which is what shipped all season.
 	playingOn := make(map[string]map[string]bool, gsStartRateWindow)
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-		playing, err := sched.TeamsPlayingOn(d)
+		playing, err := sched.TeamsPlayingOn(ctx, d)
 		if err != nil {
 			return nil, fmt.Errorf("schedule unavailable for %s: %w", d.Format("2006-01-02"), err)
 		}

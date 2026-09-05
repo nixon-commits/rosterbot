@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -47,7 +48,7 @@ func runRecap(cmd *cobra.Command, args []string) (err error) {
 		return err
 	}
 
-	weekStart, weekEnd, err := resolveRecapRange(ft, today)
+	weekStart, weekEnd, err := resolveRecapRange(cmd.Context(), ft, today)
 	if err != nil {
 		return fmt.Errorf("resolve range: %w", err)
 	}
@@ -62,7 +63,7 @@ func runRecap(cmd *cobra.Command, args []string) (err error) {
 	fmt.Fprintf(os.Stderr, "Building recap for %s – %s...\n",
 		weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"))
 
-	r, err := recap.Run(ft, recap.Options{
+	r, err := recap.Run(cmd.Context(), ft, recap.Options{
 		WeekStart:  weekStart,
 		WeekEnd:    weekEnd,
 		WeekNumber: recapWeek, // 0 if not provided → recap.Run derives it
@@ -113,7 +114,7 @@ func runRecap(cmd *cobra.Command, args []string) (err error) {
 		if recapOut == "" {
 			return fmt.Errorf("--open requires --out (no path to launch)")
 		}
-		if err := openInBrowser(recapOut); err != nil {
+		if err := openInBrowser(cmd.Context(), recapOut); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		}
 	}
@@ -122,7 +123,7 @@ func runRecap(cmd *cobra.Command, args []string) (err error) {
 
 // resolveRecapRange picks the matchup-week window. Priority: explicit --dates,
 // then --week N, then default (last completed matchup week up through yesterday).
-func resolveRecapRange(ft *fantrax.Client, today time.Time) (time.Time, time.Time, error) {
+func resolveRecapRange(ctx context.Context, ft *fantrax.Client, today time.Time) (time.Time, time.Time, error) {
 	if recapDates != "" {
 		dates, err := parseDates(recapDates, today)
 		if err != nil {
@@ -157,7 +158,7 @@ func resolveRecapRange(ft *fantrax.Client, today time.Time) (time.Time, time.Tim
 	// all final, fall through to the most recent fully-finished week.
 	if ws, we, err := ft.GetMatchupWeekBounds(today, seasonStart); err == nil && !ws.IsZero() && we.Format("2006-01-02") == today.Format("2006-01-02") {
 		sched := schedule.NewClient()
-		if done, derr := sched.AllGamesFinalOn(we); derr == nil && done {
+		if done, derr := sched.AllGamesFinalOn(ctx, we); derr == nil && done {
 			return ws, we, nil
 		}
 	}

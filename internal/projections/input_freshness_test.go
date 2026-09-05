@@ -54,7 +54,7 @@ func TestLoadBattingProjections_FreshFetchStampsFetchedAtNow(t *testing.T) {
 	})
 	before := time.Now()
 
-	src, res, err := LoadBattingProjections(ProjectionATCRoS, t.TempDir(), ProjectionCacheTTL)
+	src, res, err := LoadBattingProjections(t.Context(), ProjectionATCRoS, t.TempDir(), ProjectionCacheTTL)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestLoadBattingProjections_StaleFallbackReportsTheCopysAge(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(batFixture())
 	})
 
-	if _, _, err := LoadBattingProjections(ProjectionATCRoS, dir, ProjectionCacheTTL); err != nil {
+	if _, _, err := LoadBattingProjections(t.Context(), ProjectionATCRoS, dir, ProjectionCacheTTL); err != nil {
 		t.Fatalf("seed load: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestLoadBattingProjections_StaleFallbackReportsTheCopysAge(t *testing.T) {
 	}
 	fail = true
 
-	src, res, err := LoadBattingProjections(ProjectionATCRoS, dir, ProjectionCacheTTL)
+	src, res, err := LoadBattingProjections(t.Context(), ProjectionATCRoS, dir, ProjectionCacheTTL)
 	if err != nil {
 		t.Fatalf("stale load: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestLoadBattingProjections_NoDataLeavesFetchedAtZero(t *testing.T) {
 	// Nothing cached and nothing upstream: the stub carries no projections, so
 	// there is no fetch time to report. Zero means unknown, and a consumer
 	// must not read it as "fetched at the epoch, therefore ancient".
-	_, res, err := LoadBattingProjections(ProjectionATCRoS, t.TempDir(), ProjectionCacheTTL)
+	_, res, err := LoadBattingProjections(t.Context(), ProjectionATCRoS, t.TempDir(), ProjectionCacheTTL)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestLoadPitcherProjections_FreshFetchStampsFetchedAtNow(t *testing.T) {
 	})
 	before := time.Now()
 
-	src, res, err := LoadPitcherProjections(ProjectionATCRoS, t.TempDir(), ProjectionCacheTTL)
+	src, res, err := LoadPitcherProjections(t.Context(), ProjectionATCRoS, t.TempDir(), ProjectionCacheTTL)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestLoadPitcherProjections_StaleFallbackReportsTheCopysAge(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(pitFixture())
 	})
 
-	if _, _, err := LoadPitcherProjections(ProjectionATCRoS, dir, ProjectionCacheTTL); err != nil {
+	if _, _, err := LoadPitcherProjections(t.Context(), ProjectionATCRoS, dir, ProjectionCacheTTL); err != nil {
 		t.Fatalf("seed load: %v", err)
 	}
 
@@ -171,7 +171,7 @@ func TestLoadPitcherProjections_StaleFallbackReportsTheCopysAge(t *testing.T) {
 	}
 	fail = true
 
-	src, res, err := LoadPitcherProjections(ProjectionATCRoS, dir, ProjectionCacheTTL)
+	src, res, err := LoadPitcherProjections(t.Context(), ProjectionATCRoS, dir, ProjectionCacheTTL)
 	if err != nil {
 		t.Fatalf("stale load: %v", err)
 	}

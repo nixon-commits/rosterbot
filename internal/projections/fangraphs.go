@@ -1,6 +1,7 @@
 package projections
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -141,9 +142,9 @@ type FanGraphsSource struct {
 }
 
 // fetchBattingRows fetches raw batting projection rows from the FanGraphs API.
-func fetchBattingRows() ([]fgRow, error) {
+func fetchBattingRows(ctx context.Context) ([]fgRow, error) {
 	var rows []fgRow
-	if err := fetchJSON(fangraphsBattingURL, "fangraphs", &rows); err != nil {
+	if err := fetchJSON(ctx, fangraphsBattingURL, "fangraphs", &rows); err != nil {
 		return nil, err
 	}
 	return rows, nil
@@ -187,8 +188,8 @@ func buildFanGraphsSource(rows []fgRow) *FanGraphsSource {
 }
 
 // NewFanGraphsSource fetches and parses the FanGraphs batting projections JSON.
-func NewFanGraphsSource() (*FanGraphsSource, error) {
-	rows, err := fetchBattingRows()
+func NewFanGraphsSource(ctx context.Context) (*FanGraphsSource, error) {
+	rows, err := fetchBattingRows(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -202,10 +203,10 @@ func NewFanGraphsSource() (*FanGraphsSource, error) {
 // serves a previously-stored copy whenever the fetch fails, and during the
 // Cloudflare challenge window (rosterbot-sagc) that copy can be days old with
 // nothing in the returned source to say so. Zero means unknown.
-func NewFanGraphsSourceCached(cacheDir string, ttl time.Duration) (*FanGraphsSource, time.Time, error) {
+func NewFanGraphsSourceCached(ctx context.Context, cacheDir string, ttl time.Duration) (*FanGraphsSource, time.Time, error) {
 	c := cache.New[[]fgRow](cacheDir, ttl)
 	key := cache.Key(keyFanGraphs, "bat", currentAPIType)
-	rows, fetchedAt, err := c.GetWithStaleFallbackAt(key, fetchBattingRows)
+	rows, fetchedAt, err := c.GetWithStaleFallbackAt(key, func() ([]fgRow, error) { return fetchBattingRows(ctx) })
 	if err != nil {
 		return nil, time.Time{}, err
 	}
@@ -366,7 +367,7 @@ type LoadResult struct {
 // LoadBattingProjections tries to load batting projections with RoS-first priority.
 // For base systems (e.g. "depthcharts"): RoS API → Preseason API → CSV.
 // For explicit RoS systems (e.g. "depthcharts-ros"): RoS API → CSV.
-func LoadBattingProjections(system, cacheDir string, ttl time.Duration) (*FanGraphsSource, LoadResult, error) {
+func LoadBattingProjections(ctx context.Context, system, cacheDir string, ttl time.Duration) (*FanGraphsSource, LoadResult, error) {
 	result := LoadResult{System: system}
 
 	// Build the list of systems to try via API.
@@ -384,7 +385,7 @@ func LoadBattingProjections(system, cacheDir string, ttl time.Duration) (*FanGra
 		if err := SetProjectionSystem(sys); err != nil {
 			continue
 		}
-		src, fetchedAt, err := NewFanGraphsSourceCached(cacheDir, ttl)
+		src, fetchedAt, err := NewFanGraphsSourceCached(ctx, cacheDir, ttl)
 		if err != nil {
 			if i < len(systems)-1 {
 				continue

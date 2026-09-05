@@ -55,10 +55,10 @@ func TestRun_SnapshotRecordsEachRolesProjectionFetchTime(t *testing.T) {
 		SnapshotRoot:   "snapshots",
 		Out:            &out,
 	}, bat, pit, sched)
-	opts.LoadBattingProjections = func(system, _ string, _ time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
+	opts.LoadBattingProjections = func(_ context.Context, system, _ string, _ time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
 		return bat, projections.LoadResult{System: system, FetchedAt: batFetched}, nil
 	}
-	opts.LoadPitcherProjections = func(system, _ string, _ time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
+	opts.LoadPitcherProjections = func(_ context.Context, system, _ string, _ time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
 		return pit, projections.LoadResult{System: system, FetchedAt: pitFetched}, nil
 	}
 

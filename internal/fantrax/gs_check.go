@@ -2,6 +2,7 @@ package fantrax
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -54,7 +55,14 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 		return nil, nil, nil, fmt.Errorf("marshal standings request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", standingsURL+"?leagueId="+c.leagueID, bytes.NewBuffer(jsonStr))
+	// context.Background() is deliberate: GetScoringPeriodsAndTeams is called
+	// from ~6 sites (cmd/team-values.go, cmd/trades.go, internal/recap,
+	// internal/lineuprun, internal/gscheck, and internally via
+	// GetSeasonDateRange's own ~8 callers) with no ctx threaded through
+	// *Client's method surface anywhere in the tree today — see the identical
+	// note on fetchMLBGameLogUncached in mlb_backfill.go for why ctx-enabling
+	// this whole surface is out of scope for a noctx lint-compliance pass.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, standingsURL+"?leagueId="+c.leagueID, bytes.NewBuffer(jsonStr))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("create standings request: %w", err)
 	}

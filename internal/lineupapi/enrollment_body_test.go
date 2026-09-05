@@ -24,7 +24,7 @@ import (
 // decided whether registration worked.
 func TestEnrollmentToken_LeavesTheBodyReadable(t *testing.T) {
 	body := `{"token":"enroll-abc","id":"credential-id","type":"public-key"}`
-	r := httptest.NewRequest(http.MethodPost, "/v1/auth/register/finish", strings.NewReader(body))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/register/finish", strings.NewReader(body))
 
 	if got := enrollmentToken(r); got != "enroll-abc" {
 		t.Fatalf("enrollmentToken = %q, want the body token", got)
@@ -50,7 +50,7 @@ func TestEnrollmentToken_LeavesTheBodyReadable(t *testing.T) {
 // TestEnrollmentToken_QueryStillWins keeps the documented precedence, and keeps
 // the body untouched on that path too.
 func TestEnrollmentToken_QueryStillWins(t *testing.T) {
-	r := httptest.NewRequest(http.MethodPost,
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"/v1/auth/register/finish?token=from-query", strings.NewReader(`{"token":"from-body","id":"x"}`))
 
 	if got := enrollmentToken(r); got != "from-query" {
@@ -65,7 +65,7 @@ func TestEnrollmentToken_QueryStillWins(t *testing.T) {
 // registration carries no token at all, and must still reach the ceremony with
 // its body intact.
 func TestEnrollmentToken_NoTokenIsNotAnError(t *testing.T) {
-	r := httptest.NewRequest(http.MethodPost, "/v1/auth/register/finish", strings.NewReader(`{"id":"x"}`))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/register/finish", strings.NewReader(`{"id":"x"}`))
 
 	if got := enrollmentToken(r); got != "" {
 		t.Errorf("enrollmentToken = %q, want empty", got)

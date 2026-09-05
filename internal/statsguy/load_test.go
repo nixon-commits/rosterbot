@@ -39,7 +39,7 @@ func TestLoadBundleJoinsPlayersAndPicks(t *testing.T) {
 	baseURL = srv.URL
 	defer func() { baseURL = orig }()
 
-	bundle, err := LoadBundle(t.TempDir(), CacheTTL)
+	bundle, err := LoadBundle(t.Context(), t.TempDir(), CacheTTL)
 	if err != nil {
 		t.Fatalf("LoadBundle: %v", err)
 	}
@@ -81,11 +81,11 @@ func TestLoadBundleCachesSecondCall(t *testing.T) {
 	defer func() { baseURL = orig }()
 
 	dir := t.TempDir()
-	first, err := LoadBundle(dir, CacheTTL)
+	first, err := LoadBundle(t.Context(), dir, CacheTTL)
 	if err != nil {
 		t.Fatalf("LoadBundle: %v", err)
 	}
-	second, err := LoadBundle(dir, CacheTTL)
+	second, err := LoadBundle(t.Context(), dir, CacheTTL)
 	if err != nil {
 		t.Fatalf("LoadBundle (cached): %v", err)
 	}

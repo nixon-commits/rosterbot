@@ -97,7 +97,7 @@ func TestMe_RefusesTheTokenCaller(t *testing.T) {
 	h := Handler(Config{Token: "tok", Users: users, Enrollments: users,
 		SessionSecret: []byte("s"), WebAuthn: testWebAuthn(t)})
 
-	r := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/me", nil)
 	r.Header.Set("Authorization", "Bearer tok")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
@@ -116,7 +116,7 @@ func TestSetAutoApply_IsTheUsersOwnDecision(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r := signedReq(t, secret, http.MethodPost, "/v1/me/preferences", "alice", 0)
 	r.Body = http.NoBody
-	r2 := httptest.NewRequest(http.MethodPost, "/v1/me/preferences",
+	r2 := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/me/preferences",
 		strings.NewReader(`{"auto_apply":true}`))
 	r2.Header = r.Header
 	h.ServeHTTP(rec, r2)
@@ -142,7 +142,7 @@ func TestSetAutoApply_CannotChangeAnyoneElse(t *testing.T) {
 	}
 
 	r := signedReq(t, secret, http.MethodPost, "/v1/me/preferences", "alice", 0)
-	r2 := httptest.NewRequest(http.MethodPost, "/v1/me/preferences",
+	r2 := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/me/preferences",
 		strings.NewReader(`{"auto_apply":true,"user_id":"bob","id":"bob"}`))
 	r2.Header = r.Header
 	rec := httptest.NewRecorder()
@@ -158,7 +158,7 @@ func TestSetAutoApply_CannotChangeAnyoneElse(t *testing.T) {
 func postPrefs(t *testing.T, h http.Handler, secret []byte, uid UserID, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := signedReq(t, secret, http.MethodPost, "/v1/me/preferences", uid, 0)
-	r2 := httptest.NewRequest(http.MethodPost, "/v1/me/preferences", strings.NewReader(body))
+	r2 := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/me/preferences", strings.NewReader(body))
 	r2.Header = r.Header
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r2)
@@ -280,7 +280,7 @@ func TestSetAutoApply_PreservesTheRestOfTheProfile(t *testing.T) {
 		Email: "a@e.test", Role: RoleAdmin, Status: UserActive, TeamID: "team-7"})
 
 	r := signedReq(t, secret, http.MethodPost, "/v1/me/preferences", "alice", 0)
-	r2 := httptest.NewRequest(http.MethodPost, "/v1/me/preferences",
+	r2 := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/me/preferences",
 		strings.NewReader(`{"auto_apply":true}`))
 	r2.Header = r.Header
 	h.ServeHTTP(httptest.NewRecorder(), r2)

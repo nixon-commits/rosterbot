@@ -247,7 +247,7 @@ func TestBuildStatus_StampsGeneratedAt(t *testing.T) {
 
 func TestHandleInfra_NotConfiguredReturns501(t *testing.T) {
 	h := Handler(Config{Token: "t"})
-	rec := do(h, http.MethodGet, "/v1/infra")
+	rec := do(t, h, http.MethodGet, "/v1/infra")
 	if rec.Code != http.StatusNotImplemented {
 		t.Errorf("status = %d, want 501", rec.Code)
 	}
@@ -259,7 +259,7 @@ func TestHandleInfra_ServesJSON(t *testing.T) {
 	}}
 	h := Handler(Config{Token: "t", Infra: lister})
 
-	rec := do(h, http.MethodGet, "/v1/infra")
+	rec := do(t, h, http.MethodGet, "/v1/infra")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}

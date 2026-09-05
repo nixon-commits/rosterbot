@@ -34,7 +34,7 @@ func pushJSON(t *testing.T, secret []byte, method, path, uid, body string) *http
 	t.Helper()
 	rec := httptest.NewRecorder()
 	setSessionCookie(rec, secret, UserID(uid), 0, time.Now())
-	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	for _, c := range rec.Result().Cookies() {
 		r.AddCookie(c)
@@ -49,7 +49,7 @@ func TestRegisterDevice_RequiresASession(t *testing.T) {
 
 	// No credentials at all: refused at the gate.
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/push/devices",
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/push/devices",
 		strings.NewReader(validRegisterBody)))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401 without a session, got %d", rec.Code)
@@ -59,7 +59,7 @@ func TestRegisterDevice_RequiresASession(t *testing.T) {
 	// construction, so there is no account a device could belong to. Same
 	// rule handleConnect enforces.
 	rec = httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/push/devices", strings.NewReader(validRegisterBody))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/push/devices", strings.NewReader(validRegisterBody))
 	req.Header.Set("Authorization", "Bearer op-token")
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {

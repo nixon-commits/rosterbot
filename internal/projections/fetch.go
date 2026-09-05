@@ -1,6 +1,7 @@
 package projections
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,7 +29,7 @@ var fgBackoff = []time.Duration{time.Second, 4 * time.Second}
 // 5xx, a rate-limit) that used to burn a whole hourly run's fetch. The real
 // protection against the challenge window is the stale fallback plus the fact
 // that some run in the clean window lands the refresh.
-func fetchJSON(url, label string, out any) error {
+func fetchJSON(ctx context.Context, url, label string, out any) error {
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	var lastErr error
@@ -37,7 +38,11 @@ func fetchJSON(url, label string, out any) error {
 			time.Sleep(fgBackoff[attempt-1])
 		}
 
-		resp, err := client.Get(url)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return fmt.Errorf("%s: build request: %w", label, err)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("%s fetch: %w", label, err)
 			continue // a transport error is always worth one more try

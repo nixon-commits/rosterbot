@@ -129,7 +129,7 @@ func runShadow(cmd *cobra.Command, args []string) error {
 		userKey := os.Getenv("PUSHOVER_USER_KEY")
 		apiToken := os.Getenv("PUSHOVER_API_TOKEN")
 		if userKey != "" && apiToken != "" {
-			if err := notify.SendPushover(userKey, apiToken, "Shadow: projection system status changed", msg); err != nil {
+			if err := notify.SendPushover(cmd.Context(), userKey, apiToken, "Shadow: projection system status changed", msg); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: shadow no-data Pushover failed: %v\n", err)
 			}
 		}

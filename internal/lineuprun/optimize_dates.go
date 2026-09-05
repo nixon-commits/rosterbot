@@ -1,6 +1,7 @@
 package lineuprun
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -22,11 +23,11 @@ type dateRosterClient interface {
 // dateScheduleClient is the MLB-schedule surface the per-date pass needs.
 // *schedule.Client satisfies it; a map-backed fake satisfies it in tests.
 type dateScheduleClient interface {
-	TeamsPlayingOn(date time.Time) (map[string]bool, error)
-	LockedTeams(date time.Time) (map[string]bool, error)
-	ProbableStarters(date time.Time) (map[string]string, error)
-	GameVenues(date time.Time) (map[string]string, error)
-	BenchedPlayers(date time.Time, rosterNames map[string]string) (map[string]bool, error)
+	TeamsPlayingOn(ctx context.Context, date time.Time) (map[string]bool, error)
+	LockedTeams(ctx context.Context, date time.Time) (map[string]bool, error)
+	ProbableStarters(ctx context.Context, date time.Time) (map[string]string, error)
+	GameVenues(ctx context.Context, date time.Time) (map[string]string, error)
+	BenchedPlayers(ctx context.Context, date time.Time, rosterNames map[string]string) (map[string]bool, error)
 }
 
 // OptimizeInputs is everything the per-date optimize pass consumes. It is a
@@ -79,7 +80,7 @@ type OptimizeInputs struct {
 // The results slice is preallocated and each goroutine writes only its own
 // index, so the parallelism needs no lock and the output order is the input
 // order regardless of completion order.
-func OptimizeDates(ft dateRosterClient, sched dateScheduleClient, in OptimizeInputs) []dateResult {
+func OptimizeDates(ctx context.Context, ft dateRosterClient, sched dateScheduleClient, in OptimizeInputs) []dateResult {
 	results := make([]dateResult, len(in.Dates))
 
 	var wg sync.WaitGroup
@@ -87,7 +88,7 @@ func OptimizeDates(ft dateRosterClient, sched dateScheduleClient, in OptimizeInp
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = optimizeOneDate(ft, sched, in, date)
+			results[i] = optimizeOneDate(ctx, ft, sched, in, date)
 		}()
 	}
 	wg.Wait()
@@ -97,7 +98,7 @@ func OptimizeDates(ft dateRosterClient, sched dateScheduleClient, in OptimizeInp
 // optimizeOneDate is the whole per-date pipeline for a single day: resolve the
 // period, fetch that day's rosters and schedule facts, optimize both roles, and
 // (when requested) build the projection-pipeline detail tables.
-func optimizeOneDate(ft dateRosterClient, sched dateScheduleClient, in OptimizeInputs, date time.Time) dateResult {
+func optimizeOneDate(ctx context.Context, ft dateRosterClient, sched dateScheduleClient, in OptimizeInputs, date time.Time) dateResult {
 	isToday := date.Equal(in.Today)
 
 	// DailyPeriodFor is the ONLY correct resolver here: ApplyLineup and
@@ -135,7 +136,7 @@ func optimizeOneDate(ft dateRosterClient, sched dateScheduleClient, in OptimizeI
 	}
 
 	// MLB schedule + probable pitchers.
-	playingToday, err := sched.TeamsPlayingOn(date)
+	playingToday, err := sched.TeamsPlayingOn(ctx, date)
 	if err != nil {
 		warnf("mlb schedule unavailable for %s (%v) — assuming all teams play", date.Format("2006-01-02"), err)
 		allPlayers := append(dateHitterRoster, datePitcherRoster...)
@@ -144,7 +145,7 @@ func optimizeOneDate(ft dateRosterClient, sched dateScheduleClient, in OptimizeI
 
 	// Detect locked teams (game in progress or final) — only for today.
 	if isToday {
-		lockedTeams, err := sched.LockedTeams(date)
+		lockedTeams, err := sched.LockedTeams(ctx, date)
 		if err != nil {
 			warnf("locked teams unavailable (%v) — proceeding without lock detection", err)
 		} else if len(lockedTeams) > 0 {
@@ -153,7 +154,7 @@ func optimizeOneDate(ft dateRosterClient, sched dateScheduleClient, in OptimizeI
 		}
 	}
 
-	probableStarters, err := sched.ProbableStarters(date)
+	probableStarters, err := sched.ProbableStarters(ctx, date)
 	if err != nil {
 		warnf("probable pitchers unavailable for %s (%v) — SPs default to start", date.Format("2006-01-02"), err)
 		probableStarters = map[string]string{} // empty = default to start
@@ -161,7 +162,7 @@ func optimizeOneDate(ft dateRosterClient, sched dateScheduleClient, in OptimizeI
 
 	// Fetch game venues for matchup adjustments.
 	var venues map[string]string
-	if v, err := sched.GameVenues(date); err != nil {
+	if v, err := sched.GameVenues(ctx, date); err != nil {
 		warnf("game venues unavailable for %s (%v)", date.Format("2006-01-02"), err)
 	} else {
 		venues = v
@@ -177,7 +178,7 @@ func optimizeOneDate(ft dateRosterClient, sched dateScheduleClient, in OptimizeI
 				rosterNames[projections.NormalizeName(p.Name)] = p.MLBTeam
 			}
 		}
-		if b, err := sched.BenchedPlayers(date, rosterNames); err != nil {
+		if b, err := sched.BenchedPlayers(ctx, date, rosterNames); err != nil {
 			warnf("starting lineups unavailable (%v) — assuming all hitters play", err)
 		} else if len(b) > 0 {
 			benchedToday = b

@@ -83,7 +83,7 @@ func TestSendOnce_QuietVerdictLeavesNoMarker(t *testing.T) {
 func TestSendOnce_FailedSendLeavesNoMarkerAndPropagates(t *testing.T) {
 	prev := send
 	sendErr := errors.New("pushover down")
-	send = func(string, string) error { return sendErr }
+	send = func(context.Context, string, string) error { return sendErr }
 	t.Cleanup(func() { send = prev })
 
 	fake := fakeMarkers(t)

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -105,7 +106,7 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	}
 
 	if backtestRecencyExperiment {
-		return runRecencyExperiment(ft, cfg, days, start, end, seasonStart, snapTTL, hitterSlots, pitcherSlots)
+		return runRecencyExperiment(cmd.Context(), ft, cfg, days, start, end, seasonStart, snapTTL, hitterSlots, pitcherSlots)
 	}
 
 	snapStore, err := statestore.FromEnv().SnapshotStore()
@@ -194,6 +195,7 @@ func backtestRangeOptions(today, seasonStart time.Time) (backtest.RangeOptions, 
 // strategies need, then hands both it and the grading window to
 // internal/backtest for the comparison.
 func runRecencyExperiment(
+	ctx context.Context,
 	ft *fantrax.Client,
 	cfg *config.Config,
 	gradeDays []fantrax.DayRoster,
@@ -215,7 +217,7 @@ func runRecencyExperiment(
 		return fmt.Errorf("recency series fetch: %w", err)
 	}
 
-	report, err := backtest.RunRecencyExperiment(ft, gradeDays, seriesDays, backtest.ExperimentOptions{
+	report, err := backtest.RunRecencyExperiment(ctx, ft, gradeDays, seriesDays, backtest.ExperimentOptions{
 		ProjectionSystem: experimentSystem,
 		CacheDir:         cacheDir,
 		ProjectionTTL:    cacheTTL(projections.ProjectionCacheTTL),

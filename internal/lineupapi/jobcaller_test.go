@@ -22,7 +22,7 @@ func (r *recordingRunner) Run(_ context.Context, caller UserID, command []string
 
 func jobRequest(t *testing.T, name string, caller Caller) *http.Request {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodPost, "/v1/jobs/"+name, strings.NewReader("{}"))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/jobs/"+name, strings.NewReader("{}"))
 	r.SetPathValue("name", name)
 	return r.WithContext(withCaller(r.Context(), caller))
 }

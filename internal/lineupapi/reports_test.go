@@ -29,7 +29,7 @@ func TestReports_RequireAuth(t *testing.T) {
 	for _, name := range []string{ReportModelKey, ReportGapKey, ReportViewsKey} {
 		t.Run(name+"/anonymous", func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/reports/"+name, nil))
+			h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/reports/"+name, nil))
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("anonymous GET /v1/reports/%s = %d, want 401", name, rec.Code)
 			}
@@ -42,7 +42,7 @@ func TestReports_RequireAuth(t *testing.T) {
 			}
 		})
 		t.Run(name+"/wrong-token", func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/v1/reports/"+name, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/reports/"+name, nil)
 			req.Header.Set("Authorization", "Bearer nope")
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
@@ -66,7 +66,7 @@ func TestReports_PassthroughBytes(t *testing.T) {
 	}
 	for name, want := range cases {
 		t.Run(name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/v1/reports/"+name, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/reports/"+name, nil)
 			req.Header.Set("Authorization", "Bearer secret-token")
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
@@ -91,7 +91,7 @@ func TestReports_UnknownName(t *testing.T) {
 	h := Handler(reportsConfig())
 
 	for _, name := range []string{"value", "football", "webauthn", "session"} {
-		req := httptest.NewRequest(http.MethodGet, "/v1/reports/"+name, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/reports/"+name, nil)
 		req.Header.Set("Authorization", "Bearer secret-token")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -104,7 +104,7 @@ func TestReports_UnknownName(t *testing.T) {
 	// the path and answers 307 to the cleaned location, which serves no bytes.
 	// Asserted as "not 200" rather than "404" so the test pins the property
 	// (nothing is served) instead of which layer refuses.
-	req := httptest.NewRequest(http.MethodGet, "/v1/reports/../lineup/today", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/reports/../lineup/today", nil)
 	req.Header.Set("Authorization", "Bearer secret-token")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -119,7 +119,7 @@ func TestReports_UnknownName(t *testing.T) {
 func TestReports_MissingAndUnconfigured(t *testing.T) {
 	t.Run("missing object", func(t *testing.T) {
 		h := Handler(Config{Token: "t", Reports: fakeStore{data: map[string][]byte{}}})
-		req := httptest.NewRequest(http.MethodGet, "/v1/reports/"+ReportGapKey, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/reports/"+ReportGapKey, nil)
 		req.Header.Set("Authorization", "Bearer t")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -130,7 +130,7 @@ func TestReports_MissingAndUnconfigured(t *testing.T) {
 
 	t.Run("store not configured", func(t *testing.T) {
 		h := Handler(Config{Token: "t"})
-		req := httptest.NewRequest(http.MethodGet, "/v1/reports/"+ReportModelKey, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/reports/"+ReportModelKey, nil)
 		req.Header.Set("Authorization", "Bearer t")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -141,7 +141,7 @@ func TestReports_MissingAndUnconfigured(t *testing.T) {
 
 	t.Run("store error", func(t *testing.T) {
 		h := Handler(Config{Token: "t", Reports: fakeStore{err: errFakeList}})
-		req := httptest.NewRequest(http.MethodGet, "/v1/reports/"+ReportViewsKey, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/reports/"+ReportViewsKey, nil)
 		req.Header.Set("Authorization", "Bearer t")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)

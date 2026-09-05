@@ -28,7 +28,7 @@ func TestFanGraphsSource_ParsesJSON(t *testing.T) {
 	fangraphsBattingURL = srv.URL
 	defer func() { fangraphsBattingURL = orig }()
 
-	src, err := NewFanGraphsSource()
+	src, err := NewFanGraphsSource(t.Context())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestFanGraphsSource_MLBAMIDs(t *testing.T) {
 	fangraphsBattingURL = srv.URL
 	defer func() { fangraphsBattingURL = old }()
 
-	src, err := NewFanGraphsSource()
+	src, err := NewFanGraphsSource(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestSetProjectionSystem_AffectsFetch(t *testing.T) {
 
 	// Point URLs at test server, then switch system to steamer.
 	fangraphsBattingURL = srv.URL + "?type=steamer&stats=bat"
-	_, err := NewFanGraphsSource()
+	_, err := NewFanGraphsSource(t.Context())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestLoadBattingProjections_RoSAvailable(t *testing.T) {
 	// Point the base URL template at the test server.
 	fgBaseURL = srv.URL + "?type=%s&stats=%s"
 
-	src, result, err := LoadBattingProjections("depthcharts", t.TempDir(), 0)
+	src, result, err := LoadBattingProjections(t.Context(), "depthcharts", t.TempDir(), 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestLoadBattingProjections_RoSEmpty_FallsBack(t *testing.T) {
 
 	fgBaseURL = srv.URL + "?type=%s&stats=%s"
 
-	src, result, err := LoadBattingProjections("depthcharts", t.TempDir(), 0)
+	src, result, err := LoadBattingProjections(t.Context(), "depthcharts", t.TempDir(), 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestLoadBattingProjections_ExplicitRoS_NoPreseasonFallback(t *testing.T) {
 	fgBaseURL = srv.URL + "?type=%s&stats=%s"
 
 	// Explicit RoS — should NOT fall back to preseason; should return NoData stub, not error.
-	src, result, err := LoadBattingProjections("depthcharts-ros", t.TempDir(), 0)
+	src, result, err := LoadBattingProjections(t.Context(), "depthcharts-ros", t.TempDir(), 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

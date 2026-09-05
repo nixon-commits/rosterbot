@@ -104,7 +104,7 @@ func CheckTrades(ctx context.Context, ft TradeClient, cacheDir string, dryRun bo
 		return nil
 	}
 
-	players, err := hkb.GetPlayers(cacheDir)
+	players, err := hkb.GetPlayers(ctx, cacheDir)
 	if err != nil {
 		return fmt.Errorf("get HKB players: %w", err)
 	}

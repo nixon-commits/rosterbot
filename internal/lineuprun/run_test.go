@@ -144,16 +144,16 @@ func (f *fakeLineupClient) InvalidatePeriodRosterCache(period fantrax.DailyPerio
 // network-hitting dependency (see the Options doc).
 func withFakeDeps(o Options, bat *projections.FanGraphsSource, pit *projections.FanGraphsPitcherSource, sched ScheduleClient) Options {
 	o.Schedule = sched
-	o.LoadBattingProjections = func(system string, _ string, _ time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
+	o.LoadBattingProjections = func(_ context.Context, system string, _ string, _ time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
 		return bat, projections.LoadResult{System: system}, nil
 	}
-	o.LoadPitcherProjections = func(system string, _ string, _ time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
+	o.LoadPitcherProjections = func(_ context.Context, system string, _ string, _ time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
 		return pit, projections.LoadResult{System: system}, nil
 	}
 	o.FetchHandedness = func(map[string]int, string, time.Duration) (map[string]string, map[string]string, error) {
 		return map[string]string{}, map[string]string{}, nil
 	}
-	o.LoadHKBMeta = func(string) (map[string]lineupapi.Dynasty, error) {
+	o.LoadHKBMeta = func(context.Context, string) (map[string]lineupapi.Dynasty, error) {
 		return map[string]lineupapi.Dynasty{}, nil
 	}
 	return o
@@ -310,13 +310,13 @@ func TestRun_UsesPerRoleProjectionSystems(t *testing.T) {
 	}, bat, pit, sched)
 	var gotBat, gotPit string
 	origBat, origPit := opts.LoadBattingProjections, opts.LoadPitcherProjections
-	opts.LoadBattingProjections = func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
+	opts.LoadBattingProjections = func(ctx context.Context, system, cacheDir string, ttl time.Duration) (*projections.FanGraphsSource, projections.LoadResult, error) {
 		gotBat = system
-		return origBat(system, cacheDir, ttl)
+		return origBat(ctx, system, cacheDir, ttl)
 	}
-	opts.LoadPitcherProjections = func(system, cacheDir string, ttl time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
+	opts.LoadPitcherProjections = func(ctx context.Context, system, cacheDir string, ttl time.Duration) (*projections.FanGraphsPitcherSource, projections.LoadResult, error) {
 		gotPit = system
-		return origPit(system, cacheDir, ttl)
+		return origPit(ctx, system, cacheDir, ttl)
 	}
 
 	cfg := &config.Config{LeagueID: "lg1", TeamID: "team1", DryRun: true,

@@ -37,7 +37,7 @@ func seedUser(t *testing.T, users *FileUserStore, id UserID, role Role, status U
 
 func reqWithSession(t *testing.T, method, path string, sub UserID, ver int) *http.Request {
 	t.Helper()
-	r := httptest.NewRequest(method, path, nil)
+	r := httptest.NewRequestWithContext(t.Context(), method, path, nil)
 	r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: signSession(testSecret, sub, ver, time.Now())})
 	return r
 }
@@ -58,7 +58,7 @@ func status(h http.Handler, r *http.Request) int {
 func TestBearerTokenWorksWithoutAUserStore(t *testing.T) {
 	h := Handler(Config{Token: testToken, SessionSecret: testSecret, Users: nil})
 
-	r := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/runs", nil)
 	r.Header.Set("Authorization", "Bearer "+testToken)
 	if got := status(h, r); got == http.StatusUnauthorized {
 		t.Fatal("the bearer token was refused with no user store configured. It is " +
@@ -133,7 +133,7 @@ func TestAdminOnlyRoutes(t *testing.T) {
 		t.Errorf("admin GET /v1/infra = %d, want to pass the gate", got)
 	}
 
-	r := httptest.NewRequest(http.MethodGet, "/v1/infra", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/infra", nil)
 	r.Header.Set("Authorization", "Bearer "+testToken)
 	if got := status(h, r); got == http.StatusForbidden || got == http.StatusUnauthorized {
 		t.Errorf("bearer token GET /v1/infra = %d, want to pass the gate", got)
@@ -180,7 +180,7 @@ func TestCallerFromZeroValueIsPowerless(t *testing.T) {
 // never be attributed to a tenant.
 func TestBearerCallerHasNoUserID(t *testing.T) {
 	cfg := Config{Token: testToken, SessionSecret: testSecret}
-	r := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/runs", nil)
 	r.Header.Set("Authorization", "Bearer "+testToken)
 
 	c, ok := cfg.resolveCaller(context.Background(), r)

@@ -1,6 +1,7 @@
 package prospects
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -45,7 +46,7 @@ func TestFanGraphsRankingSource_ParsesResponse(t *testing.T) {
 	defer func() { fgProspectURL = origURL }()
 
 	src := &FanGraphsRankingSource{}
-	prospects, err := src.GetTopProspects(2026)
+	prospects, err := src.GetTopProspects(t.Context(), 2026)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -90,7 +91,7 @@ func TestFanGraphsRankingSource_Returns403(t *testing.T) {
 	defer func() { fgProspectURL = origURL }()
 
 	src := &FanGraphsRankingSource{}
-	_, err := src.GetTopProspects(2026)
+	_, err := src.GetTopProspects(t.Context(), 2026)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -103,7 +104,7 @@ type succeedingSource struct {
 	prospects []RankedProspect
 }
 
-func (s *succeedingSource) GetTopProspects(season int) ([]RankedProspect, error) {
+func (s *succeedingSource) GetTopProspects(_ context.Context, season int) ([]RankedProspect, error) {
 	return s.prospects, nil
 }
 
@@ -111,7 +112,7 @@ func (s *succeedingSource) GetTopProspects(season int) ([]RankedProspect, error)
 
 type panicSource struct{}
 
-func (p *panicSource) GetTopProspects(season int) ([]RankedProspect, error) {
+func (p *panicSource) GetTopProspects(_ context.Context, season int) ([]RankedProspect, error) {
 	panic("should not be called")
 }
 
@@ -135,7 +136,7 @@ func TestLoadRankings_UsesCacheWhenFresh(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := LoadRankings(&panicSource{}, 2026, 24)
+	result, err := LoadRankings(t.Context(), &panicSource{}, 2026, 24)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,7 +168,7 @@ func TestLoadRankings_FetchesWhenStale(t *testing.T) {
 	fresh := []RankedProspect{{Name: "fresh player", Rank: 1}}
 	src := &succeedingSource{prospects: fresh}
 
-	result, err := LoadRankings(src, 2026, 24)
+	result, err := LoadRankings(t.Context(), src, 2026, 24)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -30,7 +30,7 @@ func TestFetchHitterExp(t *testing.T) {
 	srv := fixtureServer(t, "testdata/savant_hitter_exp.csv")
 	defer srv.Close()
 
-	rows, err := fetchHitterExp(srv.URL)
+	rows, err := fetchHitterExp(t.Context(), srv.URL)
 	if err != nil {
 		t.Fatalf("fetchHitterExp: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestFetchHitterSC(t *testing.T) {
 	srv := fixtureServer(t, "testdata/savant_hitter_sc.csv")
 	defer srv.Close()
 
-	rows, err := fetchHitterSC(srv.URL)
+	rows, err := fetchHitterSC(t.Context(), srv.URL)
 	if err != nil {
 		t.Fatalf("fetchHitterSC: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestFetchPitcherExp(t *testing.T) {
 	srv := fixtureServer(t, "testdata/savant_pitcher_exp.csv")
 	defer srv.Close()
 
-	rows, err := fetchPitcherExp(srv.URL)
+	rows, err := fetchPitcherExp(t.Context(), srv.URL)
 	if err != nil {
 		t.Fatalf("fetchPitcherExp: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestFetchCSV_EmptyResponse(t *testing.T) {
 		_, _ = w.Write([]byte(""))
 	}))
 	defer srv.Close()
-	if _, err := fetchHitterExp(srv.URL); err == nil {
+	if _, err := fetchHitterExp(t.Context(), srv.URL); err == nil {
 		t.Fatal("expected error on empty body, got nil")
 	}
 }
@@ -117,7 +117,7 @@ func TestFetchCSV_HTTPError(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	if _, err := fetchHitterExp(srv.URL); err == nil {
+	if _, err := fetchHitterExp(t.Context(), srv.URL); err == nil {
 		t.Fatal("expected error on 500, got nil")
 	}
 }

@@ -1,6 +1,7 @@
 package prospects
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,6 +19,7 @@ var mlbTransactionsURL = "https://statsapi.mlb.com/api/v1/transactions?startDate
 // rankings: normalized name -> rank (1-100) for ranked prospects.
 // available: normalized name -> true for free agents in your league (nil = unknown).
 func FetchTransactionAlerts(
+	ctx context.Context,
 	from, to time.Time,
 	myMinors map[string]bool,
 	rankings map[string]int,
@@ -26,7 +28,11 @@ func FetchTransactionAlerts(
 	url := fmt.Sprintf(mlbTransactionsURL, from.Format("2006-01-02"), to.Format("2006-01-02"))
 
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("mlb transactions request: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("mlb transactions fetch: %w", err)
 	}

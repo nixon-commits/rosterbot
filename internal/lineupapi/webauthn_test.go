@@ -40,7 +40,7 @@ func testWebAuthn(t *testing.T) *webauthn.WebAuthn {
 
 func TestRegisterBegin_RejectsWithoutSessionOrToken(t *testing.T) {
 	h := Handler(Config{Token: "secret-token", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/register/begin", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -63,7 +63,7 @@ func TestRegisterBegin_RejectsBootstrapToken(t *testing.T) {
 	users := NewFileUserStore(t.TempDir())
 	h := Handler(Config{Token: "secret-token", Users: users, Enrollments: users,
 		WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/register/begin", nil)
 	req.Header.Set("Authorization", "Bearer secret-token")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -93,7 +93,7 @@ func TestRegisterBegin_AcceptsEnrollmentToken(t *testing.T) {
 
 	h := Handler(Config{Token: "secret-token", Users: users, Enrollments: users,
 		WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin?token="+string(tok), nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/register/begin?token="+string(tok), nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -129,7 +129,7 @@ func TestRegisterBegin_AcceptsValidSession(t *testing.T) {
 	sessionRec := httptest.NewRecorder()
 	setSessionCookie(sessionRec, secret, alice, 0, time.Now())
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/register/begin", nil)
 	for _, c := range sessionRec.Result().Cookies() {
 		req.AddCookie(c)
 	}
@@ -167,7 +167,7 @@ func TestRegisterBegin_RefusesInvalidHandle(t *testing.T) {
 
 	sessionRec := httptest.NewRecorder()
 	setSessionCookie(sessionRec, secret, badID, 0, time.Now())
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/begin", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/register/begin", nil)
 	for _, c := range sessionRec.Result().Cookies() {
 		req.AddCookie(c)
 	}
@@ -202,7 +202,7 @@ func TestRegisterFinish_RejectsWithoutCeremonyCookie(t *testing.T) {
 	// entitled to ask, which is the same ordering mistake handleJob had.
 	sessionRec := httptest.NewRecorder()
 	setSessionCookie(sessionRec, secret, alice, 0, time.Now())
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/finish", strings.NewReader("{}"))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/register/finish", strings.NewReader("{}"))
 	for _, c := range sessionRec.Result().Cookies() {
 		req.AddCookie(c)
 	}
@@ -215,7 +215,7 @@ func TestRegisterFinish_RejectsWithoutCeremonyCookie(t *testing.T) {
 
 func TestRegisterFinish_RejectsWithoutSessionOrToken(t *testing.T) {
 	h := Handler(Config{Token: "secret-token", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register/finish", strings.NewReader("{}"))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/register/finish", strings.NewReader("{}"))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -237,7 +237,7 @@ func TestRegisterFinish_RejectsWithoutSessionOrToken(t *testing.T) {
 // "someone is", so login/begin is not a user-enumeration oracle.
 func TestLoginBegin_DoesNotRevealWhetherAnyoneIsRegistered(t *testing.T) {
 	h := Handler(Config{Token: "t", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login/begin", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/login/begin", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -259,7 +259,7 @@ func TestLoginBegin_DoesNotRevealWhetherAnyoneIsRegistered(t *testing.T) {
 // no reader — a store whose removal a test cannot feel was never being read.
 func TestLoginBegin_SetsCeremonyCookie(t *testing.T) {
 	h := Handler(Config{Token: "t", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login/begin", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/login/begin", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -278,7 +278,7 @@ func TestLoginBegin_SetsCeremonyCookie(t *testing.T) {
 
 func TestLoginFinish_RejectsWithoutCeremonyCookie(t *testing.T) {
 	h := Handler(Config{Token: "t", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login/finish", strings.NewReader("{}"))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/login/finish", strings.NewReader("{}"))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -288,7 +288,7 @@ func TestLoginFinish_RejectsWithoutCeremonyCookie(t *testing.T) {
 
 func TestListPasskeys_RequiresSession(t *testing.T) {
 	h := Handler(Config{Token: "t", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
-	req := httptest.NewRequest(http.MethodGet, "/v1/auth/passkeys", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/auth/passkeys", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
@@ -297,7 +297,7 @@ func TestListPasskeys_RequiresSession(t *testing.T) {
 
 	// Bearer token alone (no session) must NOT satisfy this route — passkey
 	// management is a logged-in-browser action, not a break-glass one.
-	req = httptest.NewRequest(http.MethodGet, "/v1/auth/passkeys", nil)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/auth/passkeys", nil)
 	req.Header.Set("Authorization", "Bearer t")
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -315,7 +315,7 @@ func TestListPasskeys_ReturnsRegisteredIDs(t *testing.T) {
 
 	sessionRec := httptest.NewRecorder()
 	setSessionCookie(sessionRec, secret, alice, 0, time.Now())
-	req := httptest.NewRequest(http.MethodGet, "/v1/auth/passkeys", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/auth/passkeys", nil)
 	for _, c := range sessionRec.Result().Cookies() {
 		req.AddCookie(c)
 	}
@@ -340,7 +340,7 @@ func TestRevokePasskey_RemovesMatchingCredential(t *testing.T) {
 	sessionRec := httptest.NewRecorder()
 	setSessionCookie(sessionRec, secret, alice, 0, time.Now())
 	id := base64.RawURLEncoding.EncodeToString([]byte("cred-1"))
-	req := httptest.NewRequest(http.MethodDelete, "/v1/auth/passkeys/"+id, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/v1/auth/passkeys/"+id, nil)
 	for _, c := range sessionRec.Result().Cookies() {
 		req.AddCookie(c)
 	}
@@ -384,7 +384,7 @@ func seedUserWithCredential(t *testing.T, id UserID, credID string) *FileUserSto
 
 func TestLogout_ClearsSessionCookie(t *testing.T) {
 	h := Handler(Config{Token: "t", WebAuthn: testWebAuthn(t), SessionSecret: []byte("s")})
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/logout", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {

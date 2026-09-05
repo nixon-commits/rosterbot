@@ -186,7 +186,7 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 	// predictable path (the store owns their layout), and value.json is the one
 	// artifact this command still writes to <out>.
 	if projSiteOpen && scopeWritesPublicDir(scope) {
-		if err := openInBrowser(filepath.Join(projSiteOut, "value.json")); err != nil {
+		if err := openInBrowser(cmd.Context(), filepath.Join(projSiteOut, "value.json")); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		}
 	}

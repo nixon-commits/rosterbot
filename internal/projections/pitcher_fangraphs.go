@@ -1,6 +1,7 @@
 package projections
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -77,9 +78,9 @@ type FanGraphsPitcherSource struct {
 }
 
 // fetchPitchingRows fetches raw pitching projection rows from the FanGraphs API.
-func fetchPitchingRows() ([]fgPitchRow, error) {
+func fetchPitchingRows(ctx context.Context) ([]fgPitchRow, error) {
 	var rows []fgPitchRow
-	if err := fetchJSON(fangraphsPitchingURL, "fangraphs pitching", &rows); err != nil {
+	if err := fetchJSON(ctx, fangraphsPitchingURL, "fangraphs pitching", &rows); err != nil {
 		return nil, err
 	}
 	return rows, nil
@@ -115,8 +116,8 @@ func buildFanGraphsPitcherSource(rows []fgPitchRow) *FanGraphsPitcherSource {
 }
 
 // NewFanGraphsPitcherSource fetches and parses the FanGraphs pitching projections JSON.
-func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
-	rows, err := fetchPitchingRows()
+func NewFanGraphsPitcherSource(ctx context.Context) (*FanGraphsPitcherSource, error) {
+	rows, err := fetchPitchingRows(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -127,10 +128,10 @@ func NewFanGraphsPitcherSource() (*FanGraphsPitcherSource, error) {
 // file cache. Like its batting twin it also reports when the rows it built
 // from were last fetched from FanGraphs (zero = unknown); see
 // NewFanGraphsSourceCached for why that is not the time of this call.
-func NewFanGraphsPitcherSourceCached(cacheDir string, ttl time.Duration) (*FanGraphsPitcherSource, time.Time, error) {
+func NewFanGraphsPitcherSourceCached(ctx context.Context, cacheDir string, ttl time.Duration) (*FanGraphsPitcherSource, time.Time, error) {
 	c := cache.New[[]fgPitchRow](cacheDir, ttl)
 	key := cache.Key(keyFanGraphs, "pit", currentAPIType)
-	rows, fetchedAt, err := c.GetWithStaleFallbackAt(key, fetchPitchingRows)
+	rows, fetchedAt, err := c.GetWithStaleFallbackAt(key, func() ([]fgPitchRow, error) { return fetchPitchingRows(ctx) })
 	if err != nil {
 		return nil, time.Time{}, err
 	}
@@ -276,7 +277,7 @@ func (s *FanGraphsPitcherSource) GetPitcherProjection(name, mlbTeam string) (*Pi
 // LoadPitcherProjections tries to load pitcher projections with RoS-first priority.
 // For base systems (e.g. "depthcharts"): RoS API → Preseason API → CSV.
 // For explicit RoS systems (e.g. "depthcharts-ros"): RoS API → CSV.
-func LoadPitcherProjections(system, cacheDir string, ttl time.Duration) (*FanGraphsPitcherSource, LoadResult, error) {
+func LoadPitcherProjections(ctx context.Context, system, cacheDir string, ttl time.Duration) (*FanGraphsPitcherSource, LoadResult, error) {
 	result := LoadResult{System: system}
 
 	// Build the list of systems to try via API.
@@ -292,7 +293,7 @@ func LoadPitcherProjections(system, cacheDir string, ttl time.Duration) (*FanGra
 		if err := SetProjectionSystem(sys); err != nil {
 			continue
 		}
-		src, fetchedAt, err := NewFanGraphsPitcherSourceCached(cacheDir, ttl)
+		src, fetchedAt, err := NewFanGraphsPitcherSourceCached(ctx, cacheDir, ttl)
 		if err != nil {
 			if i < len(systems)-1 {
 				continue

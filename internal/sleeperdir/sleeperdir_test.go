@@ -15,8 +15,10 @@ type stubClient struct {
 	leagues []sleeper.League
 }
 
-func (s stubClient) UserByName(string) (*sleeper.User, error) { return s.user, s.userErr }
-func (s stubClient) LeaguesForUser(_, _, _ string) ([]sleeper.League, error) {
+func (s stubClient) UserByName(context.Context, string) (*sleeper.User, error) {
+	return s.user, s.userErr
+}
+func (s stubClient) LeaguesForUser(_ context.Context, _, _, _ string) ([]sleeper.League, error) {
 	return s.leagues, nil
 }
 
