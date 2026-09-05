@@ -480,8 +480,11 @@ func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
 	// the Options field could go unthreaded, dedup would silently vanish, and
 	// the only symptom would be the alert firing every hour forever — the
 	// flood this repo already fixed once for the stale-cache alert.
-	if len(markers.getKeys) != 1 || markers.getKeys[0] != "2026-p21" {
-		t.Errorf("marker store consulted with %v, want exactly [2026-p21] — "+
+	// The -d3 suffix is the remaining-day component: this fixture has three days
+	// left, and the key carries it so a later, worse day in the same week can
+	// still page (rosterbot-bpbk).
+	if len(markers.getKeys) != 1 || markers.getKeys[0] != "2026-p21-d3" {
+		t.Errorf("marker store consulted with %v, want exactly [2026-p21-d3] — "+
 			"Options.GSFloorMarkers is not reaching the dedup check", markers.getKeys)
 	}
 }
