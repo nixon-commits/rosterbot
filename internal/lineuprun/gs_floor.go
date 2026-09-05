@@ -56,6 +56,26 @@ const gsFloorEps = 1e-9
 //	weighted, credit 1.0, max 4             51      0.392     0.800
 //	weighted, credit 1.0, max 3             45      0.422     0.760   <- chosen
 //
+// EVERY FIGURE ABOVE IS A LOWER BOUND ON PRODUCTION'S TRUE ALERT RATE, NOT A
+// POINT ESTIMATE, and the direction is worth being exact about. The replay
+// credits "today" with the day's REALISED active-slot starts — known only in
+// hindsight — while production's GSBudget.TodayUnsettled credits only
+// CONFIRMED-AND-UNLOCKED probables and collapses to 0 the instant those games
+// lock, which is most of the day (see internal/optimizer.GSBudget and
+// todayUnsettledStarts in gsbudget.go). Realised is always >= that unlocked
+// subset, so this replay's Need reads lower than production's ever does at
+// the moment it evaluates, and the rule fires here LESS often than it would
+// against the identical week in production. Crediting today with 0 instead —
+// production's own worst case, reached before anything locks — the same
+// sweep reads 97/150 at precision 0.227 for the chosen rule (credit 1.0, max
+// 3) and 129/150 at precision 0.194 for "credit 0.8 alongside the corrected
+// estimator" below. The RANKING is unchanged under both extremes: credit 1.0
+// / max 3 is still the best of the group either way, which is the
+// load-bearing fact this constant's choice rests on. TestDiagGSFloorSweep
+// prints both readings for every row so a re-run shows the bracket rather
+// than the single, understated number an earlier version of this comment
+// quoted.
+//
 // Leaving the credit at 0.8 alongside the corrected estimator would have fired
 // on 87 of 150 weeks — 58% of them, at precision 0.253 against a 16.7% base
 // rate. An alert that speaks on more than half of all weeks is one nobody
@@ -111,6 +131,11 @@ const gsFloorMinDaysLeft = 2
 // Under the criterion gsFloorEstimateCredit states — the best precision at
 // recall at least the flat baseline's 0.760 — all three qualify and 3 wins.
 // Widening to 4 buys six alerts and one true positive; to 5, twelve and three.
+//
+// These three rows are the same today-credit=realised readings gsFloorEstimateCredit
+// documents, and carry the same caveat: they are a LOWER BOUND on production's
+// alert rate, not a point. See that constant's comment for the today-credit=0
+// bracket (97/150 at max 3) and why the ranking does not move between the two.
 //
 // THE VALUE OF THIS CONSTANT IS SENSITIVE TO THE REPLAY SAMPLE, which is worth
 // knowing before anyone re-runs the sweep and reads a different answer. On an

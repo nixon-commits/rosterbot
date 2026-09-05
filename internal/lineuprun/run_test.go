@@ -41,6 +41,13 @@ type fakeLineupClient struct {
 	periods            []fantrax.ScoringPeriod
 	gsMin, gsMax       *int
 	usedGS             int
+
+	// pitcherDayCalls counts GetTeamPitcherDaysWithStatus invocations — the
+	// start-rate history walk. It exists to prove StartRateCache actually
+	// dedupes that walk across a Run (see
+	// TestRun_PrefilledStartRateCacheSkipsTheHistoryWalk): nothing else here
+	// distinguishes "measured once" from "measured every call".
+	pitcherDayCalls int
 }
 
 func (f *fakeLineupClient) copyOf(ps []fantrax.Player) []fantrax.Player {
@@ -91,6 +98,9 @@ func (f *fakeLineupClient) GetTeamGS(_, _ string, _ fantrax.ScoringPeriod, _, _ 
 	return f.usedGS, nil, nil
 }
 func (f *fakeLineupClient) GetTeamPitcherDaysWithStatus(_ string, _, _, _ time.Time, _ string, _ time.Duration) ([]fantrax.PitcherDay, error) {
+	f.mu.Lock()
+	f.pitcherDayCalls++
+	f.mu.Unlock()
 	return nil, nil
 }
 func (f *fakeLineupClient) GetRecentPitcherStats(_ fantrax.DailyPeriod) (map[string]fantrax.RecentStat, error) {
@@ -473,5 +483,89 @@ func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
 	if len(markers.getKeys) != 1 || markers.getKeys[0] != "2026-p21" {
 		t.Errorf("marker store consulted with %v, want exactly [2026-p21] — "+
 			"Options.GSFloorMarkers is not reaching the dedup check", markers.getKeys)
+	}
+}
+
+// TestRun_PrefilledStartRateCacheSkipsTheHistoryWalk pins the wiring that lets
+// nothing here catch a regression: Options.StartRates only ever gets threaded
+// into GSInputs.StartRates (lineuprun.go) and consulted inside ComputeGSBudget
+// (gsbudget.go) — delete either line and every other test in this package
+// stays green, because StartRateCache.get(measure) falls back to calling
+// measure() on a nil receiver, which is exactly what "not wired" looks like
+// from the outside.
+//
+// A cache is "pre-filled" here by calling its own get once, ahead of Run, with
+// a stub measure that never touches the fake client — mirroring what
+// `shadow`'s first per-system pass would have already done by the time a
+// later pass reuses the same *StartRateCache. If Run is actually consulting
+// that cache, its own walk must never run: pitcherDayCalls stays 0.
+func TestRun_PrefilledStartRateCacheSkipsTheHistoryWalk(t *testing.T) {
+	today := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
+	weekStart := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	weekEnd := time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC)
+	gsMin, gsMax := 10, 12
+
+	ft := &fakeLineupClient{
+		hitters: []fantrax.Player{
+			{ID: "h1", Name: "Only Bat", MLBTeam: "NYY", Positions: []string{"012"}, Status: "Active", RosterPosition: "014"},
+		},
+		pitchers: []fantrax.Player{
+			{ID: "p1", Name: "Lone Starter", MLBTeam: "BOS", Positions: []string{"015"}, PosShortNames: "SP", Status: "Active", RosterPosition: "017"},
+		},
+		seasonStart: time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC),
+		seasonEnd:   time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC),
+		period:      155,
+
+		weekStart: weekStart,
+		weekEnd:   weekEnd,
+		periods: []fantrax.ScoringPeriod{
+			{Number: 21, StartDate: weekStart, EndDate: weekEnd},
+		},
+		gsMin:  &gsMin,
+		gsMax:  &gsMax,
+		usedGS: 4,
+	}
+
+	bat := projections.NewFanGraphsSourceFromEntries([]projections.SourceEntry{
+		{Name: "Only Bat", Team: "NYY", Proj: projections.Projection{G: 100, HR: 20}},
+	})
+	pit := projections.NewFanGraphsPitcherSourceFromEntries([]projections.PitcherSourceEntry{
+		{Name: "Lone Starter", Team: "BOS", Proj: projections.PitcherProjection{G: 30, IP: 180, K: 200}},
+	})
+	sched := &fakeDateSchedule{}
+
+	cache := NewStartRateCache()
+	// Pre-fill: measure() here is the stand-in for an earlier pass's real
+	// walk. It must never be called again by the Run below.
+	if _, err := cache.get(func() (startRateResult, error) {
+		return startRateResult{Rate: map[string]float64{"lone starter": 0.15}}, nil
+	}); err != nil {
+		t.Fatalf("priming the cache: %v", err)
+	}
+
+	var out bytes.Buffer
+	cfg := &config.Config{
+		LeagueID: "lg1", TeamID: "team1",
+		DryRun: false, AutoApply: true,
+		GSTrackingEnabled: true,
+		Dates:             []time.Time{today},
+	}
+	opts := withFakeDeps(Options{
+		Today:         today,
+		HitterSystem:  "depthcharts",
+		PitcherSystem: "depthcharts",
+		StartRates:    cache,
+		Out:           &out,
+	}, bat, pit, sched)
+
+	if _, err := Run(context.Background(), ft, cfg, opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if ft.pitcherDayCalls != 0 {
+		t.Errorf("pitcherDayCalls = %d, want 0 — a pre-filled StartRateCache must not "+
+			"trigger a fresh history walk; either the Options.StartRates -> GSInputs.StartRates "+
+			"wiring in lineuprun.go or the StartRates.get consult in gsbudget.go is not reaching "+
+			"this call.\n%s", ft.pitcherDayCalls, out.String())
 	}
 }

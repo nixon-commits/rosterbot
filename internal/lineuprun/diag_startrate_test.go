@@ -819,6 +819,37 @@ func diagFloorFires(c *diagCache, used, todayStarters, daysLeft int, w diagWeek,
 	return diagFloorFiresWith(c, used, todayStarters, daysLeft, w, i, rate, shippedGSFloorParams())
 }
 
+// diagFloorFiresWith builds the same *optimizer.GSBudget the floor trigger
+// reads and asks the rule identified by gp.
+//
+// todayStarters IS A SUBSTITUTION, NOT A MEASUREMENT OF WHAT IT STANDS IN FOR,
+// and the direction of the error is worth stating precisely. Every caller
+// passes w.realised[i] — the day's ACTUAL active-slot starts, known only in
+// hindsight — into the TodayUnsettled field production reserves for
+// GSBudget.TodayUnsettled, which counts only CONFIRMED-AND-UNLOCKED probables
+// sitting in an active P slot (todayUnsettledStarts, gsbudget.go) and
+// collapses to 0 the moment those games lock — i.e. for most of the day,
+// including every hourly run before the evening's games settle.
+//
+// Realised is always >= that unlocked-probable subset: a start that actually
+// happened was, at every earlier hour of the same day, either an unlocked
+// confirmed probable or not yet locked at all, never less. So this harness
+// credits Need with MORE today-credit than production ever has in hand at the
+// moment it evaluates, which makes Need read LOWER here than in production —
+// and the rule therefore fires LESS often here than it would in production
+// facing the identical week. Every alert-rate figure this file's comments
+// quote from TestDiagGSFloorSweep is consequently a LOWER BOUND on
+// production's true alert rate, not a point estimate: see that test, whose
+// output now prints both this credited reading and the zero-credit reading
+// (production's worst case, at the top of the day before anything locks) so a
+// re-run shows the bracket rather than a single, understated number.
+//
+// The smaller sibling of the same substitution lives in diagWeeks: spsOn[j]
+// for a future day j is built from day j's OWN roster, where production's
+// buildGSForecast forecasts every remaining day from TODAY's roster. A
+// mid-week roster move (an IL stint, a waiver claim) makes the two disagree
+// about who is even eligible to be estimated, in a direction this harness
+// does not attempt to bound.
 func diagFloorFiresWith(c *diagCache, used, todayStarters, daysLeft int, w diagWeek, i int, rate map[string]float64, gp gsFloorParams) bool {
 	b := &optimizer.GSBudget{
 		Limit: c.limit, Floor: c.floor, Used: used,
@@ -845,6 +876,16 @@ func diagFloorFiresWith(c *diagCache, used, todayStarters, daysLeft int, w diagW
 // A week counts as ALERTED if the rule fires on any in-window day of it, since
 // the marker keys on (season, weekly period) and so one week raises at most one
 // alert however many days would have triggered.
+//
+// EVERY ROW PRINTS TWICE, under today-credit = realised (this harness's
+// stand-in for GSBudget.TodayUnsettled, always >= what production actually
+// holds — see diagFloorFiresWith) and today-credit = 0 (production's own
+// floor, reached the moment today's games lock). Production's true alert rate
+// for a given rule sits inside that bracket: never below the zero-credited
+// reading, never above the realised-credited one. Earlier versions of this
+// test and the comments quoting it printed only the realised-credited
+// reading and called it the rate, which understated every figure they
+// reported.
 func TestDiagGSFloorSweep(t *testing.T) {
 	c := diagLoad(t, diagCacheDir(t))
 	weeks := diagWeeks(c)
@@ -872,13 +913,21 @@ func TestDiagGSFloorSweep(t *testing.T) {
 		len(weeks), strict, c.floor, 100*float64(strict)/float64(len(weeks)),
 		atOrUnder, 100*float64(atOrUnder)/float64(len(weeks)))
 
-	report := func(label string, rateFor func(w diagWeek, day time.Time) map[string]float64, gp gsFloorParams) {
+	// todayCredit selects what each row passes as diagFloorFiresWith's
+	// todayStarters: either w.realised[i] (this harness's ceiling — see
+	// diagFloorFiresWith) or a flat 0 (production's floor, reached the moment
+	// today's games lock). report calls both for every row so the printed
+	// numbers are a bracket, never a single understated point.
+	realisedCredit := func(realised int) int { return realised }
+	zeroCredit := func(int) int { return 0 }
+
+	report := func(label string, rateFor func(w diagWeek, day time.Time) map[string]float64, gp gsFloorParams, todayCredit func(realised int) int) {
 		alerts, tp, tpAt := 0, 0, 0
 		for _, w := range weeks {
 			fired := false
 			used := 0
 			for i := 0; i < 6; i++ {
-				if diagFloorFiresWith(c, used, w.realised[i], 6-i, w, i, rateFor(w, w.days[i]), gp) {
+				if diagFloorFiresWith(c, used, todayCredit(w.realised[i]), 6-i, w, i, rateFor(w, w.days[i]), gp) {
 					fired = true
 				}
 				used += w.realised[i]
@@ -905,6 +954,15 @@ func TestDiagGSFloorSweep(t *testing.T) {
 			tpAt, div(tpAt, alerts), div(tpAt, atOrUnder))
 	}
 
+	// reportBoth prints label's row under both today-credit extremes so a
+	// re-run shows the bracket production's true rate sits inside, rather than
+	// the single realised-credited point the earlier version of this test
+	// reported.
+	reportBoth := func(label string, rateFor func(w diagWeek, day time.Time) map[string]float64, gp gsFloorParams) {
+		report(label+" [today=realised, ceiling]", rateFor, gp, realisedCredit)
+		report(label+" [today=0, production floor]", rateFor, gp, zeroCredit)
+	}
+
 	flatRate := func(diagWeek, time.Time) map[string]float64 { return nil }
 	wtRate := func(w diagWeek, d time.Time) map[string]float64 { return c.rates(w.team, d, p).Rate }
 
@@ -915,13 +973,13 @@ func TestDiagGSFloorSweep(t *testing.T) {
 	// changed, which is a baseline that cannot report a regression.
 	prev := gsFloorParams{EstimateCredit: 0.8, MinDaysLeft: 2, MaxDaysLeft: 4}
 	t.Logf("--- baseline: the rule before this change (flat 1/5, credit 0.8, max 4) ---")
-	report("flat credit=0.8 max=4", flatRate, prev)
+	reportBoth("flat credit=0.8 max=4", flatRate, prev)
 
 	t.Logf("--- corrected estimator, credit x maxDaysLeft ---")
 	for _, credit := range []float64{0.6, 0.7, 0.8, 0.9, 1.0} {
 		for _, maxDays := range []int{3, 4, 5} {
 			gp := gsFloorParams{EstimateCredit: credit, MinDaysLeft: gsFloorMinDaysLeft, MaxDaysLeft: maxDays}
-			report(fmt.Sprintf("weighted credit=%.1f max=%d", credit, maxDays), wtRate, gp)
+			reportBoth(fmt.Sprintf("weighted credit=%.1f max=%d", credit, maxDays), wtRate, gp)
 		}
 	}
 }

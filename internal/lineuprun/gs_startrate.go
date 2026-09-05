@@ -184,10 +184,21 @@ type startRateResult struct {
 // p90 0.178 under production's, with 7.5% of consulted pitcher-days carrying
 // more than two IL or minor-league days in the denominator (Gerrit Cole read
 // 0.086 on 26 "opportunities" of which 24 were days he could not have pitched
-// for us, against 0.600 on the two that were real). Every number in the
-// comments around this file is now produced by THIS function: the diagnostic
-// feeds frozen snapshots through fantrax.PitcherDayWalk and then through here,
-// so it can no longer measure an estimator nobody ships.
+// for us, against 0.600 on the two that were real).
+//
+// THAT n=160/n=225 PAIR IS QUOTED FROM THE PRE-FIX REVIEW, NOT RE-DERIVED BY
+// THIS FUNCTION, and neither n is reproducible from the shipped kernel below.
+// The 160 was an artefact of the un-normalized schedule map fixed in this
+// branch (a club that played on a day the old map recorded as idle counted as
+// no opportunity at all, so the harness's own denominator moved under it), and
+// the shipped kernel's dispersion sample is n=169, not 160 or 225 (see
+// computeStartRates' "169 pitcher-seasons" figure below). The claim that holds
+// is narrower than the one this comment used to make: only the numbers
+// computeStartRates itself states — the 169-pitcher-season dispersion and the
+// 150-team-week forecast comparison — are produced by THIS function today,
+// with the diagnostic feeding frozen snapshots through fantrax.PitcherDayWalk
+// and then through here. This pair predates that and is kept only as the
+// record of what the fix corrected.
 //
 // The four filters, and why each one is a filter rather than a zero:
 //

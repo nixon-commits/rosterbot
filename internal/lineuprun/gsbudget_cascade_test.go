@@ -43,9 +43,15 @@ type fakeGSFantrax struct {
 	pitcherDaysErr error
 	pitcherDayFrom time.Time
 	pitcherDayTo   time.Time
+	// pitcherDayCalls counts invocations of the history walk itself, which is
+	// the only way to observe whether a *StartRateCache actually deduped it —
+	// pitcherDayFrom/To only records the LAST call's arguments and cannot tell
+	// one call from two identical ones.
+	pitcherDayCalls int
 }
 
 func (f *fakeGSFantrax) GetTeamPitcherDaysWithStatus(_ string, start, end, _ time.Time, _ string, _ time.Duration) ([]fantrax.PitcherDay, error) {
+	f.pitcherDayCalls++
 	f.pitcherDayFrom, f.pitcherDayTo = start, end
 	return f.pitcherDays, f.pitcherDaysErr
 }
@@ -516,4 +522,41 @@ func TestComputeGSBudget_TodayUnsettledCapsAtPitcherSlots(t *testing.T) {
 		t.Errorf("TodayUnsettled = %d, want 2 — capped at NumPitcherSlots even though 3 active SPs are confirmed",
 			got.Budget.TodayUnsettled)
 	}
+}
+
+// TestComputeGSBudget_StartRateCacheDedupesTheHistoryWalk pins the wiring
+// nothing else here catches: nothing about the budget's OUTPUT changes
+// whether or not in.StartRates.get consults a shared cache, so a regression
+// that dropped the `in.StartRates.get(...)` call in favour of calling
+// computeStartRates directly would pass every other test in this file while
+// silently paying for the walk on every call.
+func TestComputeGSBudget_StartRateCacheDedupesTheHistoryWalk(t *testing.T) {
+	sched := &fakeSchedule{}
+
+	t.Run("shared cache measures once across two calls", func(t *testing.T) {
+		ft := healthyGS()
+		in := gsInputs()
+		in.StartRates = NewStartRateCache()
+
+		ComputeGSBudget(t.Context(), ft, sched, in)
+		ComputeGSBudget(t.Context(), ft, sched, in)
+
+		if ft.pitcherDayCalls != 1 {
+			t.Errorf("pitcherDayCalls = %d, want 1 — a shared *StartRateCache must dedupe "+
+				"the history walk across both calls", ft.pitcherDayCalls)
+		}
+	})
+
+	t.Run("nil StartRates measures every call", func(t *testing.T) {
+		ft := healthyGS()
+		in := gsInputs() // StartRates left nil: the ordinary single-Run path.
+
+		ComputeGSBudget(t.Context(), ft, sched, in)
+		ComputeGSBudget(t.Context(), ft, sched, in)
+
+		if ft.pitcherDayCalls != 2 {
+			t.Errorf("pitcherDayCalls = %d, want 2 — a nil StartRateCache must measure "+
+				"fresh every call", ft.pitcherDayCalls)
+		}
+	})
 }
