@@ -265,11 +265,31 @@ func newGSFloorHarness() *gsFloorHarness {
 	return &gsFloorHarness{out: &bytes.Buffer{}, markers: newFakeMarkers()}
 }
 
-// The week that fires, twice. A standing shortfall must announce itself once,
-// not once per hourly run — every scheduled run is a fresh container, so
-// in-process state cannot carry this and the durable marker is the whole
-// mechanism.
-func TestReportGSFloor_AlertsOncePerPeriod(t *testing.T) {
+// gsFloorWeekAt builds a week with exactly daysLeft days remaining and nothing
+// meaningful forecast on any of them, so the only things that can decide the
+// outcome are the day window and Used. It is the delivery-side twin of the
+// fixture in TestEvaluateGSFloor_FiresOnlyInsideTheDayWindow: the same shape,
+// but driven through reportGSFloor so the assertions are about what was
+// DELIVERED rather than about what the trigger concluded.
+//
+// Those are different facts, and Period 22 is the week that proved it — the
+// trigger fired seven times and the manager was told nothing.
+func gsFloorWeekAt(daysLeft, used int) *optimizer.GSBudget {
+	fcs := make([]optimizer.DayForecast, 0, daysLeft)
+	for i := 1; i <= daysLeft; i++ {
+		fcs = append(fcs, optimizer.DayForecast{Date: gsDay(i), Estimated: 0.1})
+	}
+	return &optimizer.GSBudget{
+		Limit: 12, Floor: 10, Used: used,
+		Today: gsFloorToday, WeekEnd: gsDay(daysLeft), Forecast: fcs,
+	}
+}
+
+// Two runs on one day are one decision point, and must collapse to one page.
+// The hourly lineup cron runs up to fourteen times a day; every scheduled run
+// is a fresh container, so in-process state cannot carry this and the durable
+// marker is the whole mechanism.
+func TestReportGSFloor_RepeatRunsOnOneDayAlertOnce(t *testing.T) {
 	h := newGSFloorHarness()
 	short := gsFloorBudget(10, 12, 4, fc(1, nil, 0), fc(2, nil, 0), fc(3, nil, 1.0))
 
@@ -284,6 +304,131 @@ func TestReportGSFloor_AlertsOncePerPeriod(t *testing.T) {
 	}
 	if !strings.Contains(h.sent[0], "Fri Aug 28") || !strings.Contains(h.sent[0], "Sat Aug 29") {
 		t.Errorf("message must name the empty days, got: %s", h.sent[0])
+	}
+}
+
+// Each remaining day is a genuinely new decision point, and the alert gets one
+// page per bucket — at most two a week, because the [gsFloorMinDaysLeft,
+// gsFloorMaxDaysLeft] window bounds DaysLeft to {3,2}. Four runs across two
+// days must therefore deliver two alerts, not one and not four.
+//
+// The upper bound matters as much as the lower one. A raw-body compare
+// (alertmarker.SendOnChange) would also have unstuck this, but the shortfall
+// wobbled by +0.2/+0.7/+0.8 WITHIN Period 22's window, so nearly every hourly
+// run would have re-sent — trading permanent silence for a flood, which mutes
+// the channel just as thoroughly.
+func TestReportGSFloor_AlertsOncePerRemainingDay(t *testing.T) {
+	h := newGSFloorHarness()
+
+	// The week as it actually runs down: two runs on each of Friday, Saturday.
+	for _, daysLeft := range []int{3, 3, 2, 2} {
+		h.run(gsFloorWeekAt(daysLeft, 4), false)
+	}
+
+	if len(h.sent) != 2 {
+		t.Fatalf("sent %d alerts over daysLeft 3,3,2,2 — want 2, one per remaining-day bucket", len(h.sent))
+	}
+	if h.markers.publCalls != 2 {
+		t.Errorf("marker written %d times, want 2", h.markers.publCalls)
+	}
+
+	// Distinct keys are the mechanism, not an incidental detail: if the two
+	// sends came from one key being re-consulted, the dedup is simply broken in
+	// the other direction.
+	distinct := map[string]bool{}
+	for _, k := range h.markers.getKeys {
+		distinct[k] = true
+	}
+	if len(distinct) != 2 {
+		t.Errorf("consulted %d distinct marker keys %v, want 2", len(distinct), h.markers.getKeys)
+	}
+}
+
+// The Period 22 regression, and the reason this bug is worth a P1.
+//
+// Period 22 (2026-08-31..09-06) is the first week of the season in which the GS
+// floor actually bound. Its marker burned at 2026-09-02T14:01:15Z carrying the
+// rosterbot-ogtq inflated magnitude — "about 2.7 short", a figure PR #193
+// corrected to 0.0 two hours later — and with the marker spent, the week was
+// mute for the rest of its run.
+//
+// It then genuinely deteriorated, and the trigger re-fired seven times on the
+// live optimize path (09-03 21:01Z/22:01Z/23:01Z, 09-04 00:01Z/03:01Z/14:01Z/
+// 15:01Z) at DaysLeft 3 and 2 — both inside the re-bracketed window, while a
+// waiver claim could still have added a Sunday probable. Every one of those
+// sends was swallowed: zero objects under notifications/user=*/ carry the title
+// "GS Floor Risk" after 09-02. The week closed at exactly the floor, 10 against
+// 10, with the estimate cushion at 0.00 — one scratch from tripping gscheck's
+// ViolationMin, and nobody was ever told.
+func TestReportGSFloor_AnEarlyFireDoesNotSuppressALaterOne(t *testing.T) {
+	h := newGSFloorHarness()
+
+	h.run(gsFloorWeekAt(3, 4), false) // the Thursday fire that burns the marker
+	h.run(gsFloorWeekAt(2, 4), false) // the Friday fire Period 22 never delivered
+
+	if len(h.sent) != 2 {
+		t.Fatalf("sent %d alerts, want 2: a fire at DaysLeft 3 must not mute DaysLeft 2", len(h.sent))
+	}
+}
+
+// The fix is delivery-side and must not have widened the trigger. DaysLeft 1 is
+// below gsFloorMinDaysLeft and 4 is above gsFloorMaxDaysLeft, and neither may
+// reach the notifier however short the week reads — so this asserts on the
+// marker store too: an out-of-window run must not even consult it, because a
+// key written there would mute the in-window alert that follows.
+func TestReportGSFloor_DeliversNothingOutsideTheDayWindow(t *testing.T) {
+	for _, daysLeft := range []int{1, 4} {
+		h := newGSFloorHarness()
+		h.run(gsFloorWeekAt(daysLeft, 4), false)
+
+		if len(h.sent) != 0 {
+			t.Errorf("daysLeft=%d: delivered %d alerts, want 0", daysLeft, len(h.sent))
+		}
+		if len(h.markers.getKeys) != 0 || h.markers.publCalls != 0 {
+			t.Errorf("daysLeft=%d: touched the marker store (%d gets, %d publishes), want none",
+				daysLeft, len(h.markers.getKeys), h.markers.publCalls)
+		}
+	}
+}
+
+// A met floor is not a near miss. Keying on DaysLeft doubles the number of
+// chances the alert has to speak, so the Need > 0 guard now has twice the
+// opportunity to be wrong — pin it across the whole window rather than at one
+// convenient day.
+func TestReportGSFloor_AMetFloorNeverAlertsAtAnyDaysLeft(t *testing.T) {
+	for daysLeft := 1; daysLeft <= 4; daysLeft++ {
+		h := newGSFloorHarness()
+		h.run(gsFloorWeekAt(daysLeft, 10), false) // Used 10 against a floor of 10
+
+		if len(h.sent) != 0 {
+			t.Errorf("daysLeft=%d: delivered %d alerts on a met floor, want 0", daysLeft, len(h.sent))
+		}
+	}
+}
+
+// Period 22's final day, and the case this change must NOT "fix".
+//
+// Read at 2026-09-05T13:00Z by four independent sources agreeing to the digit:
+// 6 settled + 2 confirmed today + 2 confirmed Sunday = 10 against a floor of
+// 10. Silence here is correct and doubly determined — DaysLeft is 1, below
+// gsFloorMinDaysLeft, and the shortfall is exactly 0.0. Per-day keying gives
+// the alert more chances to speak, so the day it must stay quiet is worth
+// pinning explicitly.
+func TestReportGSFloor_Period22FinalDayStaysSilent(t *testing.T) {
+	h := newGSFloorHarness()
+	h.run(&optimizer.GSBudget{
+		Limit: 12, Floor: 10, Used: 6,
+		TodayUnsettled: 2, // the WSH and STL starters, confirmed for Saturday
+		Today:          gsFloorToday,
+		WeekEnd:        gsDay(1),
+		Forecast: []optimizer.DayForecast{
+			// Sunday: Eduardo Rodriguez (ARI) and Gage Jump (ATH).
+			{Date: gsDay(1), ConfirmedStarters: []float64{11, 11}},
+		},
+	}, false)
+
+	if len(h.sent) != 0 {
+		t.Fatalf("delivered %d alerts on a week that finished exactly at the floor, want 0", len(h.sent))
 	}
 }
 
@@ -429,11 +574,31 @@ func TestReportGSFloor_SaysNothingWhenTheGateIsDisabled(t *testing.T) {
 // next season's week 21 find this season's marker and stay silent for the whole
 // week — the correction rosterbot-qoa made to the past-period cache keys.
 func TestGSFloorMarkerKey_IsScopedToTheSeason(t *testing.T) {
-	if a, b := gsFloorMarkerKey(2026, 21), gsFloorMarkerKey(2027, 21); a == b {
+	if a, b := gsFloorMarkerKey(2026, 21, 3), gsFloorMarkerKey(2027, 21, 3); a == b {
 		t.Fatalf("period 21 collides across seasons: %q == %q", a, b)
 	}
-	if a, b := gsFloorMarkerKey(2026, 21), gsFloorMarkerKey(2026, 22); a == b {
+	if a, b := gsFloorMarkerKey(2026, 21, 3), gsFloorMarkerKey(2026, 22, 3); a == b {
 		t.Fatalf("two periods in one season collide: %q == %q", a, b)
+	}
+}
+
+// The key Period 22 needed and did not have. Two runs in one matchup week at
+// different remaining-day counts must not share a marker, or the first one
+// consumes the channel for the rest of the week — which is exactly what
+// happened between 09-03 and 09-04.
+func TestGSFloorMarkerKey_SeparatesRemainingDays(t *testing.T) {
+	seen := map[string]int{}
+	for _, daysLeft := range []int{2, 3} {
+		seen[gsFloorMarkerKey(2026, 22, daysLeft)]++
+	}
+	if len(seen) != 2 {
+		t.Fatalf("the two in-window days share %d keys, want 2 distinct: %v", len(seen), seen)
+	}
+
+	// Same day, same key — the other half of the contract. Without this, the
+	// fix for permanent silence becomes a page every hour.
+	if a, b := gsFloorMarkerKey(2026, 22, 3), gsFloorMarkerKey(2026, 22, 3); a != b {
+		t.Fatalf("the same remaining day produced two keys: %q != %q", a, b)
 	}
 }
 

@@ -331,11 +331,12 @@ func evaluateGSFloorWith(b *optimizer.GSBudget, p gsFloorParams) gsFloorFinding 
 
 type gsFloorInputs struct {
 	Budget *optimizer.GSBudget
-	// Period and Season together identify the matchup week for the marker key.
-	// The season is load-bearing, not decoration: weekly period numbers restart
-	// each year, so a season-less key would let period 21 of next season find
-	// this season's marker and stay silent for the whole week (rosterbot-qoa
-	// made the same correction to the past-period cache keys).
+	// Period and Season identify the matchup week; the marker key scopes that
+	// further by the finding's DaysLeft, so see gsFloorMarkerKey. The season is
+	// load-bearing, not decoration: weekly period numbers restart each year, so
+	// a season-less key would let period 21 of next season find this season's
+	// marker and stay silent for the whole week (rosterbot-qoa made the same
+	// correction to the past-period cache keys).
 	Period fantrax.WeeklyPeriod
 	Season int
 
@@ -356,9 +357,11 @@ type gsFloorInputs struct {
 	Out    io.Writer
 }
 
-// reportGSFloor raises one alert per matchup week when that week is projected
-// to finish under the league's weekly game-start minimum, naming the days on
-// which no rostered starter has a turn.
+// reportGSFloor alerts when a matchup week is projected to finish under the
+// league's weekly game-start minimum, naming the days on which no rostered
+// starter has a turn. It speaks at most once per remaining day, so a week that
+// deteriorates after its first alert can still say so while there is time to
+// act on it — see gsFloorMarkerKey for why that is per-day and not per-week.
 //
 // It is the counterpart to gs-check's ViolationMin, which is correct but
 // necessarily retrospective: it keys off FindJustEndedPeriod, so it speaks the
@@ -424,7 +427,7 @@ func reportGSFloor(in gsFloorInputs) {
 		return
 	}
 
-	key := gsFloorMarkerKey(in.Season, in.Period)
+	key := gsFloorMarkerKey(in.Season, in.Period, f.DaysLeft)
 	ctx := context.Background()
 	m := alertmarker.New(in.Markers, alertmarker.WithLogf(func(format string, args ...any) {
 		fmt.Fprintf(in.Out, "  gs floor check: "+format+"\n", args...)
@@ -440,12 +443,42 @@ func reportGSFloor(in gsFloorInputs) {
 	}
 }
 
-// gsFloorMarkerKey keys on (season, weekly period) — one alert per matchup
-// week. The tenant is NOT in the key: the artifact is PerTenant, so the
-// user=<uid>/ segment is already applied by layout.PrefixFor, exactly as it is
-// for the IL-start markers.
-func gsFloorMarkerKey(season int, period fantrax.WeeklyPeriod) string {
-	return fmt.Sprintf("%d-p%d", season, period)
+// gsFloorMarkerKey keys on (season, weekly period, days left) — one alert per
+// remaining-day bucket, at most two a week because the [gsFloorMinDaysLeft,
+// gsFloorMaxDaysLeft] window bounds DaysLeft to {3,2}. That bound is
+// structural rather than a policy someone has to remember: the same window that
+// decides whether the alert fires at all is what limits the key space, so
+// re-bracketing the window cannot silently change how often the alert pages.
+//
+// DaysLeft is in the key because the once-per-week key it replaces did not
+// merely dedup the alert, it consumed the channel. Period 22 (2026-08-31..09-06)
+// was the first week of the season in which the floor actually bound, and its
+// marker burned at 2026-09-02T14:01:15Z on the rosterbot-ogtq inflated
+// magnitude — "about 2.7 short", a figure PR #193 corrected to 0.0 two hours
+// later. The week then genuinely deteriorated, the trigger re-fired seven times
+// at DaysLeft 3 and 2 while a waiver claim could still have added a Sunday
+// probable, and every one of those sends was swallowed. It closed at exactly
+// the floor, 10 against 10, one scratch from gscheck's ViolationMin, with
+// nothing ever delivered.
+//
+// DaysLeft rather than a hash of the body, though alertmarker.SendOnChange
+// exists and would also have unstuck it: the shortfall wobbled by +0.2/+0.7/+0.8
+// WITHIN that one window, so a raw-body compare would have re-sent on nearly
+// every hourly run. That trades permanent silence for a flood, and a flooded
+// channel is muted just as thoroughly as a silent one is ignored. A remaining
+// day is the actionable granularity — each new day is a genuinely new decision
+// point about whether to spend a claim, and DaysLeft only ever counts down, so
+// keys are consumed in order and never revisited.
+//
+// Markers written under the old <season>-p<period> shape are orphaned by this
+// and are deliberately left to age out: they are a few hundred bytes each, and
+// a migration that rewrote them could only ever re-mute a live week.
+//
+// The tenant is NOT in the key: the artifact is PerTenant, so the user=<uid>/
+// segment is already applied by layout.PrefixFor, exactly as it is for the
+// IL-start markers.
+func gsFloorMarkerKey(season int, period fantrax.WeeklyPeriod, daysLeft int) string {
+	return fmt.Sprintf("%d-p%d-d%d", season, period, daysLeft)
 }
 
 // gsFloorMessage renders the finding. The empty days are the point of it: a
