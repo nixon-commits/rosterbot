@@ -82,6 +82,19 @@ type GSDecision struct {
 	Logs   []string
 	Alert  *GSAlert
 
+	// Notices are the lines Run must print to Options.Out on EVERY run, not
+	// only under --verbose. Logs ride prog.Logf, which is a no-op unless the
+	// operator asked for verbose output — fine for the cascade's narration,
+	// wrong for a coverage line whose whole purpose is to make a silent
+	// degradation visible in CloudWatch. The first production run after the
+	// per-pitcher start-rate weighting shipped (2026-09-05 17:00 UTC) printed
+	// "gs floor check:" and "il-start check:" and NOT "GS start rates:",
+	// because the latter had been routed through Logs; the soft-fail WARNING
+	// beside it was equally invisible, which is degrade-to-silence under
+	// another name. Same split the disabled-path notice in Run already makes
+	// (rosterbot-8gmu).
+	Notices []string
+
 	// Period and Season identify the matchup week the budget describes. They
 	// are returned rather than re-resolved by the caller because this phase
 	// already did the lookup, and a second FindCurrentPeriod over the same list
@@ -95,6 +108,12 @@ type GSDecision struct {
 
 func (d *GSDecision) logf(format string, args ...any) {
 	d.Logs = append(d.Logs, fmt.Sprintf(format, args...))
+}
+
+// noticef records a line for GSDecision.Notices — see that field for why it is
+// a separate channel from logf.
+func (d *GSDecision) noticef(format string, args ...any) {
+	d.Notices = append(d.Notices, fmt.Sprintf(format, args...))
 }
 
 // ComputeGSBudget resolves this run's weekly game-start budget, or reports why
@@ -218,12 +237,14 @@ func ComputeGSBudget(ctx context.Context, ft gsFantraxClient, sched gsScheduleCl
 			cacheTTL(in.NoCache, fantrax.PastPeriodTTL))
 	})
 	if rateErr != nil {
-		d.logf("WARNING: start-rate history unavailable (%v) — every SP priced at the flat %.2f",
+		d.noticef("WARNING: start-rate history unavailable (%v) — every SP priced at the flat %.2f",
 			rateErr, 1/RotationSize)
 	}
 	cov := summariseStartRates(rates, spNames)
-	// Printed unconditionally, including the all-flat case, on the same
-	// reasoning as the "gs floor check:" and "il-start check:" lines. A
+	// Printed unconditionally — via Notices, which Run writes to Options.Out
+	// on every run, not via Logs, which only --verbose ever shows — including
+	// the all-flat case, on the same reasoning as the "gs floor check:" and
+	// "il-start check:" lines. A
 	// weighting that silently stopped matching any pitcher would forecast
 	// exactly what the flat divisor forecasts, and nothing else in the output
 	// would say so.
@@ -234,7 +255,7 @@ func ComputeGSBudget(ctx context.Context, ft gsFantraxClient, sched gsScheduleCl
 	// first seen, and before gsStartRateMinOpportunities the second case was
 	// real: 301 of the 2255 prices the 150-week replay issued rested on
 	// under one rotation turn of history.
-	d.logf("GS start rates: %d of %d rostered SPs priced from their own %d-day active-slot history (median %d opportunities), %d at the flat %.2f (%d under the %d-opportunity minimum, %d with no history)",
+	d.noticef("GS start rates: %d of %d rostered SPs priced from their own %d-day active-slot history (median %d opportunities), %d at the flat %.2f (%d under the %d-opportunity minimum, %d with no history)",
 		cov.Priced, len(spNames), gsStartRateWindow, cov.MedianOpps,
 		cov.BelowMin+cov.NoHistory, 1/RotationSize,
 		cov.BelowMin, gsStartRateMinOpportunities, cov.NoHistory)

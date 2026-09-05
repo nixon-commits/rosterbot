@@ -442,6 +442,15 @@ func TestRun_RaisesTheGSFloorAlert(t *testing.T) {
 	if !strings.Contains(got, "gs floor check: 4/12 used, floor 10") {
 		t.Fatalf("Run never printed the floor coverage line; the phase is not wired in.\n%s", got)
 	}
+	// The start-rate coverage line must reach Out on a NON-verbose run — this
+	// Options has Verbose unset, exactly like the production task. It shipped
+	// routed through GSDecision.Logs, which Run hands to prog.Logf, a no-op
+	// unless --verbose: the first production run after the weighting deployed
+	// (2026-09-05 17:00 UTC) printed the two lines above and not this one, and
+	// its soft-fail WARNING would have been equally silent.
+	if !strings.Contains(got, "GS start rates: ") {
+		t.Fatalf("Run never printed the start-rate coverage line to Out; it is riding the verbose-only channel.\n%s", got)
+	}
 
 	// The disabled-path notice must be ABSENT here. Without this, hoisting that
 	// fmt.Fprintln out of its else — a plausible refactor or merge resolution —

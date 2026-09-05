@@ -605,7 +605,7 @@ func TestComputeGSBudget_StartRateFailureDoesNotDisableTheGate(t *testing.T) {
 	if d.Budget == nil {
 		t.Fatal("a failed start-rate read must not disable the gate")
 	}
-	logs := strings.Join(d.Logs, "\n")
+	logs := strings.Join(d.Notices, "\n")
 	if !strings.Contains(logs, "start-rate history unavailable") {
 		t.Errorf("the failure must be named on the console; logs:\n%s", logs)
 	}
@@ -642,7 +642,7 @@ func TestComputeGSBudget_StartRateCoverageLineReportsPricedPitchers(t *testing.T
 	if d.Budget == nil {
 		t.Fatal("gate unexpectedly disabled")
 	}
-	logs := strings.Join(d.Logs, "\n")
+	logs := strings.Join(d.Notices, "\n")
 	if !strings.Contains(logs, "1 of 1 rostered SPs priced") {
 		t.Errorf("coverage line must report the priced pitcher; logs:\n%s", logs)
 	}
@@ -689,7 +689,7 @@ func TestComputeGSBudget_CoverageLineSeparatesTooLittleHistoryFromNone(t *testin
 	}
 
 	d := ComputeGSBudget(t.Context(), ft, sched, in)
-	logs := strings.Join(d.Logs, "\n")
+	logs := strings.Join(d.Notices, "\n")
 	if !strings.Contains(logs, "1 of 3 rostered SPs priced") {
 		t.Errorf("want 1 of 3 priced; logs:\n%s", logs)
 	}
