@@ -9,9 +9,10 @@
 //	    -run TestDiagSeasonIndexParity -v -timeout 30m
 //
 // Or, for the larger age-adjudicated sweep (rosterbot-gcjh): build a reference
-// file mapping playername.Normalize(name) -> {"age": N, "club": "ABC"} from a
-// Fantrax player pool snapshot (see diagPoolSample's doc comment for how) and
-// run:
+// file mapping playername.Normalize(name) -> a LIST of {"age": N, "club":
+// "ABC"} rows — one entry per real Fantrax pool row that normalizes to that
+// key, NOT one entry per key — from a Fantrax player pool snapshot (see
+// diagPoolSample's doc comment for how) and run:
 //
 //	DIAG_POOL_JSON=/path/to/pool-ref.json go test -tags diag ./internal/playername/ \
 //	    -run TestDiagSeasonIndexParity -v -timeout 30m
@@ -19,22 +20,37 @@
 // (optionally DIAG_POOL_SAMPLE=<n> to cap the sweep to a deterministic subset
 // when the full pool is too slow for a hand-run's time budget)
 //
+// The list shape is load-bearing, not incidental (rosterbot-gcjh): playername.
+// Normalize is a many-to-one join key (see the "Deep-pool caveat" bullet in
+// CLAUDE.md), so a real Fantrax pool holds keys shared by two or more
+// genuinely distinct players — measured on a 10,429-row 2026-08-17 snapshot,
+// 169 of 10,222 unique keys hold 2+ rows. A reference file keyed
+// {name: {age, club}} (one row, last-write-wins) silently discards every
+// collision's other row(s), and a disagreement at one of those keys then gets
+// adjudicated against an ARBITRARY one of the real players who share the key
+// — which is indistinguishable from a real index defect unless the reference
+// itself can say "this key has more than one real answer."
+//
 // It reports resolved / ambiguous / missed for index-only, search-only and the
 // combined path, plus every ID on which the two disagree — a disagreement means
 // the index returns a DIFFERENT player than today's resolver rather than merely
 // a faster one. When a reference file is supplied, every disagreement is also
-// adjudicated against it by age (see adjudicateByAge in adjudicate_test.go): a
-// searchCorrect verdict — the search candidate's age matches the reference and
-// the index candidate's doesn't — fails the test, because that is a real index
-// defect rather than a coverage regression. It also asserts the two live
-// invariants the design rests on: that no dump row reports active:false (which
-// is why claimName cannot arbitrate inside the index), and that the season dump
-// clears seasonIndexMinPlayers.
+// adjudicated against the FULL list of reference ages recorded at its key (see
+// adjudicateByAges in adjudicate_test.go): a searchCorrect verdict — the
+// search candidate's age matches a reference row and the index candidate's
+// doesn't — fails the test, because that is a real index defect rather than a
+// coverage regression or a collision the reference key can't disambiguate. A
+// key holding more than one reference row where each candidate's age matches
+// a DIFFERENT one of those rows adjudicates to ageAmbiguous instead, and an
+// ageAmbiguous verdict is NEVER counted as indexCorrect or searchCorrect —
+// see adjudicateByAges' doc comment for the full four-way decision, including
+// the case where the collision is still decidable. It also asserts the two
+// live invariants the design rests on: that no dump row reports active:false
+// (which is why claimName cannot arbitrate inside the index), and that the
+// season dump clears seasonIndexMinPlayers.
 //
-// 2026-09-07 (rosterbot-gcjh): ran with a 5,000-name deterministic sample drawn
-// from a 10,429-row Fantrax pool snapshot (2026-08-17) and FOUND 4 real index
-// defects the 2026-08-31 hand-check's smaller sample missed. See the dated
-// result recorded at the bottom of this file.
+// See the dated result recorded at the bottom of this file for the most
+// recent sweep and what it actually supports.
 package playername
 
 import (
@@ -60,10 +76,21 @@ type poolRef struct {
 	Club string `json:"club"`
 }
 
-// diagPoolSample loads DIAG_POOL_JSON (a {playername.Normalize(name): {"age":
-// N, "club": "ABC"}} reference file) and returns a deterministic name sample
-// plus the reference map, or (nil, nil) if the env var is unset — the caller
-// falls back to diagNames(t) in that case.
+// diagPoolSample loads DIAG_POOL_JSON (a {playername.Normalize(name): [{"age":
+// N, "club": "ABC"}, ...]} reference file, one list entry per real Fantrax
+// pool row sharing that normalized key) and returns a deterministic name
+// sample plus the reference map, or (nil, nil) if the env var is unset — the
+// caller falls back to diagNames(t) in that case.
+//
+// The list shape (rosterbot-gcjh) is not cosmetic: playername.Normalize
+// collapses distinct real players onto the same key (169 of 10,222 keys on a
+// real 10,429-row snapshot measured 2026-09-07), and a {name: {age, club}}
+// shape can hold only the LAST row parsed for a collided key — silently
+// picking an arbitrary one of the real players as "the" reference and making
+// every disagreement at that key look like a defect against whichever
+// namesake didn't survive the overwrite. Keeping every row is what lets the
+// adjudicator (adjudicateByAges) recognize a collision and refuse to call it
+// either the index or the search.
 //
 // The reference file is deliberately NOT committed (it is derived from a
 // point-in-time Fantrax pool export and would go stale immediately) and there
@@ -82,6 +109,11 @@ type poolRef struct {
 //		"github.com/nixon-commits/rosterbot/internal/playername"
 //	)
 //
+//	type poolRefRow struct {
+//		Age  int    `json:"age"`
+//		Club string `json:"club"`
+//	}
+//
 //	func main() {
 //		var pool struct {
 //			Data []struct {
@@ -92,19 +124,16 @@ type poolRef struct {
 //		}
 //		raw, _ := os.ReadFile(os.Args[1])
 //		_ = json.Unmarshal(raw, &pool)
-//		out := map[string]struct {
-//			Age  int    `json:"age"`
-//			Club string `json:"club"`
-//		}{}
+//		// Keep EVERY row per key — do not overwrite. A key with more than one
+//		// row means more than one real player shares it; last-write-wins would
+//		// silently discard the collision (rosterbot-gcjh).
+//		out := map[string][]poolRefRow{}
 //		for _, p := range pool.Data {
 //			k := playername.Normalize(p.Name)
 //			if k == "" {
 //				continue
 //			}
-//			out[k] = struct {
-//				Age  int    `json:"age"`
-//				Club string `json:"club"`
-//			}{Age: p.Age, Club: p.MLBTeamShortName}
+//			out[k] = append(out[k], poolRefRow{Age: p.Age, Club: p.MLBTeamShortName})
 //		}
 //		enc, _ := json.Marshal(out)
 //		os.Stdout.Write(enc)
@@ -117,7 +146,7 @@ type poolRef struct {
 // ~15-30 minute budget a hand-run affords; omit it to sweep every name in the
 // file. Seeded rather than time-based so a repeated run samples the identical
 // subset and is directly comparable to an earlier one.
-func diagPoolSample(t *testing.T) ([]string, map[string]poolRef) {
+func diagPoolSample(t *testing.T) ([]string, map[string][]poolRef) {
 	path := os.Getenv("DIAG_POOL_JSON")
 	if path == "" {
 		return nil, nil
@@ -126,7 +155,7 @@ func diagPoolSample(t *testing.T) ([]string, map[string]poolRef) {
 	if err != nil {
 		t.Fatalf("DIAG_POOL_JSON: reading %s: %v", path, err)
 	}
-	var ref map[string]poolRef
+	var ref map[string][]poolRef
 	if err := json.Unmarshal(data, &ref); err != nil {
 		t.Fatalf("DIAG_POOL_JSON: parsing %s: %v", path, err)
 	}
@@ -196,8 +225,18 @@ func ageLookupRetry(ctx context.Context, client *mlb.Client, ids []int) ([]model
 // personIds= lookup bypasses the mask entirely and stays cheap: disagreements
 // are rare (~5 per 1,000 names, measured 2026-08-31), so even a multi-
 // thousand-name sweep asks for only a couple hundred IDs at most.
-func fetchAges(ctx context.Context, client *mlb.Client, ids []int) map[int]int {
+//
+// A whole batch failing after searchAttempts retries used to fold silently
+// into "age unknown" for every ID in that batch — indistinguishable, in the
+// adjudication summary, from an ID statsapi genuinely has no currentAge for.
+// That matters: a transient statsapi hiccup mid-sweep should read as "retry
+// the sweep", not as "N names have an unexplainable missing age". fetchAges
+// now t.Logf's each failed batch by name and returns the set of IDs it asked
+// for in a failed batch, so the caller can count them apart from ordinary
+// ageUnknown verdicts.
+func fetchAges(ctx context.Context, t *testing.T, client *mlb.Client, ids []int) (ages map[int]int, failedBatchIDs map[int]bool) {
 	out := map[int]int{}
+	failed := map[int]bool{}
 	seen := map[int]bool{}
 	var uniq []int
 	for _, id := range ids {
@@ -212,8 +251,14 @@ func fetchAges(ctx context.Context, client *mlb.Client, ids []int) map[int]int {
 		if end > len(uniq) {
 			end = len(uniq)
 		}
-		people, err := ageLookupRetry(ctx, client, uniq[i:end])
+		batch := uniq[i:end]
+		people, err := ageLookupRetry(ctx, client, batch)
 		if err != nil {
+			t.Logf("age lookup: batch %d-%d (%d id(s): %v) failed after %d attempt(s): %v",
+				i, end-1, len(batch), batch, searchAttempts, err)
+			for _, id := range batch {
+				failed[id] = true
+			}
 			continue
 		}
 		for _, p := range people {
@@ -222,7 +267,7 @@ func fetchAges(ctx context.Context, client *mlb.Client, ids []int) map[int]int {
 			}
 		}
 	}
-	return out
+	return out, failed
 }
 
 func TestDiagSeasonIndexParity(t *testing.T) {
@@ -363,15 +408,20 @@ func TestDiagSeasonIndexParity(t *testing.T) {
 		for _, d := range disagreements {
 			ids = append(ids, d.idxID, d.srchID)
 		}
-		ages := fetchAges(ctx, client, ids)
+		ages, failedBatchIDs := fetchAges(ctx, t, client, ids)
 		counts := map[verdict]int{}
 		var searchCorrectCases []string
+		var transientUnknown int // ageUnknown caused by a failed age-lookup batch
 		for _, d := range disagreements {
-			ref, ok := poolRefs[Normalize(d.name)]
+			refs, ok := poolRefs[Normalize(d.name)]
 			if !ok {
 				counts[ageUnknown]++
 				t.Logf("  %s: no reference-file entry — ageUnknown", d.name)
 				continue
+			}
+			refAges := make([]int, len(refs))
+			for i, r := range refs {
+				refAges[i] = r.Age
 			}
 			var idxAge, searchAge *int
 			if a, ok2 := ages[d.idxID]; ok2 {
@@ -380,22 +430,28 @@ func TestDiagSeasonIndexParity(t *testing.T) {
 			if a, ok2 := ages[d.srchID]; ok2 {
 				searchAge = &a
 			}
-			v := adjudicateByAge(ref.Age, idxAge, searchAge)
+			v := adjudicateByAges(refAges, idxAge, searchAge)
 			counts[v]++
-			t.Logf("  %s: referenceAge=%d idxAge=%s searchAge=%s -> %s",
-				d.name, ref.Age, fmtAgePtr(idxAge), fmtAgePtr(searchAge), v)
+			if v == ageUnknown && (failedBatchIDs[d.idxID] || failedBatchIDs[d.srchID]) {
+				transientUnknown++
+			}
+			t.Logf("  %s: referenceAges=%v idxAge=%s searchAge=%s -> %s",
+				d.name, refAges, fmtAgePtr(idxAge), fmtAgePtr(searchAge), v)
 			if v == searchCorrect {
 				searchCorrectCases = append(searchCorrectCases, fmt.Sprintf(
-					"%s: reference age %d matches search candidate %d (age %s) but not index candidate %d (age %s)",
-					d.name, ref.Age, d.srchID, fmtAgePtr(searchAge), d.idxID, fmtAgePtr(idxAge)))
+					"%s: reference age(s) %v match search candidate %d (age %s) but not index candidate %d (age %s)",
+					d.name, refAges, d.srchID, fmtAgePtr(searchAge), d.idxID, fmtAgePtr(idxAge)))
 			}
 		}
-		t.Logf("ADJUDICATION verdicts: indexCorrect=%d searchCorrect=%d bothMatch=%d neitherMatch=%d ageUnknown=%d",
-			counts[indexCorrect], counts[searchCorrect], counts[bothMatch], counts[neitherMatch], counts[ageUnknown])
+		t.Logf("ADJUDICATION verdicts: indexCorrect=%d searchCorrect=%d bothMatch=%d neitherMatch=%d ageAmbiguous=%d ageUnknown=%d (of which %d transient: caused by a failed age-lookup batch, not a genuine missing age)",
+			counts[indexCorrect], counts[searchCorrect], counts[bothMatch], counts[neitherMatch], counts[ageAmbiguous], counts[ageUnknown], transientUnknown)
 		// searchCorrect is the gap rosterbot-gcjh closes: unlike a plain
 		// disagreement, it means the age cross-check found the SEARCH path
-		// right and the INDEX path wrong — a real index defect, not merely an
-		// unresolved finding for a human to adjudicate by hand.
+		// right and the INDEX path wrong at an UNAMBIGUOUS key — a real index
+		// defect, not merely an unresolved finding for a human to adjudicate
+		// by hand, and not a collision the reference key can't disambiguate
+		// (that case adjudicates to ageAmbiguous instead and is never counted
+		// here — see adjudicateByAges' doc comment).
 		for _, c := range searchCorrectCases {
 			t.Errorf("age cross-check found a real index defect: %s", c)
 		}
@@ -408,47 +464,81 @@ func TestDiagSeasonIndexParity(t *testing.T) {
 	}
 }
 
-// 2026-09-07 result (rosterbot-gcjh): ran the extended harness with
-// DIAG_POOL_JSON pointing at a reference file built from a 10,429-row Fantrax
-// pool snapshot (fantrax-player-pool-epsb8xzlmj203yrx.json, fetched_at
-// 2026-08-17; 10,222 unique normalized keys after 207 duplicate-key
-// collisions), DIAG_POOL_SAMPLE=5000 (seeded deterministic subset, seed
-// 20260907), wall time ~8.5 minutes:
+// 2026-09-07 result, RE-RUN (rosterbot-gcjh, collision-aware reference): a
+// same-day earlier run of this harness (see git history for the superseded
+// text this replaces) used a reference file shaped {name: {age, club}} —
+// exactly one row per normalized key, last-write-wins on a duplicate key —
+// and reported 4 "real index defects." That reference shape was itself the
+// defect: playername.Normalize collapses distinct real players onto one key
+// (measured on the same 10,429-row Fantrax pool snapshot,
+// fantrax-player-pool-epsb8xzlmj203yrx.json, fetched_at 2026-08-17: 10,222
+// unique keys, 169 of which hold 2+ real rows — the doc comment's earlier
+// "207 duplicate-key collisions" was counting excess ROWS [10,429−10,222],
+// not collision KEYS), so an index-vs-search disagreement at one of those 169
+// keys was being adjudicated against an ARBITRARY one of the several real
+// players who share it. Rebuilt the reference to keep every row per key (see
+// diagPoolSample's doc comment) and re-ran with the SAME DIAG_POOL_SAMPLE=5000
+// seed (20260907) against the SAME pool snapshot, wall time ~36s:
 //
+//	names asked: 5000
 //	INDEX-ONLY   resolved=2770 ambiguous=23  missed=2207
 //	SEARCH-ONLY  resolved=4650 missed=350
 //	COMBINED     resolved=4713 missed=287        (>= search-only: no regression)
 //	DISAGREEMENTS index-vs-search: 23
-//	ADJUDICATION indexCorrect=15 searchCorrect=4 bothMatch=3 neitherMatch=1 ageUnknown=0
+//	ADJUDICATION verdicts: indexCorrect=11 searchCorrect=0 bothMatch=3 neitherMatch=0 ageAmbiguous=9 ageUnknown=0 (0 transient)
 //
-// This REPLACES the earlier 2026-08-31 hand-check's conclusion. That check —
-// 5 disagreements over a 1,000-name sample, adjudicated by hand — found "no
-// case where the search was right and the index wrong." This 5,000-name sweep,
-// adjudicated the same way (Fantrax's Age column) but automatically and at 5x
-// the sample, found 4:
+// Index-only, search-only and combined resolution counts are byte-identical
+// to the earlier same-day run (neither the index nor the search changed —
+// only the adjudication logic did), which isolates the entire swing in the
+// verdict histogram to the collision fix. All 4 of the earlier run's
+// "searchCorrect" cases are among the 9 now classified ageAmbiguous:
 //
-//	antonio jimenez:  reference age 25, index candidate 806128 age 22, search candidate 682607 age 25
-//	isaiah jackson:   reference age 24, index candidate 805365 age 22, search candidate 694722 age 24
-//	jose devers:      reference age 26, index candidate 691410 age 23, search candidate 672701 age 26
-//	michael martinez: reference age 27, index candidate 824765 age 19, search candidate 681597 age 27
+//	antonio jimenez:  refAges=[22 25] idx=806128(age 22) search=682607(age 25) -> ageAmbiguous
+//	isaiah jackson:   refAges=[22 24] idx=805365(age 22) search=694722(age 24) -> ageAmbiguous
+//	jose devers:      refAges=[23 26] idx=691410(age 23) search=672701(age 26) -> ageAmbiguous
+//	michael martinez: refAges=[19 27] idx=824765(age 19) search=681597(age 27) -> ageAmbiguous
 //
-// This is a FINDING TO REPORT, not a defect fixed by this bead (rosterbot-gcjh
-// scoped the age cross-check itself, not a repair to seasonIndex.find's
-// uncontested-key selection). It shows the 2026-08-31 hand-check's "no case
-// found" was a sample-size artifact, not a property of the design: the season
-// index's uncontested-key answer is sometimes the WRONG namesake, at a rate of
-// roughly 4-in-5000 (~0.08%) names on this sweep — small, but no longer zero.
-// A follow-up bead should decide whether that rate is acceptable or whether
-// seasonIndex.find needs an arbitration signal beyond "uncontested" (the
-// existing doc comment on claimName explains why active-status can't be that
-// signal here).
+// In each case BOTH candidates' ages matched a real row at that key (one row
+// each) — exactly the "each candidate matches a different row" shape
+// adjudicateByAges refuses to call either way. These were never real index
+// defects; they were the reference file's own last-write-wins bug expressing
+// itself as a false positive against whichever candidate happened to match
+// the row that survived the overwrite.
+//
+// With the collision fixed, there are ZERO remaining unambiguous
+// searchCorrect cases in this sweep — the test PASSES. This restores, rather
+// than overturns, the 2026-08-31 hand-check's "no case where the search was
+// right and the index wrong" — now on a 5x larger, automated, collision-aware
+// sample instead of a 1,000-name hand-check, and finding the same answer.
+//
+// Two things this result does NOT support, stated plainly because the
+// earlier text overclaimed on both:
+//
+//   - This is a rate over the 23 DISAGREEMENTS, not over the 5,000 names
+//     asked, and not even over the 2,770 the index answered. The method can
+//     only ever see a defect on a name where the index and the search
+//     disagree — the other 2,747 index answers that AGREE with the search are
+//     never cross-checked against the reference at all, so "0 defects found"
+//     is a FLOOR on the index's real error rate, not a measurement of it: a
+//     defect where index and search happen to agree (both wrong the same way,
+//     or the search itself resolves the wrong namesake) is invisible to this
+//     harness by construction.
+//   - The collision caveat is not a rounding error: 9 of the 23 disagreements
+//     (39%) were ageAmbiguous — undecidable by this method — and all 4 of the
+//     previously-reported "defects" were drawn from exactly that ambiguous
+//     set. A rate computed by DIVIDING BY the index-answered population
+//     (2770) and IGNORING the ambiguous bucket would still be wrong for the
+//     same reason: 0/2770 (or 0/23) reads as a precise measurement where the
+//     honest statement is "found none, out of a method that can't see most of
+//     the space and refuses to guess on the part that's structurally
+//     ambiguous."
 //
 // Limitation, stated plainly: Fantrax Age is a snapshot as of the pool file's
-// fetch time, not live, and the ±1yr tolerance (adjudicateByAge,
+// fetch time, not live, and the ±1yr tolerance (adjudicateByAges,
 // adjudicate_test.go) exists to absorb ordinary birthday drift between that
 // snapshot and whenever statsapi is asked — it can in principle swallow a
-// smaller real defect as a false bothMatch, and the 3 bothMatch cases above are
-// exactly the disagreements this limitation leaves unresolved. This is a
+// smaller real defect as a false bothMatch, and the 3 bothMatch cases above
+// are exactly the disagreements this limitation leaves unresolved. This is a
 // heuristic cross-check, not a proof. Regenerating the reference file from a
 // fresher pool snapshot and re-running (same DIAG_POOL_SAMPLE seed) is the way
-// to check whether the rate holds up over time.
+// to check whether this floor holds up over time.
