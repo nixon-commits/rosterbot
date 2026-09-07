@@ -82,7 +82,14 @@ export async function renderTenants(root, minted) {
     body.append(tenantRow(t, root));
   }
   table.append(body);
-  c.append(table);
+  // Same scroll container every other data-table on the dashboard sits in
+  // (style.css, "Wide-table scroll container"). This was the one table
+  // appended straight to its card, so its intrinsic width — eight columns,
+  // one of them a command string — pushed past the card's edge and widened
+  // the whole page rather than scrolling inside the card.
+  const wrap = el("div", "table-wrap");
+  wrap.append(table);
+  c.append(wrap);
   root.append(c);
 }
 
@@ -90,9 +97,9 @@ function tenantRow(t, root) {
   const tr = el("tr");
   const parked = t.status === "parked";
 
-  const who = el("td");
+  const who = el("td", "tenant-who");
   who.append(el("div", null, t.display_name || String(t.id)));
-  if (t.email) who.append(el("div", "muted small", t.email));
+  if (t.email) who.append(el("div", "muted small tenant-email", t.email));
   if (t.role === "admin") who.append(el("span", "badge", "admin"));
   if (parked) who.append(el("span", "badge badge-failed", "parked"));
   tr.append(who);
@@ -154,7 +161,7 @@ function tenantRow(t, root) {
 // re-invite somebody whose jobs are running — the same trap the Passkey column
 // above documents.
 function runsCell(t) {
-  const td = el("td");
+  const td = el("td", "tenant-runs");
   const r = t.runs;
   if (!r) {
     td.append(el("span", "muted", "?"));
@@ -169,11 +176,17 @@ function runsCell(t) {
     // A connect run whose own verdict is "failed" exits 0 on purpose
     // (rosterbot-jg92), so it is labelled by the verdict rather than by the
     // exit status — otherwise this cell reads "OK" on a broken connection.
+    //
+    // The command goes on the line under the badge, the same shape as the OK
+    // branch below, not inside it: a badge is white-space:nowrap, and
+    // "optimize --matchup --archive-projections failed" as one unbreakable
+    // 324px chip was the second-widest thing in the table after the Actions
+    // cell. On the muted line it breaks at spaces like any other text.
     const f = r.last_failure;
     const failedConnect = f.connect && f.connect.verdict === "failed";
-    td.append(el("span", "badge badge-failed",
-      failedConnect ? "connect failed" : `${f.command || "job"} failed`));
-    td.append(el("div", "muted small", relativeTime(f.started_at)));
+    td.append(el("span", "badge badge-failed", failedConnect ? "connect failed" : "Failed"));
+    td.append(el("div", "muted small",
+      `${commandLabel(f.command) || "job"} ${relativeTime(f.started_at)}`));
   } else if (r.last && r.last.status === "RUNNING") {
     // The age matters: a task killed hard never writes its terminal record, so
     // a tenant can sit at RUNNING forever. Without the timestamp that reads as
@@ -184,7 +197,7 @@ function runsCell(t) {
     td.append(el("span", "badge badge-ok", "OK"));
     if (r.last) {
       td.append(el("div", "muted small",
-        `${r.last.command || "job"} ${relativeTime(r.last.started_at)}`));
+        `${commandLabel(r.last.command) || "job"} ${relativeTime(r.last.started_at)}`));
     }
   }
 
@@ -210,6 +223,26 @@ function runsCell(t) {
     td.append(el("div", "muted small", `Also failing: ${line}`));
   }
   return td;
+}
+
+// commandLabel is how THIS tenant's row names one of its runs. A ledger
+// record's command is the task's argv verbatim (entrypoint.sh records
+// CMD="$*"), and handleConnect launches `connect --user <id>`, where the id is
+// an 87-character opaque WebAuthn handle. In a row already headed by the
+// tenant it disambiguates nothing — the Infra tab's rule for the same id —
+// and it is the one token a browser cannot break, so it dragged the table out
+// of its card. Only that pair is dropped: "optimize --matchup" and "optimize"
+// are different jobs to the operator and must stay distinguishable. The full
+// string is still one click away in the Runs drill-down below.
+function commandLabel(cmd) {
+  const parts = String(cmd || "").split(/\s+/).filter(Boolean);
+  const out = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] === "--user") { i++; continue; }
+    if (parts[i].startsWith("--user=")) continue;
+    out.push(parts[i]);
+  }
+  return out.join(" ");
 }
 
 function actionsCell(t, root, parked) {

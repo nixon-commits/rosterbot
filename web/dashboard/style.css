@@ -853,7 +853,7 @@ td.cov[data-unmatched]:focus-visible { outline: 2px solid var(--accent); outline
 
 /* ---- Wide-table scroll container ---------------------------------------- */
 /* Every table.data-table wraps in this: views.js, trades.js, projections.js,
-   value.js, runs.js, and render.js's generic renderTable (arbitrary JSON, so
+   value.js, runs.js, tenants.js, and render.js's generic renderTable (arbitrary JSON, so
    its column count is unbounded). Without it, table{width:100%} can't shrink
    a table below its intrinsic content width, so the overflow bubbles up
    through <main>/<body> and widens the whole page's layout viewport on
@@ -1330,8 +1330,35 @@ pre {
    the bare <button> look; the minted-link box is the one place a credential is
    ever displayed, so it gets width and a visible border rather than blending
    into the card. */
-.tenant-actions { white-space: nowrap; }
-.tenant-actions button { margin-right: 0.35rem; }
+/* The six controls wrap into two or three short rows rather than sitting on one
+   472px line: with white-space:nowrap this cell alone was wider than a third of
+   the content column, so the table (eight columns, auto layout) could not fit
+   inside its card at any desktop width and the last three buttons — Runs,
+   Recovery link, Delete — sat past the viewport edge where the operator could
+   not see them. min-width keeps at least two buttons to a row, so the cell
+   never degrades to one button per line when the other columns are wide. */
+.tenant-actions { white-space: normal; min-width: 12rem; }
+.tenant-actions button { margin: 0 0.35rem 0.35rem 0; }
+/* The Runs cell's floor. Once the command moved out of its nowrap badge the
+   column had break opportunities everywhere, and auto layout — which hands
+   surplus width to the columns with the widest UNBREAKABLE content — squeezed
+   it to under 100px while Team and Passkey kept theirs, shredding
+   "optimize --matchup --archive-projections" across five lines. 11rem reads
+   the command in three, and with the email rule below the whole table still
+   fits the content column's 1166px cap without a scrollbar. */
+.tenant-runs { min-width: 11rem; }
+/* The email is a secondary line under the display name, so when the table is
+   squeezed it may break mid-address rather than hold the column open. With
+   surplus width it renders on one line as before; only its contribution to
+   the table's MINIMUM width changes, which is what lets the other seven
+   columns share the space. */
+.tenant-email { overflow-wrap: anywhere; }
+/* ...but not so far that the display name — the row's primary identifier —
+   wraps before anything else does. anywhere makes the cell's minimum width
+   near zero, so without this floor auto layout squeezed Tenant to 89px while
+   handing Team its full 158 for a sixteen-character id. 10rem holds a typical
+   name on one line and breaks a long email once. */
+.tenant-who { min-width: 10rem; }
 .minted-link .link-row { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
 .minted-link .link-row input { flex: 1 1 auto; font-family: var(--mono, monospace); }
 .tenant-actions button.danger {
