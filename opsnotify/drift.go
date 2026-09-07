@@ -216,3 +216,48 @@ func handleDrift(ctx context.Context) error {
 		body:  body,
 	})
 }
+
+// handleDriftConfig asserts that the drift check is configured at all, and
+// alerts once per disablement when it is not. It runs on the heartbeat tick,
+// not the drift tick, and the choice is the whole mechanism (rosterbot-k2w0):
+// BuildDriftRule, BUILD_PROJECT and the CodeBuild project all live under the
+// same `if buildProject != nil` in infra/, so a `cdk deploy --all` without
+// `-c enableBuild=true` removes CI and the rule watching for CI's absence in
+// one command. handleDrift's "check disabled" log line is the right call for
+// handleDrift — a rule that has been deleted fires nothing — but it leaves the
+// silence total: no build on the next push to main, no rule to notice, nothing
+// red anywhere. HeartbeatRule is created outside that branch, so it is the one
+// scheduled path that survives the mistake.
+//
+// One line is logged on every tick, configured or not, for the same reason
+// `il-start check:` and `mlb recency coverage:` print their zero case: a
+// check whose healthy output is silence is indistinguishable from a check
+// that is not running.
+//
+// A restore overwrites the token with the project name rather than deleting
+// the marker (the store has no delete), which is what makes a SECOND
+// disablement news: see opsalert.DriftDarkToken.
+func handleDriftConfig(ctx context.Context) {
+	d := opsalert.DriftDark{}
+	project := os.Getenv(projectEnv)
+	prev, _ := markers.token(ctx, d.MarkerKey())
+	if project != "" {
+		if prev == opsalert.DriftDarkToken {
+			log.Printf("drift-config: %s restored (%s); clearing dark marker", projectEnv, project)
+			markers.record(d.MarkerKey(), project)
+			return
+		}
+		log.Printf("drift-config: %s=%s; drift check configured", projectEnv, project)
+		return
+	}
+	if !d.NeedsAlert(prev) {
+		log.Printf("drift-config: %s unset; already reported", projectEnv)
+		return
+	}
+	title, body := opsalert.FormatDriftDark()
+	if err := send1(ctx, markers, alert{
+		key: d.MarkerKey(), note: d.AlertToken(), title: title, body: body,
+	}); err != nil {
+		log.Printf("drift-config send: %v", err)
+	}
+}

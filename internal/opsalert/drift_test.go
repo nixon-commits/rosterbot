@@ -1,6 +1,7 @@
 package opsalert
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -152,5 +153,46 @@ func TestFormatDrift_NamesBothCommitsAndTheAge(t *testing.T) {
 	_, body = FormatDrift(Drift{HeadSHA: shaHead, Age: 2 * time.Hour})
 	if !contains(body, "no successful build on record") {
 		t.Errorf("empty built sha must be described, got %q", body)
+	}
+}
+
+// The drift check can be switched off by an ordinary operator mistake — a
+// `cdk deploy --all` without `-c enableBuild=true` deletes the CodeBuild
+// project, BuildDriftRule and the Lambda's BUILD_PROJECT in one command — and a
+// rule that fires cannot report its own absence. DriftDark is the finding the
+// heartbeat raises instead, once per disablement.
+func TestDriftDark_AlertsOnceUntilRestored(t *testing.T) {
+	d := DriftDark{}
+	if !d.NeedsAlert("") {
+		t.Fatal("first tick with no marker must alert")
+	}
+	if d.NeedsAlert(d.AlertToken()) {
+		t.Fatal("a later tick during the same disablement must stay quiet")
+	}
+}
+
+// After a restore the marker holds the project name, not the dark token, so a
+// SECOND disablement is news again rather than being swallowed by the first
+// alert's marker forever.
+func TestDriftDark_ASecondDisablementAfterRestoreAlertsAgain(t *testing.T) {
+	if !(DriftDark{}).NeedsAlert("Build45A36621-KN5IpAFXWtlG") {
+		t.Fatal("a marker recording the restored project must not suppress a fresh disablement")
+	}
+}
+
+func TestDriftDark_MarkerKeyIsDistinctFromTheDriftAlert(t *testing.T) {
+	if (DriftDark{}).MarkerKey() == (Drift{}).MarkerKey() {
+		t.Fatal("the dark marker must not share the drift alert's key: its token grammar is different")
+	}
+}
+
+// The body has to name the cause the operator can act on, not just the symptom.
+func TestFormatDriftDark_NamesTheFlag(t *testing.T) {
+	title, body := FormatDriftDark()
+	if title == "" {
+		t.Fatal("title must not be the stay-quiet signal")
+	}
+	if !strings.Contains(body, "enableBuild") || !strings.Contains(body, "BUILD_PROJECT") {
+		t.Errorf("body %q must name both the missing env var and the context flag that restores it", body)
 	}
 }

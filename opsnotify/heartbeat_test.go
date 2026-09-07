@@ -348,6 +348,10 @@ func TestDispatch_RoutesHeartbeat(t *testing.T) {
 	timedLedger(t, []opsalert.Record{ranAt("r1", "grade", 40*time.Hour, opsalert.StatusSuccess)})
 	got := capture(t)
 	fakeMarkers(t)
+	// The heartbeat also asserts the drift check is configured (rosterbot-k2w0);
+	// a configured project keeps that assertion quiet so this counts only the
+	// overdue-job alert.
+	t.Setenv(projectEnv, "Build45A36621")
 
 	ev := `{"version":"0","detail-type":"Rosterbot Heartbeat","source":"rosterbot.ops","detail":{}}`
 	if err := dispatch(context.Background(), json.RawMessage(ev)); err != nil {

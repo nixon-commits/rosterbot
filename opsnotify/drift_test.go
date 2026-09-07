@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/codebuild"
 	cbtypes "github.com/aws/aws-sdk-go-v2/service/codebuild/types"
+
+	"github.com/nixon-commits/rosterbot/internal/opsalert"
 )
 
 var driftNow = time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC)
@@ -238,5 +241,93 @@ func TestHeadOfMain_UndateableHeadYieldsZeroTimeNotEpoch(t *testing.T) {
 	}
 	if sha != dHead || !at.IsZero() {
 		t.Errorf("got sha=%s at=%v, want sha set and zero time", sha, at)
+	}
+}
+
+// --- Mode B: the check that the drift check exists at all (rosterbot-k2w0) ---
+
+// A stack deployed without `-c enableBuild=true` removes BUILD_PROJECT along
+// with the rule that would have noticed. The heartbeat must say so, once.
+func TestHandleDriftConfig_AlertsOnceWhileTheProjectIsUnset(t *testing.T) {
+	got := capture(t)
+	fakeMarkers(t)
+	t.Setenv(projectEnv, "")
+
+	handleDriftConfig(context.Background())
+	handleDriftConfig(context.Background())
+
+	if len(*got) != 1 {
+		t.Fatalf("got %d sends, want exactly 1 across two ticks: %v", len(*got), *got)
+	}
+	if !strings.Contains((*got)[0], "enableBuild") {
+		t.Errorf("alert %q must name the flag that restores the pipeline", (*got)[0])
+	}
+	tok, found := markers.token(context.Background(), opsalert.DriftDark{}.MarkerKey())
+	if !found || tok != opsalert.DriftDarkToken {
+		t.Errorf("marker token = %q found=%v, want %q", tok, found, opsalert.DriftDarkToken)
+	}
+}
+
+// The healthy path must be silent AND leave no marker: a marker written on
+// every tick would make the prefix read as a history of alerts that never went out.
+func TestHandleDriftConfig_QuietAndMarkerlessWhenConfigured(t *testing.T) {
+	got := capture(t)
+	fake := fakeMarkers(t)
+	t.Setenv(projectEnv, "Build45A36621")
+
+	handleDriftConfig(context.Background())
+
+	if len(*got) != 0 {
+		t.Fatalf("got %d sends, want 0: %v", len(*got), *got)
+	}
+	if len(fake.Keys()) != 0 {
+		t.Errorf("markers %v, want none on a healthy tick", fake.Keys())
+	}
+}
+
+// Dark → restored → dark again is two outages and must be two alerts. The
+// restore has to overwrite the token, or the first alert's marker would mute
+// every later disablement for the life of the bucket.
+func TestHandleDriftConfig_ASecondDisablementAfterRestoreAlertsAgain(t *testing.T) {
+	got := capture(t)
+	fakeMarkers(t)
+	ctx := context.Background()
+
+	t.Setenv(projectEnv, "")
+	handleDriftConfig(ctx)
+
+	t.Setenv(projectEnv, "Build45A36621")
+	handleDriftConfig(ctx)
+	if len(*got) != 1 {
+		t.Fatalf("restore must not send; got %d sends", len(*got))
+	}
+	tok, _ := markers.token(ctx, opsalert.DriftDark{}.MarkerKey())
+	if tok != "Build45A36621" {
+		t.Fatalf("after restore the marker must record the project, got %q", tok)
+	}
+
+	t.Setenv(projectEnv, "")
+	handleDriftConfig(ctx)
+	if len(*got) != 2 {
+		t.Fatalf("got %d sends, want 2 — a second disablement is a second outage", len(*got))
+	}
+}
+
+// The wiring is the whole point: the assertion has to ride the heartbeat,
+// because HeartbeatRule is created outside the enableBuild branch and
+// BuildDriftRule is not. Pinned through dispatch so a refactor that drops the
+// call from the heartbeat case fails here rather than in production silence.
+func TestDispatch_HeartbeatAssertsTheDriftCheckIsConfigured(t *testing.T) {
+	withSchedules(t, nil) // heartbeat itself is a no-op; only the assertion can send
+	got := capture(t)
+	fakeMarkers(t)
+	t.Setenv(projectEnv, "")
+
+	ev := `{"version":"0","detail-type":"Rosterbot Heartbeat","source":"rosterbot.ops","detail":{}}`
+	if err := dispatch(context.Background(), json.RawMessage(ev)); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 1 || !strings.Contains((*got)[0], "enableBuild") {
+		t.Fatalf("got %v, want one dark-pipeline alert", *got)
 	}
 }

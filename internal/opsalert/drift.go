@@ -160,3 +160,51 @@ func ShortSHA(s string) string {
 	}
 	return s
 }
+
+// DriftDark is the finding that the drift check itself is switched off: the
+// OpsNotify function has no BUILD_PROJECT to compare against.
+//
+// That is what a stack deployed without `-c enableBuild=true` looks like. The
+// CodeBuild project, its GitHub webhook, BuildDriftRule and the Lambda's
+// BUILD_PROJECT all live under the same `if buildProject != nil` in infra/, so
+// one omitted context flag removes CI and the check that watches for CI's
+// absence in a single command — after which no push to main builds, and
+// nothing anywhere goes red (rosterbot-k2w0). A rule cannot report its own
+// deletion, so this finding is raised by the heartbeat, the one scheduled path
+// created outside that branch.
+//
+// It is a distinct type rather than a Drift with an empty BuiltSHA because the
+// two mean opposite things: Drift says "the check ran and production is
+// behind", DriftDark says "the check did not run and cannot".
+type DriftDark struct{}
+
+// MarkerKey names the dark-check marker. Separate from Drift's key: that one's
+// token is a commit sha, this one's is a state, and sharing the key would let a
+// restored check's token look like a drift baseline.
+func (DriftDark) MarkerKey() string { return "builddrift-config" }
+
+// DriftDarkToken is what an alert records under MarkerKey. When the check is
+// restored the heartbeat overwrites it with the project name, so the marker
+// distinguishes "alerted, still dark" from "alerted once, since restored" —
+// without that overwrite the first alert's marker would swallow every later
+// disablement for the life of the bucket.
+const DriftDarkToken = "dark"
+
+// AlertToken is the token recorded when the dark alert fires.
+func (DriftDark) AlertToken() string { return DriftDarkToken }
+
+// NeedsAlert reports whether the dark finding is news, given prev — the token
+// under MarkerKey, empty when none. Anything but the dark token means the last
+// thing recorded was a restore (or nothing), so a disablement is news.
+func (DriftDark) NeedsAlert(prev string) bool { return prev != DriftDarkToken }
+
+// FormatDriftDark renders the Pushover title and body for a dark check. The
+// body names the cause the operator can act on — the flag — not only the
+// symptom, because the symptom is silence and silence has no obvious fix.
+func FormatDriftDark() (title, body string) {
+	title = "Rosterbot deploy pipeline is dark"
+	body = "⚠️ OpsNotify has no BUILD_PROJECT: the CodeBuild project, its webhook and " +
+		"BuildDriftRule are absent. Was the stack deployed without -c enableBuild=true? " +
+		"No push to main will build until it is redeployed with the flag."
+	return title, body
+}
