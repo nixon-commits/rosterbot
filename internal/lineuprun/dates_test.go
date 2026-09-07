@@ -41,7 +41,7 @@ func TestResolveDates_ExplicitDatesPassThroughWithoutFetching(t *testing.T) {
 	ft := &fakeDateClient{}
 	base := []time.Time{day(2026, 7, 25), day(2026, 7, 26)}
 
-	got, seasonStart, err := ResolveDates(ft, base, Options{Today: day(2026, 7, 25)}, discard)
+	got, seasonStart, _, err := ResolveDates(ft, base, Options{Today: day(2026, 7, 25)}, discard)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestResolveDates_MatchupSkipsPastDaysInWeek(t *testing.T) {
 		weekStart: day(2026, 7, 13), weekEnd: day(2026, 7, 26),
 	}
 
-	got, seasonStart, err := ResolveDates(ft, nil,
+	got, seasonStart, _, err := ResolveDates(ft, nil,
 		Options{Today: day(2026, 7, 25), NeedsMatchupLookup: true}, discard)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -85,7 +85,7 @@ func TestResolveDates_SeasonStartsFromTodayNotOpener(t *testing.T) {
 		seasonStart: day(2026, 3, 25), seasonEnd: day(2026, 3, 28),
 	}
 
-	got, _, err := ResolveDates(ft, nil,
+	got, _, _, err := ResolveDates(ft, nil,
 		Options{Today: day(2026, 3, 27), NeedsSeasonLookup: true}, discard)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -109,7 +109,7 @@ func TestResolveDates_DoesNotMutateCallerSlice(t *testing.T) {
 	base := make([]time.Time, 1, 8)
 	base[0] = day(2026, 7, 25)
 
-	got, _, err := ResolveDates(ft, base, Options{Today: day(2026, 7, 25), NeedsMatchupLookup: true}, discard)
+	got, _, _, err := ResolveDates(ft, base, Options{Today: day(2026, 7, 25), NeedsMatchupLookup: true}, discard)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -130,16 +130,109 @@ func TestResolveDates_SeasonFetchErrorPropagates(t *testing.T) {
 	want := errors.New("season range down")
 	ft := &fakeDateClient{seasonErr: want}
 
-	if _, _, err := ResolveDates(ft, nil, Options{NeedsSeasonLookup: true}, discard); !errors.Is(err, want) {
+	if _, _, _, err := ResolveDates(ft, nil, Options{NeedsSeasonLookup: true}, discard); !errors.Is(err, want) {
 		t.Errorf("expected wrapped %v, got %v", want, err)
 	}
 }
 
-func TestResolveDates_NoMatchupWeekIsAnError(t *testing.T) {
+// A gap in the matchup schedule while the season is running is a genuine
+// fault — Fantrax owes us a row for that date and did not supply one — so it
+// stays an error. The fixture is deliberately mid-season: this test used to
+// ask for 2026-12-01 against a season ending 2026-09-13, which exercised the
+// out-of-season path instead and would have kept passing no matter what the
+// in-season branch did.
+func TestResolveDates_NoMatchupWeekInSeasonIsAnError(t *testing.T) {
 	ft := &fakeDateClient{seasonStart: day(2026, 3, 25), seasonEnd: day(2026, 9, 13)}
 
-	_, _, err := ResolveDates(ft, nil, Options{Today: day(2026, 12, 1), NeedsMatchupLookup: true}, discard)
+	_, _, _, err := ResolveDates(ft, nil, Options{Today: day(2026, 7, 1), NeedsMatchupLookup: true}, discard)
 	if err == nil {
 		t.Fatal("expected an error when today falls in no matchup week")
+	}
+	var oos *OutOfSeasonError
+	if errors.As(err, &oos) {
+		t.Fatalf("an in-season matchup gap must not be reported as out-of-season: %v", err)
+	}
+}
+
+// The 2026 season ended 2026-09-06 and the 13:45Z `optimize --matchup` job
+// kept firing daily, exiting 1 with a cobra usage dump every time. There is no
+// matchup week left to resolve and that is not a fault, so the phase reports a
+// distinguishable condition the caller can end cleanly on.
+func TestResolveDates_MatchupAfterSeasonEndIsOutOfSeason(t *testing.T) {
+	ft := &fakeDateClient{seasonStart: day(2026, 3, 26), seasonEnd: day(2026, 9, 6)}
+
+	_, _, _, err := ResolveDates(ft, nil,
+		Options{Today: day(2026, 9, 7), NeedsMatchupLookup: true}, discard)
+
+	var oos *OutOfSeasonError
+	if !errors.As(err, &oos) {
+		t.Fatalf("err = %v, want *OutOfSeasonError", err)
+	}
+	if oos.BeforeOpener() {
+		t.Error("BeforeOpener() = true, want false — 2026-09-07 is past the finale")
+	}
+	if !oos.End.Equal(day(2026, 9, 6)) {
+		t.Errorf("End = %v, want the season's final day 2026-09-06", oos.End)
+	}
+	if ft.weekCalls != 0 {
+		t.Errorf("weekCalls = %d, want 0 — an out-of-season run needs no matchup fetch", ft.weekCalls)
+	}
+}
+
+// The same boundary from the other side. Before the opener no matchup row has
+// been published yet, which reaches the identical zero-weekStart branch — so
+// the pre-season guard further down in Run was unreachable on --matchup runs.
+func TestResolveDates_MatchupBeforeOpenerIsOutOfSeason(t *testing.T) {
+	ft := &fakeDateClient{seasonStart: day(2027, 3, 25), seasonEnd: day(2027, 9, 5)}
+
+	_, _, _, err := ResolveDates(ft, nil,
+		Options{Today: day(2027, 3, 20), NeedsMatchupLookup: true}, discard)
+
+	var oos *OutOfSeasonError
+	if !errors.As(err, &oos) {
+		t.Fatalf("err = %v, want *OutOfSeasonError", err)
+	}
+	if !oos.BeforeOpener() {
+		t.Error("BeforeOpener() = false, want true — 2027-03-20 precedes the opener")
+	}
+	if ft.weekCalls != 0 {
+		t.Errorf("weekCalls = %d, want 0 — an out-of-season run needs no matchup fetch", ft.weekCalls)
+	}
+}
+
+// Opening day itself is in season even though no matchup row may exist yet.
+// That window is exactly where a silently disabled GS gate costs real points,
+// so it must stay an error rather than being swept into the quiet path.
+func TestResolveDates_MatchupOnOpeningDayIsInSeason(t *testing.T) {
+	ft := &fakeDateClient{seasonStart: day(2027, 3, 25), seasonEnd: day(2027, 9, 5)}
+
+	_, _, _, err := ResolveDates(ft, nil,
+		Options{Today: day(2027, 3, 25), NeedsMatchupLookup: true}, discard)
+
+	var oos *OutOfSeasonError
+	if errors.As(err, &oos) {
+		t.Fatalf("opening day must not be treated as out of season: %v", err)
+	}
+	if err == nil {
+		t.Fatal("expected the in-season no-matchup-week error")
+	}
+}
+
+// The season end reaches the caller so the GS phase can tell a post-season run
+// from a mid-season lookup failure. Both boundary dates ride the same call
+// that already fetched them.
+func TestResolveDates_ReturnsSeasonEnd(t *testing.T) {
+	ft := &fakeDateClient{seasonStart: day(2026, 3, 25), seasonEnd: day(2026, 9, 6)}
+
+	_, seasonStart, seasonEnd, err := ResolveDates(ft, nil,
+		Options{Today: day(2026, 3, 27), NeedsSeasonLookup: true}, discard)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !seasonStart.Equal(day(2026, 3, 25)) {
+		t.Errorf("seasonStart = %v, want 2026-03-25", seasonStart)
+	}
+	if !seasonEnd.Equal(day(2026, 9, 6)) {
+		t.Errorf("seasonEnd = %v, want 2026-09-06", seasonEnd)
 	}
 }

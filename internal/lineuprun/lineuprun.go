@@ -10,6 +10,7 @@ package lineuprun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -305,8 +306,24 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 
 	// Resolve "all" / "--matchup" now that the client is available. dates is a
 	// local value — Run does not write back into cfg (rosterbot-6rv).
-	dates, seasonStart, err := ResolveDates(ft, cfg.Dates, opts, prog.Logf)
+	dates, seasonStart, seasonEnd, err := ResolveDates(ft, cfg.Dates, opts, prog.Logf)
 	if err != nil {
+		// An out-of-season --matchup run is a clean stop, not a failure. The
+		// pre-season guard further down never saw these: ResolveDates errored
+		// ~190 lines earlier, so the daily job exited 1 with a usage dump
+		// every day past the season's final date.
+		var oos *OutOfSeasonError
+		if errors.As(err, &oos) {
+			prog.Logf("%s", oos.Error())
+			if oos.BeforeOpener() {
+				fmt.Fprintf(out, "\nSeason starts %s. No games to optimize for today.\n",
+					oos.Start.Format("2006-01-02"))
+			} else {
+				fmt.Fprintf(out, "\nSeason ended %s. No games to optimize.\n",
+					oos.End.Format("2006-01-02"))
+			}
+			return Result{}, nil
+		}
 		return Result{}, err
 	}
 
@@ -488,11 +505,14 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	// If ResolveDates already fetched the season range (--dates all or --matchup),
 	// reuse seasonStart from above instead of refetching it.
 	if seasonStart.IsZero() {
-		s, _, err := ft.GetSeasonDateRange()
+		// End is captured too: on the explicit --dates path ResolveDates does
+		// no lookup at all, and this is the only place the GS phase can learn
+		// the season boundary it needs to recognize an off-season run.
+		s, e, err := ft.GetSeasonDateRange()
 		if err != nil {
 			prog.Logf("WARNING: could not get season start (%v) — only today's lineup can be set", err)
 		} else {
-			seasonStart = s
+			seasonStart, seasonEnd = s, e
 		}
 	}
 
@@ -515,6 +535,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 			TeamID:          cfg.TeamID,
 			Today:           today,
 			SeasonStart:     seasonStart,
+			SeasonEnd:       seasonEnd,
 			Periods:         periods,
 			PeriodsErr:      periodsErr,
 			PitcherRoster:   pitcherRoster,
@@ -541,9 +562,16 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		}
 		gsBudget = dec.Budget
 
-		if gsBudget != nil {
+		switch {
+		case gsBudget != nil:
 			prog.Done("GS budget", fmt.Sprintf("%d/%d used · %.1f projected", gsBudget.Used, gsBudget.Limit, gsBudget.FutureDemand()))
-		} else {
+		case dec.Inapplicable:
+			// Off season the gate is off because there is nothing to gate. The
+			// dec.Notices line above already said which boundary we are past,
+			// so warning here would only dilute the channel that reports real
+			// fail-open cascades.
+			prog.Done("GS budget", "not applicable outside the season")
+		default:
 			prog.Warn("GS budget", "unavailable — limit disabled")
 		}
 
