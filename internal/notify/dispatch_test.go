@@ -115,3 +115,69 @@ func TestSendWithNoDispatcherConfiguredIsANoOp(t *testing.T) {
 		t.Fatalf("want a silent no-op, got %v", err)
 	}
 }
+
+// TestDeliverFansOutToEverySinkWithTheGivenFeedID covers rosterbot-3has's
+// seam: a caller that has ALREADY written its own durable feed record (the
+// connect-failure path, which cannot go through Send without minting a
+// second one) still needs the dispatcher's fan-out — APNs, and the
+// cutover-window Pushover dual-send — under the id it already has.
+func TestDeliverFansOutToEverySinkWithTheGivenFeedID(t *testing.T) {
+	a := &fakeSink{name: "apns"}
+	b := &fakeSink{name: "pushover"}
+	d := &notify.Dispatcher{Sinks: []notify.Sink{a, b}}
+
+	evt := notify.Event{Kind: "alert", Title: "t", Message: "m"}
+	d.Deliver(context.Background(), evt, "notif-99")
+
+	for _, s := range []*fakeSink{a, b} {
+		if s.calls != 1 {
+			t.Errorf("%s called %d times, want 1", s.name, s.calls)
+		}
+		if s.gotID != "notif-99" {
+			t.Errorf("%s got feed id %q, want notif-99", s.name, s.gotID)
+		}
+		if s.gotEvt.Kind != "alert" {
+			t.Errorf("%s got kind %q, want alert", s.name, s.gotEvt.Kind)
+		}
+	}
+}
+
+// TestDeliverOneSinkFailureDoesNotSuppressTheOthers mirrors Send's own
+// best-effort contract for the standalone Deliver seam.
+func TestDeliverOneSinkFailureDoesNotSuppressTheOthers(t *testing.T) {
+	broken := &fakeSink{name: "apns", err: errors.New("nope")}
+	healthy := &fakeSink{name: "pushover"}
+	d := &notify.Dispatcher{Sinks: []notify.Sink{broken, healthy}}
+
+	d.Deliver(context.Background(), notify.Event{Kind: "alert"}, "notif-1")
+
+	if healthy.calls != 1 {
+		t.Error("a sink listed after a failing one must still be delivered to")
+	}
+}
+
+// TestSendDeliversUnderTheIdItJustWrote pins that refactoring Send's
+// post-write fan-out onto Deliver kept the exact same behavior: every sink
+// still sees the id the FeedSink returned, not some other value.
+func TestSendDeliversUnderTheIdItJustWrote(t *testing.T) {
+	feed := &fakeFeed{id: "notif-77"}
+	sink := &fakeSink{name: "apns"}
+	d := &notify.Dispatcher{Feed: feed, Sinks: []notify.Sink{sink}}
+
+	if err := d.Send(context.Background(), notify.Event{Kind: "lineup"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if sink.gotID != "notif-77" {
+		t.Errorf("sink got feed id %q, want notif-77", sink.gotID)
+	}
+}
+
+// TestNilDispatcherDeliverIsANoOp mirrors TestSendWithNoDispatcherConfiguredIsANoOp
+// for the package-level Deliver function: a caller on a path with no
+// dispatcher configured (local dev, tests) must not panic.
+func TestNilDispatcherDeliverIsANoOp(t *testing.T) {
+	old := notify.Default
+	t.Cleanup(func() { notify.Default = old })
+	notify.Default = nil
+	notify.Deliver(context.Background(), notify.Event{Kind: "alert"}, "notif-1")
+}

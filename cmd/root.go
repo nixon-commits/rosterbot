@@ -86,6 +86,24 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("config: %w", err)
 	}
+	// BEFORE resolveTenantCredentials, not after (rosterbot-3has). This used
+	// to run after the tenant credentials step, on no particular reasoning
+	// about ordering between the two — but resolveTenantCredentials reaches
+	// into the session ladder (sessionLadder.refresh), and the ladder's own
+	// failure path calls recordTenantConnectFailure, which needs
+	// notify.Default populated to push a tenant-actionable connect failure
+	// through APNs/Pushover rather than only writing the feed record. Wiring
+	// it here first is safe: initShared depends only on os.Getenv and
+	// statestore.FromEnv()/statestore.Tenant() (verified by reading
+	// installNotifyDispatcher, installOutputRecorder and
+	// installProgressRecorder in full), never on cfg or on anything
+	// resolveTenantCredentials/tenantcreds.go sets up (ddbuser store, KMS
+	// opener/sealer) — so neither call depends on the other's output, and the
+	// only real constraint is that resolveTenantCredentials must still
+	// precede fantrax.NewClient below, which needs cfg.TeamID.
+	if err := initShared(); err != nil {
+		return nil, nil, err
+	}
 	// Before the client is built, because NewClient takes cfg.TeamID and a
 	// tenant run must reach THEIR roster, never the deployment's. A refusal
 	// here stops the command outright rather than falling through to the
@@ -96,9 +114,6 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 	ft, err := fantrax.NewClient(cfg.LeagueID, cfg.TeamID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fantrax client: %w", err)
-	}
-	if err := initShared(); err != nil {
-		return nil, nil, err
 	}
 	if !noCache {
 		ft.SetCache(cacheDir)

@@ -193,6 +193,55 @@ func TestFirstRankedHandlesTheZeroSentinel(t *testing.T) {
 	}
 }
 
+// TestValueHistoryUsesItsOwnSentinel: value_history_starts_at must be
+// FirstRanked computed over ValueHistory30Days, NOT over RankHistory30Days.
+// The two fixtures deliberately start being ranked on DIFFERENT indices so a
+// copy-paste that reuses the rank computation for value is caught rather than
+// passing by coincidence.
+func TestValueHistoryUsesItsOwnSentinel(t *testing.T) {
+	hkbPlayers := []hkb.Player{{
+		Name: "Momentum Guy", Value: 500, Rank: 250, Level: "MLB", Team: "MIL",
+		// Ranked from index 2.
+		RankHistory30Days: []int{0, 0, 300, 275},
+		// Ranked from index 1 -- a DIFFERENT start index than rank's, on
+		// purpose.
+		ValueHistory30Days: []int{0, 400, 450, 500},
+	}}
+	pool := []PoolPlayer{{ID: "1", Name: "Momentum Guy", MLBTeam: "MIL", FantasyStatus: "FA"}}
+
+	got := Build(now(), "2026-08-24", pool, hkbPlayers)
+	if len(got.MLB) != 1 {
+		t.Fatalf("want 1 mlb player, got %d", len(got.MLB))
+	}
+	p := got.MLB[0]
+
+	wantHist := []int{0, 400, 450, 500}
+	if !equalInts(p.ValueHistory30D, wantHist) {
+		t.Errorf("ValueHistory30D=%v, want %v", p.ValueHistory30D, wantHist)
+	}
+	if p.ValueHistoryStartsAt != 1 {
+		t.Errorf("ValueHistoryStartsAt=%d, want 1 (this player's OWN first-ranked value index, not rank's 2)",
+			p.ValueHistoryStartsAt)
+	}
+	// Guard the rank side too, so a fix that breaks rank while fixing value
+	// is also caught.
+	if p.RankHistoryStartsAt != 2 {
+		t.Errorf("RankHistoryStartsAt=%d, want 2", p.RankHistoryStartsAt)
+	}
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestIsUnownedMatchesWaiversDefinition(t *testing.T) {
 	for _, s := range []string{"FA", "", "W", "W <small>(Tue)</small>"} {
 		if !IsUnowned(s) {

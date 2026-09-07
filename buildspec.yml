@@ -40,8 +40,8 @@ phases:
     # cache restore (measured, build 295: `n` ran at 18:03:36, "Downloading
     # S3 cache" at 18:04:10) -- so a nodejs pin here re-downloads Node from
     # nodejs.org on every fresh host, ~33-45s, and no cache path can ever
-    # help it. Node is installed by the first install command below instead,
-    # which runs after the restore and can therefore hit $NODE_DIST_CACHE.
+    # help it. Node is installed by an install command below instead (the third,
+    # after the cache-size report and the GOCACHE gate), which runs after the restore and can therefore hit $NODE_DIST_CACHE.
     # The image's EOL default Node is never invoked: nothing runs node before
     # that command replaces it.
     runtime-versions:
@@ -55,6 +55,66 @@ phases:
       # pin it like python instead of inheriting a default that shifts on EOL.
       golang: "1.26"
     commands:
+      # Report cache directory sizes on every build, unconditionally, before
+      # any prune decision is made (rosterbot-b6bg). CodeBuild's own
+      # "Cache uploaded successfully (size: ...)" line only reports the
+      # combined GOCACHE+GOMODCACHE+NODE_DIST_CACHE tarball total -- it grew
+      # 466.49 MiB (build 294, 2026-08-29) -> 1.81 GiB (build 312,
+      # 2026-09-07) with no way to see which directory drove it. This line
+      # IS that measurement, so it must print every build, not only when the
+      # gate below fires -- a report that speaks only on the unhealthy path
+      # is indistinguishable from one that never worked at all. `du` erroring
+      # on a directory absent on a fresh host reads as 0, not a build
+      # failure: `2>/dev/null` plus the `${VAR:-0}` default under `set -u`.
+      #
+      # Unverified hypothesis, not acted on here: Go's cache trim is
+      # mtime-based over 5 days, and without -trimpath each CodeBuild source
+      # checkout uses a different path, so cache objects keyed on it may
+      # never be reused across builds and just accumulate. Changing build
+      # flags is out of scope for this bead.
+      - |
+        set -eu
+        GOCACHE_MB="$(du -sm "$GOCACHE" 2>/dev/null | awk '{print $1}')"
+        GOCACHE_MB="${GOCACHE_MB:-0}"
+        GOMODCACHE_MB="$(du -sm "$GOMODCACHE" 2>/dev/null | awk '{print $1}')"
+        GOMODCACHE_MB="${GOMODCACHE_MB:-0}"
+        NODE_DIST_CACHE_MB="$(du -sm "$NODE_DIST_CACHE" 2>/dev/null | awk '{print $1}')"
+        NODE_DIST_CACHE_MB="${NODE_DIST_CACHE_MB:-0}"
+        TOTAL_MB=$((GOCACHE_MB + GOMODCACHE_MB + NODE_DIST_CACHE_MB))
+        echo "cache sizes: GOCACHE=${GOCACHE_MB} MiB GOMODCACHE=${GOMODCACHE_MB} MiB NODE_DIST_CACHE=${NODE_DIST_CACHE_MB} MiB total=${TOTAL_MB} MiB"
+      # Size-gated GOCACHE prune (rosterbot-b6bg). Runs here, in install,
+      # immediately after the S3 cache restore CodeBuild performs
+      # automatically before this phase's commands run, and before this
+      # build's own first `go` sanity-check invocation below can write
+      # anything new into GOCACHE. Pruning in post_build instead would upload
+      # an EMPTY GOCACHE, so the very next build pays a full cold recompile
+      # AND re-uploads -- twice the cost this bead exists to avoid; pruning
+      # here means this build pays the cold compile once and uploads a
+      # freshly-useful cache.
+      #
+      # GOCACHE only, not the total and not GOMODCACHE: a total-based gate
+      # fires on every build the moment GOMODCACHE alone exceeds it (module
+      # downloads are content-addressed -- `go clean -modcache` would throw
+      # away the expensive part, re-downloading them, and is out of scope
+      # here). The `cache sizes:` line above is what will show whether
+      # GOMODCACHE or the node tarball turns out to be the real driver; if
+      # so, a modcache-specific gate is the follow-up, not this one.
+      #
+      # 768 MiB is a PRIOR, not a measurement: comfortably above a single
+      # fresh warm build's GOCACHE, comfortably below the 1.81 GiB (build
+      # 312) the tarball has already reached with no mitigation. Watch the
+      # `cache sizes:` line on the next several builds -- firing on nearly
+      # every build (not occasionally) means the threshold is too low and is
+      # paying the ~130s cold aws-cdk-go recompile (build 290) more than the
+      # ~15s/100MiB upload tax it's meant to save.
+      - |
+        set -eu
+        GOCACHE_MB="$(du -sm "$GOCACHE" 2>/dev/null | awk '{print $1}')"
+        GOCACHE_MB="${GOCACHE_MB:-0}"
+        if [ "$GOCACHE_MB" -gt 768 ]; then
+          echo "GOCACHE is ${GOCACHE_MB} MiB, over the 768 MiB threshold; pruning"
+          go clean -cache || echo "warning: go clean -cache failed; continuing with the unpruned cache"
+        fi
       # Install Node from the cached dist tarball -- the post-cache-restore twin
       # of the runtime-versions pin this replaces (see the comment above).
       # $NODE_22_VERSION is the image's own exact pin for its "22" runtime (an

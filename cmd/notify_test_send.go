@@ -21,7 +21,7 @@ activity-feed record first, then APNs to every registered device (and Pushover
 while PUSHOVER_FANTASY_DUAL_SEND is set).
 
 This exists because no ordinary job can be used to test push delivery. Every one
-of the nine notify.Send call sites is gated behind !dryRun -- emit.go returns
+of the eleven notify.Send call sites is gated behind !dryRun -- emit.go returns
 before applyLineupFor, transactions.go returns before its send -- and the iOS
 Debug build forces dry_run=true on every job it launches (APIClient.guardedParams).
 So a developer holding a Debug build has no way to make a real push happen, and

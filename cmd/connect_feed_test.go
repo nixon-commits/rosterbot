@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
+	"github.com/nixon-commits/rosterbot/internal/notify"
 )
 
 // errNotWritable is a sentinel used by the tests for a feed that rejects writes.
@@ -22,6 +23,31 @@ func (m *memFeed) PutNotification(_ context.Context, n lineupapi.Notification) e
 	}
 	m.written = append(m.written, n)
 	return nil
+}
+
+// fakeDeliverSink records every (event, feedID) pair it is asked to deliver,
+// standing in for notify.Default's real sinks (APNs, the cutover-window
+// Pushover dual-send) without any network.
+type fakeDeliverSink struct {
+	events []notify.Event
+	ids    []string
+}
+
+func (s *fakeDeliverSink) Name() string { return "fake" }
+func (s *fakeDeliverSink) Deliver(_ context.Context, e notify.Event, feedID string) error {
+	s.events = append(s.events, e)
+	s.ids = append(s.ids, feedID)
+	return nil
+}
+
+// withFakeDispatcher installs d as notify.Default for the duration of the
+// test, restoring whatever was there before on cleanup — mirrors
+// internal/notify's own TestSendWithNoDispatcherConfiguredIsANoOp pattern.
+func withFakeDispatcher(t *testing.T, d *notify.Dispatcher) {
+	t.Helper()
+	old := notify.Default
+	t.Cleanup(func() { notify.Default = old })
+	notify.Default = d
 }
 
 // TestConnectFeed_TenantActionableReachesTheirFeed is rosterbot-crq.14's last
@@ -115,5 +141,65 @@ func TestConnectFeed_EveryClassIsRoutedSomewhere(t *testing.T) {
 		if len(feed.written) == 0 && pushed == 0 {
 			t.Errorf("class %q reaches nobody — invisible to the tenant and the operator", class)
 		}
+	}
+}
+
+// TestConnectFeed_TenantActionablePushesThroughDispatcherSinks is
+// rosterbot-3has: the feed write alone reaches the in-app feed only; nothing
+// pushed it. Once notify.Default has sinks, a tenant-actionable connect
+// failure must fan out through them under the SAME id the feed write just
+// produced — reusing it rather than going through notify.Send/Deliver
+// minting a second record.
+func TestConnectFeed_TenantActionablePushesThroughDispatcherSinks(t *testing.T) {
+	feed := &memFeed{}
+	sink := &fakeDeliverSink{}
+	withFakeDispatcher(t, &notify.Dispatcher{Sinks: []notify.Sink{sink}})
+
+	recordConnectFailure(context.Background(), feed, func(string) {},
+		"alice", lineupapi.ConnErrBadCredentials)
+
+	if len(feed.written) != 1 {
+		t.Fatalf("wrote %d feed entries, want 1", len(feed.written))
+	}
+	if len(sink.ids) != 1 {
+		t.Fatalf("delivered %d times, want 1", len(sink.ids))
+	}
+	if sink.ids[0] != feed.written[0].ID {
+		t.Errorf("delivered under feed id %q, want the id PutNotification stored (%q)",
+			sink.ids[0], feed.written[0].ID)
+	}
+}
+
+// TestConnectFeed_NoDispatcherConfiguredStillWritesFeedAndDoesNotPanic covers
+// the local-dev/no-dispatcher path: notify.Default is nil (never installed,
+// or the standalone connect task before this bead). The feed write is the
+// durable record either way, and calling into a nil dispatcher must not
+// panic.
+func TestConnectFeed_NoDispatcherConfiguredStillWritesFeedAndDoesNotPanic(t *testing.T) {
+	feed := &memFeed{}
+	withFakeDispatcher(t, nil)
+
+	recordConnectFailure(context.Background(), feed, func(string) {},
+		"alice", lineupapi.ConnErrBadCredentials)
+
+	if len(feed.written) != 1 {
+		t.Fatalf("wrote %d feed entries, want 1", len(feed.written))
+	}
+}
+
+// TestConnectFeed_FeedWriteFailureNeverPushes is the absence half: a record
+// that never landed durably must not be pushed, because its id would open
+// nothing on tap.
+func TestConnectFeed_FeedWriteFailureNeverPushes(t *testing.T) {
+	feed := &memFeed{err: errNotWritable}
+	sink := &fakeDeliverSink{}
+	withFakeDispatcher(t, &notify.Dispatcher{Sinks: []notify.Sink{sink}})
+
+	recordConnectFailure(context.Background(), feed, func(string) {},
+		"alice", lineupapi.ConnErrBadCredentials)
+
+	if len(sink.ids) != 0 {
+		t.Errorf("delivered %d times after a failed feed write, want 0 — the id would open nothing",
+			len(sink.ids))
 	}
 }

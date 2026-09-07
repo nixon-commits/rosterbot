@@ -86,6 +86,15 @@ type Player struct {
 	RankHistory30D      []int `json:"rank_history_30d,omitempty"`
 	RankHistoryStartsAt int   `json:"rank_history_starts_at"`
 
+	// ValueHistory30D has the same 0 "not ranked yet" sentinel as
+	// RankHistory30D -- hkb.Player.ValueHistory30Days uses the identical
+	// convention. ValueHistoryStartsAt is FirstRanked computed over THIS
+	// slice, not RankHistory30D's: the two histories can start being ranked
+	// on different days, and a client re-deriving one from the other would be
+	// a second copy of the sentinel rule, drifting from this one.
+	ValueHistory30D      []int `json:"value_history_30d,omitempty"`
+	ValueHistoryStartsAt int   `json:"value_history_starts_at"`
+
 	// FantasyStatus is "FA" or "W". WaiverClearsOn is the weekday a waiver
 	// claim settles ("Tue"), empty for a true free agent.
 	FantasyStatus  string `json:"fantasy_status"`
@@ -204,24 +213,26 @@ func Build(now time.Time, hkbAsOf string, pool []PoolPlayer, hkbPlayers []hkb.Pl
 		status, clears := ParseStatus(pp.FantasyStatus)
 		rankChg, valueChg := NormaliseChanges(hp)
 		p := Player{
-			ID:                  pp.ID,
-			Name:                hp.Name,
-			MLBTeam:             pp.MLBTeam,
-			Pos:                 append([]string(nil), hp.Positions...),
-			FantraxPos:          ParsePositions(pp.Positions),
-			Level:               hp.Level,
-			ActiveLevels:        hp.ActiveLevels,
-			Prospect:            hp.Prospect,
-			FYPD:                hp.FYPD,
-			Age:                 hp.Age,
-			HKBValue:            hp.Value,
-			HKBRank:             hp.Rank,
-			RankChange30D:       rankChg,
-			ValueChange30D:      valueChg,
-			RankHistory30D:      append([]int(nil), hp.RankHistory30Days...),
-			RankHistoryStartsAt: FirstRanked(hp.RankHistory30Days),
-			FantasyStatus:       status,
-			WaiverClearsOn:      clears,
+			ID:                   pp.ID,
+			Name:                 hp.Name,
+			MLBTeam:              pp.MLBTeam,
+			Pos:                  append([]string(nil), hp.Positions...),
+			FantraxPos:           ParsePositions(pp.Positions),
+			Level:                hp.Level,
+			ActiveLevels:         hp.ActiveLevels,
+			Prospect:             hp.Prospect,
+			FYPD:                 hp.FYPD,
+			Age:                  hp.Age,
+			HKBValue:             hp.Value,
+			HKBRank:              hp.Rank,
+			RankChange30D:        rankChg,
+			ValueChange30D:       valueChg,
+			RankHistory30D:       append([]int(nil), hp.RankHistory30Days...),
+			RankHistoryStartsAt:  FirstRanked(hp.RankHistory30Days),
+			ValueHistory30D:      append([]int(nil), hp.ValueHistory30Days...),
+			ValueHistoryStartsAt: FirstRanked(hp.ValueHistory30Days),
+			FantasyStatus:        status,
+			WaiverClearsOn:       clears,
 		}
 
 		// Partitioned on Prospect alone: disjoint because it is a boolean, and

@@ -4,6 +4,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscertificatemanager"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsroute53"
+	"github.com/aws/aws-cdk-go/awscdk/v2/customresources"
 	"github.com/aws/constructs-go/constructs/v10"
 	"github.com/aws/jsii-runtime-go"
 )
@@ -110,7 +111,97 @@ func NewCertStack(scope constructs.Construct, id string, props *CertStackProps) 
 
 	awscdk.NewCfnOutput(stack, jsii.String("SiteCertArn"), &awscdk.CfnOutputProps{Value: cert.CertificateArn()})
 
+	publishCertArnParam(stack, cert)
+
 	return stack, cert
+}
+
+// siteCertArnParamName is the plain (non-CFN-reference) SSM parameter name the
+// cert ARN lands in. Shared with the test so the two can't drift apart.
+const siteCertArnParamName = "/rosterbot/SITE_CERT_ARN"
+
+// siteCertArnParamArn is the full ARN of that parameter in the region
+// InfraStack lives in. Hardcoding the account id matches the existing
+// convention elsewhere in this package (e.g. the DASHBOARD_RP_ID/RP_ORIGIN
+// parameter ARNs in infra.go) rather than introducing a new way to spell it.
+const siteCertArnParamArn = "arn:aws:ssm:us-west-1:476646938644:parameter" + siteCertArnParamName
+
+// publishCertArnParam is the producer half of rosterbot-klbh's durable fix for
+// the stale cross-region cert ARN (see docs/adr/0004-cert-arn-handoff-via-ssm-parameter.md).
+//
+// CDK's built-in CrossRegionReferences machinery carries the cert ARN from
+// this stack (us-east-1) to InfraStack (us-west-1) through a generated SSM
+// parameter written by an ExportsWriter custom resource CDK manages itself.
+// That writer's Update handler diffs by SSM parameter NAME, not value
+// (aws/aws-cdk#38059) — a cert REPLACEMENT keeps the same exported name, so
+// the writer sees "nothing new to export", the Lambda succeeds, CloudFormation
+// records UPDATE_COMPLETE, and the parameter is left holding the OLD ARN
+// forever. That is invisible right up until CloudFront rejects the (correct,
+// healthy) new certificate for not covering an alias, which reads as a
+// certificate problem and is actually a stale-parameter problem.
+//
+// This works around it by writing a SEPARATE, plain-named SSM parameter
+// ourselves via a hand-rolled AwsCustomResource, keyed so a value-only change
+// is unambiguously an Update the custom-resource framework must perform:
+// PhysicalResourceId is the cert's own ARN token, so a cert replacement
+// changes what that token resolves to, which changes this resource's own
+// physical id, which forces CloudFormation to invoke the SDK call again —
+// unlike the built-in exporter, whose bug lives inside its own Lambda's
+// name-based diff and has nothing to do with CloudFormation's own change
+// detection.
+//
+// STAGING, DELIBERATE: nothing reads this parameter yet. InfraStack still
+// imports the cert through the (buggy) CrossRegionReferences path until a
+// live deploy confirms this writer's Update handler actually advances the
+// parameter version on the next cert change — see the ADR's Status section.
+// This function is additive-only and does not touch InfraStack, so it carries
+// zero deploy risk ahead of that confirmation.
+func publishCertArnParam(stack awscdk.Stack, cert awscertificatemanager.ICertificate) {
+	customresources.NewAwsCustomResource(stack, jsii.String("CertArnParamWriter"), &customresources.AwsCustomResourceProps{
+		// Same call for both — a plain overwrite-the-value PutParameter is
+		// exactly as correct the first time the resource is created as it is
+		// on every subsequent update, so there is nothing an OnCreate would
+		// need to do differently.
+		OnCreate: certArnPutParameterCall(cert),
+		OnUpdate: certArnPutParameterCall(cert),
+		// No OnDelete: a cert REPLACEMENT is a Create(new)+Delete(old) pair
+		// under a changed physical id, and the parameter must be left holding
+		// the NEW value — an OnDelete firing on the old resource's teardown
+		// would overwrite it with the ARN that is being replaced away.
+		Policy: customresources.AwsCustomResourcePolicy_FromSdkCalls(&customresources.SdkCallsPolicyOptions{
+			// Scoped to the one parameter this writer ever touches, never
+			// AwsCustomResourcePolicy_ANY_RESOURCE — mirroring the
+			// least-privilege precedent for the other /rosterbot/* parameters
+			// (RP_ID/RP_ORIGIN) in infra.go.
+			Resources: jsii.Strings(siteCertArnParamArn),
+		}),
+		// The default (true) has the custom-resource Lambda `npm install` the
+		// latest AWS SDK v3 at deploy time — a real network dependency this
+		// deploy does not need, since the Lambda runtime's bundled SDK already
+		// supports ssm:PutParameter.
+		InstallLatestAwsSdk: jsii.Bool(false),
+	})
+}
+
+// certArnPutParameterCall builds the SDK call both OnCreate and OnUpdate
+// share: an overwriting PutParameter into siteCertArnParamName in us-west-1,
+// keyed to the cert's own ARN so a value change forces an Update.
+func certArnPutParameterCall(cert awscertificatemanager.ICertificate) *customresources.AwsSdkCall {
+	return &customresources.AwsSdkCall{
+		Service: jsii.String("SSM"),
+		Action:  jsii.String("putParameter"),
+		// InfraStack lives in us-west-1; a cert stack resident in us-east-1
+		// (see certEnv's comment) has to name the target region explicitly —
+		// an AwsSdkCall with no Region runs against the stack's own region.
+		Region: jsii.String("us-west-1"),
+		Parameters: map[string]interface{}{
+			"Name":      jsii.String(siteCertArnParamName),
+			"Value":     cert.CertificateArn(),
+			"Type":      jsii.String("String"),
+			"Overwrite": jsii.Bool(true),
+		},
+		PhysicalResourceId: customresources.PhysicalResourceId_Of(cert.CertificateArn()),
+	}
 }
 
 // Apple-issued values for the iCloud+ Custom Email Domain on rosterbot.dev.

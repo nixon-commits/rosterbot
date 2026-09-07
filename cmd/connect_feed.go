@@ -35,6 +35,16 @@ type feedWriter interface {
 // operator-actionable one goes the other way, because telling a user to
 // re-enter a working password wastes their time while leaving the one person
 // who can act unaware.
+//
+// One deliberate exception to "NOT to the operator": while
+// PUSHOVER_FANTASY_DUAL_SEND is set (the APNs cutover window, on the deployed
+// task definition today) the dispatcher's Pushover sink mirrors EVERY dispatched
+// event to the operator's phone under a "[tenant]" title prefix (rosterbot-b1oh),
+// including the tenant-actionable push recordTenantConnectFailure fans out. That
+// is the same cutover behaviour the other eleven dispatcher events have and is
+// accepted as such; it ends when the flag is removed (rosterbot-quis step 4).
+// The invariant above is about the operator-actionable push() path, the only
+// one that reaches the operator by design.
 func recordConnectFailure(ctx context.Context, feed feedWriter, push func(string),
 	uid lineupapi.UserID, class string) {
 
@@ -49,7 +59,8 @@ func recordConnectFailure(ctx context.Context, feed feedWriter, push func(string
 	recordTenantConnectFailure(ctx, feed, uid, class)
 }
 
-// recordTenantConnectFailure writes the tenant half only, for callers that have
+// recordTenantConnectFailure writes the tenant half only — and, since
+// rosterbot-3has, pushes it through the dispatcher's sinks — for callers that have
 // already decided the failure is theirs to hear about.
 //
 // SPLIT OUT BECAUSE THE OPERATOR HALF IS NOT SHARED (rosterbot-zi4u). The push
@@ -92,7 +103,27 @@ func recordTenantConnectFailure(ctx context.Context, feed feedWriter,
 	if err := feed.PutNotification(ctx, n); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not write the connect failure to %s's feed: %v\n",
 			uid, err)
+		// A record that never landed durably must not be pushed: its id would
+		// open nothing on tap, and notify.Deliver has no other id to offer.
+		return
 	}
+	// Fan out to whatever sinks notify.Default holds (APNs, and the
+	// cutover-window Pushover dual-send) UNDER THE ID JUST WRITTEN ABOVE.
+	// This deliberately calls Deliver, not Send: Send's own FeedSink would
+	// mint a second id and write a SECOND feed record for one connect
+	// failure, since PutNotification above is already the durable write.
+	// Deliver is a no-op when notify.Default is nil (this path is reached
+	// from both the standalone `connect` task and the hourly session
+	// ladder; either may run before a dispatcher is configured).
+	notify.Deliver(ctx, notify.Event{Kind: n.Kind, Title: n.Title, Message: n.Message}, n.ID)
+	// Unconditional, like `il-start check:`: Deliver is a silent no-op on a nil
+	// dispatcher, so without this line a run whose dispatcher was never installed
+	// is indistinguishable in the logs from one that pushed.
+	sinks := 0
+	if notify.Default != nil {
+		sinks = len(notify.Default.Sinks)
+	}
+	fmt.Fprintf(os.Stderr, "connect-failure push: feed record %s, sinks=%d\n", n.ID, sinks)
 }
 
 // connectFailureMessage is the tenant-facing wording for a failure class.

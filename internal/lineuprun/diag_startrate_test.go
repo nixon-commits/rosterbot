@@ -873,9 +873,12 @@ func diagFloorFiresWith(c *diagCache, used, todayStarters, daysLeft int, w diagW
 // finished strictly below the league floor. That is the event the alert exists
 // to give notice of, and it is the only one recoverable from frozen snapshots.
 //
-// A week counts as ALERTED if the rule fires on any in-window day of it, since
-// the marker keys on (season, weekly period) and so one week raises at most one
-// alert however many days would have triggered.
+// A week counts as ALERTED if the rule fires on any in-window day of it. That
+// per-week aggregation is deliberately blind to send volume: the marker keys on
+// (season, period, daysLeft) since cd54480 (#198), so production can send once
+// per in-window day, and a lower minDaysLeft admits more firing days that this
+// metric collapses to one. The alerts/precision columns are therefore NOT
+// comparable across minDaysLeft rows; recall is, and that sweep decides on it.
 //
 // EVERY ROW PRINTS TWICE, under today-credit = realised (this harness's
 // stand-in for GSBudget.TodayUnsettled, always >= what production actually
@@ -975,11 +978,34 @@ func TestDiagGSFloorSweep(t *testing.T) {
 	t.Logf("--- baseline: the rule before this change (flat 1/5, credit 0.8, max 4) ---")
 	reportBoth("flat credit=0.8 max=4", flatRate, prev)
 
-	t.Logf("--- corrected estimator, credit x maxDaysLeft ---")
+	t.Logf("--- corrected estimator, credit x maxDaysLeft (minDaysLeft held at the shipped %d) ---", gsFloorMinDaysLeft)
 	for _, credit := range []float64{0.6, 0.7, 0.8, 0.9, 1.0} {
 		for _, maxDays := range []int{3, 4, 5} {
 			gp := gsFloorParams{EstimateCredit: credit, MinDaysLeft: gsFloorMinDaysLeft, MaxDaysLeft: maxDays}
-			reportBoth(fmt.Sprintf("weighted credit=%.1f max=%d", credit, maxDays), wtRate, gp)
+			reportBoth(fmt.Sprintf("weighted credit=%.1f max=%d min=%d", credit, maxDays, gsFloorMinDaysLeft), wtRate, gp)
+		}
+	}
+
+	// rosterbot-1tia's second, smaller prior: gsFloorMinDaysLeft (2) was
+	// justified on actionability alone (a claim must clear waivers and the
+	// pitcher must then take the ball), never measured. Sweep it the same way
+	// the credit and maxDaysLeft constants were: across the full existing grid
+	// (credit x maxDaysLeft), not just at the shipped pair, so a minDaysLeft
+	// finding cannot depend on a credit/maxDays choice that was itself only
+	// bracketed against this one dimension.
+	//
+	// minDaysLeft=1 is deliberately swept too, even though the bead's own
+	// actionability argument already excludes it from adoption regardless of
+	// what the numbers say — a claim needs to clear waivers and then have the
+	// pitcher take the ball, and one day is not enough for either. It is
+	// reported so the table shows what recall it would buy, not adopted.
+	t.Logf("--- corrected estimator, credit x maxDaysLeft x minDaysLeft ---")
+	for _, credit := range []float64{0.6, 0.7, 0.8, 0.9, 1.0} {
+		for _, maxDays := range []int{3, 4, 5} {
+			for _, minDays := range []int{1, 2, 3} {
+				gp := gsFloorParams{EstimateCredit: credit, MinDaysLeft: minDays, MaxDaysLeft: maxDays}
+				reportBoth(fmt.Sprintf("weighted credit=%.1f max=%d min=%d", credit, maxDays, minDays), wtRate, gp)
+			}
 		}
 	}
 }

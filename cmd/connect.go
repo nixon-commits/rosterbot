@@ -70,6 +70,15 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// This standalone task never calls initShared (it has no reason to touch
+	// the Fantrax-facing cache or the two other recorders), but it DOES need
+	// notify.Default populated: a failed connect attempt records its outcome
+	// through recordConnectFailure below, which now (rosterbot-3has) fans a
+	// tenant-actionable failure out through the dispatcher's sinks (APNs, the
+	// cutover-window Pushover dual-send) in addition to writing the feed.
+	// Without this, notify.Deliver would be a silent no-op here forever.
+	installNotifyDispatcher()
+
 	// The tenant's own activity feed, built as soon as the store exists so
 	// every failure from here on has somewhere durable to land. Composed from
 	// the environment, which the launcher set to THIS tenant, so the store is
