@@ -275,8 +275,9 @@ entrant as having fallen from the best possible rank. `rank_history_starts_at >
 
 **`value_history_30d` uses the identical `0` "not ranked yet" sentinel**, and
 `value_history_starts_at` is computed independently of
-`rank_history_starts_at` — the two histories can start being ranked on
-different days, so do not derive one start index from the other. Not
+`rank_history_starts_at`: nothing in the feed guarantees the two agree (on the
+live feed as of 2026-09-07 they were identical for all 1753 players), so do not
+derive one start index from the other. Not
 currently read by any client (the momentum sparkline is rank-based today);
 emitted so a future value-based badge does not have to re-derive the sentinel
 rule client-side and risk drifting from this one.

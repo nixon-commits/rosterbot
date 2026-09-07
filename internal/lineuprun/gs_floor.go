@@ -116,10 +116,19 @@ const gsFloorEstimateCredit = 1.0
 // now has been, against the same 150 Monday-anchored team-week replay, at the
 // shipped credit=1.0/max=3 pair:
 //
-//	minDaysLeft   under: recall (today=realised / today=0, see gsFloorEstimateCredit)
-//	1              0.960 / 0.960
-//	2 (shipped)    0.760 / 0.880
-//	3              0.680 / 0.840
+//	minDaysLeft   under-floor, 25 positive of 150 weeks (today=realised | today=0, see gsFloorEstimateCredit)
+//	              alerts  TP/25  P      R      |  alerts  TP/25  P      R
+//	1               58     24    0.414  0.960  |   112     24    0.214  0.960
+//	2 (shipped)     45     19    0.422  0.760  |    97     22    0.227  0.880
+//	3               38     17    0.447  0.680  |    67     21    0.313  0.840
+//
+// "alerts" counts WEEKS with at least one in-window firing day, not sends: the
+// marker keys on daysLeft since #198, so production can send once per day, and
+// a lower minDaysLeft admits more firing days that this column collapses to
+// one. Precision is therefore not comparable across these rows; recall is, and
+// recall is what this constant was decided on — a floor alert exists to not
+// miss under-floor weeks — where gsFloorMaxDaysLeft below was chosen on
+// precision at a recall floor.
 //
 // 1 is excluded on actionability, not the numbers, and that argument still
 // stands: the only lever the bead identifies is a roster action — claiming a
@@ -129,9 +138,13 @@ const gsFloorEstimateCredit = 1.0
 // is how a channel gets muted, whatever recall it buys.
 //
 // 3 loses recall on the under-floor side against 2 under BOTH today-credit
-// readings (0.680 vs 0.760 realised-credited, 0.840 vs 0.880 zero-credited) —
-// the bar the sweep set for adopting it — so it is not adopted. The constant
-// stays at 2, now for a measured reason instead of an assumed one. Measured
+// readings (17 vs 19 of 25 weeks realised-credited, 21 vs 22 zero-credited) —
+// the bar set for adopting it — so it is not adopted. That margin is THIN: two
+// weeks and one week of a 25-week positive class, so the ranking (3 never beats
+// 2) is the finding and the third decimal is noise a different 150-week sample
+// could move. 3 would also leave a single evaluable day per week with the
+// shipped max=3 (DaysLeft==3 only) where 2 keeps two. The constant stays at 2,
+// now for a measured reason instead of an assumed one. Measured
 // 2026-09-07; TestDiagGSFloorSweep prints the full credit x maxDaysLeft x
 // minDaysLeft grid this table is drawn from.
 const gsFloorMinDaysLeft = 2

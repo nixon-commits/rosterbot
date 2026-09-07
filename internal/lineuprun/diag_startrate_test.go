@@ -873,9 +873,12 @@ func diagFloorFiresWith(c *diagCache, used, todayStarters, daysLeft int, w diagW
 // finished strictly below the league floor. That is the event the alert exists
 // to give notice of, and it is the only one recoverable from frozen snapshots.
 //
-// A week counts as ALERTED if the rule fires on any in-window day of it, since
-// the marker keys on (season, weekly period) and so one week raises at most one
-// alert however many days would have triggered.
+// A week counts as ALERTED if the rule fires on any in-window day of it. That
+// per-week aggregation is deliberately blind to send volume: the marker keys on
+// (season, period, daysLeft) since cd54480 (#198), so production can send once
+// per in-window day, and a lower minDaysLeft admits more firing days that this
+// metric collapses to one. The alerts/precision columns are therefore NOT
+// comparable across minDaysLeft rows; recall is, and that sweep decides on it.
 //
 // EVERY ROW PRINTS TWICE, under today-credit = realised (this harness's
 // stand-in for GSBudget.TodayUnsettled, always >= what production actually

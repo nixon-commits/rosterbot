@@ -366,9 +366,14 @@ func TestBuildspec_PrintsCacheSizesEveryBuild(t *testing.T) {
 			"split (GOCACHE/GOMODCACHE/NODE_DIST_CACHE) is the measurement rosterbot-b6bg needed and " +
 			"nobody had -- the combined CodeBuild upload total cannot show which dir drives growth")
 	}
-	for _, want := range []string{"$GOCACHE", "$GOMODCACHE", "$NODE_DIST_CACHE"} {
-		if !strings.Contains(buildspec, want) {
-			t.Errorf("buildspec.yml does not reference %s; the size report must cover all three "+
+	// Scan the report's OWN command block, not the whole file: two of the three
+	// names were already present elsewhere in buildspec.yml before this line
+	// existed, so a whole-file scan could not notice one being dropped from it.
+	at := strings.Index(buildspec, "cache sizes:")
+	block := buildspec[strings.LastIndex(buildspec[:at], "- |"):at]
+	for _, want := range []string{"du -sm \"$GOCACHE\"", "du -sm \"$GOMODCACHE\"", "du -sm \"$NODE_DIST_CACHE\""} {
+		if !strings.Contains(block, want) {
+			t.Errorf("the cache-sizes block does not measure %s; the size report must cover all three "+
 				"pinned cache dirs, or it cannot show which one is actually driving growth", want)
 		}
 	}
@@ -379,10 +384,10 @@ func TestBuildspec_PrintsCacheSizesEveryBuild(t *testing.T) {
 // invocation ever writes into it.
 //
 // Gating on GOCACHE's own size (rather than the combined total) is
-// deliberate: GOMODCACHE alone already exceeds any total-based threshold that
-// wouldn't also fire on every single build (module downloads are
-// content-addressed and this bead does not touch them), so a total-based
-// gate would either never stop firing or never fire at all. And the prune
+// deliberate: a total-based gate would fire on every build the moment
+// GOMODCACHE alone exceeded it, and nobody yet knows GOMODCACHE's size -- the
+// `cache sizes:` line this change adds is what will tell us (module downloads
+// are content-addressed and this bead does not touch them). And the prune
 // must land in `install`, immediately after the S3 cache restore CodeBuild
 // performs automatically before this phase runs, and before the pre-existing
 // `go version` sanity check -- pruning in `post_build` would upload an EMPTY

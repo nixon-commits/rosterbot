@@ -103,9 +103,14 @@ reference is not a plain revert):
 1. After this producer ships, confirm via
    `aws ssm get-parameter-history --name /rosterbot/SITE_CERT_ARN --region us-west-1`
    that the parameter's version actually advances on the next `InfraCertStack`
-   update (a real cert replacement, or a manufactured no-op property nudge if
-   none is due) — proving this Update handler fires where CDK's own exporter
-   (stuck at version 1 forever per the bead) does not.
+   update — proving this Update handler fires where CDK's own exporter (stuck
+   at version 1 forever per the bead) does not. A real cert replacement is the
+   honest trigger; if none is due, the nudge must touch THIS resource's own
+   properties (temporarily add a `Description` field to
+   `certArnPutParameterCall`'s `Parameters` map and deploy), because
+   CloudFormation only re-invokes a custom resource's handler when its own
+   properties change — a nudge elsewhere in `InfraCertStack` leaves this
+   resource byte-identical and proves nothing.
 2. Switch `InfraStack`'s certificate import to the dynamic reference and
    redeploy, confirming `DashboardCdn` still resolves the correct certificate.
 3. Only then remove `CrossRegionReferences` from both stacks, confirming
@@ -131,5 +136,5 @@ the consumer switch is complete.
 - Until the consumer switch lands, this parameter is inert — a real risk that
   it gets treated as "done" and forgotten. The staged-migration framing above
   is deliberate and should be preserved rather than read as a completed fix.
-- `docs/aws-deployment.md`'s cert-stack section carries a one-line pointer to
-  this ADR.
+- `docs/aws-deployment.md`'s us-east-1 bootstrap bullet (the one describing the
+  `InfraCertStack` cross-region reference) points here.

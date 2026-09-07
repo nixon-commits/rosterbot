@@ -40,8 +40,8 @@ phases:
     # cache restore (measured, build 295: `n` ran at 18:03:36, "Downloading
     # S3 cache" at 18:04:10) -- so a nodejs pin here re-downloads Node from
     # nodejs.org on every fresh host, ~33-45s, and no cache path can ever
-    # help it. Node is installed by the first install command below instead,
-    # which runs after the restore and can therefore hit $NODE_DIST_CACHE.
+    # help it. Node is installed by an install command below instead (the third,
+    # after the cache-size report and the GOCACHE gate), which runs after the restore and can therefore hit $NODE_DIST_CACHE.
     # The image's EOL default Node is never invoked: nothing runs node before
     # that command replaces it.
     runtime-versions:
@@ -113,7 +113,7 @@ phases:
         GOCACHE_MB="${GOCACHE_MB:-0}"
         if [ "$GOCACHE_MB" -gt 768 ]; then
           echo "GOCACHE is ${GOCACHE_MB} MiB, over the 768 MiB threshold; pruning"
-          go clean -cache
+          go clean -cache || echo "warning: go clean -cache failed; continuing with the unpruned cache"
         fi
       # Install Node from the cached dist tarball -- the post-cache-restore twin
       # of the runtime-versions pin this replaces (see the comment above).
