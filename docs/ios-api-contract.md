@@ -240,6 +240,7 @@ that job has run once.
       "age": 22.4, "hkb_value": 1369, "hkb_rank": 134,
       "rank_change_30d": 0, "value_change_30d": 0,
       "rank_history_30d": [137, 134, 130], "rank_history_starts_at": 0,
+      "value_history_30d": [1310, 1340, 1369], "value_history_starts_at": 0,
       "fantasy_status": "FA" }
   ],
   "prospects": [],
@@ -271,6 +272,14 @@ meaning only because rank is inverted. Pinned by `TestSignConvention`.
 Plot from `rank_history_starts_at`; plotting index 0 literally draws a new
 entrant as having fallen from the best possible rank. `rank_history_starts_at >
 0` means the player arrived on the board mid-window.
+
+**`value_history_30d` uses the identical `0` "not ranked yet" sentinel**, and
+`value_history_starts_at` is computed independently of
+`rank_history_starts_at` — the two histories can start being ranked on
+different days, so do not derive one start index from the other. Not
+currently read by any client (the momentum sparkline is rank-based today);
+emitted so a future value-based badge does not have to re-derive the sentinel
+rule client-side and risk drifting from this one.
 
 **`generated_at` is RFC3339 UTC with no fractional seconds**, byte-compatible
 with `generated_at` on `GET /v1/lineup/today`. Parse both with the same strict
@@ -341,7 +350,11 @@ has not connected Fantrax, so treat it as the empty state, never as a fault.
 **Ranked rows are the pool row** minus `fantasy_status` and `waiver_clears_on`:
 same sign convention (positive is better on both deltas), same `0` sentinel in
 `rank_history_30d`, same `pos` versus `fantrax_pos` split. `age` is **absent**
-when unknown here, not `0` as on the pool.
+when unknown here, not `0` as on the pool. One field is not yet mirrored:
+`internal/rostervalues.Player` does not carry `value_history_30d` /
+`value_history_starts_at` — the pool row's value-history pair (rosterbot-xdmg)
+has no roster-row equivalent yet, so this "mirrors the pool row" claim is one
+field short until a follow-up closes it.
 
 **Unranked rows are kept, not dropped.** On the pickups list a player HKB does
 not value has no reason to appear; on your own roster his absence is a silent
