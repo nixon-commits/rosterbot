@@ -41,6 +41,11 @@ type GSInputs struct {
 	TeamID             string
 	Today, SeasonStart time.Time
 
+	// SeasonEnd is the season's final day, used only to recognize an
+	// off-season run. Zero means the range was never fetched, which is not the
+	// same as "out of season" — see the guard in ComputeGSBudget.
+	SeasonEnd time.Time
+
 	Periods    []fantrax.ScoringPeriod
 	PeriodsErr error
 
@@ -81,6 +86,13 @@ type GSDecision struct {
 	Budget *optimizer.GSBudget
 	Logs   []string
 	Alert  *GSAlert
+
+	// Inapplicable separates "there was nothing to gate" from "the gate
+	// broke". Both leave Budget nil, but only the second deserves the warning
+	// Run prints for a disabled gate — off season that warning is pure noise,
+	// and noise in the one channel that reports real fail-open cascades is how
+	// a genuine one gets missed. Every failure path leaves this false.
+	Inapplicable bool
 
 	// Notices are the lines Run must print to Options.Out on EVERY run, not
 	// only under --verbose. Logs ride prog.Logf, which is a no-op unless the
@@ -138,6 +150,32 @@ func ComputeGSBudget(ctx context.Context, ft gsFantraxClient, sched gsScheduleCl
 	// is no week to bound the budget to. Silent, as it was inline — the failed
 	// lookup already logged its own warning.
 	if in.SeasonStart.IsZero() {
+		return d
+	}
+
+	// Outside the season there is no matchup week and no games to gate, so a
+	// nil budget is the correct answer rather than the fail-open cascade every
+	// WARNING below describes. Checked ahead of the bounds fetch for the same
+	// reason ResolveDates checks it: the zero weekStart the lookup returns off
+	// season is indistinguishable from a genuine mid-season gap, and the
+	// request is wasted either way.
+	//
+	// This is deliberately a Notice, not silence and not a verbose-only log. A
+	// gate that turns off with no stated reason is the failure mode this file
+	// already treats as a bug (see GSDecision.Notices), and "the season is
+	// over" is the one explanation that never reaches CloudWatch otherwise.
+	//
+	// A zero SeasonEnd is an unknown boundary, not an off-season one: guessing
+	// from a missing value would disable the gate for the wrong reason, so it
+	// falls through to the warning path instead. Opening day itself is in
+	// season — that window costs real points and keeps the loud path.
+	if !in.SeasonEnd.IsZero() && (in.Today.Before(in.SeasonStart) || in.Today.After(in.SeasonEnd)) {
+		if in.Today.After(in.SeasonEnd) {
+			d.noticef("season ended %s — GS limit not applicable", in.SeasonEnd.Format("2006-01-02"))
+		} else {
+			d.noticef("season starts %s — GS limit not applicable", in.SeasonStart.Format("2006-01-02"))
+		}
+		d.Inapplicable = true
 		return d
 	}
 
