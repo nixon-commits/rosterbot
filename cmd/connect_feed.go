@@ -92,7 +92,19 @@ func recordTenantConnectFailure(ctx context.Context, feed feedWriter,
 	if err := feed.PutNotification(ctx, n); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not write the connect failure to %s's feed: %v\n",
 			uid, err)
+		// A record that never landed durably must not be pushed: its id would
+		// open nothing on tap, and notify.Deliver has no other id to offer.
+		return
 	}
+	// Fan out to whatever sinks notify.Default holds (APNs, and the
+	// cutover-window Pushover dual-send) UNDER THE ID JUST WRITTEN ABOVE.
+	// This deliberately calls Deliver, not Send: Send's own FeedSink would
+	// mint a second id and write a SECOND feed record for one connect
+	// failure, since PutNotification above is already the durable write.
+	// Deliver is a no-op when notify.Default is nil (this path is reached
+	// from both the standalone `connect` task and the hourly session
+	// ladder; either may run before a dispatcher is configured).
+	notify.Deliver(ctx, notify.Event{Kind: n.Kind, Title: n.Title, Message: n.Message}, n.ID)
 }
 
 // connectFailureMessage is the tenant-facing wording for a failure class.
