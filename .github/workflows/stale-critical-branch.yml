@@ -11,6 +11,9 @@ on:
 
 permissions:
   contents: read
+  # The check asks gh for every merged PR's head so a merged-but-undeleted
+  # branch is skipped before the content heuristics run (rosterbot-dqpi).
+  pull-requests: read
 
 env:
   STALE_HOURS: '24'
@@ -30,6 +33,9 @@ jobs:
 
       - name: Check for stale critical-path branches
         id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: .github/scripts/check-stale-critical-branches.sh
 
       - name: Notify Pushover

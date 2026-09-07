@@ -11,6 +11,9 @@
 # diff-since-fork to recover direction — otherwise a branch that's merely
 # behind main gets every file main has since touched misattributed to it.
 #
+# A branch whose tip is the head of a MERGED PR is skipped before any of that
+# runs (rosterbot-dqpi) -- see the comment at merged_heads below.
+#
 # See docs/superpowers/specs/2026-08-11-stale-critical-branch-alert-design.md.
 set -euo pipefail
 
@@ -21,6 +24,52 @@ STALE_HOURS="${STALE_HOURS:-24}"
 now=$(date +%s)
 stale_found=0
 report=""
+
+# Merged-PR evidence, consulted before any content heuristic. A branch whose
+# tip IS the headRefOid of a merged PR has, by definition, had everything on
+# it merged: GitHub recorded that at merge time, and no later edit to main
+# can unrecord it. The content heuristics below cannot say the same. They
+# reconstruct "landed" from main's CURRENT text, so a landed line that main
+# then legitimately rewrote reads as missing, the check fails closed, and the
+# age it reports is the branch's own last commit, which never moves. That is
+# how claude/push-notification-backend-4db619 (PR #153, squash-merged
+# 2026-08-20, branch never deleted) paged every 6h from 2026-09-05, when
+# #197's noctx work changed the pushover.Send line it had added: the third
+# arrival of the feat/trades-tab class, by a route no heuristic can close.
+#
+# This is a short-circuit, not a replacement. The design doc chose to watch
+# branches rather than PRs because most merges here once bypassed PRs
+# (rosterbot-naz never had one), so a PR-less branch still gets the full
+# content check. A tip that moved PAST its merged head is not matched either:
+# those commits were never reviewed by that PR. A PR merged and then reverted
+# on main does read as landed; a revert is a deliberate act on main, not the
+# stranded fix this check exists for.
+#
+# MERGED_HEADS_FILE is the test seam (newline-separated SHAs). Without it, gh
+# is asked once for every merged PR's head; it resolves the repo from the
+# checkout's origin and needs GH_TOKEN plus pull-requests:read, both set by
+# the workflow. Any failure degrades to the heuristics and is SAID on the
+# coverage line printed after the loop, unconditionally: a lookup that
+# answered nothing and one that never ran must not read the same, or a
+# broken lookup looks exactly like a repo with no merged PRs. --limit 500
+# bounds the walk; a merged PR older than that falls through to the
+# heuristics, i.e. to a possible duplicate alert, never to silence.
+merged_heads=""
+merged_lookup="unavailable"
+if [ -n "${MERGED_HEADS_FILE:-}" ]; then
+  if merged_heads=$(cat "$MERGED_HEADS_FILE" 2>/dev/null); then
+    merged_lookup="ok"
+  else
+    merged_lookup="unavailable (MERGED_HEADS_FILE unreadable)"
+  fi
+elif merged_heads=$(gh pr list --state merged --limit 500 --json headRefOid --jq '.[].headRefOid' 2>/dev/null); then
+  merged_lookup="ok"
+else
+  merged_heads=""
+  merged_lookup="unavailable (gh pr list failed)"
+fi
+merged_known=$(printf '%s\n' "$merged_heads" | grep -c '^[0-9a-f]\{40\}$' || true)
+skipped_landed=0
 
 # Answers, for ONE file, whether the branch's own change to it is still
 # absent from main. This is the content question that the two file-name
@@ -98,6 +147,14 @@ branch_change_landed_status() {
 # shellcheck disable=SC2086
 for branch in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin \
   | grep -v -F -x -e 'origin' -e "${BASE_REF}"); do
+
+  # Herestring rather than a pipe: under pipefail an early grep -q exit could
+  # SIGPIPE the writer and turn a match into a non-match.
+  tip=$(git rev-parse "${branch}" 2>/dev/null || true)
+  if [ -n "$tip" ] && grep -qxF -- "$tip" <<< "$merged_heads"; then
+    skipped_landed=$((skipped_landed + 1))
+    continue
+  fi
 
   # Direct two-tree diff (no dots) — deliberately NOT `A...B`, which diffs
   # from the merge-base to B and ignores whatever main did after the fork.
@@ -186,6 +243,13 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin
   echo "STALE: $line"
   report="${report}${line}"$'\n'
 done
+
+# Unconditional, zero case included -- see the merged_heads comment above.
+if [ "$merged_lookup" = "ok" ]; then
+  echo "merged-PR lookup: ${merged_known} merged head(s) known; ${skipped_landed} branch(es) skipped as landed"
+else
+  echo "merged-PR lookup: ${merged_lookup}; content heuristics only"
+fi
 
 if [ "$stale_found" -eq 0 ]; then
   echo "No stale critical-path branches found."

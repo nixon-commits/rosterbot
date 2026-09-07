@@ -8,6 +8,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="${SCRIPT_DIR}/check-stale-critical-branches.sh"
 
+# Keep every test hermetic: with the merged-PR seam pointed at an empty file
+# the script never shells out to gh, and the short-circuit stays inert unless
+# a test supplies merged heads of its own.
+export MERGED_HEADS_FILE=/dev/null
+
 fail() {
   echo "FAIL: $1"
   exit 1
@@ -557,6 +562,174 @@ test_trivial_only_additions_stay_indeterminate() {
   echo "PASS: test_trivial_only_additions_stay_indeterminate"
 }
 
+# Fixtures for the merged-PR short-circuit tests below. This is the live
+# shape from 2026-09-05: PR #153's branch added the one-arg Pushover send in
+# opsnotify/main.go, was squash-merged on 08-20, and its branch survived on
+# the remote; PR #197's noctx work then REWROTE that same line on main to
+# take a ctx. Neither content test can see a rewritten landed line as
+# anything but a missing one — the reverse-apply fails (the line it would
+# remove is gone) and the line-presence fallback finds the added line absent
+# — so the check fails closed, and because the reported age is the branch's
+# own last commit it never ages out.
+FIXTURE_SEND_BASE='package main
+
+func main() {
+	setup()
+	run()
+}'
+
+FIXTURE_SEND_ONE_ARG='package main
+
+func main() {
+	setup()
+	send = func(t, m string) error { return pushover.Send(key, t, m) }
+	run()
+}'
+
+FIXTURE_SEND_CTX='package main
+
+func main() {
+	setup()
+	send = func(ctx context.Context, t, m string) error { return pushover.Send(ctx, key, t, m) }
+	run()
+}'
+
+# Builds the rewritten-landed-line fixture. Prints "<tmpdir> <branch tip>",
+# the tip being what a merged PR's headRefOid would record.
+setup_rewritten_landed_line() {
+  local tmpdir work tip
+  tmpdir=$(setup_repo)
+  work="$tmpdir/work"
+
+  commit_file "$work" "opsnotify/main.go" "$FIXTURE_SEND_BASE" "$(epoch_hours_ago 96)"
+  (cd "$work" && git push -q origin main)
+
+  (cd "$work" && git checkout -q -b merged-pr-branch)
+  commit_file "$work" "opsnotify/main.go" "$FIXTURE_SEND_ONE_ARG" "$(epoch_hours_ago 87)"
+  (cd "$work" && git push -q origin merged-pr-branch)
+  tip=$(cd "$work" && git rev-parse HEAD)
+
+  # main squash-takes the branch's line under a new SHA, then rewrites it.
+  (cd "$work" && git checkout -q main)
+  commit_file "$work" "opsnotify/main.go" "$FIXTURE_SEND_ONE_ARG" "$(epoch_hours_ago 80)"
+  commit_file "$work" "opsnotify/main.go" "$FIXTURE_SEND_CTX" "$(epoch_hours_ago 30)"
+  (cd "$work" && git push -q origin main)
+  (cd "$work" && git fetch -q origin)
+
+  echo "$tmpdir $tip"
+}
+
+test_merged_pr_head_short_circuits_content_heuristics() {
+  # The third arrival of the feat/trades-tab class, by a route no content
+  # heuristic can close: main legitimately rewrote the landed line. GitHub
+  # knows the exact answer for a branch that went through a PR — its tip is
+  # the headRefOid of a merged PR — so that evidence is consulted first, and
+  # the content heuristics stay as the fallback for the PR-less branches the
+  # design doc was built around (rosterbot-naz never had a PR).
+  local tmpdir tip work heads output status
+  read -r tmpdir tip <<< "$(setup_rewritten_landed_line)"
+  work="$tmpdir/work"
+  heads="$tmpdir/merged-heads"
+  echo "$tip" > "$heads"
+
+  set +e
+  output=$(cd "$work" && MERGED_HEADS_FILE="$heads" STALE_HOURS=24 CRITICAL_PATHS="infra/ internal/opsalert/ opsnotify/" BASE_REF=origin/main "$SCRIPT" 2>&1)
+  status=$?
+  set -e
+
+  rm -rf "$tmpdir"
+
+  [ "$status" -eq 0 ] || fail "expected exit 0 -- the branch tip is a merged PR's head, so everything on it landed. Got $status. Output:\n$output"
+  echo "$output" | grep -q "merged-pr-branch" && fail "merged-pr-branch must not be flagged: it is a merged PR's head, main merely rewrote its line afterward. Output:\n$output"
+  echo "$output" | grep -q "merged-PR lookup: 1 merged head(s) known; 1 branch(es) skipped as landed" || fail "expected the lookup coverage line to report 1 head known and 1 branch skipped. Output:\n$output"
+
+  echo "PASS: test_merged_pr_head_short_circuits_content_heuristics"
+}
+
+test_rewritten_landed_line_flags_without_merged_pr_evidence() {
+  # The same fixture with no merged-head evidence must still alert. This is
+  # what proves the test above is not vacuous -- the short-circuit is the one
+  # thing that flips the verdict -- and it pins the fallback: without GitHub's
+  # answer the check is exactly as fail-closed as before. The coverage line
+  # prints in the zero case too, on the il-start check: / mlb recency
+  # coverage: precedent -- a lookup that answered nothing and a lookup that
+  # never ran must not read the same.
+  local tmpdir tip work output status
+  read -r tmpdir tip <<< "$(setup_rewritten_landed_line)"
+  work="$tmpdir/work"
+
+  set +e
+  output=$(cd "$work" && MERGED_HEADS_FILE=/dev/null STALE_HOURS=24 CRITICAL_PATHS="infra/ internal/opsalert/ opsnotify/" BASE_REF=origin/main "$SCRIPT" 2>&1)
+  status=$?
+  set -e
+
+  rm -rf "$tmpdir"
+
+  [ "$status" -eq 1 ] || fail "expected exit 1 -- with no merged-PR evidence a rewritten line is indeterminate and must fail closed. Got $status. Output:\n$output"
+  echo "$output" | grep -q "merged-pr-branch" || fail "merged-pr-branch must be flagged when nothing says its tip was merged. Output:\n$output"
+  echo "$output" | grep -q "merged-PR lookup: 0 merged head(s) known; 0 branch(es) skipped as landed" || fail "expected the lookup coverage line to report zero heads known. Output:\n$output"
+
+  echo "PASS: test_rewritten_landed_line_flags_without_merged_pr_evidence"
+}
+
+test_merged_pr_lookup_failure_degrades_to_heuristics() {
+  # A lookup that cannot run (unreadable seam here; a gh failure in
+  # production) must degrade to the content heuristics and say so, never to
+  # silence -- the same posture as the indeterminate case: a duplicate alert
+  # is the acceptable failure, a dropped one is not.
+  local tmpdir tip work output status
+  read -r tmpdir tip <<< "$(setup_rewritten_landed_line)"
+  work="$tmpdir/work"
+
+  set +e
+  output=$(cd "$work" && MERGED_HEADS_FILE="$tmpdir/does-not-exist" STALE_HOURS=24 CRITICAL_PATHS="infra/ internal/opsalert/ opsnotify/" BASE_REF=origin/main "$SCRIPT" 2>&1)
+  status=$?
+  set -e
+
+  rm -rf "$tmpdir"
+
+  [ "$status" -eq 1 ] || fail "expected exit 1 -- an unavailable lookup must fall through to the fail-closed heuristics. Got $status. Output:\n$output"
+  echo "$output" | grep -q "merged-pr-branch" || fail "merged-pr-branch must be flagged when the lookup is unavailable. Output:\n$output"
+  echo "$output" | grep -q "merged-PR lookup: unavailable" || fail "expected the coverage line to say the lookup was unavailable. Output:\n$output"
+
+  echo "PASS: test_merged_pr_lookup_failure_degrades_to_heuristics"
+}
+
+test_commits_past_the_merged_head_still_checked() {
+  # The short-circuit is keyed on the branch TIP equalling a merged head, not
+  # on the branch containing one. A branch that gained a commit after its PR
+  # merged carries work that PR never reviewed, and that work must go through
+  # the heuristics like any other. Note this shape already exits 1 on the
+  # pre-fix script (nothing short-circuits there), so on its own it does not
+  # distinguish pre/post-fix behaviour; it is the pin against a looser
+  # implementation that matches any commit reachable from the branch --
+  # mutating the tip lookup to a `git merge-base --is-ancestor` turns it red.
+  local tmpdir tip work heads output status
+  read -r tmpdir tip <<< "$(setup_rewritten_landed_line)"
+  work="$tmpdir/work"
+  heads="$tmpdir/merged-heads"
+  echo "$tip" > "$heads"
+
+  # A second, genuinely unlanded critical-path commit past the merged head.
+  (cd "$work" && git checkout -q merged-pr-branch)
+  commit_file "$work" "infra/infra.go" "v-unlanded" "$(epoch_hours_ago 60)"
+  (cd "$work" && git push -q origin merged-pr-branch && git checkout -q main && git fetch -q origin)
+
+  set +e
+  output=$(cd "$work" && MERGED_HEADS_FILE="$heads" STALE_HOURS=24 CRITICAL_PATHS="infra/ internal/opsalert/ opsnotify/" BASE_REF=origin/main "$SCRIPT" 2>&1)
+  status=$?
+  set -e
+
+  rm -rf "$tmpdir"
+
+  [ "$status" -eq 1 ] || fail "expected exit 1 -- the commit past the merged head is unlanded. Got $status. Output:\n$output"
+  echo "$output" | grep -q "merged-pr-branch" || fail "merged-pr-branch must be flagged for the commit its PR never carried. Output:\n$output"
+  echo "$output" | grep -q "infra/infra.go" || fail "expected the unlanded infra/infra.go change in the report. Output:\n$output"
+  echo "$output" | grep -q "merged-PR lookup: 1 merged head(s) known; 0 branch(es) skipped as landed" || fail "expected 1 head known but nothing skipped, since the tip moved past it. Output:\n$output"
+
+  echo "PASS: test_commits_past_the_merged_head_still_checked"
+}
+
 test_flags_and_filters_correctly
 test_clean_when_nothing_stale
 test_stale_go_masked_by_recent_non_go
@@ -566,4 +739,8 @@ test_landed_branch_not_reflagged_when_main_touches_same_file
 test_unlanded_work_still_flagged_when_main_touches_same_file
 test_landed_branch_not_reflagged_when_main_drifts_adjacent
 test_trivial_only_additions_stay_indeterminate
+test_merged_pr_head_short_circuits_content_heuristics
+test_rewritten_landed_line_flags_without_merged_pr_evidence
+test_merged_pr_lookup_failure_degrades_to_heuristics
+test_commits_past_the_merged_head_still_checked
 echo "All tests passed."
