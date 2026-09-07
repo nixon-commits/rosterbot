@@ -201,6 +201,24 @@ type ConnectRun struct {
 // ErrNoConnection reports that a tenant has never connected Fantrax.
 var ErrNoConnection = errors.New("lineupapi: no fantrax connection for user")
 
+// ErrConnectionConflict reports that a conditional PutConnection lost: the
+// record moved (or vanished) between the caller's read and its write, so the
+// FantraxConnection it holds was built on a version that is no longer current
+// (rosterbot-wm9g). Unlike ErrIdentityConflict and ErrUserConflict, the fix is
+// NOT always "re-read, re-apply, write again" — see ConnectionStore.
+var ErrConnectionConflict = errors.New("lineupapi: fantrax connection changed concurrently")
+
+// ConnUnversioned is the Version GetConnection reports for a record written
+// before the field existed — every production row as of rosterbot-wm9g. A
+// PutConnection carrying it succeeds exactly once, while the stored record is
+// still unversioned, and leaves it versioned; that one successful write is the
+// whole migration, so no script has to touch the table. It is a constant of
+// the CONTRACT rather than a ddbuser detail because a fake that reported "" for
+// such a record would make the first write over it a create-that-must-fail,
+// and one that reported a real number would claim a precondition it cannot
+// enforce.
+const ConnUnversioned IdentityVersion = "0"
+
 // FantraxConnection is one tenant's link to their Fantrax account.
 //
 // The two ciphertext fields are never decrypted by anything that serves HTTP —
@@ -244,6 +262,15 @@ type FantraxConnection struct {
 	// reconnects.
 	CredsCiphertext []byte `json:"creds_ct,omitempty"`
 	FXRMCiphertext  []byte `json:"fx_rm_ct,omitempty"`
+
+	// Version is the optimistic-concurrency token this record was read at and
+	// the precondition its next write is made under, exactly as
+	// Identity.Version (identity.go) and User.Version — same rules, same
+	// opacity, same reason for riding on the struct rather than the method
+	// signature. json:"-" keeps it out of the durable body for the reason
+	// identity.go gives; ddbuser additionally strips the attributevalue copy,
+	// which ignores json tags (rosterbot-wm9g).
+	Version IdentityVersion `json:"-"`
 }
 
 // Usable reports whether the bot may act for this tenant.
@@ -278,6 +305,40 @@ type Opener interface {
 // ConnectionStore persists the record. It is deliberately not split the way
 // Sealer/Opener are: the ciphertext is opaque to whoever holds it, so reading
 // the record without an Opener discloses nothing beyond status and team.
+//
+// Implementations MUST make PutConnection conditional on c.Version, following
+// IdentityStore's rules plus one of its own (rosterbot-wm9g):
+//
+//   - Version == "": create only if no record exists. Otherwise
+//     ErrConnectionConflict.
+//   - Version == ConnUnversioned: write only if a record exists AND it is still
+//     unversioned (written before the field existed). Otherwise
+//     ErrConnectionConflict.
+//   - Any other Version: write only if the stored record is still at that
+//     version. Otherwise (including if the record is gone)
+//     ErrConnectionConflict.
+//
+// On success PutConnection advances c.Version in place. GetConnection reports
+// ConnUnversioned for a stored record that carries no version.
+//
+// The record used to be written unconditionally, and its three writers race by
+// design: the API's connect handler (a tenant submitting fresh credentials),
+// the connect task (the verdict on those credentials), and every scheduled
+// job's session ladder (a re-login with whatever credentials it read). A
+// ladder that read the record before a reconnect and wrote after it replaced
+// the tenant's new credentials with the old ones, or marked dead ones verified.
+//
+// WHAT A CALLER DOES ON CONFLICT IS NOT "RE-READ AND RE-APPLY", and that is
+// the difference from Config.mutateIdentity/mutateUser. Those mutations are
+// edits to a record (append a credential, bump a counter) that stay correct
+// against a newer copy. A connection write is a VERDICT ABOUT THE SPECIFIC
+// CREDENTIALS THE WRITER READ — "these no longer log in", "this session was
+// minted from them" — and re-applying it to credentials a reconnect has since
+// replaced is the exact bug the version exists to stop. The only re-applier
+// is the connect handler, whose write is a wholesale replacement that does
+// not depend on the old record beyond the in-flight guard it re-runs; every
+// other writer abstains and says so. internal/lineupapi/conntest.Run is the
+// contract; run every implementation through it.
 type ConnectionStore interface {
 	GetConnection(ctx context.Context, uid UserID) (*FantraxConnection, bool, error)
 	PutConnection(ctx context.Context, c *FantraxConnection) error

@@ -760,18 +760,69 @@ func (st *Store) GetConnection(ctx context.Context, uid lineupapi.UserID) (*line
 	if err := attributevalue.UnmarshalMap(out.Item, &c); err != nil {
 		return nil, false, err
 	}
+	c.Version = connVersionOf(out.Item)
 	return &c, true, nil
 }
 
+// connVersionOf is versionOf for the connection item, with one deliberate
+// difference: an existing item with no `ver` attribute reports
+// lineupapi.ConnUnversioned rather than "". Every connection record written
+// before rosterbot-wm9g has no `ver`, and "" would tell PutConnection to
+// assert that no record exists — refusing every write over a legacy row for
+// the rest of its life. ConnUnversioned instead conditions the next write on
+// the row still being unversioned, so the first write migrates it in place.
+func connVersionOf(item map[string]types.AttributeValue) lineupapi.IdentityVersion {
+	if v, ok := item["ver"].(*types.AttributeValueMemberN); ok {
+		return lineupapi.IdentityVersion(v.Value)
+	}
+	return lineupapi.ConnUnversioned
+}
+
+// PutConnection is conditional on c.Version (rosterbot-wm9g); see
+// lineupapi.ConnectionStore for the contract and for why callers ABSTAIN on
+// ErrConnectionConflict rather than re-applying the way mutateUser does.
+//
+// Three preconditions, one per version state. `ver = :v` binds :v with n(),
+// the same type the item writes — the rosterbot-6my mismatch, one item over —
+// and condition_types_test.go pins that by inspecting the raw input rather
+// than trusting any evaluator; live_test.go runs all three against the real
+// service, which is the reason this bead waited on rosterbot-0jv.
 func (st *Store) PutConnection(ctx context.Context, c *lineupapi.FantraxConnection) error {
 	if c.UserID == "" {
 		return fmt.Errorf("ddbuser: refusing to write a connection with no user id")
 	}
+	in := &dynamodb.PutItemInput{TableName: aws.String(st.table)}
+	var next int64
+	switch c.Version {
+	case "":
+		in.ConditionExpression = aws.String("attribute_not_exists(pk)")
+		next = 1
+	case lineupapi.ConnUnversioned:
+		// The migration write: a legacy row, still legacy. attribute_exists
+		// keeps a row deleted since the read from being resurrected;
+		// attribute_not_exists(ver) keeps a row another writer has since
+		// versioned from being overwritten unseen.
+		in.ConditionExpression = aws.String("attribute_exists(pk) AND attribute_not_exists(ver)")
+		next = 1
+	default:
+		cur, err := strconv.ParseInt(string(c.Version), 10, 64)
+		if err != nil {
+			return fmt.Errorf("ddbuser: unparseable connection version %q for %s: %w", c.Version, c.UserID, err)
+		}
+		in.ConditionExpression = aws.String("ver = :v")
+		in.ExpressionAttributeValues = map[string]types.AttributeValue{":v": n(cur)}
+		next = cur + 1
+	}
+
 	c.UpdatedAt = time.Now().UTC()
 	item, err := attributevalue.MarshalMap(c)
 	if err != nil {
 		return err
 	}
+	// The marshalled copy of Version must not reach the item, for the reason
+	// userItem strips it: json:"-" does not stop attributevalue, and a stored
+	// copy would be a stale duplicate shadowing `ver`.
+	delete(item, attrVersion)
 	// Zero times marshal to the string "0001-01-01T00:00:00Z" rather than being
 	// omitted (attributevalue honours dynamodbav tags and ignores json ones), so
 	// an unverified connection would carry a LastVerifiedAt that reads as a real
@@ -781,8 +832,16 @@ func (st *Store) PutConnection(ctx context.Context, c *lineupapi.FantraxConnecti
 	}
 	item["pk"] = s(userPK(c.UserID))
 	item["sk"] = s(connSK)
-	_, err = st.api.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(st.table), Item: item,
-	})
-	return err
+	item["ver"] = n(next)
+	in.Item = item
+
+	if _, err := st.api.PutItem(ctx, in); err != nil {
+		var failed *types.ConditionalCheckFailedException
+		if errors.As(err, &failed) {
+			return lineupapi.ErrConnectionConflict
+		}
+		return err
+	}
+	c.Version = lineupapi.IdentityVersion(strconv.FormatInt(next, 10))
+	return nil
 }

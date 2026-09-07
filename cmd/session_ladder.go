@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -170,7 +171,22 @@ func (l sessionLadder) refresh(ctx context.Context, uid lineupapi.UserID, cfg *c
 
 	conn.FXRMCiphertext = sealed
 	conn.LastError = ""
-	if err := l.conns.PutConnection(ctx, conn); err != nil {
+	switch err := l.conns.PutConnection(ctx, conn); {
+	case errors.Is(err, lineupapi.ErrConnectionConflict):
+		// The record moved between this function's read and its write — a
+		// reconnect, a connect task's verdict, another job's ladder
+		// (rosterbot-wm9g). The cookie was minted from the credentials THIS
+		// run read, so storing it over a record that may now hold different
+		// ones is the clobber the version exists to stop; and re-reading to
+		// re-apply would store it anyway. The session is still real for this
+		// run, so the run keeps it; the next run re-logins from whatever the
+		// record says by then. Named separately from a store failure because
+		// an operator reading the log needs to know it was a race, not an
+		// outage.
+		fmt.Fprintf(l.errw(), "tenant %s: the connection record changed while this run was "+
+			"re-logging in (a reconnect or another run landed first); not storing the refreshed "+
+			"session over it — this run continues on it, the next will re-login again\n", uid)
+	case err != nil:
 		fmt.Fprintf(l.errw(), "tenant %s: could not store the refreshed session (%v); "+
 			"this run continues, the next will re-login again\n", uid, err)
 	}
@@ -216,8 +232,16 @@ func (l sessionLadder) stop(ctx context.Context, conn *lineupapi.FantraxConnecti
 	// outcome to an optimize row is the conflation rosterbot-jg92 exists to
 	// remove — relocating it here would not make it any less wrong.
 	//
-	// Either half runs BEFORE the write, like connect's fail(), so a store that
-	// rejects the update still tells the person the run stopped.
+	// The console half runs BEFORE the write, like connect's fail(), so a store
+	// that rejects the update still tells the operator the run stopped. The
+	// TENANT half runs AFTER it, and that ordering is rosterbot-wm9g's: the
+	// write is conditioned on the version read above, and a conflict means
+	// the record now describes newer credentials than the ones this verdict
+	// is about — a reconnect landed while the re-login was running. Telling
+	// the tenant to reconnect over a reconnect they just made is the bead's
+	// own bug as a feed entry. A store that merely FAILS still tells them, so
+	// the only write outcome that goes untold is the one where somebody else
+	// already wrote the newer truth.
 	switch v.route {
 	case routeOperator, routeInternal:
 		// routeInternal is UNREACHABLE HERE by construction (see its doc in
@@ -258,22 +282,35 @@ func (l sessionLadder) stop(ctx context.Context, conn *lineupapi.FantraxConnecti
 			"the run's non-zero exit alerts once per outage via the run ledger)\n",
 			uid, v.class)
 
-	default:
-		recordTenantConnectFailure(ctx, l.tenantFeed(uid), uid, v.class)
 	}
 
 	conn.LastError = v.class
 	if v.route == routeTenant {
 		conn.Status = lineupapi.ConnNeedsReconnect
 	}
-	if err := l.conns.PutConnection(ctx, conn); err != nil {
-		return fmt.Errorf("tenant %s: re-login failed (%s) and the record could not be updated: %w",
-			uid, v.class, err)
-	}
+	werr := l.conns.PutConnection(ctx, conn)
 
 	// Fail safe: nothing downstream should be able to authenticate as anyone
-	// after this point.
+	// after this point — whatever the write did.
 	setFantraxEnv("", "", "")
+
+	if errors.Is(werr, lineupapi.ErrConnectionConflict) {
+		// Abstain: no write, no feed entry. The run still stops (there is no
+		// session), and the returned error names the race, because it is
+		// what opsalert quotes.
+		fmt.Fprintf(l.errw(), "tenant %s: re-login failed (%s) but the connection record changed "+
+			"while this run held it (a reconnect or another run landed first); leaving the newer "+
+			"record alone — its own run will judge the credentials it holds\n", uid, v.class)
+		return fmt.Errorf("tenant %s: re-login failed (%s) but the connection record changed while "+
+			"this run held it; nothing written, the newer record's own run owns the outcome", uid, v.class)
+	}
+	if v.route == routeTenant {
+		recordTenantConnectFailure(ctx, l.tenantFeed(uid), uid, v.class)
+	}
+	if werr != nil {
+		return fmt.Errorf("tenant %s: re-login failed (%s) and the record could not be updated: %w",
+			uid, v.class, werr)
+	}
 
 	switch v.route {
 	case routeOperator, routeInternal:
