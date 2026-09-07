@@ -57,12 +57,34 @@ func (d *Dispatcher) Send(ctx context.Context, e Event) error {
 	if err != nil {
 		return fmt.Errorf("notify: write feed record: %w", err)
 	}
+	d.Deliver(ctx, e, id)
+	return nil
+}
+
+// Deliver fans an event out to every sink under an ALREADY-WRITTEN feed
+// record's id, without writing a feed record itself.
+//
+// It exists for a caller that holds its own durable writer and cannot go
+// through Send: Send's FeedSink mints a fresh id and writes a SECOND record,
+// which is wrong when the caller's own write already happened (the
+// connect-failure feed entry, rosterbot-3has — the caller cannot reuse Send
+// without duplicating what it already wrote). Send is refactored to call
+// this too, so there is one fan-out implementation, not two that could
+// drift.
+//
+// Best-effort like Send's own loop: one sink's failure is logged and does
+// not suppress the rest. A nil Dispatcher is a safe no-op, matching Send's
+// nil-safety, for a caller on a path where no dispatcher is configured
+// (local dev, tests).
+func (d *Dispatcher) Deliver(ctx context.Context, e Event, feedID string) {
+	if d == nil {
+		return
+	}
 	for _, s := range d.Sinks {
-		if err := s.Deliver(ctx, e, id); err != nil {
+		if err := s.Deliver(ctx, e, feedID); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: notify sink %s: %v\n", s.Name(), err)
 		}
 	}
-	return nil
 }
 
 // Default is the process-wide dispatcher, set once by cmd.initShared. It
@@ -75,6 +97,11 @@ var Default *Dispatcher
 
 // Send emits an event through the process-wide dispatcher.
 func Send(ctx context.Context, e Event) error { return Default.Send(ctx, e) }
+
+// Deliver fans an event out through the process-wide dispatcher's sinks
+// under an already-written feed record's id, without writing a second feed
+// record. See Dispatcher.Deliver. A no-op when no dispatcher is configured.
+func Deliver(ctx context.Context, e Event, feedID string) { Default.Deliver(ctx, e, feedID) }
 
 // Configured reports whether Send will actually record anything. Most call
 // sites do not care — an unconfigured dispatcher is a silent no-op by design —
