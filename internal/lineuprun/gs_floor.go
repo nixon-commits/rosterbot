@@ -110,11 +110,30 @@ const gsFloorEps = 1e-9
 const gsFloorEstimateCredit = 1.0
 
 // gsFloorMinDaysLeft is the fewest remaining days on which the alert will still
-// fire. Below it the alert is not merely noisy but useless: the only lever the
-// bead identifies is a roster action — claiming a starter whose turn falls on a
-// day our staff leaves empty — and a claim needs to clear waivers and then have
-// the pitcher actually take the ball. An alert on the final evening names a
-// problem that can no longer be acted on, which is how a channel gets muted.
+// fire. It was chosen on actionability alone when the trigger shipped and
+// stayed unmeasured through the credit/maxDaysLeft sweep above — rosterbot-1tia
+// asked for this constant to be checked too once the corpus existed, and it
+// now has been, against the same 150 Monday-anchored team-week replay, at the
+// shipped credit=1.0/max=3 pair:
+//
+//	minDaysLeft   under: recall (today=realised / today=0, see gsFloorEstimateCredit)
+//	1              0.960 / 0.960
+//	2 (shipped)    0.760 / 0.880
+//	3              0.680 / 0.840
+//
+// 1 is excluded on actionability, not the numbers, and that argument still
+// stands: the only lever the bead identifies is a roster action — claiming a
+// starter whose turn falls on a day our staff leaves empty — and a claim needs
+// to clear waivers and then have the pitcher actually take the ball. An alert
+// on the final evening names a problem that can no longer be acted on, which
+// is how a channel gets muted, whatever recall it buys.
+//
+// 3 loses recall on the under-floor side against 2 under BOTH today-credit
+// readings (0.680 vs 0.760 realised-credited, 0.840 vs 0.880 zero-credited) —
+// the bar the sweep set for adopting it — so it is not adopted. The constant
+// stays at 2, now for a measured reason instead of an assumed one. Measured
+// 2026-09-07; TestDiagGSFloorSweep prints the full credit x maxDaysLeft x
+// minDaysLeft grid this table is drawn from.
 const gsFloorMinDaysLeft = 2
 
 // gsFloorMaxDaysLeft is the MOST remaining days on which the alert will fire.
