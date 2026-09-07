@@ -340,3 +340,93 @@ func TestBuildspec_FailsExplicitlyOnMissingOutputs(t *testing.T) {
 		}
 	}
 }
+
+// The buildspec reports cache directory sizes on every build, unconditionally
+// -- not only when a prune gate fires.
+//
+// The "Cache uploaded successfully (size: ...)" line CodeBuild itself prints
+// only reports the combined tarball total (GOCACHE + GOMODCACHE +
+// NODE_DIST_CACHE packed into one opaque S3 object); nobody has the
+// per-directory split that would show which cache actually drives growth.
+// Measured (rosterbot-b6bg): the total grew 466.49 MiB (build 294,
+// 2026-08-29) -> 1.81 GiB (build 312, 2026-09-07) with zero visibility into
+// which directory caused it. This line is the measurement, so it must print
+// every build, healthy or not -- a report that only speaks when a gate
+// decides something is wrong is exactly the failure mode the "il-start
+// check:" / "mlb recency coverage:" precedent in this repo warns about.
+func TestBuildspec_PrintsCacheSizesEveryBuild(t *testing.T) {
+	raw, err := os.ReadFile("../buildspec.yml")
+	if err != nil {
+		t.Fatalf("read buildspec: %v", err)
+	}
+	buildspec := string(raw)
+
+	if !strings.Contains(buildspec, "cache sizes:") {
+		t.Fatal("buildspec.yml has no unconditional \"cache sizes:\" report line; the per-directory " +
+			"split (GOCACHE/GOMODCACHE/NODE_DIST_CACHE) is the measurement rosterbot-b6bg needed and " +
+			"nobody had -- the combined CodeBuild upload total cannot show which dir drives growth")
+	}
+	for _, want := range []string{"$GOCACHE", "$GOMODCACHE", "$NODE_DIST_CACHE"} {
+		if !strings.Contains(buildspec, want) {
+			t.Errorf("buildspec.yml does not reference %s; the size report must cover all three "+
+				"pinned cache dirs, or it cannot show which one is actually driving growth", want)
+		}
+	}
+}
+
+// The buildspec size-gates GOCACHE specifically -- not the combined total --
+// and prunes it in the install phase, before this build's own first `go`
+// invocation ever writes into it.
+//
+// Gating on GOCACHE's own size (rather than the combined total) is
+// deliberate: GOMODCACHE alone already exceeds any total-based threshold that
+// wouldn't also fire on every single build (module downloads are
+// content-addressed and this bead does not touch them), so a total-based
+// gate would either never stop firing or never fire at all. And the prune
+// must land in `install`, immediately after the S3 cache restore CodeBuild
+// performs automatically before this phase runs, and before the pre-existing
+// `go version` sanity check -- pruning in `post_build` would upload an EMPTY
+// GOCACHE, so the very next build pays a full cold recompile AND re-uploads,
+// twice the cost this bead exists to avoid.
+func TestBuildspec_SizeGatesGoCache(t *testing.T) {
+	raw, err := os.ReadFile("../buildspec.yml")
+	if err != nil {
+		t.Fatalf("read buildspec: %v", err)
+	}
+	buildspec := string(raw)
+
+	if !strings.Contains(buildspec, "$GOCACHE") {
+		t.Fatal("buildspec.yml never references $GOCACHE; the size gate must key off GOCACHE's own " +
+			"size, not the combined tarball total")
+	}
+	if !strings.Contains(buildspec, "-gt") {
+		t.Fatal("buildspec.yml has no numeric -gt threshold comparison; an unconditional prune would " +
+			"evict GOCACHE on every build and force a full cold recompile every time")
+	}
+	pruneIdx := strings.Index(buildspec, "go clean -cache")
+	if pruneIdx == -1 {
+		t.Fatal("buildspec.yml never runs `go clean -cache`; nothing prunes GOCACHE when it grows")
+	}
+
+	installIdx := strings.Index(buildspec, "install:")
+	preBuildIdx := strings.Index(buildspec, "pre_build:")
+	if installIdx == -1 || preBuildIdx == -1 {
+		t.Fatal("buildspec.yml is missing the install:/pre_build: phase markers this test anchors on")
+	}
+	if pruneIdx < installIdx || pruneIdx > preBuildIdx {
+		t.Errorf("`go clean -cache` (offset %d) is not inside the install: phase (install: at %d, "+
+			"pre_build: at %d); pruning outside install means either the cache restore hasn't happened "+
+			"yet or this build's own compiles have already run against a stale cache", pruneIdx, installIdx, preBuildIdx)
+	}
+
+	goVersionIdx := strings.Index(buildspec, "go version")
+	if goVersionIdx == -1 {
+		t.Fatal("buildspec.yml no longer contains the `go version` sanity check this test anchors on")
+	}
+	if pruneIdx >= goVersionIdx {
+		t.Errorf("`go clean -cache` (offset %d) does not precede the pre-existing `go version` check "+
+			"(offset %d); the gate must run before this build's own install phase can write into "+
+			"GOCACHE, so it prunes what accumulated across PRIOR builds only, and a build that fires "+
+			"the gate still uploads a freshly-warmed cache instead of an empty one", pruneIdx, goVersionIdx)
+	}
+}
