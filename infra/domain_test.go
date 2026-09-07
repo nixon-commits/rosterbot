@@ -72,6 +72,209 @@ func TestCertStack_ImportsTheZoneRatherThanCreatingOne(t *testing.T) {
 	assertions.Template_FromStack(stack, nil).ResourceCountIs(jsii.String("AWS::Route53::HostedZone"), jsii.Number(0))
 }
 
+// rosterbot-klbh: CDK's built-in CrossRegionReferences exporter silently
+// no-ops on a cert REPLACEMENT (aws/aws-cdk#38059 — its Update handler diffs
+// exported SSM parameters by NAME, not value, so a stable export name with a
+// changed ARN is filtered out of what it writes). This pins the producer-side
+// workaround: NewCertStack must also write the cert ARN into a plain,
+// separately-named SSM parameter via a hand-rolled AwsCustomResource, keyed so
+// a value-only change is unambiguously an Update.
+//
+// The Custom::AWS resource's Create/Update payload is an Fn::Join'd JSON
+// string spread across literal fragments plus embedded {Ref: ...} tokens, not
+// a plain JSON string — asserting on it needs the fragments re-assembled
+// (concatenating string fragments and standing tokens in for their {Ref}
+// logical id), not a naive `.(string)` type assertion, which does not even
+// compile against what CDK actually synthesizes here.
+func TestCertStack_PublishesCertArnToPlainSSMParam(t *testing.T) {
+	app := awscdk.NewApp(nil)
+	stack, _ := NewCertStack(app, "Cert", &CertStackProps{awscdk.StackProps{
+		Env:                   certEnv(),
+		CrossRegionReferences: jsii.Bool(true),
+	}})
+	_, raw := certRawTemplate(t, stack)
+	resources, _ := raw["Resources"].(map[string]any)
+
+	certLogicalID := certificateLogicalID(t, resources)
+
+	var (
+		matches   int
+		lastProps map[string]any
+	)
+	for _, r := range resources {
+		res, _ := r.(map[string]any)
+		if res["Type"] != "Custom::AWS" {
+			continue
+		}
+		props, _ := res["Properties"].(map[string]any)
+		matches++
+		lastProps = props
+	}
+	if matches != 1 {
+		t.Fatalf("found %d Custom::AWS resource(s) in the cert stack, want exactly 1 — "+
+			"no Custom::AWS resource publishing the cert ARN to %s found", matches, siteCertArnParamName)
+	}
+
+	// OnCreate and OnUpdate must both carry the same call (rosterbot-klbh's
+	// integrator decision 4): assert both "Create" and "Update" independently
+	// rather than assuming CDK's documented OnUpdate-covers-OnCreate fallback,
+	// since this construct sets both explicitly.
+	for _, key := range []string{"Create", "Update"} {
+		joined, _ := joinedFnJoinString(t, lastProps[key])
+		for _, want := range []string{
+			`"service":"SSM"`,
+			`"action":"putParameter"`,
+			`"region":"us-west-1"`,
+			`"Name":"` + siteCertArnParamName + `"`,
+			`"Overwrite":true`,
+		} {
+			if !strings.Contains(joined, want) {
+				t.Errorf("Custom::AWS %s payload = %q, missing %q", key, joined, want)
+			}
+		}
+		// physicalResourceId must reference the CERTIFICATE's own logical id
+		// SPECIFICALLY — not merely have some Ref to it somewhere in the
+		// payload (the "Value" field already carries one of those). A fixed
+		// literal in physicalResourceId would defeat the whole fix
+		// identically to the bug this works around: a value-only ARN change
+		// would no longer force a CloudFormation Update. The code below
+		// extracts exactly the physicalResourceId.id fragment's content and
+		// compares it against a bracketed marker standing in for {Ref:
+		// certLogicalID} — see joinedFnJoinString's doc comment for why the
+		// marker is bracketed.
+		const physField = `"physicalResourceId":{"id":"`
+		idx := strings.Index(joined, physField)
+		if idx < 0 {
+			t.Fatalf("Custom::AWS %s payload = %q has no physicalResourceId.id field", key, joined)
+		}
+		rest := joined[idx+len(physField):]
+		end := strings.Index(rest, `"}`)
+		if end < 0 {
+			t.Fatalf("Custom::AWS %s payload = %q has an unterminated physicalResourceId.id field", key, joined)
+		}
+		wantRef := "[" + certLogicalID + "]"
+		if got := rest[:end]; got != wantRef {
+			t.Errorf("Custom::AWS %s payload's physicalResourceId.id = %q, want %q (a {Ref} to "+
+				"the certificate resource, not a fixed literal) — otherwise a cert replacement "+
+				"does not change this resource's own physical id and CloudFormation has no "+
+				"reason to re-invoke the SDK call", key, got, wantRef)
+		}
+	}
+
+	// The IAM policy backing the custom resource's Lambda must be scoped to
+	// the one parameter it writes, never AwsCustomResourcePolicy_ANY_RESOURCE
+	// ("*") — mirroring the least-privilege precedent for the other
+	// /rosterbot/* parameters (RP_ID/RP_ORIGIN) elsewhere in this package.
+	var sawScopedStatement bool
+	for _, r := range resources {
+		res, _ := r.(map[string]any)
+		if res["Type"] != "AWS::IAM::Policy" {
+			continue
+		}
+		props, _ := res["Properties"].(map[string]any)
+		doc, _ := props["PolicyDocument"].(map[string]any)
+		for _, s := range asSlice(doc["Statement"]) {
+			stmt, _ := s.(map[string]any)
+			action, _ := stmt["Action"].(string)
+			if action != "ssm:PutParameter" {
+				continue
+			}
+			resource := stmt["Resource"]
+			if resource == "*" {
+				t.Errorf("CertArnParamWriter's IAM policy grants ssm:PutParameter on Resource \"*\"; "+
+					"want it scoped to %s", siteCertArnParamArn)
+				continue
+			}
+			resStr, isStr := resource.(string)
+			if !isStr {
+				t.Errorf("CertArnParamWriter's IAM policy Resource = %#v, want the literal scoped ARN string", resource)
+				continue
+			}
+			if resStr != siteCertArnParamArn {
+				t.Errorf("CertArnParamWriter's IAM policy Resource = %q, want %q", resStr, siteCertArnParamArn)
+			}
+			sawScopedStatement = true
+		}
+	}
+	if !sawScopedStatement {
+		t.Fatal("no IAM policy statement granting ssm:PutParameter found for the cert-ARN writer")
+	}
+}
+
+// certRawTemplate synthesizes stack's template to the same raw
+// map[string]any shape infraTemplate uses, without infraTemplate's
+// once-shared InfraStack scope — this test needs the CERT stack's own
+// resources, not InfraStack's.
+func certRawTemplate(t *testing.T, stack awscdk.Stack) (assertions.Template, map[string]any) {
+	t.Helper()
+	tpl := assertions.Template_FromStack(stack, nil)
+	raw, err := json.Marshal(tpl.ToJSON())
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal template: %v", err)
+	}
+	return tpl, m
+}
+
+// certificateLogicalID returns the logical id of the one
+// AWS::CertificateManager::Certificate resource in the template.
+func certificateLogicalID(t *testing.T, resources map[string]any) string {
+	t.Helper()
+	var ids []string
+	for logicalID, r := range resources {
+		res, _ := r.(map[string]any)
+		if res["Type"] == "AWS::CertificateManager::Certificate" {
+			ids = append(ids, logicalID)
+		}
+	}
+	if len(ids) != 1 {
+		t.Fatalf("found %d AWS::CertificateManager::Certificate resource(s), want exactly 1", len(ids))
+	}
+	return ids[0]
+}
+
+// joinedFnJoinString re-assembles a synthesized {"Fn::Join": [sep, [...]]}
+// value into its concatenated string form, substituting each embedded
+// {"Ref": "<logicalID>"} token with that id (bracketed, so it cannot be
+// confused with literal text) and also returning the set of logical ids it
+// referenced. This is the shape CDK actually emits for a custom resource's
+// Create/Update property — inspecting it needs the fragments walked, not a
+// direct `.(string)` assertion, which would panic (this property is never a
+// plain Go string).
+func joinedFnJoinString(t *testing.T, v any) (joined string, refs []string) {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("Custom::AWS payload = %#v (%T), want an Fn::Join map", v, v)
+	}
+	fj, ok := m["Fn::Join"].([]any)
+	if !ok || len(fj) != 2 {
+		t.Fatalf("Custom::AWS payload = %#v, want a 2-element Fn::Join", m)
+	}
+	sep, _ := fj[0].(string)
+	parts := asSlice(fj[1])
+	strs := make([]string, 0, len(parts))
+	for _, p := range parts {
+		switch pv := p.(type) {
+		case string:
+			strs = append(strs, pv)
+		case map[string]any:
+			if ref, ok := pv["Ref"].(string); ok {
+				refs = append(refs, ref)
+				strs = append(strs, "["+ref+"]")
+				continue
+			}
+			t.Fatalf("Fn::Join fragment %#v is a map with no Ref key", pv)
+		default:
+			t.Fatalf("Fn::Join fragment %#v has unexpected type %T", p, p)
+		}
+	}
+	return strings.Join(strs, sep), refs
+}
+
 // --- InfraStack: alias domains on the two distributions ---
 
 // Synthesising InfraStack bundles three Go Lambdas, so it is done once and

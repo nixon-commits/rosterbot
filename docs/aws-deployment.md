@@ -140,7 +140,12 @@ that does not name the real cause.
   `cdk bootstrap aws://476646938644/us-east-1`. It brings its own staging bucket and ECR repo, so a
   small line item in an otherwise-unused region is expected, not drift. Delete it and every
   `InfraCertStack` deploy fails on `BootstrapVersionValidation`; because the certificate is a
-  cross-region reference, `InfraStack` fails with it.
+  cross-region reference, `InfraStack` fails with it. That cross-region reference is also the
+  seat of a known, upstream-rooted bug (rosterbot-klbh): a certificate replacement can leave
+  the CDK-generated export parameter permanently stale, which reads as a certificate problem
+  and is actually a plumbing one — see `docs/adr/0004-cert-arn-handoff-via-ssm-parameter.md`
+  for the mechanism, the producer-side workaround already shipped, and the pending consumer
+  migration.
 - **The rosterbot.dev hosted zone** (`Z07503721VYCRE63MNQ5V`) was auto-created by the Route 53
   registrar at registration, with matching NS delegation. `infra/domain.go` **imports** it via
   `HostedZone_FromHostedZoneAttributes` — by attributes rather than `FromLookup`, so synth needs no
