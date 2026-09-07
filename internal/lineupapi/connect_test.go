@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,13 @@ func (s *recordingSealer) Seal(_ context.Context, uid UserID, plaintext []byte) 
 	return append([]byte("sealed:"), plaintext...), nil
 }
 
+// memConnections is version-faithful (rosterbot-wm9g): PutConnection is
+// conditioned on c.Version exactly as the ConnectionStore contract requires,
+// so the connect handler's re-read-and-retry path is exercised against a fake
+// that can actually refuse a write. A fake that rubber-stamped every Put would
+// let the retry loop pass with the loop deleted — the s3blobtest lesson.
+// TestMemConnections_HonoursTheVersionContract pins it; conntest.Run cannot be
+// used here because it imports this package.
 type memConnections struct {
 	conn *FantraxConnection
 	err  error
@@ -42,6 +50,15 @@ type memConnections struct {
 	// consulted when no row could use the answer.
 	getErr error
 	gets   int
+
+	// ver is the counter the fake hands out as an opaque version; puts counts
+	// every PutConnection call, landed or refused.
+	ver, puts int
+
+	// afterGet, when set, runs after each GetConnection has taken its copy —
+	// the one seam through which a concurrent writer can be simulated, the
+	// same shape as ddbusertest.AfterGetItem.
+	afterGet func()
 }
 
 func (m *memConnections) GetConnection(context.Context, UserID) (*FantraxConnection, bool, error) {
@@ -52,16 +69,55 @@ func (m *memConnections) GetConnection(context.Context, UserID) (*FantraxConnect
 	if m.conn == nil {
 		return nil, false, nil
 	}
-	return m.conn, true, nil
+	cp := *m.conn
+	// A record a test seeded with no Version predates the field, exactly as
+	// every production row did — it reads as ConnUnversioned, per the contract.
+	if cp.Version == "" {
+		cp.Version = ConnUnversioned
+	}
+	if m.afterGet != nil {
+		m.afterGet()
+	}
+	return &cp, true, nil
+}
+
+// currentVersion is the version a Put must carry to land: "" with no record,
+// ConnUnversioned for a seeded pre-field record, else the stored version.
+func (m *memConnections) currentVersion() IdentityVersion {
+	switch {
+	case m.conn == nil:
+		return ""
+	case m.conn.Version == "":
+		return ConnUnversioned
+	default:
+		return m.conn.Version
+	}
 }
 
 func (m *memConnections) PutConnection(_ context.Context, c *FantraxConnection) error {
+	m.puts++
 	if m.err != nil {
 		return m.err
 	}
+	if c.Version != m.currentVersion() {
+		return ErrConnectionConflict
+	}
+	m.ver++
 	cp := *c
+	cp.Version = IdentityVersion(strconv.Itoa(m.ver))
 	m.conn = &cp
+	c.Version = cp.Version
 	return nil
+}
+
+// moveUnderneath simulates an independent writer landing on the stored
+// record: its version advances, so any Put built on an earlier read conflicts.
+func (m *memConnections) moveUnderneath() {
+	if m.conn == nil {
+		return
+	}
+	m.ver++
+	m.conn.Version = IdentityVersion(strconv.Itoa(m.ver))
 }
 
 // recordingJobs captures the argv the handler launches, and — crucially — what

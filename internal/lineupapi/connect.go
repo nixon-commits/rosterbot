@@ -2,6 +2,7 @@ package lineupapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -67,32 +68,22 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One verification at a time. Each accepted submission launches a chromedp
-	// login against the tenant's real Fantrax account, so a double-click must
-	// not stack parallel logins — that is how a tester's first minutes trip
-	// Fantrax's bot defences. The window bounds the guard: a connect task that
-	// crashed leaves the record pending forever, and refusing past the window
-	// would lock the tenant out of retrying. A store read failure proceeds —
-	// the Put below hits the same store and fails loudly.
-	if cur, ok, gerr := cfg.Connections.GetConnection(r.Context(), caller.UserID); gerr == nil && ok {
-		if cur.Status == ConnPending && time.Since(cur.UpdatedAt) < connectInFlightWindow {
-			writeErr(w, http.StatusConflict, "a verification is already running; wait for it to finish")
-			return
-		}
-		if cur.Status == ConnInterrupted && time.Since(cur.UpdatedAt) < connectInterruptedCooldown {
-			writeErr(w, http.StatusConflict,
-				"the last check reached Fantrax but did not finish; try again in a minute")
-			return
-		}
-		// ConnCheckFailed gets the SAME cooldown as ConnInterrupted, not
-		// ConnPending's open-ended block: like ConnInterrupted, there is no
-		// task in flight to wait for, and "try again" against a fault on our
-		// own side is the same invitation to hold the button down — every
-		// submission drives a full chromedp login regardless of why the
-		// PREVIOUS one never reached Fantrax (rosterbot-spb9).
-		if cur.Status == ConnCheckFailed && time.Since(cur.UpdatedAt) < connectInterruptedCooldown {
-			writeErr(w, http.StatusConflict,
-				"the last check could not run because of a problem on our side; try again in a minute")
+	// The record is read at its version before anything is sealed, and the
+	// write below is conditioned on that version (rosterbot-wm9g). A store
+	// read failure used to proceed to the write; it now refuses. A record that
+	// could not be read has an unknown version, and the only write the handler
+	// could then make asserts that no record exists — which the version
+	// refuses over a real record anyway. Failing the request is the honest
+	// form of that refusal: the tenant retries in a moment instead of getting
+	// a 502 from a write that was never going to be allowed.
+	cur, ok, gerr := cfg.Connections.GetConnection(r.Context(), caller.UserID)
+	if gerr != nil {
+		writeErr(w, http.StatusBadGateway, "connection store unavailable")
+		return
+	}
+	if ok {
+		if msg := connectInFlightRefusal(cur); msg != "" {
+			writeErr(w, http.StatusConflict, msg)
 			return
 		}
 	}
@@ -118,19 +109,57 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	conn := &FantraxConnection{
-		UserID:          caller.UserID,
-		TeamID:          teamID,
-		Status:          ConnPending,
-		CredsCiphertext: sealed,
-		UpdatedAt:       time.Now().UTC(),
-	}
 	// Written BEFORE the task is launched. If the launch fails the record shows
 	// pending with no run, which is recoverable by retrying; the reverse order
 	// could leave a task looking for credentials that were never stored.
-	if err := cfg.Connections.PutConnection(r.Context(), conn); err != nil {
-		writeErr(w, http.StatusBadGateway, "could not store credentials")
-		return
+	//
+	// The write REPLACES the record wholesale — fresh credentials, pending —
+	// at the version that was read, so a writer landing in between (a session
+	// ladder storing a refreshed cookie, a connect task recording a verdict)
+	// surfaces as ErrConnectionConflict rather than being overwritten unseen.
+	// This is the one connection writer that may re-apply after a lost race,
+	// because its write does not depend on the old record beyond the in-flight
+	// guard — and that guard is exactly why the retry RE-READS rather than
+	// retrying blind: it has to run against the record that won. A connect
+	// task landing "verified" in the window is fine to replace; a second
+	// submission landing "pending" is not (see ConnectionStore).
+	for attempt := 1; ; attempt++ {
+		conn := &FantraxConnection{
+			UserID:          caller.UserID,
+			TeamID:          teamID,
+			Status:          ConnPending,
+			CredsCiphertext: sealed,
+			UpdatedAt:       time.Now().UTC(),
+		}
+		if ok {
+			conn.Version = cur.Version
+		}
+		err := cfg.Connections.PutConnection(r.Context(), conn)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, ErrConnectionConflict) {
+			writeErr(w, http.StatusBadGateway, "could not store credentials")
+			return
+		}
+		if attempt >= connectPutAttempts {
+			// Bounded, like mutateUser. A record that moves on every read is
+			// real contention, and the answer is a 409 the client can act on,
+			// not a 502 that reads as an outage.
+			writeErr(w, http.StatusConflict, "the connection changed while this request was running; try again")
+			return
+		}
+		cur, ok, gerr = cfg.Connections.GetConnection(r.Context(), caller.UserID)
+		if gerr != nil {
+			writeErr(w, http.StatusBadGateway, "connection store unavailable")
+			return
+		}
+		if ok {
+			if msg := connectInFlightRefusal(cur); msg != "" {
+				writeErr(w, http.StatusConflict, msg)
+				return
+			}
+		}
 	}
 
 	// The caller goes in BOTH places, and they are not redundant. --user tells
@@ -204,4 +233,39 @@ type connectStatusOut struct {
 	TeamID         string        `json:"team_id"`
 	LastError      string        `json:"last_error"`
 	LastVerifiedAt wiretime.Time `json:"last_verified_at"`
+}
+
+// connectPutAttempts bounds handleConnect's re-read-and-retry on a lost
+// version race, the same bound Config.mutateUser and mutateIdentity use.
+const connectPutAttempts = 5
+
+// connectInFlightRefusal is the one-verification-at-a-time guard, returning
+// the 409 message for a record that must not be replaced yet, or "" when a
+// new submission may proceed. It is a function rather than inline because
+// handleConnect runs it TWICE — on the first read and again on every re-read
+// after a lost race — and two hand-copies of a three-branch guard are how the
+// branches drift.
+//
+// Each accepted submission launches a chromedp login against the tenant's
+// real Fantrax account, so a double-click must not stack parallel logins —
+// that is how a tester's first minutes trip Fantrax's bot defences. The
+// window bounds the pending guard: a connect task that crashed leaves the
+// record pending forever, and refusing past the window would lock the tenant
+// out of retrying.
+func connectInFlightRefusal(cur *FantraxConnection) string {
+	switch {
+	case cur.Status == ConnPending && time.Since(cur.UpdatedAt) < connectInFlightWindow:
+		return "a verification is already running; wait for it to finish"
+	case cur.Status == ConnInterrupted && time.Since(cur.UpdatedAt) < connectInterruptedCooldown:
+		return "the last check reached Fantrax but did not finish; try again in a minute"
+	case cur.Status == ConnCheckFailed && time.Since(cur.UpdatedAt) < connectInterruptedCooldown:
+		// ConnCheckFailed gets the SAME cooldown as ConnInterrupted, not
+		// ConnPending's open-ended block: like ConnInterrupted, there is no
+		// task in flight to wait for, and "try again" against a fault on our
+		// own side is the same invitation to hold the button down — every
+		// submission drives a full chromedp login regardless of why the
+		// PREVIOUS one never reached Fantrax (rosterbot-spb9).
+		return "the last check could not run because of a problem on our side; try again in a minute"
+	}
+	return ""
 }

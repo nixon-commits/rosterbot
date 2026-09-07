@@ -125,6 +125,9 @@ func teamKey(teamID string) map[string]types.AttributeValue {
 func enrollKey(hash string) map[string]types.AttributeValue {
 	return itemKey("ENROLL#"+hash, "TOKEN")
 }
+func connKey(uid lineupapi.UserID) map[string]types.AttributeValue {
+	return itemKey("USER#"+string(uid), "FANTRAX")
+}
 
 // TestLivePutUser_VersionCondition is the literal rosterbot-6my regression.
 // A PutUser carrying the CURRENT version must succeed — under the pre-fix
@@ -462,4 +465,128 @@ func TestLiveEnrollment_SingleUseCondition(t *testing.T) {
 	if _, err := store.RedeemEnrollment(ctx, hash, time.Now()); !errors.Is(err, lineupapi.ErrEnrollmentInvalid) {
 		t.Fatalf("RedeemEnrollment (second, already used) = %v, want ErrEnrollmentInvalid", err)
 	}
+}
+
+// TestLivePutConnection_VersionCondition runs all three of PutConnection's
+// preconditions (rosterbot-wm9g) against the real service — the reason that
+// bead was blocked on this file: a new ConditionExpression evaluated only by
+// ddbusertest's hand-rolled evalCondition is the failure class rosterbot-6my
+// already shipped once.
+//
+//   - "" → attribute_not_exists(pk): create, and a second create is refused.
+//   - ver = :v with :v bound as N: an update at the current version lands and
+//     advances; a stale one is refused; one after a DeleteItem is refused.
+//   - ConnUnversioned → attribute_exists(pk) AND attribute_not_exists(ver): a
+//     row written by hand with no `ver` (every production row) reads as
+//     ConnUnversioned, migrates on its first write, and refuses a second
+//     writer still holding ConnUnversioned.
+func TestLivePutConnection_VersionCondition(t *testing.T) {
+	table := liveTable(t)
+	ctx := context.Background()
+	client := rawClient(t)
+
+	prefix := runPrefix()
+	uid := lineupapi.UserID(prefix + "-conn")
+	legacyUID := lineupapi.UserID(prefix + "-legacy-conn")
+
+	keys := []map[string]types.AttributeValue{connKey(uid), connKey(legacyUID)}
+	trackKeys(t, client, table, &keys)
+
+	store, err := ddbuser.New(ctx, table)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	t.Run("create, update, stale, gone", func(t *testing.T) {
+		c := &lineupapi.FantraxConnection{UserID: uid, Status: lineupapi.ConnPending, CredsCiphertext: []byte("ct-1")}
+		if err := store.PutConnection(ctx, c); err != nil {
+			t.Fatalf("PutConnection (create): %v", err)
+		}
+		if c.Version != "1" {
+			t.Fatalf("Version after create = %q, want \"1\"", c.Version)
+		}
+		dup := &lineupapi.FantraxConnection{UserID: uid, Status: lineupapi.ConnPending, CredsCiphertext: []byte("ct-blind")}
+		if err := store.PutConnection(ctx, dup); !errors.Is(err, lineupapi.ErrConnectionConflict) {
+			t.Fatalf("second create = %v, want ErrConnectionConflict", err)
+		}
+
+		stale := *c
+		c.Status = lineupapi.ConnVerified
+		c.CredsCiphertext = []byte("ct-2")
+		if err := store.PutConnection(ctx, c); err != nil {
+			t.Fatalf("PutConnection at the current version = %v, want success — a type-mismatched "+
+				"`ver = :v` would refuse every update, not only stale ones (rosterbot-6my, one item over)", err)
+		}
+		if c.Version != "2" {
+			t.Fatalf("Version after update = %q, want \"2\"", c.Version)
+		}
+		got, err := client.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(table), Key: connKey(uid)})
+		if err != nil {
+			t.Fatalf("GetItem: %v", err)
+		}
+		if verAttr, ok := got.Item["ver"].(*types.AttributeValueMemberN); !ok || verAttr.Value != "2" {
+			t.Fatalf("stored `ver` = %#v, want N \"2\"", got.Item["ver"])
+		}
+		if _, leaked := got.Item["Version"]; leaked {
+			t.Fatal("the item carries a `Version` attribute; attributevalue ignores json:\"-\" and the copy would shadow `ver`")
+		}
+
+		// The bead's scenario: a ladder that read v1 before a reconnect
+		// writes its verdict about the old credentials after it.
+		stale.Status = lineupapi.ConnNeedsReconnect
+		if err := store.PutConnection(ctx, &stale); !errors.Is(err, lineupapi.ErrConnectionConflict) {
+			t.Fatalf("PutConnection at a stale version = %v, want ErrConnectionConflict", err)
+		}
+		cur, ok, err := store.GetConnection(ctx, uid)
+		if err != nil || !ok {
+			t.Fatalf("GetConnection: ok=%v err=%v", ok, err)
+		}
+		if cur.Status != lineupapi.ConnVerified || string(cur.CredsCiphertext) != "ct-2" || cur.Version != "2" {
+			t.Fatalf("the stale write landed: %+v", *cur)
+		}
+
+		if _, err := client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(table), Key: connKey(uid)}); err != nil {
+			t.Fatalf("DeleteItem: %v", err)
+		}
+		if err := store.PutConnection(ctx, c); !errors.Is(err, lineupapi.ErrConnectionConflict) {
+			t.Fatalf("PutConnection at v2 after the record was deleted = %v, want ErrConnectionConflict "+
+				"(a deleted tenant's record must not be resurrected)", err)
+		}
+	})
+
+	t.Run("legacy row migrates exactly once", func(t *testing.T) {
+		// Written by hand from the pre-wm9g field set: no `ver` at all.
+		if _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
+			TableName: aws.String(table),
+			Item: map[string]types.AttributeValue{
+				"pk":     &types.AttributeValueMemberS{Value: "USER#" + string(legacyUID)},
+				"sk":     &types.AttributeValueMemberS{Value: "FANTRAX"},
+				"UserID": &types.AttributeValueMemberS{Value: string(legacyUID)},
+				"Status": &types.AttributeValueMemberS{Value: string(lineupapi.ConnVerified)},
+			},
+		}); err != nil {
+			t.Fatalf("seed legacy item: %v", err)
+		}
+		first, ok, err := store.GetConnection(ctx, legacyUID)
+		if err != nil || !ok {
+			t.Fatalf("GetConnection(legacy): ok=%v err=%v", ok, err)
+		}
+		if first.Version != lineupapi.ConnUnversioned {
+			t.Fatalf("Version on a legacy row = %q, want ConnUnversioned", first.Version)
+		}
+		second := *first
+
+		if err := store.PutConnection(ctx, first); err != nil {
+			t.Fatalf("migration write at ConnUnversioned = %v, want success", err)
+		}
+		if first.Version != "1" {
+			t.Fatalf("Version after the migration write = %q, want \"1\"", first.Version)
+		}
+		if err := store.PutConnection(ctx, &second); !errors.Is(err, lineupapi.ErrConnectionConflict) {
+			t.Fatalf("second migration write = %v, want ErrConnectionConflict — the row is versioned now", err)
+		}
+		if err := store.PutConnection(ctx, first); err != nil {
+			t.Fatalf("PutConnection at v1 after migration = %v, want success", err)
+		}
+	})
 }

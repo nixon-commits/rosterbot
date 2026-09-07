@@ -21,6 +21,10 @@ type recordingConns struct {
 	conn *lineupapi.FantraxConnection
 	put  []lineupapi.FantraxConnection
 	err  error
+
+	// putErr, when set, makes PutConnection fail WITHOUT recording the write —
+	// a refused write is one that did not land.
+	putErr error
 }
 
 func (c *recordingConns) GetConnection(context.Context, lineupapi.UserID) (*lineupapi.FantraxConnection, bool, error) {
@@ -35,6 +39,9 @@ func (c *recordingConns) GetConnection(context.Context, lineupapi.UserID) (*line
 }
 
 func (c *recordingConns) PutConnection(_ context.Context, conn *lineupapi.FantraxConnection) error {
+	if c.putErr != nil {
+		return c.putErr
+	}
 	c.put = append(c.put, *conn)
 	return nil
 }

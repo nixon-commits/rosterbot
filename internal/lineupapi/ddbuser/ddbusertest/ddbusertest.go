@@ -174,6 +174,19 @@ func (a *API) evalCondition(expr *string, existing item, exists bool, vals map[s
 		}
 		return str(existing["uid"]) == str(vals[":uid"]), nil
 
+	case "attribute_exists(pk) AND attribute_not_exists(ver)":
+		// PutConnection's migration branch (rosterbot-wm9g): the record must
+		// exist AND still be unversioned. Both halves are load-bearing — drop
+		// attribute_exists and a record deleted between the read and the write
+		// is silently resurrected; drop attribute_not_exists and a record
+		// another writer has since versioned is overwritten unseen, which is
+		// the blind write the version exists to stop.
+		if !exists {
+			return false, nil
+		}
+		_, versioned := existing["ver"]
+		return !versioned, nil
+
 	default:
 		return false, fmt.Errorf("ddbusertest: unrecognised condition expression %q. "+
 			"This double evaluates only the expressions ddbuser emits; teach it the "+

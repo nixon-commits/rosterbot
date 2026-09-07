@@ -183,6 +183,19 @@ func (c connectRun) w() io.Writer {
 // With no RUN_ID (a hand-run task) it leaves any existing stamp ALONE rather
 // than clearing it. The older stamp still states truly what THAT run concluded,
 // and the read side matches on id, so it can never be shown against this one.
+//
+// THE WRITE IS CONDITIONED ON THE VERSION connectTenant READ, and a conflict
+// is absorbed here rather than surfaced (rosterbot-wm9g). The verdict is
+// about the credentials this run read; if the record moved — a resubmission
+// past the in-flight window, or a deletion — the newer record's own connect
+// run owns the outcome, and nothing here is the operator's to fix, so every
+// route keeps the exit code it already chose. The console names the race so
+// a run whose outcome is missing from the record can be explained. Unlike
+// the ladder's stop, fail() keeps telling the tenant BEFORE the write: the
+// API's in-flight guard already refuses a resubmission for ten minutes, so a
+// conflict here is a crashed-and-superseded task or a deleted tenant, and a
+// feed entry about the superseded attempt costs less than restructuring the
+// four routes around the order of two calls.
 func (c connectRun) record(verdict string) error {
 	if id := os.Getenv("RUN_ID"); id != "" {
 		c.conn.LastConnectRun = &lineupapi.ConnectRun{
@@ -191,7 +204,14 @@ func (c connectRun) record(verdict string) error {
 			LastError: c.conn.LastError,
 		}
 	}
-	return c.conns.PutConnection(c.ctx, c.conn)
+	err := c.conns.PutConnection(c.ctx, c.conn)
+	if errors.Is(err, lineupapi.ErrConnectionConflict) {
+		fmt.Fprintf(c.w(), "connect: the connection record for %s changed while this run held it "+
+			"(a resubmitted connect or a deletion landed first); verdict %s not recorded — the "+
+			"newer record's own connect run owns the outcome\n", c.uid, verdict)
+		return nil
+	}
+	return err
 }
 
 // connectVerdict is a failure class plus whatever the route it implies needs.

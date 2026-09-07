@@ -173,3 +173,87 @@ func TestCreateUserConditionsReferenceNoTypedPlaceholder(t *testing.T) {
 		}
 	}
 }
+
+// TestPutConnectionConditionValueTypeMatchesStoredAttributeType is the
+// rosterbot-6my check applied to PutConnection's `ver = :v` (rosterbot-wm9g):
+// the `:v` placeholder and the item's own `ver` attribute must be the same
+// AttributeValue variant, or the condition can never be true against the
+// real service and EVERY update of a versioned connection would surface as
+// ErrConnectionConflict — read, once again, as routine contention.
+//
+// The two placeholder-free branches (create, and the legacy migration write)
+// are pinned to binding no value at all, so a future edit that adds one is
+// told — by this test failing — that it now needs its own type check.
+func TestPutConnectionConditionValueTypeMatchesStoredAttributeType(t *testing.T) {
+	api := &recordingAPI{}
+	st := NewWithAPI(api, "test-table")
+	ctx := context.Background()
+
+	t.Run("versioned update binds :v as the type of ver", func(t *testing.T) {
+		c := &lineupapi.FantraxConnection{UserID: "alice", Status: lineupapi.ConnVerified, Version: "3"}
+		if err := st.PutConnection(ctx, c); err != nil {
+			t.Fatalf("PutConnection: %v", err)
+		}
+		if api.lastPut == nil {
+			t.Fatal("PutConnection never called PutItem")
+		}
+		if api.lastPut.ConditionExpression == nil {
+			t.Fatal("PutConnection wrote with NO ConditionExpression: the blind last-writer-wins " +
+				"overwrite rosterbot-wm9g closed")
+		}
+		if got := *api.lastPut.ConditionExpression; got != "ver = :v" {
+			t.Fatalf("condition = %q, want \"ver = :v\"", got)
+		}
+		boundV, ok := api.lastPut.ExpressionAttributeValues[":v"]
+		if !ok {
+			t.Fatal("PutItemInput carries no :v expression attribute value")
+		}
+		storedVer, ok := api.lastPut.Item["ver"]
+		if !ok {
+			t.Fatal("PutItemInput's Item carries no `ver` attribute")
+		}
+		if typeName(boundV) != typeName(storedVer) {
+			t.Fatalf("condition binds :v as %s but the item's own `ver` attribute is %s; "+
+				"DynamoDB's `ver = :v` compares type AND value, so a mismatch means the condition "+
+				"can never be true against the real service — rosterbot-6my, one item over",
+				typeName(boundV), typeName(storedVer))
+		}
+		if _, ok := boundV.(*types.AttributeValueMemberN); !ok {
+			t.Fatalf(":v bound as %s, want *types.AttributeValueMemberN", typeName(boundV))
+		}
+		if v, ok := storedVer.(*types.AttributeValueMemberN); !ok || v.Value != "4" {
+			t.Fatalf("stored ver = %#v, want N \"4\" (the read version plus one)", storedVer)
+		}
+		if _, leaked := api.lastPut.Item[attrVersion]; leaked {
+			t.Fatalf("the item carries a %q attribute: attributevalue ignores json:\"-\", and a "+
+				"stored copy of Version is a stale duplicate shadowing `ver`", attrVersion)
+		}
+	})
+
+	for _, tc := range []struct {
+		name, version, wantCond string
+	}{
+		{"create", "", "attribute_not_exists(pk)"},
+		{"legacy migration", string(lineupapi.ConnUnversioned), "attribute_exists(pk) AND attribute_not_exists(ver)"},
+	} {
+		t.Run(tc.name+" binds no placeholder", func(t *testing.T) {
+			c := &lineupapi.FantraxConnection{UserID: "alice", Version: lineupapi.IdentityVersion(tc.version)}
+			if err := st.PutConnection(ctx, c); err != nil {
+				t.Fatalf("PutConnection: %v", err)
+			}
+			if api.lastPut.ConditionExpression == nil {
+				t.Fatalf("PutConnection on a %s write set NO ConditionExpression, want %q", tc.name, tc.wantCond)
+			}
+			if got := *api.lastPut.ConditionExpression; got != tc.wantCond {
+				t.Fatalf("condition = %q, want %q", got, tc.wantCond)
+			}
+			if n := len(api.lastPut.ExpressionAttributeValues); n != 0 {
+				t.Fatalf("binds %d expression attribute values for a placeholder-free condition, "+
+					"want none — if one was added on purpose, it needs its own type-matching subtest", n)
+			}
+			if v, ok := api.lastPut.Item["ver"].(*types.AttributeValueMemberN); !ok || v.Value != "1" {
+				t.Fatalf("stored ver = %#v, want N \"1\" on a %s write", api.lastPut.Item["ver"], tc.name)
+			}
+		})
+	}
+}
