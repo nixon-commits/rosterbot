@@ -173,3 +173,34 @@ hard to unit test in isolation; verification is:
 - Extending critical-path scope beyond `infra/`, `internal/opsalert/`,
   `opsnotify/` (e.g. `.github/workflows/`, `entrypoint.sh`) — easy to add
   later via the env var if warranted; not justified by this incident.
+
+## Addendum 2026-09-07: merged-PR evidence as a short-circuit (rosterbot-dqpi)
+
+The content heuristics gained a third false-positive route that no content
+test can close. `claude/push-notification-backend-4db619` was PR #153,
+squash-merged 2026-08-20 with its tip exactly the merged head, and its branch
+survived on the remote (it predated `delete_branch_on_merge`). On 2026-09-05
+PR #197's `noctx` work rewrote the one `opsnotify/main.go` line that branch
+had added, `pushover.Send(userKey, …)` → `pushover.Send(ctx, userKey, …)`.
+The reverse-apply then failed (the line it would remove was gone) and the
+line-presence fallback found the added line absent, so the check returned
+indeterminate, failed closed, and paged every 6h for two days. The reported
+age is the branch's own last commit, so nothing main does can age it out.
+
+The heuristics reconstruct "landed" from main's *current* text; a landed line
+that main later legitimately rewrites is indistinguishable from one that never
+landed. GitHub, by contrast, recorded the merge at merge time. So the script
+now asks `gh pr list --state merged --json headRefOid` once per run and skips
+any branch whose tip is one of those heads, *before* the content heuristics.
+
+This does not reopen the "watch branches, not PRs" decision above. It is a
+short-circuit, not a replacement: a PR-less branch (the `rosterbot-naz`
+shape) still gets the full content check, and a tip that moved past its
+merged head is not matched, since those commits were never reviewed by that
+PR. The one accepted blind spot is a PR merged and then reverted on main,
+which reads as landed; a revert is a deliberate act on main, not a stranded
+fix. A lookup failure degrades to the heuristics and is said on an
+unconditional `merged-PR lookup:` coverage line, zero case included, so a
+broken lookup cannot read like a repo with no merged PRs. `MERGED_HEADS_FILE`
+is the harness seam; the workflow grants `pull-requests: read` and passes
+`GH_TOKEN`/`GH_REPO`.
