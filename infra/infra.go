@@ -8,7 +8,6 @@ import (
 
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsathena"
-	"github.com/aws/aws-cdk-go/awscdk/v2/awscertificatemanager"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfront"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudfrontorigins"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscodebuild"
@@ -34,15 +33,6 @@ import (
 
 type InfraStackProps struct {
 	awscdk.StackProps
-
-	// Certificate is the us-east-1 ACM cert covering every rosterbot.dev name
-	// this stack serves (see infra/domain.go). It is REQUIRED, not optional:
-	// treating a missing cert as "skip the alias domains" would let the custom
-	// hostnames silently stop being served while the deploy stayed green — the
-	// stack would come up healthy on its cloudfront.net names and nothing would
-	// say the domain had dropped off. Failing loudly at synth is the only
-	// version of this that can be noticed.
-	Certificate awscertificatemanager.ICertificate
 }
 
 func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps) awscdk.Stack {
@@ -50,15 +40,19 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	if props != nil {
 		sprops = props.StackProps
 	}
-	if props == nil || props.Certificate == nil {
-		panic("InfraStackProps.Certificate is required: the alias domains on both " +
-			"distributions cannot be attached without it (see infra/domain.go)")
-	}
 	stack := awscdk.NewStack(scope, &id, &sprops)
 
 	// The zone that answers for the alias records below. Imported, never
 	// created — see importZone.
 	zone := importZone(stack, "Zone")
+
+	// The us-east-1 ACM cert covering every rosterbot.dev name this stack
+	// serves, read from the SSM parameter InfraCertStack publishes (see
+	// importSiteCert in infra/domain.go). Unconditional on purpose: treating a
+	// missing cert as "skip the alias domains" would let the custom hostnames
+	// silently stop being served while the deploy stayed green. A missing
+	// parameter instead fails the distribution update loudly, naming it.
+	siteCert := importSiteCert(stack, "SiteCert")
 
 	// --- Phase 1: foundation (ECR, S3 state + site buckets, log group) ---
 
@@ -245,7 +239,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// CloudFront keeps serving both — so every published or bookmarked
 		// recap URL keeps working through this change and after it.
 		DomainNames: jsii.Strings(recapHost),
-		Certificate: props.Certificate,
+		Certificate: siteCert,
 		DefaultBehavior: &awscloudfront.BehaviorOptions{
 			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(siteBucket, nil),
 			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
@@ -810,7 +804,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// on AWS::CertificateManager::Certificate), which is why this deploy
 		// is slower and more failure-prone than its diff suggests.
 		DomainNames: jsii.Strings(dashboardHosts...),
-		Certificate: props.Certificate,
+		Certificate: siteCert,
 		DefaultBehavior: &awscloudfront.BehaviorOptions{
 			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(dashboardBucket, nil),
 			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
@@ -1799,35 +1793,34 @@ func main() {
 	defer jsii.Close()
 
 	app := awscdk.NewApp(nil)
-
-	// The rosterbot.dev certificate, in us-east-1 because CloudFront reads
-	// viewer certs from nowhere else (see infra/domain.go). Both return values
-	// are dropped on purpose: this slice creates the certificate and stops
-	// there, so InfraStack still holds no reference to it and its diff stays
-	// empty. The capture — and CrossRegionReferences on InfraStack, which is
-	// only required once a reference actually crosses — arrives with the first
-	// alias domain.
-	_, siteCert := NewCertStack(app, "InfraCertStack", &CertStackProps{
-		awscdk.StackProps{
-			Env:                   certEnv(),
-			CrossRegionReferences: jsii.Bool(true),
-		},
-	})
-
-	// CrossRegionReferences is required on BOTH stacks now that the cert ARN
-	// actually crosses: CDK carries it through generated SSM parameters plus a
-	// reader custom resource. Note the one-way cost — CloudFormation refuses to
-	// delete an export still in use, so unwinding this reference later is a
-	// staged weakening across several deploys, not a plain revert.
-	NewInfraStack(app, "InfraStack", &InfraStackProps{
-		StackProps: awscdk.StackProps{
-			Env:                   env(),
-			CrossRegionReferences: jsii.Bool(true),
-		},
-		Certificate: siteCert,
-	})
-
+	buildStacks(app)
 	app.Synth(nil)
+}
+
+// buildStacks declares every stack in the app. main and the tests share it so
+// the tests synthesize the app CodeBuild deploys rather than a look-alike.
+func buildStacks(app awscdk.App) (certStack, infraStack awscdk.Stack) {
+	// The rosterbot.dev certificate, in us-east-1 because CloudFront reads
+	// viewer certs from nowhere else (see infra/domain.go). Nothing here
+	// receives the certificate construct: the ARN reaches InfraStack through
+	// the SSM parameter this stack writes, and neither stack sets
+	// CrossRegionReferences — see NewCertStack for why that absence is a guard.
+	certStack = NewCertStack(app, "InfraCertStack", &CertStackProps{
+		awscdk.StackProps{Env: certEnv()},
+	})
+
+	infraStack = NewInfraStack(app, "InfraStack", &InfraStackProps{
+		StackProps: awscdk.StackProps{Env: env()},
+	})
+
+	// Nothing in the templates orders the two any more — the parameter name
+	// is a plain string, not a CDK reference — so the order the exporter used
+	// to imply is stated here. On a certificate change this is what makes
+	// `cdk deploy --all` rewrite the parameter before InfraStack reads it;
+	// without it InfraStack could attach the ARN that is being replaced away.
+	infraStack.AddDependency(certStack, jsii.String(
+		"InfraStack reads "+siteCertArnParamName+", which InfraCertStack writes"))
+	return certStack, infraStack
 }
 
 // env determines the AWS environment (account+region) in which our stack is to

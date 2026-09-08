@@ -1,7 +1,7 @@
 # 4. Hand off the cert ARN via a plain SSM parameter, not a CDK cross-region reference
 
 Date: 2026-09-07
-Status: Producer shipped; consumer switch PENDING (see Status below)
+Status: Accepted — producer shipped 2026-09-07, consumer switched 2026-09-08 (see Status below for the live checks that remain)
 
 ## Context
 
@@ -69,72 +69,126 @@ precedent for the other `/rosterbot/*` parameters (`DASHBOARD_RP_ID`,
 a real network dependency this call does not need since the Lambda runtime's
 bundled SDK already supports `ssm:PutParameter`.
 
-**Consumer (future work, not this change):** `InfraStack` will import the
-certificate via `awscertificatemanager.Certificate_FromCertificateArn` on the
-CloudFormation **dynamic reference** `{{resolve:ssm:/rosterbot/SITE_CERT_ARN}}`
-— not a CFN template Parameter (immune to `UsePreviousValue`, since a dynamic
-reference is resolved fresh on every Create/Update/Delete of the resource that
-uses it, not cached into the template) — and `CrossRegionReferences` will be
-removed from both stacks once the producer is confirmed live.
+**Consumer (`InfraStack`, us-west-1):** `importSiteCert` in `infra/domain.go`
+hands each CloudFront distribution the certificate as
+`Certificate_FromCertificateArn` over the CloudFormation **dynamic reference**
+`{{resolve:ssm:/rosterbot/SITE_CERT_ARN}}` — the literal string in the template,
+built with `awscdk.NewCfnDynamicReference`, not a template Parameter and not a
+synth-time lookup. CloudFormation resolves it against the parameter's latest
+version on every update of the distribution and records the version it
+resolved (the deployed template of the old reader showed exactly this,
+`{{resolve:ssm:…:2:<timestamp>}}`, pinned by CloudFormation rather than by
+CDK), which is what lets a later update see that the value moved.
+`InfraStackProps.Certificate` is gone: the import is unconditional inside
+`NewInfraStack`, because "no cert ⇒ skip the alias domains" is the silent
+failure the old REQUIRED panic existed to prevent, and a missing parameter now
+fails the distribution update loudly, naming the parameter.
 
-This is **deliberately staged**. Nothing reads `/rosterbot/SITE_CERT_ARN` yet.
-This repo's dominant bug class is a control written but read by nothing, and
-that is exactly what this change is on its own — the reader is the named next
-step, not an oversight. It is staged this way because the alternative (writing
-producer and consumer in one change) cannot be verified hermetically: the
-consumer's dynamic reference would fail to resolve at deploy time unless the
-parameter already exists in the live account, which requires the producer to
-be deployed and confirmed *first* — an ordering hazard that is a property of
-the live AWS account, not of the CDK template shape, so no synth-only test can
-stand in for it.
+**No CDK reference crosses any more, so CDK's export plumbing is gone with
+it.** This was not a choice available to stage. CDK emits the `ExportsWriter`
+and `ExportsReader` custom resources only for a reference that actually crosses
+stacks at synth; `CrossRegionReferences: true` is permission, not plumbing. The
+moment `InfraStack` stopped receiving the certificate construct, both halves
+left the templates, so the bead's "switch the consumer, then remove the
+plumbing" was always one deploy. The flag is removed from both stacks for the
+same reason it can be: with it gone, a future edit that hands `InfraStack` the
+construct again fails at synth (`Set crossRegionReferences=true to enable cross
+region references`) instead of quietly reinstating the buggy path.
+`TestCertHandoff_SynthesizesNoCrossRegionExportPlumbing` pins the absence, and
+`TestCrossRegionPlumbingDetector_SeesBothHalvesWhenAReferenceCrosses` is its
+positive control — a zero count is only evidence if the detector can see the
+thing it counts.
+
+**Ordering is now stated, because nothing implies it.** `buildStacks` (the one
+place both stacks are declared; `main` and the tests share it so the tests
+synthesize the app CodeBuild deploys) calls `infraStack.AddDependency(certStack)`.
+The exporter used to order the two through the reference; a parameter name is
+a plain string and orders nothing. `TestInfraStack_DeploysAfterTheCertStack`
+went red the moment the reference was removed and green when the dependency
+was added, which is the whole reason it exists.
+
+**The parameter carries a Description, and adding it was the ADR's step-1
+proof.** CloudFormation invokes a custom resource's Update handler only when
+that resource's own properties change, so the first deploy of the consumer
+switch is also the first Update the writer ever performs — the parameter's
+version advancing from 1 to 2 (same value, new Description) proves this
+writer's Update path works where CDK's exporter did not. It is permanent
+rather than the temporary nudge the earlier Status proposed: `aws ssm
+describe-parameters` now says what writes it and what reads it.
 
 ## Status
 
-**Producer shipped** (this change): `publishCertArnParam`, called once at the
-end of `NewCertStack`. `InfraStackProps.Certificate`, `CrossRegionReferences`,
-and `NewInfraStack` are untouched — `InfraStack` still imports the certificate
-through the (buggy) built-in cross-region path until the consumer switch below
-is confirmed live.
+**Consumer switched 2026-09-08** (this change); **producer shipped 2026-09-07**
+(PR #203). The deploy delta was measured before merge by creating and
+inspecting real change sets against both live stacks (not `cdk diff`, whose
+change-set mode on CLI 2.1140 silently omitted the distribution and
+custom-resource modifications the change set itself listed — use
+`--method=template`, or create the change set):
 
-**Consumer switch is PENDING a live check only a human can run**, in two
-gated deploys (a "deadly embrace" migration — removing a cross-region
-reference is not a plain revert):
+- `InfraCertStack`: **Modify** `CertArnParamWriter` (`Custom::AWS`, static,
+  direct modification of both Create and Update payloads — the Description);
+  **Remove** `ExportsWriter`, its handler Lambda and its role.
+- `InfraStack`: **Modify** `SiteCdn` and `DashboardCdn` (`DistributionConfig`,
+  static, **Replacement: False** — the property text changes from a
+  `Fn::GetAtt` on the reader to the dynamic reference while the resolved ARN
+  stays `…/42c8ff20-…`); **Remove** `ExportsReader`, its handler Lambda and
+  its role.
 
-1. After this producer ships, confirm via
-   `aws ssm get-parameter-history --name /rosterbot/SITE_CERT_ARN --region us-west-1`
-   that the parameter's version actually advances on the next `InfraCertStack`
-   update — proving this Update handler fires where CDK's own exporter (stuck
-   at version 1 forever per the bead) does not. A real cert replacement is the
-   honest trigger; if none is due, the nudge must touch THIS resource's own
-   properties (temporarily add a `Description` field to
-   `certArnPutParameterCall`'s `Parameters` map and deploy), because
-   CloudFormation only re-invokes a custom resource's handler when its own
-   properties change — a nudge elsewhere in `InfraCertStack` leaves this
-   resource byte-identical and proves nothing.
-2. Switch `InfraStack`'s certificate import to the dynamic reference and
-   redeploy, confirming `DashboardCdn` still resolves the correct certificate.
-3. Only then remove `CrossRegionReferences` from both stacks, confirming
-   CloudFormation actually permits deleting the old export — the NOTES flag
-   this as "now uncertain" since `#38059` removed the in-use check entirely,
-   so it must be checked empirically against the real stack, not assumed.
+Deploy order is `InfraCertStack` then `InfraStack` (the explicit dependency).
+Both deployed handlers are CDK 2.267.0's, so the writer's Delete deletes the
+`/cdk/exports/InfraStack/…` parameter unconditionally and the reader's Delete
+tolerates its absence (`InvalidResourceId` is caught) — checked in the
+upstream handler sources, since the earlier NOTES flagged this as uncertain
+after `#38059` removed the in-use check. The previously feared "deadly
+embrace" therefore cannot occur in either order.
 
-The one-time manual workaround (`aws ssm put-parameter --overwrite` against
-the CDK-generated export parameter) remains in force for the *current*
-outage until step 2 above lands; this ADR does not retroactively fix an
-already-stale export, it prevents the next one from recurring silently once
-the consumer switch is complete.
+**Live checks still owed after the merge lands** (merging is the deploy):
+
+1. `aws ssm get-parameter-history --name /rosterbot/SITE_CERT_ARN --region us-west-1`
+   shows **version 2**, same value, with the Description. Version still 1
+   means the writer's Update handler did not run and step 1 is NOT proven —
+   stop and investigate before trusting the next cert change to it.
+2. `aws cloudformation list-stack-resources --stack-name InfraStack --region us-west-1`
+   lists no `ExportsReader`, and
+   `aws cloudformation list-stack-resources --stack-name InfraCertStack --region us-east-1`
+   lists no `ExportsWriter`.
+3. `aws ssm get-parameters-by-path --path /cdk/exports/InfraStack/ --region us-west-1`
+   returns nothing. If the old export parameter survives, the writer's Delete
+   did not run to completion; delete it by hand, it has no reader.
+4. `aws cloudfront get-distribution-config --id E135ZMD24EU5ON` reports
+   `ViewerCertificate.ACMCertificateArn` = the ARN in the parameter, and both
+   `https://rosterbot.dev` and `https://recaps.rosterbot.dev` present that
+   certificate.
+
+Until (1) is observed on the real account this ADR is Accepted but its
+central claim — that the Update path advances the parameter — rests on the
+change-set evidence above, not on a version number.
 
 ## Consequences
 
-- One more Lambda-backed custom resource (a CDK "singleton Lambda" shared by
-  every `AwsCustomResource` in `InfraCertStack`) deploys into `InfraCertStack`
-  on the next `cdk deploy --all` after this merges. Verify with
-  `aws ssm get-parameter --name /rosterbot/SITE_CERT_ARN --region us-west-1`.
-- Because the writer only runs when `InfraCertStack` itself changes, this rides
-  on the next deliberate cert-stack touch rather than landing (or being
-  observably correct) the moment it merges.
-- Until the consumer switch lands, this parameter is inert — a real risk that
-  it gets treated as "done" and forgotten. The staged-migration framing above
-  is deliberate and should be preserved rather than read as a completed fix.
-- `docs/aws-deployment.md`'s us-east-1 bootstrap bullet (the one describing the
-  `InfraCertStack` cross-region reference) points here.
+- The certificate ARN is the only value crossing between the two regions, and
+  it crosses as a parameter name. Neither stack carries `CrossRegionReferences`
+  and no CDK-managed custom resource, Lambda or role exists for the handoff;
+  the writer that remains is this repo's own, scoped to one parameter.
+- **A certificate change propagates only through an `InfraStack` update.**
+  CloudFormation re-resolves a dynamic reference when the resource that holds
+  it is updated, and `cdk deploy` skips a stack whose template is unchanged.
+  In this repo a certificate changes because a hostname was added, which is
+  always a new alias on a distribution here, so the two arrive in one PR — but
+  a change that touched `InfraCertStack` alone would sit unpropagated until
+  `InfraStack` next deployed for any reason. CDK's exporter had the identical
+  limitation; this ADR documents it rather than removes it.
+- **A certificate REPLACEMENT still stalls the cert stack's cleanup.**
+  `InfraCertStack` deploys first and tries to delete the old certificate while
+  both distributions still use it; ACM refuses until `InfraStack` has moved
+  them, which only happens after `InfraCertStack` completes. That is
+  rosterbot-ck9y (the CodeBuild timeout) and predates this ADR; the parameter
+  handoff neither causes nor fixes it.
+- Reverting is a plain revert. `InfraCertStack` would re-create the writer
+  (its Create handler writes the export parameter fresh) before `InfraStack`
+  re-creates the reader (whose Create tags that parameter), because the
+  dependency keeps that order; the distributions would fall back to a
+  `Fn::GetAtt` on the re-created reader.
+- `docs/aws-deployment.md`'s us-east-1 bootstrap bullet and `buildspec.yml`'s
+  `cdk deploy --all` comment both describe the explicit dependency now, not the
+  reference.

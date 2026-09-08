@@ -74,7 +74,7 @@ type CertStackProps struct {
 }
 
 // NewCertStack holds the one resource CloudFront forces out of region, and
-// returns it for InfraStack to attach.
+// publishes its ARN for InfraStack to read.
 //
 // One certificate covers both hostnames (dash as the subject, recaps as a SAN)
 // rather than one per surface: ACM renews a DNS-validated certificate
@@ -82,15 +82,18 @@ type CertStackProps struct {
 // is one renewal path to keep healthy instead of two, and both distributions
 // fail or succeed together rather than one quietly expiring.
 //
-// Callers must set CrossRegionReferences on BOTH this stack and the consuming
-// one — CDK carries the ARN across the region boundary through generated SSM
-// parameters plus a reader custom resource, and without the flag synth simply
-// refuses the reference. Opting in has a cost worth knowing before the first
-// deploy: once InfraStack references this cert, removing that reference is not
-// a plain revert. CloudFormation refuses to delete an export still in use (the
-// "deadly embrace"), so backing it out means weakening the reference across
-// successive deploys before the final removal.
-func NewCertStack(scope constructs.Construct, id string, props *CertStackProps) (awscdk.Stack, awscertificatemanager.ICertificate) {
+// The certificate construct itself is deliberately NOT returned. InfraStack
+// used to receive it and attach it directly, which made CDK carry the ARN
+// across the region boundary through its CrossRegionReferences exporter — the
+// mechanism that silently kept a replaced certificate's old ARN
+// (rosterbot-klbh, see publishCertArnParam). The handoff now goes through the
+// SSM parameter below, which importSiteCert reads back as a CloudFormation
+// dynamic reference, so no CDK reference crosses and neither stack needs
+// CrossRegionReferences. That is a guard as much as a simplification: with the
+// flag gone, handing InfraStack the construct again fails at synth ("Set
+// crossRegionReferences=true to enable cross region references") rather than
+// quietly reopening the path this closed.
+func NewCertStack(scope constructs.Construct, id string, props *CertStackProps) awscdk.Stack {
 	var sprops awscdk.StackProps
 	if props != nil {
 		sprops = props.StackProps
@@ -113,7 +116,7 @@ func NewCertStack(scope constructs.Construct, id string, props *CertStackProps) 
 
 	publishCertArnParam(stack, cert)
 
-	return stack, cert
+	return stack
 }
 
 // siteCertArnParamName is the plain (non-CFN-reference) SSM parameter name the
@@ -125,6 +128,21 @@ const siteCertArnParamName = "/rosterbot/SITE_CERT_ARN"
 // convention elsewhere in this package (e.g. the DASHBOARD_RP_ID/RP_ORIGIN
 // parameter ARNs in infra.go) rather than introducing a new way to spell it.
 const siteCertArnParamArn = "arn:aws:ssm:us-west-1:476646938644:parameter" + siteCertArnParamName
+
+// siteCertArnParamDescription is stored on the parameter itself, so an
+// operator who finds it via `aws ssm describe-parameters` learns what writes
+// it and what breaks if it is edited or deleted, before either happens.
+//
+// It also did one job on the deploy that introduced it: adding a property to
+// the writer's SDK call is a change to the custom resource's own properties,
+// which is the only thing that makes CloudFormation invoke its Update handler
+// — so that deploy was the first Update the writer ever performed, and the
+// parameter's version advancing from 1 to 2 was the live proof (ADR 0004,
+// step 1) that this writer's Update path works where CDK's exporter did not.
+const siteCertArnParamDescription = "ARN of the rosterbot.dev ACM certificate (us-east-1). " +
+	"Written by InfraCertStack (CertArnParamWriter) whenever the certificate changes; " +
+	"read by InfraStack's CloudFront distributions as a CloudFormation dynamic reference. " +
+	"See docs/adr/0004-cert-arn-handoff-via-ssm-parameter.md."
 
 // publishCertArnParam is the producer half of rosterbot-klbh's durable fix for
 // the stale cross-region cert ARN (see docs/adr/0004-cert-arn-handoff-via-ssm-parameter.md).
@@ -150,12 +168,10 @@ const siteCertArnParamArn = "arn:aws:ssm:us-west-1:476646938644:parameter" + sit
 // name-based diff and has nothing to do with CloudFormation's own change
 // detection.
 //
-// STAGING, DELIBERATE: nothing reads this parameter yet. InfraStack still
-// imports the cert through the (buggy) CrossRegionReferences path until a
-// live deploy confirms this writer's Update handler actually advances the
-// parameter version on the next cert change — see the ADR's Status section.
-// This function is additive-only and does not touch InfraStack, so it carries
-// zero deploy risk ahead of that confirmation.
+// The reader is importSiteCert, below. Between them the only thing that
+// crosses the region boundary is a parameter name, and the only thing that
+// orders the two stacks is the explicit dependency buildStacks declares — keep
+// both when touching either.
 func publishCertArnParam(stack awscdk.Stack, cert awscertificatemanager.ICertificate) {
 	customresources.NewAwsCustomResource(stack, jsii.String("CertArnParamWriter"), &customresources.AwsCustomResourceProps{
 		// Same call for both — a plain overwrite-the-value PutParameter is
@@ -195,13 +211,51 @@ func certArnPutParameterCall(cert awscertificatemanager.ICertificate) *customres
 		// an AwsSdkCall with no Region runs against the stack's own region.
 		Region: jsii.String("us-west-1"),
 		Parameters: map[string]interface{}{
-			"Name":      jsii.String(siteCertArnParamName),
-			"Value":     cert.CertificateArn(),
-			"Type":      jsii.String("String"),
-			"Overwrite": jsii.Bool(true),
+			"Name":        jsii.String(siteCertArnParamName),
+			"Value":       cert.CertificateArn(),
+			"Type":        jsii.String("String"),
+			"Overwrite":   jsii.Bool(true),
+			"Description": jsii.String(siteCertArnParamDescription),
 		},
 		PhysicalResourceId: customresources.PhysicalResourceId_Of(cert.CertificateArn()),
 	}
+}
+
+// importSiteCert is the consumer half of rosterbot-klbh: it hands InfraStack
+// the certificate as a CloudFormation DYNAMIC REFERENCE on the parameter
+// publishCertArnParam writes — the literal string
+// "{{resolve:ssm:/rosterbot/SITE_CERT_ARN}}" in the template, which
+// CloudFormation resolves against the parameter's latest version on every
+// update of the resource that uses it and records the version it resolved.
+//
+// Two other spellings are deliberately not used, each of which would
+// reinstate the bug one level up:
+//
+//   - awsssm.StringParameter_ValueForStringParameter emits an
+//     AWS::SSM::Parameter::Value<String> template PARAMETER whose Default is
+//     the name. `cdk deploy` runs with --previous-parameters, which tells
+//     CloudFormation UsePreviousValue whenever the template's Parameter is
+//     unchanged — so the ARN is resolved once and then frozen, exactly the
+//     silent staleness this exists to remove (aws/aws-cdk#7722).
+//   - awsssm.StringParameter_ValueFromLookup resolves at synth time and
+//     caches into cdk.context.json, so a replacement is invisible until
+//     someone clears the context by hand.
+//
+// Certificate_FromCertificateArn accepts the token because CDK skips its
+// "must be in us-east-1" check on an unresolved ARN; the region is enforced
+// where it is decided instead, by certEnv on the producing stack.
+//
+// One property of dynamic references is worth knowing before a cert change:
+// CloudFormation only re-resolves this on a stack UPDATE, and `cdk deploy`
+// skips a stack whose template is byte-identical to the deployed one. A
+// certificate change that touched nothing in InfraStack would therefore not
+// propagate until InfraStack next deployed for any reason. In this repo a
+// cert change is always a new hostname, which is always a new alias on a
+// distribution here, so the two arrive together — but a pure re-issue would
+// not, and CDK's exporter had the identical limitation.
+func importSiteCert(scope constructs.Construct, id string) awscertificatemanager.ICertificate {
+	arn := awscdk.NewCfnDynamicReference(awscdk.CfnDynamicReferenceService_SSM, jsii.String(siteCertArnParamName)).ToString()
+	return awscertificatemanager.Certificate_FromCertificateArn(scope, jsii.String(id), arn)
 }
 
 // Apple-issued values for the iCloud+ Custom Email Domain on rosterbot.dev.
