@@ -350,7 +350,9 @@ hand-run on Fargate and verified (compare their Pushover output to the GHA twins
 > running. To pause everything, deploy with `-c schedulesEnabled=false` (explicit kill switch).
 > `enableBuild` is the opposite polarity and reads as a trap now that CodeBuild is live: it
 > defaults **off**, so a deploy omitting `-c enableBuild=true` does not leave CI absent, it
-> **deletes** it. Always pass it.
+> **deletes** it. Always pass it. Since rosterbot-k2w0 the heartbeat pages once if it is left
+> off (`opsalert.DriftDark`: "deploy pipeline is dark"), because the drift rule that would
+> otherwise notice is deleted by the same command; redeploying with the flag clears it.
 
 ## Cost control while idle
 

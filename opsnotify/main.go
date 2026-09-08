@@ -141,6 +141,10 @@ func dispatch(ctx context.Context, raw json.RawMessage) error {
 		return handleTask(ctx, env.Detail)
 
 	case heartbeatDetailType:
+		// The drift check's own existence is asserted here rather than on the
+		// drift tick, because the drift rule is the thing that goes missing
+		// (rosterbot-k2w0). Best-effort: it never fails the heartbeat.
+		handleDriftConfig(ctx)
 		return handleHeartbeat(ctx)
 
 	case driftDetailType:
