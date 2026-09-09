@@ -1,7 +1,7 @@
 # 4. Hand off the cert ARN via a plain SSM parameter, not a CDK cross-region reference
 
 Date: 2026-09-07
-Status: Accepted — producer shipped 2026-09-07, consumer switched 2026-09-08 (see Status below for the live checks that remain)
+Status: Accepted — producer shipped 2026-09-07, consumer switched 2026-09-09 (PR #206), all four live checks observed on the real account 2026-09-09
 
 ## Context
 
@@ -142,7 +142,10 @@ upstream handler sources, since the earlier NOTES flagged this as uncertain
 after `#38059` removed the in-use check. The previously feared "deadly
 embrace" therefore cannot occur in either order.
 
-**Live checks still owed after the merge lands** (merging is the deploy):
+**Live checks, observed 2026-09-09 after PR #206 deployed (CodeBuild
+`53e014a0`, `InfraCertStack` UPDATE_COMPLETE 16:21:09Z, `InfraStack`
+UPDATE_COMPLETE 16:22:09Z).** Every one of the four passed; the commands are
+kept because they are the recipe for the next certificate change:
 
 1. `aws ssm get-parameter-history --name /rosterbot/SITE_CERT_ARN --region us-west-1`
    shows **version 2**, same value, with the Description. Version still 1
@@ -160,9 +163,23 @@ embrace" therefore cannot occur in either order.
    `https://rosterbot.dev` and `https://recaps.rosterbot.dev` present that
    certificate.
 
-Until (1) is observed on the real account this ADR is Accepted but its
-central claim — that the Update path advances the parameter — rests on the
-change-set evidence above, not on a version number.
+What was seen: (1) version 2 written 16:20:44Z, same ARN, Description
+present — the writer's Update handler ran on the first property change it
+was ever given, which is precisely what CDK's exporter failed to do; (2) the
+`ExportsWriter` trio deleted 16:20:47–16:21:09Z and the `ExportsReader` trio
+16:21:48–16:22:08Z, both cleanly; (3) the old export path empty; (4) both
+distributions on `…/42c8ff20-…`, all three hostnames answering 200 with the
+certificate whose serial ACM reports. Two things the change sets did not
+predict: CloudFormation resolved the dynamic reference, found the ARN already
+attached, and **did not update either distribution at all** (their last
+update is still 2026-08-19, and the `InfraStack` update took 50 s), so the
+change set's `Modify` on `SiteCdn`/`DashboardCdn` was conservative — while
+the stored template now reads `{{resolve:ssm:/rosterbot/SITE_CERT_ARN:2:<ms>}}`
+on both distributions, CloudFormation's own pin of the version it resolved,
+which is what a later update compares the live parameter against; and the
+deploy itself was delayed a day because the CodeBuild webhook was paused for
+rosterbot-k2w0's drift positive control, which is unrelated to this ADR but
+is the first thing to check when a merge produces no build.
 
 ## Consequences
 
