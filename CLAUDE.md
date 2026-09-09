@@ -279,28 +279,7 @@ When adding new commands, flags, env vars, or changing architecture, update `REA
 
 ## GHA
 
-> **SUPERSEDED (2026-06-16).** The GitHub Actions workflows have been **retired** and deleted.
-> The scheduled jobs now run as **ECS Fargate tasks** launched by **EventBridge** schedules in
-> AWS account `476646938644` / `us-west-1`, defined in AWS CDK (Go) under `infra/`. Secrets live
-> in **SSM Parameter Store** (`/rosterbot/*`), state syncs to **S3** (`cache/`/`session/`/`claims/`/`archive/`
-> prefixes) via `entrypoint.sh`, and the recap site is served from **CloudFront**. See
-> **`docs/aws-deployment.md`** for operations, the EventBridge schedule mapping, image builds
-> (CodeBuild, gated `enableBuild`), the schedule gate (`schedulesEnabled`), and cutover/rollback.
-> The `claims` cursor is relocated to `.waivers/last-claims.json` via `CLAIMS_CURSOR_PATH` so it
-> rides the single-writer S3 `claims/` prefix. A push to `main` triggers a Pushover alert on
-> build success/failure via an EventBridge rule on the `Build` project's CodeBuild state-change
-> events, and **every scheduled ECS task that stops is checked for failure** via a second
-> rule on `ECS Task State Change` — both target the one `opsnotify/` Lambda
-> (SUCCEEDED/FAILED/STOPPED, priority 0, personal ops channel). The function is
-> created **unconditionally**; only the CodeBuild rule sits behind
-> `enableBuild`, because job-failure alerting must survive a stack deployed
-> without that flag. Task failures are judged in Go from the run ledger, not by
-> the event pattern — see `internal/opsalert`.
-> The section below is retained as historical reference for how the jobs ran on GHA.
-
-**Auth in AWS** — every Fargate task syncs `.fantrax-cache/` from S3 `session/` before it runs and syncs it back after completion. The first task run after a stale cache may still do a chromedp browser login; subsequent tasks reuse the cached cookie.
-
-`The `.github/workflows/*` details below are retained only as historical reference. The current deployment uses EventBridge schedule rules for the same set of commands and cadence, not GitHub Actions.
+> Retired — scheduled jobs run as ECS Fargate tasks via EventBridge (see `docs/aws-deployment.md`), not GitHub Actions.
 
 ## Agent skills
 
