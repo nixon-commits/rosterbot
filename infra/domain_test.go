@@ -22,13 +22,7 @@ import (
 // — a green deploy that never produces a usable cert.
 func TestCertStack_CoversBothHostnamesAndValidatesInTheImportedZone(t *testing.T) {
 	app := awscdk.NewApp(nil)
-	stack, cert := NewCertStack(app, "Cert", &CertStackProps{awscdk.StackProps{
-		Env:                   certEnv(),
-		CrossRegionReferences: jsii.Bool(true),
-	}})
-	if cert == nil {
-		t.Fatal("NewCertStack returned a nil certificate; nothing downstream could attach it")
-	}
+	stack := NewCertStack(app, "Cert", &CertStackProps{awscdk.StackProps{Env: certEnv()}})
 
 	assertions.Template_FromStack(stack, nil).HasResourceProperties(
 		jsii.String("AWS::CertificateManager::Certificate"),
@@ -65,10 +59,7 @@ func TestCertStack_IsPinnedToUsEast1InTheSameAccount(t *testing.T) {
 // breaking DNS for the domain.
 func TestCertStack_ImportsTheZoneRatherThanCreatingOne(t *testing.T) {
 	app := awscdk.NewApp(nil)
-	stack, _ := NewCertStack(app, "Cert", &CertStackProps{awscdk.StackProps{
-		Env:                   certEnv(),
-		CrossRegionReferences: jsii.Bool(true),
-	}})
+	stack := NewCertStack(app, "Cert", &CertStackProps{awscdk.StackProps{Env: certEnv()}})
 	assertions.Template_FromStack(stack, nil).ResourceCountIs(jsii.String("AWS::Route53::HostedZone"), jsii.Number(0))
 }
 
@@ -88,10 +79,7 @@ func TestCertStack_ImportsTheZoneRatherThanCreatingOne(t *testing.T) {
 // compile against what CDK actually synthesizes here.
 func TestCertStack_PublishesCertArnToPlainSSMParam(t *testing.T) {
 	app := awscdk.NewApp(nil)
-	stack, _ := NewCertStack(app, "Cert", &CertStackProps{awscdk.StackProps{
-		Env:                   certEnv(),
-		CrossRegionReferences: jsii.Bool(true),
-	}})
+	stack := NewCertStack(app, "Cert", &CertStackProps{awscdk.StackProps{Env: certEnv()}})
 	_, raw := certRawTemplate(t, stack)
 	resources, _ := raw["Resources"].(map[string]any)
 
@@ -296,16 +284,8 @@ func infraTemplate(t *testing.T) (assertions.Template, map[string]any) {
 		app := awscdk.NewApp(&awscdk.AppProps{
 			Context: &map[string]interface{}{"enableBuild": "true"},
 		})
-		// An imported certificate is a literal ARN, so it needs no
-		// cross-region machinery — the real cert arrives as a token from
-		// InfraCertStack, but nothing asserted here depends on which.
-		scope := awscdk.NewStack(app, jsii.String("TestCertScope"), &awscdk.StackProps{Env: certEnv()})
-		cert := awscertificatemanager.Certificate_FromCertificateArn(scope, jsii.String("Cert"),
-			jsii.String("arn:aws:acm:us-east-1:476646938644:certificate/00000000-0000-0000-0000-000000000000"))
-
 		stack := NewInfraStack(app, "TestStack", &InfraStackProps{
-			StackProps:  awscdk.StackProps{Env: env()},
-			Certificate: cert,
+			StackProps: awscdk.StackProps{Env: env()},
 		})
 		infraTpl = assertions.Template_FromStack(stack, nil)
 		raw, err := json.Marshal(infraTpl.ToJSON())
@@ -902,4 +882,192 @@ func redirectAllowlist(t *testing.T) []string {
 		hosts = append(hosts, strings.Trim(strings.TrimSpace(f), "'"))
 	}
 	return hosts
+}
+
+// ---- rosterbot-klbh, consumer half: InfraStack reads the parameter the cert
+// stack writes, and nothing crosses the region boundary through CDK's exporter.
+
+var (
+	appOnce   sync.Once
+	appCert   awscdk.Stack
+	appInfra  awscdk.Stack
+	appCertJS map[string]any
+	appInfraJ map[string]any
+)
+
+// deployedApp synthesizes BOTH stacks through buildStacks — the same function
+// main() calls — so these tests see the app CodeBuild deploys rather than a
+// hand-assembled look-alike. That matters here more than elsewhere: whether
+// CDK emits its cross-region export plumbing is decided at app synth, from
+// which references actually cross between the two stacks, and a test that
+// synthesized InfraStack alone could never observe it either way.
+func deployedApp(t *testing.T) (certStack, infraStack awscdk.Stack, certRaw, infraRaw map[string]any) {
+	t.Helper()
+	appOnce.Do(func() {
+		app := awscdk.NewApp(&awscdk.AppProps{
+			Context: &map[string]interface{}{"enableBuild": "true"},
+		})
+		appCert, appInfra = buildStacks(app)
+		_, appCertJS = certRawTemplate(t, appCert)
+		_, appInfraJ = certRawTemplate(t, appInfra)
+	})
+	return appCert, appInfra, appCertJS, appInfraJ
+}
+
+// The consumer half of the fix. Every distribution's viewer certificate must be
+// the literal CloudFormation dynamic reference on the SAME parameter name the
+// producer writes — not a Fn::GetAtt on CDK's ExportsReader (the buggy path),
+// not a {Ref} to an AWS::SSM::Parameter::Value<String> template Parameter
+// (which `cdk deploy --previous-parameters` freezes at its first value, the
+// same silent-staleness class one level up), and not a literal ARN (which
+// cannot follow a replacement at all). Sharing the constant with the producer
+// test is what makes a rename on either side fail here instead of at deploy.
+func TestInfraStack_ReadsTheCertArnAsADynamicReferenceOnTheProducersParameter(t *testing.T) {
+	_, _, _, infraRaw := deployedApp(t)
+	resources, _ := infraRaw["Resources"].(map[string]any)
+	want := "{{resolve:ssm:" + siteCertArnParamName + "}}"
+
+	var distributions int
+	for logicalID, r := range resources {
+		res, _ := r.(map[string]any)
+		if res["Type"] != "AWS::CloudFront::Distribution" {
+			continue
+		}
+		distributions++
+		props, _ := res["Properties"].(map[string]any)
+		cfg, _ := props["DistributionConfig"].(map[string]any)
+		vc, _ := cfg["ViewerCertificate"].(map[string]any)
+		got, isStr := vc["AcmCertificateArn"].(string)
+		if !isStr {
+			t.Errorf("%s AcmCertificateArn = %#v, want the literal string %q "+
+				"(a structured value here is a GetAtt on the ExportsReader or a Ref to a "+
+				"template Parameter — both re-open rosterbot-klbh)", logicalID, vc["AcmCertificateArn"], want)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s AcmCertificateArn = %q, want %q", logicalID, got, want)
+		}
+	}
+	if distributions != 2 {
+		t.Fatalf("found %d AWS::CloudFront::Distribution resource(s), want 2 (SiteCdn and DashboardCdn) — "+
+			"the assertion above ran over fewer distributions than it thinks", distributions)
+	}
+}
+
+// With the reference gone, CDK must synthesize NEITHER half of its cross-region
+// export plumbing: the writer whose name-keyed Update diff is the upstream bug,
+// and the reader that resolved the stale value. This is also what makes
+// CrossRegionReferences removable from both stacks — and once it is removed, a
+// future edit that hands InfraStack the certificate construct again fails at
+// synth ("Set crossRegionReferences=true to enable cross region references")
+// instead of quietly reinstating the path this bead exists to close.
+func TestCertHandoff_SynthesizesNoCrossRegionExportPlumbing(t *testing.T) {
+	_, _, certRaw, infraRaw := deployedApp(t)
+	if n := countResourcesOfType(certRaw, crossRegionWriterType); n != 0 {
+		t.Errorf("InfraCertStack synthesizes %d %s resource(s), want 0 — a reference still crosses", n, crossRegionWriterType)
+	}
+	if n := countResourcesOfType(infraRaw, crossRegionReaderType); n != 0 {
+		t.Errorf("InfraStack synthesizes %d %s resource(s), want 0 — a reference still crosses", n, crossRegionReaderType)
+	}
+}
+
+// countResourcesOfType counts a raw template's resources of one CloudFormation
+// type. Preferred over assertions.ResourceCountIs here because that panics
+// through jsii on a mismatch, aborting every test after it in the binary.
+func countResourcesOfType(raw map[string]any, typ string) int {
+	resources, _ := raw["Resources"].(map[string]any)
+	var n int
+	for _, r := range resources {
+		res, _ := r.(map[string]any)
+		if res["Type"] == typ {
+			n++
+		}
+	}
+	return n
+}
+
+const (
+	crossRegionWriterType = "Custom::CrossRegionExportWriter"
+	crossRegionReaderType = "Custom::CrossRegionExportReader"
+)
+
+// Positive control for the test above. A zero count proves nothing if the type
+// names are not what CDK actually emits, so this builds the smallest app in
+// which a certificate ARN really does cross from us-east-1 to us-west-1 and
+// checks that exactly those two resource types appear. If CDK ever renames
+// them, this fails and the zero-count test is known to have gone blind.
+func TestCrossRegionPlumbingDetector_SeesBothHalvesWhenAReferenceCrosses(t *testing.T) {
+	app := awscdk.NewApp(nil)
+	producer := awscdk.NewStack(app, jsii.String("Producer"), &awscdk.StackProps{
+		Env: certEnv(), CrossRegionReferences: jsii.Bool(true),
+	})
+	cert := awscertificatemanager.NewCertificate(producer, jsii.String("Cert"), &awscertificatemanager.CertificateProps{
+		DomainName: jsii.String("positive-control.invalid"),
+	})
+	consumer := awscdk.NewStack(app, jsii.String("Consumer"), &awscdk.StackProps{
+		Env: env(), CrossRegionReferences: jsii.Bool(true),
+	})
+	awscdk.NewCfnOutput(consumer, jsii.String("CertArn"), &awscdk.CfnOutputProps{Value: cert.CertificateArn()})
+
+	_, producerRaw := certRawTemplate(t, producer)
+	_, consumerRaw := certRawTemplate(t, consumer)
+	if n := countResourcesOfType(producerRaw, crossRegionWriterType); n != 1 {
+		t.Errorf("producer synthesizes %d %s resource(s), want 1 — the detector is not seeing CDK's writer", n, crossRegionWriterType)
+	}
+	if n := countResourcesOfType(consumerRaw, crossRegionReaderType); n != 1 {
+		t.Errorf("consumer synthesizes %d %s resource(s), want 1 — the detector is not seeing CDK's reader", n, crossRegionReaderType)
+	}
+}
+
+// Nothing in the templates orders the two stacks any more — the dynamic
+// reference is a string CloudFormation resolves at deploy time, not a CDK
+// reference — so the ordering the exporter used to imply has to be stated.
+// Without it `cdk deploy --all` may update InfraStack before the parameter it
+// reads has been (re)written, which on a cert change means attaching the
+// certificate that is being replaced away.
+func TestInfraStack_DeploysAfterTheCertStack(t *testing.T) {
+	certStack, infraStack, _, _ := deployedApp(t)
+	for _, dep := range *infraStack.Dependencies() {
+		if *dep.StackName() == *certStack.StackName() {
+			return
+		}
+	}
+	t.Fatalf("InfraStack does not depend on %s; nothing orders the parameter's writer before its reader", *certStack.StackName())
+}
+
+// The parameter carries a Description naming its writer and reader, so an
+// operator running `aws ssm describe-parameters` learns what depends on it
+// before touching it. Adding the field is also the first Update the writer
+// ever performs, which is the live proof the ADR's step 1 asks for: the
+// parameter's version must advance on the deploy that ships this.
+func TestCertArnParamWriter_DescribesTheParameter(t *testing.T) {
+	_, _, certRaw, _ := deployedApp(t)
+	resources, _ := certRaw["Resources"].(map[string]any)
+	for _, r := range resources {
+		res, _ := r.(map[string]any)
+		if res["Type"] != "Custom::AWS" {
+			continue
+		}
+		props, _ := res["Properties"].(map[string]any)
+		for _, key := range []string{"Create", "Update"} {
+			joined, _ := joinedFnJoinString(t, props[key])
+			const field = `"Description":"`
+			idx := strings.Index(joined, field)
+			if idx < 0 {
+				t.Errorf("Custom::AWS %s payload has no Description field: %q", key, joined)
+				continue
+			}
+			desc := joined[idx+len(field):]
+			if end := strings.Index(desc, `"`); end >= 0 {
+				desc = desc[:end]
+			}
+			for _, name := range []string{"InfraStack", "InfraCertStack"} {
+				if !strings.Contains(desc, name) {
+					t.Errorf("Custom::AWS %s Description = %q, does not name %s", key, desc, name)
+				}
+			}
+		}
+		return
+	}
+	t.Fatal("no Custom::AWS resource found in the cert stack")
 }
