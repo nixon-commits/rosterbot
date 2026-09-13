@@ -581,3 +581,91 @@ func TestRun_PrefilledStartRateCacheSkipsTheHistoryWalk(t *testing.T) {
 			"this call.\n%s", ft.pitcherDayCalls, out.String())
 	}
 }
+
+// TestRun_ExplicitDateOutsideSeasonAppliesNothing pins both season-boundary
+// guards on the explicit-dates path — the one the 14/day hourly job takes,
+// where ResolveDates does no lookup and *OutOfSeasonError never arises
+// (rosterbot-pjqw). The roster carries an obvious upgrade and the schedule
+// says both clubs play, so a missing guard is not a quiet no-op: the
+// optimizer finds the move and the fake records a live apply. Two positive
+// controls: the final date itself, because the season's last day still has
+// games and the guard must be strictly after the end; and an explicit
+// in-season --dates day requested once the season is over, because the
+// guards key on the day being optimized, not the wall clock — otherwise
+// every single-date dry-run (the documented offseason workflow) would print
+// "Season ended" until the next opener.
+func TestRun_ExplicitDateOutsideSeasonAppliesNothing(t *testing.T) {
+	seasonStart := time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC)
+	seasonEnd := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name      string
+		today     time.Time
+		date      time.Time // the --dates day; zero means the bare [today] the hourly job passes
+		wantApply bool
+		wantLine  string
+	}{
+		{"day after the final date", seasonEnd.AddDate(0, 0, 1), time.Time{}, false, "Season ended 2026-09-27. No games to optimize."},
+		{"day before the opener", seasonStart.AddDate(0, 0, -1), time.Time{}, false, "Season starts 2026-03-25. No games to optimize for today."},
+		{"the final date itself", seasonEnd, time.Time{}, true, "Lineup applied successfully."},
+		{"an explicit in-season day requested after the season ended", seasonEnd.AddDate(0, 0, 7), seasonEnd.AddDate(0, 0, -7), true, "Lineup applied successfully."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			date := tc.date
+			if date.IsZero() {
+				date = tc.today
+			}
+			ft := &fakeLineupClient{
+				hitters: []fantrax.Player{
+					{ID: "h1", Name: "Hot Hitter", MLBTeam: "NYY", Positions: []string{"012"}, Status: "Reserve"},
+					{ID: "h2", Name: "Cold Bat", MLBTeam: "BOS", Positions: []string{"012"}, Status: "Active", RosterPosition: "014"},
+				},
+				pitchers: []fantrax.Player{
+					{ID: "p1", Name: "Steady Reliever", MLBTeam: "BOS", Positions: []string{"016"}, PosShortNames: "RP", Status: "Active", RosterPosition: "017"},
+				},
+				seasonStart: seasonStart,
+				seasonEnd:   seasonEnd,
+				period:      167,
+			}
+			bat := projections.NewFanGraphsSourceFromEntries([]projections.SourceEntry{
+				{Name: "Hot Hitter", Team: "NYY", Proj: projections.Projection{G: 100, HR: 30}},
+				{Name: "Cold Bat", Team: "BOS", Proj: projections.Projection{G: 100, HR: 5}},
+			})
+			pit := projections.NewFanGraphsPitcherSourceFromEntries([]projections.PitcherSourceEntry{
+				{Name: "Steady Reliever", Team: "BOS", Proj: projections.PitcherProjection{G: 60, IP: 65, K: 70}},
+			})
+			sched := &fakeDateSchedule{
+				fakeSchedule: fakeSchedule{
+					playing: map[string]map[string]bool{
+						date.Format("2006-01-02"): {"NYY": true, "BOS": true},
+					},
+				},
+			}
+			cfg := &config.Config{
+				LeagueID:  "lg1",
+				TeamID:    "team1",
+				DryRun:    false,
+				AutoApply: true,
+				Dates:     []time.Time{date},
+			}
+			var out bytes.Buffer
+			opts := withFakeDeps(Options{
+				Today:         tc.today,
+				HitterSystem:  "depthcharts",
+				PitcherSystem: "depthcharts",
+				Out:           &out,
+			}, bat, pit, sched)
+
+			if _, err := Run(context.Background(), ft, cfg, opts); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if got := len(ft.applies) > 0; got != tc.wantApply {
+				t.Errorf("ApplyLineup called = %v, want %v; output:\n%s", got, tc.wantApply, out.String())
+			}
+			if !strings.Contains(out.String(), tc.wantLine) {
+				t.Errorf("output lacks %q:\n%s", tc.wantLine, out.String())
+			}
+		})
+	}
+}

@@ -501,6 +501,17 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 
 	multiDate := len(dates) > 1
 
+	// day is the one day a non-range run is about: the hourly job's bare
+	// [today], or a single explicit --dates day. The season-boundary guards
+	// below key on it rather than on the wall clock, so an explicit
+	// in-season day still optimizes once the season is over (or before it
+	// opens) — that is what --dates is for, and a range already passes on
+	// !multiDate. For the scheduled jobs the two are the same value.
+	day := today
+	if len(dates) == 1 {
+		day = dates[0]
+	}
+
 	// Get season start date for period calculation.
 	// If ResolveDates already fetched the season range (--dates all or --matchup),
 	// reuse seasonStart from above instead of refetching it.
@@ -516,10 +527,24 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		}
 	}
 
-	// Skip optimization if today is before the season start.
-	if !seasonStart.IsZero() && today.Before(seasonStart) && !multiDate {
+	// Skip optimization if the day is before the season start.
+	if !seasonStart.IsZero() && day.Before(seasonStart) && !multiDate {
 		prog.Logf("season starts %s — nothing to optimize yet", seasonStart.Format("2006-01-02"))
 		fmt.Fprintf(out, "\nSeason starts %s. No games to optimize for today.\n", seasonStart.Format("2006-01-02"))
+		return result, nil
+	}
+
+	// ...and if it is past the season's final date. The OutOfSeasonError
+	// branch above covers this only for runs that asked ResolveDates for a
+	// lookup (--matchup, --dates all); the hourly job passes no --dates and
+	// reaches here with a bare [today], so without this mirror it optimized
+	// and applied every hour past the end (rosterbot-pjqw). Strictly After:
+	// the final date still has games. A zero seasonEnd stays unguarded —
+	// an unknown boundary is not an off-season one — and !multiDate keeps
+	// an explicit historical --dates range backfilling.
+	if !seasonEnd.IsZero() && day.After(seasonEnd) && !multiDate {
+		prog.Logf("season ended %s — nothing to optimize", seasonEnd.Format("2006-01-02"))
+		fmt.Fprintf(out, "\nSeason ended %s. No games to optimize.\n", seasonEnd.Format("2006-01-02"))
 		return result, nil
 	}
 
