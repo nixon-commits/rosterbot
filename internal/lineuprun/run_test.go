@@ -3,6 +3,8 @@ package lineuprun
 import (
 	"bytes"
 	"context"
+	"errors"
+	"github.com/pmurley/go-fantrax/auth_client"
 	"strings"
 	"sync"
 	"testing"
@@ -24,9 +26,11 @@ import (
 // season as not yet underway and passes the base sources through, keeping the
 // recency window (and its Fantrax reads) out of the composition under test.
 type fakeLineupClient struct {
-	mu       sync.Mutex
-	hitters  []fantrax.Player
-	pitchers []fantrax.Player
+	bracket    *auth_client.PlayoffBracket
+	bracketErr error
+	mu         sync.Mutex
+	hitters    []fantrax.Player
+	pitchers   []fantrax.Player
 
 	seasonStart, seasonEnd time.Time
 	period                 fantrax.DailyPeriod // DailyPeriodFor's answer for every date
@@ -108,6 +112,12 @@ func (f *fakeLineupClient) GetRecentPitcherStats(_ fantrax.DailyPeriod) (map[str
 }
 func (f *fakeLineupClient) GetSeasonDateRange() (time.Time, time.Time, error) {
 	return f.seasonStart, f.seasonEnd, nil
+}
+func (f *fakeLineupClient) GetPlayoffBracket() (*auth_client.PlayoffBracket, error) {
+	if f.bracketErr != nil {
+		return nil, f.bracketErr
+	}
+	return f.bracket, nil
 }
 func (f *fakeLineupClient) DailyFantasyPoints(_ string, _, _, _ time.Time, _ string, _ time.Duration) ([]fantrax.DayRoster, error) {
 	return nil, nil
@@ -761,6 +771,84 @@ func TestRun_PlayoffRoundWithoutAMatchupAppliesNothing(t *testing.T) {
 			}
 			if got := len(ft.applies) > 0; got != tc.wantApply {
 				t.Errorf("ApplyLineup called = %v, want %v; output:\n%s", got, tc.wantApply, out.String())
+			}
+			if !strings.Contains(out.String(), tc.wantLine) {
+				t.Errorf("output lacks %q:\n%s", tc.wantLine, out.String())
+			}
+		})
+	}
+}
+
+// A stop inside the bracket says WHY, read off the bracket: the round and
+// opponent a team lost to, the round it sat out, or that it was never seeded.
+// When the bracket cannot be read the stop still happens on the matchup-week
+// evidence alone, with the generic wording, because the wording is decoration
+// on a decision the week lookup already made.
+func TestRun_PlayoffStopNamesTheReason(t *testing.T) {
+	seasonStart := time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC)
+	seasonEnd := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
+	team := func(id, name string) auth_client.PlayoffSlot {
+		return auth_client.PlayoffSlot{Kind: auth_client.PlayoffSlotTeam, TeamID: id, TeamName: name}
+	}
+	bye := auth_client.PlayoffSlot{Kind: auth_client.PlayoffSlotBye}
+	bracket := &auth_client.PlayoffBracket{Rounds: []auth_client.PlayoffRound{
+		{Number: 1, Caption: "Round 1", ScoringPeriod: 23,
+			StartDate: time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC), EndDate: time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC),
+			Matchups: []auth_client.PlayoffMatchup{
+				{Home: team("pfaadt", "Pfaadt Wood Kings"), Away: bye},
+				{Home: team("jimmy", "jimmydyl"), Away: team("team1", "Intentional Balk"), HomeScore: 605, AwayScore: 515, Scored: true},
+			}},
+		{Number: 2, Caption: "Round 2", ScoringPeriod: 24,
+			StartDate: time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC), EndDate: time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC),
+			Matchups: []auth_client.PlayoffMatchup{{Home: team("pfaadt", "Pfaadt Wood Kings"), Away: team("jimmy", "jimmydyl"), Scored: true}}},
+	}}
+	round1 := fantrax.ScoringPeriod{Number: 23, Caption: "Playoffs - Round 1", Playoff: true,
+		StartDate: bracket.Rounds[0].StartDate, EndDate: bracket.Rounds[0].EndDate}
+	round2 := fantrax.ScoringPeriod{Number: 24, Caption: "Playoffs - Round 2", Playoff: true,
+		StartDate: bracket.Rounds[1].StartDate, EndDate: bracket.Rounds[1].EndDate}
+
+	cases := []struct {
+		name       string
+		teamID     string
+		today      time.Time
+		periods    []fantrax.ScoringPeriod
+		bracket    *auth_client.PlayoffBracket
+		bracketErr error
+		wantLine   string
+	}{
+		{"eliminated", "team1", round2.StartDate.AddDate(0, 0, 1), []fantrax.ScoringPeriod{round1, round2}, bracket, nil,
+			"Eliminated in Playoffs - Round 1 (lost to jimmydyl 515-605). Nothing to optimize."},
+		{"bye", "pfaadt", round1.StartDate.AddDate(0, 0, 1), []fantrax.ScoringPeriod{round1, round2}, bracket, nil,
+			"On a bye in Playoffs - Round 1 (2026-09-07 to 2026-09-13). Nothing to optimize."},
+		{"never seeded", "bt95", round2.StartDate.AddDate(0, 0, 1), []fantrax.ScoringPeriod{round1, round2}, bracket, nil,
+			"Not in the playoff bracket (Playoffs - Round 2 is under way). Nothing to optimize."},
+		{"bracket unreadable", "team1", round2.StartDate.AddDate(0, 0, 1), []fantrax.ScoringPeriod{round1, round2}, nil, errors.New("fantrax 524"),
+			"No scoring matchup for this team in Playoffs - Round 2 (2026-09-14 to 2026-09-20): bye or eliminated. Nothing to optimize."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := &fakeLineupClient{
+				hitters:     []fantrax.Player{{ID: "h1", Name: "Hot Hitter", MLBTeam: "NYY", Positions: []string{"012"}, Status: "Reserve"}},
+				pitchers:    []fantrax.Player{{ID: "p1", Name: "Steady Reliever", MLBTeam: "BOS", Positions: []string{"016"}, PosShortNames: "RP", Status: "Active", RosterPosition: "017"}},
+				seasonStart: seasonStart,
+				seasonEnd:   seasonEnd,
+				periods:     tc.periods,
+				bracket:     tc.bracket,
+				bracketErr:  tc.bracketErr,
+				period:      175,
+			}
+			bat := projections.NewFanGraphsSourceFromEntries([]projections.SourceEntry{{Name: "Hot Hitter", Team: "NYY", Proj: projections.Projection{G: 100, HR: 30}}})
+			pit := projections.NewFanGraphsPitcherSourceFromEntries([]projections.PitcherSourceEntry{{Name: "Steady Reliever", Team: "BOS", Proj: projections.PitcherProjection{G: 60, IP: 65, K: 70}}})
+			sched := &fakeDateSchedule{fakeSchedule: fakeSchedule{playing: map[string]map[string]bool{tc.today.Format("2006-01-02"): {"NYY": true, "BOS": true}}}}
+			cfg := &config.Config{LeagueID: "lg1", TeamID: tc.teamID, AutoApply: true, Dates: []time.Time{tc.today}}
+			var out bytes.Buffer
+			opts := withFakeDeps(Options{Today: tc.today, HitterSystem: "depthcharts", PitcherSystem: "depthcharts", Out: &out}, bat, pit, sched)
+
+			if _, err := Run(context.Background(), ft, cfg, opts); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(ft.applies) > 0 {
+				t.Errorf("ApplyLineup was called; output:\n%s", out.String())
 			}
 			if !strings.Contains(out.String(), tc.wantLine) {
 				t.Errorf("output lacks %q:\n%s", tc.wantLine, out.String())

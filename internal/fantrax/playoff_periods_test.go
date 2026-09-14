@@ -68,8 +68,19 @@ func TestPlayoffPeriods_OnePerRoundFlaggedPlayoff(t *testing.T) {
 // code needs no special case.
 func TestPlayoffMatchups_RealPairingsOnlyWithScoresAndStartDate(t *testing.T) {
 	got := playoffMatchups(bracket2026())
-	if len(got) != 4 {
-		t.Fatalf("matchups = %d, want 4 (2 in round 1, 2 in round 2)", len(got))
+	var drawn, pending int
+	for _, m := range got {
+		if m.AwayTeam.TeamID == "" {
+			pending++
+		} else {
+			drawn++
+		}
+	}
+	// 2 drawn in round 1, 2 in round 2; the undrawn final (seed placeholders)
+	// yields one PENDING row per team still alive out of round 2 — all four,
+	// since round 2 is unscored — see TestPlayoffMatchups_UndrawnRoundKeepsAdvancersAlive.
+	if drawn != 4 || pending != 4 {
+		t.Fatalf("matchups = %d drawn + %d pending, want 4 + 4", drawn, pending)
 	}
 	r1 := got[0]
 	if r1.ScoringPeriod != 23 || r1.Date != "Mon Sep 7, 2026" {
@@ -79,8 +90,8 @@ func TestPlayoffMatchups_RealPairingsOnlyWithScoresAndStartDate(t *testing.T) {
 		t.Errorf("round 1 matchup = %+v, want balk 515 @ jimmy 605", r1)
 	}
 	for _, m := range got {
-		if m.ScoringPeriod == 25 {
-			t.Errorf("undrawn final leaked into matchups: %+v", m)
+		if m.ScoringPeriod == 25 && m.AwayTeam.TeamID != "" {
+			t.Errorf("undrawn final produced a drawn pairing: %+v", m)
 		}
 	}
 }
