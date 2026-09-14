@@ -43,6 +43,19 @@ func (e *OutOfSeasonError) Error() string {
 // keep reaching the loud path rather than being swept in here.
 func (e *OutOfSeasonError) BeforeOpener() bool { return e.Today.Before(e.Start) }
 
+// NoMatchupWeekError reports that today is inside the season but the team has
+// no matchup week containing it. During the playoff bracket that is an
+// ordinary answer — a bye, or a team that is out — while in the regular
+// season it still means Fantrax published no row. ResolveDates has only the
+// season range and the week bounds, so it reports the condition and leaves
+// the verdict to the caller, which holds the weekly period list and can tell
+// a playoff round from a regular-season gap (rosterbot-0lyz).
+type NoMatchupWeekError struct{ Today, SeasonStart time.Time }
+
+func (e *NoMatchupWeekError) Error() string {
+	return fmt.Sprintf("no matchup week found for %s", e.Today.Format("2006-01-02"))
+}
+
 // ResolveDates expands the caller's date selection into the concrete list of
 // days a run will optimize, returning it as a VALUE.
 //
@@ -60,7 +73,9 @@ func (e *OutOfSeasonError) BeforeOpener() bool { return e.Today.Before(e.Start) 
 //     through the season's final day.
 //
 // A matchup lookup outside the season returns an *OutOfSeasonError, which the
-// caller ends the run cleanly on rather than treating as a fault.
+// caller ends the run cleanly on rather than treating as a fault; one inside
+// the season that finds no week returns a *NoMatchupWeekError for the caller
+// to judge against the weekly period list.
 //
 // seasonStart and seasonEnd are returned alongside because the same
 // GetSeasonDateRange call serves both, and downstream phases need them — the
@@ -104,7 +119,7 @@ func ResolveDates(ft DateResolver, base []time.Time, opts Options, logf func(str
 			return nil, time.Time{}, time.Time{}, fmt.Errorf("get matchup week: %w", err)
 		}
 		if weekStart.IsZero() {
-			return nil, time.Time{}, time.Time{}, fmt.Errorf("no matchup week found for today")
+			return nil, time.Time{}, time.Time{}, &NoMatchupWeekError{Today: opts.Today, SeasonStart: seasonStart}
 		}
 		// Start from today (skip past days in the matchup).
 		mStart := weekStart

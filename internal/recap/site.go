@@ -42,7 +42,11 @@ func RunSite(ctx context.Context, ft SiteClient, sopts SiteOptions) error {
 
 	sched := schedule.NewClient()
 	sched.CacheDir = sopts.Recap.CacheDir
-	completed, err := completedMatchupWeeks(ctx, ft, sched, sopts.Today)
+	periods, _, _, err := ft.GetScoringPeriodsAndTeams()
+	if err != nil {
+		return fmt.Errorf("scoring periods: %w", err)
+	}
+	completed, err := completedMatchupWeeks(ctx, periods, sched, sopts.Today)
 	if err != nil {
 		return err
 	}
@@ -55,7 +59,7 @@ func RunSite(ctx context.Context, ft SiteClient, sopts SiteOptions) error {
 	for i, w := range completed {
 		nav[i] = WeekLink{
 			WeekNumber: w.n,
-			WeekLabel:  fmt.Sprintf("Week %d", w.n),
+			WeekLabel:  w.label,
 			Filename:   weekFilename(w.n),
 		}
 	}
@@ -70,6 +74,7 @@ func RunSite(ctx context.Context, ft SiteClient, sopts SiteOptions) error {
 		weekOpts.WeekStart = w.start
 		weekOpts.WeekEnd = w.end
 		weekOpts.WeekNumber = w.n
+		weekOpts.WeekLabel = w.label
 		// Past weeks are immutable; default to a long TTL when caller didn't
 		// override. Caller can pass 0 explicitly with --no-cache semantics.
 		if weekOpts.CacheTTL == 0 {
@@ -124,8 +129,18 @@ func RunSite(ctx context.Context, ft SiteClient, sopts SiteOptions) error {
 	return nil
 }
 
-// matchupWeek is one (number, start, end) tuple.
+// weekLabel names a period the way the site shows it: "Week N" for a
+// regular-season period, Fantrax's own caption for a playoff round.
+func weekLabel(p fantrax.ScoringPeriod) string {
+	if p.Playoff {
+		return p.Caption
+	}
+	return fmt.Sprintf("Week %d", p.Number)
+}
+
+// matchupWeek is one (number, label, start, end) tuple.
 type matchupWeek struct {
+	label      string
 	n          int
 	start, end time.Time
 }
@@ -137,47 +152,35 @@ type dayCompletionChecker interface {
 	AllGamesFinalOn(ctx context.Context, date time.Time) (bool, error)
 }
 
-// matchupWeekProvider yields the [start, end] bounds of the n-th matchup week,
-// or zero times once n is past the season. Satisfied by *fantrax.Client;
-// narrowed to an interface so completedMatchupWeeks is testable without network.
-type matchupWeekProvider interface {
-	GetMatchupWeekByNumber(n int) (weekStart, weekEnd time.Time, err error)
-}
-
-// SiteClient is the fantrax subset RunSite needs: everything Run needs, plus
-// the per-number matchup-week lookup used to enumerate completed weeks.
-// *fantrax.Client satisfies it implicitly — internal/fantrax is not modified.
+// SiteClient is the fantrax subset RunSite needs. It is RecapClient: the
+// weeks are enumerated from the league's weekly period list, which Run
+// already reads. *fantrax.Client satisfies it implicitly.
 type SiteClient interface {
 	RecapClient
-	matchupWeekProvider
 }
 
-// completedMatchupWeeks enumerates weeks 1..N for the configured team and
-// returns those that are over. A week is complete when its end date is
+// completedMatchupWeeks enumerates the LEAGUE's weekly periods — regular
+// season and playoff rounds alike, never the operator's own matchup weeks, so
+// a round the operator was eliminated before still gets a page — and returns
+// those that are over. A week is complete when its end date is
 // strictly before today, OR its end date is today AND every MLB game on that
 // final day has finished. The same-day case lets a Sunday-ending week render
 // the same evening once its games conclude — the Fantrax weekly "points" field
 // is a running in-week score and can't signal closure, but the MLB schedule
 // can. On a schedule lookup error the same-day week is conservatively excluded
 // (treated as still in progress). Sorted ascending.
-func completedMatchupWeeks(ctx context.Context, weeks matchupWeekProvider, sched dayCompletionChecker, today time.Time) ([]matchupWeek, error) {
+func completedMatchupWeeks(ctx context.Context, periods []fantrax.ScoringPeriod, sched dayCompletionChecker, today time.Time) ([]matchupWeek, error) {
 	todayYMD := today.Format("2006-01-02")
 	var out []matchupWeek
-	for n := 1; ; n++ {
-		ws, we, err := weeks.GetMatchupWeekByNumber(n)
-		if err != nil {
-			return nil, fmt.Errorf("week %d bounds: %w", n, err)
-		}
-		if ws.IsZero() {
-			break
-		}
-		weYMD := we.Format("2006-01-02")
+	for _, p := range periods {
+		w := matchupWeek{n: int(p.Number), label: weekLabel(p), start: p.StartDate, end: p.EndDate}
+		weYMD := p.EndDate.Format("2006-01-02")
 		switch {
 		case weYMD < todayYMD:
-			out = append(out, matchupWeek{n: n, start: ws, end: we})
+			out = append(out, w)
 		case weYMD == todayYMD:
-			if done, err := sched.AllGamesFinalOn(ctx, we); err == nil && done {
-				out = append(out, matchupWeek{n: n, start: ws, end: we})
+			if done, err := sched.AllGamesFinalOn(ctx, p.EndDate); err == nil && done {
+				out = append(out, w)
 			}
 		}
 	}

@@ -73,7 +73,14 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	start, end, notice, err := resolveBacktestWindow(ft, rangeOpts)
+	// The weekly period list is what tells a playoff bye/elimination (a
+	// clean stop) from a regular-season gap (a fault); soft — without it the
+	// no-week case simply stays the error it always was.
+	periods, _, _, perr := ft.GetScoringPeriodsAndTeams()
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "warning: scoring periods unavailable (%v); a missing matchup week will be reported as an error\n", perr)
+	}
+	start, end, notice, err := resolveBacktestWindow(ft, rangeOpts, periods)
 	if err != nil {
 		return err
 	}
@@ -204,7 +211,11 @@ func backtestRangeOptions(today, seasonStart, seasonEnd time.Time) (backtest.Ran
 // weekly Monday job passes no flags, and past the season's final date it exited
 // 1 with a usage dump and paged every week until the next opener
 // (rosterbot-asy7). The wording mirrors the optimize jobs' season lines.
-func resolveBacktestWindow(wb fantrax.WeekBounder, opts backtest.RangeOptions) (start, end time.Time, notice string, err error) {
+//
+// periods is the league's weekly period list; inside a playoff round a
+// missing matchup week is a bye or an elimination and a clean stop, while in
+// the regular season it stays a fault (rosterbot-0lyz).
+func resolveBacktestWindow(wb fantrax.WeekBounder, opts backtest.RangeOptions, periods []fantrax.ScoringPeriod) (start, end time.Time, notice string, err error) {
 	start, end, err = backtest.ResolveRange(wb, opts)
 	var oos *backtest.OutOfSeasonError
 	if errors.As(err, &oos) {
@@ -214,6 +225,13 @@ func resolveBacktestWindow(wb fantrax.WeekBounder, opts backtest.RangeOptions) (
 		}
 		return time.Time{}, time.Time{}, fmt.Sprintf("Season ended %s. No completed matchup week to grade.",
 			oos.End.Format("2006-01-02")), nil
+	}
+	if errors.Is(err, fantrax.ErrNoMatchupWeek) {
+		yesterday := opts.Today.AddDate(0, 0, -1)
+		if p := fantrax.FindCurrentPeriod(periods, yesterday); p != nil && p.Playoff {
+			return time.Time{}, time.Time{}, fmt.Sprintf("No matchup week for this team ending %s (%s): bye or eliminated. Nothing to grade.",
+				yesterday.Format("2006-01-02"), p.Caption), nil
+		}
 	}
 	if err != nil {
 		return time.Time{}, time.Time{}, "", fmt.Errorf("resolve range: %w", err)

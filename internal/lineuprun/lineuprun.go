@@ -324,6 +324,17 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 			}
 			return Result{}, nil
 		}
+		// In season with no matchup week: a clean stop only inside a playoff
+		// round (bye or eliminated); in the regular season it stays the fault
+		// it always was.
+		var nmw *NoMatchupWeekError
+		if errors.As(err, &nmw) {
+			if p, idle, ierr := playoffIdle(ft, nmw.Today, nmw.SeasonStart); ierr == nil && idle {
+				prog.Logf("%s", playoffIdleLine(p))
+				fmt.Fprintf(out, "\n%s\n", playoffIdleLine(p))
+				return Result{}, nil
+			}
+		}
 		return Result{}, err
 	}
 
@@ -546,6 +557,22 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		prog.Logf("season ended %s — nothing to optimize", seasonEnd.Format("2006-01-02"))
 		fmt.Fprintf(out, "\nSeason ended %s. No games to optimize.\n", seasonEnd.Format("2006-01-02"))
 		return result, nil
+	}
+
+	// ...and if the day is a playoff round this team has no scoring matchup
+	// in (a bye, or eliminated). The bare-[today] hourly job reaches here
+	// without any matchup lookup, and without this it would keep optimizing
+	// and applying a lineup that scores for nobody through the bracket. An
+	// unknown bracket status is not a reason to skip a live day, so a lookup
+	// failure logs and optimizes anyway.
+	if !seasonStart.IsZero() && !multiDate {
+		if p, idle, perr := playoffIdle(ft, day, seasonStart); perr != nil {
+			prog.Logf("WARNING: playoff status unknown (%v) — optimizing anyway", perr)
+		} else if idle {
+			prog.Logf("%s", playoffIdleLine(p))
+			fmt.Fprintf(out, "\n%s\n", playoffIdleLine(p))
+			return result, nil
+		}
 	}
 
 	// --- GS Budget (weekly game-start limit awareness) ---

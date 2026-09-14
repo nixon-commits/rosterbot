@@ -198,7 +198,11 @@ type Client struct {
 	// per-run freshness — the in-progress week's scores mutate during
 	// the day — we deliberately don't persist this to disk; in-memory
 	// lasts as long as the process and that's the right scope.
-	matchupsMu   sync.Mutex
+	matchupsMu sync.Mutex
+	// bracketMemo is the playoff bracket fetched alongside matchupsMemo, under
+	// the same lock, so GetAllMatchupEntries can add the byes the SCHEDULE
+	// rows cannot express. Nil when the league has no playoffs.
+	bracketMemo  *auth_client.PlayoffBracket
 	matchupsMemo *auth_client.AllMatchupsResult
 
 	// periodMapMu guards periodMapMemo, an in-memory cache of the
@@ -280,18 +284,39 @@ func (c *Client) getLeagueInfo() (*gofantrax.LeagueInfo, error) {
 // That deliberate absence of a disk cache is also what leaves this call with
 // no fallback when Fantrax blips, so it retries (see retry.go). It is a pure
 // read, which is what makes retrying it safe.
+//
+// The SCHEDULE view stops at the regular season, so the playoff bracket is
+// fetched beside it and its real pairings are merged in as SCHEDULE-shaped
+// rows (playoffMatchups) before the memo is set. Every week lookup built on
+// this list therefore sees a playoff team's rounds and nothing for a team on
+// a bye or out of the bracket — the seam that makes 2026-09-06 the end of the
+// REGULAR season rather than the end of the season (rosterbot-0lyz).
 func (c *Client) allMatchups() (*auth_client.AllMatchupsResult, error) {
+	result, _, err := c.allMatchupsAndBracket()
+	return result, err
+}
+
+// fetchAllMatchupsFn is the seam tests use to stub the SCHEDULE matchups fetch.
+var fetchAllMatchupsFn = func(c *Client) (*auth_client.AllMatchupsResult, error) { return c.auth.GetAllMatchups() }
+
+// allMatchupsAndBracket is allMatchups plus the bracket it was merged with.
+func (c *Client) allMatchupsAndBracket() (*auth_client.AllMatchupsResult, *auth_client.PlayoffBracket, error) {
 	c.matchupsMu.Lock()
 	defer c.matchupsMu.Unlock()
 	if c.matchupsMemo != nil {
-		return c.matchupsMemo, nil
+		return c.matchupsMemo, c.bracketMemo, nil
 	}
-	result, err := withRetry("getAllMatchups", fantraxBackoff, c.auth.GetAllMatchups)
+	result, err := withRetry("getAllMatchups", fantraxBackoff, func() (*auth_client.AllMatchupsResult, error) { return fetchAllMatchupsFn(c) })
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	c.matchupsMemo = result
-	return result, nil
+	bracket, err := c.bracketWithRetry()
+	if err != nil {
+		return nil, nil, fmt.Errorf("playoff bracket: %w", err)
+	}
+	result.Matchups = append(result.Matchups, playoffMatchups(bracket)...)
+	c.matchupsMemo, c.bracketMemo = result, bracket
+	return result, bracket, nil
 }
 
 // InvalidatePeriodRosterCache drops the cached hitter and pitcher rosters for

@@ -97,6 +97,7 @@ type teamGS struct {
 // satisfies it implicitly — internal/fantrax is not modified.
 type GSCheckClient interface {
 	GetScoringPeriodsAndTeams() ([]fantrax.ScoringPeriod, map[string]string, map[string]string, error)
+	GetAllMatchupEntries() ([]fantrax.MatchupEntry, error)
 	GetGSLimits(teamID string, period fantrax.WeeklyPeriod) (min, max *int, err error)
 	GetTeamGS(teamID, teamName string, sp fantrax.ScoringPeriod, seasonStart, today time.Time, gsMax int, verbose bool) (int, []fantrax.PitcherStart, error)
 }
@@ -222,6 +223,21 @@ func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error 
 
 	if len(teamMap) == 0 {
 		return fmt.Errorf("no teams found")
+	}
+
+	// In a playoff round only the teams with a scoring matchup are bound by
+	// the limits: a bye team and an eliminated team have nothing to violate,
+	// and tallying them would page the league "Under Min" every Monday of
+	// the bracket. The pairings, not the team list, say who is in — and a
+	// failure to learn them is a failure, since guessing "everyone" is the
+	// false page and guessing "nobody" is a silent skip.
+	if period.Playoff {
+		entries, err := ft.GetAllMatchupEntries()
+		if err != nil {
+			return fmt.Errorf("playoff pairings for period %d: %w", period.Number, err)
+		}
+		teamMap = pairedTeams(teamMap, entries, int(period.Number))
+		fmt.Printf("Playoff round: checking only the %d team(s) with a scoring matchup.\n", len(teamMap))
 	}
 
 	// Derive season start from the earliest scoring period (period 1 = season opener).
@@ -355,4 +371,20 @@ func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error 
 	}
 
 	return coverageErr(skipped)
+}
+
+// pairedTeams narrows teams to those with a non-bye pairing in the period.
+func pairedTeams(teams map[string]string, entries []fantrax.MatchupEntry, period int) map[string]string {
+	out := map[string]string{}
+	for _, e := range entries {
+		if e.ScoringPeriod != period || e.Bye {
+			continue
+		}
+		for _, id := range []string{e.HomeID, e.AwayID} {
+			if name, ok := teams[id]; ok {
+				out[id] = name
+			}
+		}
+	}
+	return out
 }

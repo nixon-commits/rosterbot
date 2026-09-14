@@ -236,3 +236,21 @@ func TestResolveDates_ReturnsSeasonEnd(t *testing.T) {
 		t.Errorf("seasonEnd = %v, want 2026-09-06", seasonEnd)
 	}
 }
+
+// During the bracket "no matchup week" is an ordinary in-season answer (a
+// bye, or a team that is out), so the phase reports it as a typed condition
+// carrying what the caller needs to decide — not a bare string it would have
+// to parse — while the regular-season meaning (Fantrax published no row) is
+// left to the caller, which has the periods list and can tell the two apart.
+func TestResolveDates_NoMatchupWeekInSeasonIsTyped(t *testing.T) {
+	ft := &fakeDateClient{seasonStart: day(2026, 3, 25), seasonEnd: day(2026, 9, 27)}
+
+	_, _, _, err := ResolveDates(ft, nil, Options{Today: day(2026, 9, 14), NeedsMatchupLookup: true}, discard)
+	var nmw *NoMatchupWeekError
+	if !errors.As(err, &nmw) {
+		t.Fatalf("err = %v, want *NoMatchupWeekError", err)
+	}
+	if !nmw.Today.Equal(day(2026, 9, 14)) || !nmw.SeasonStart.Equal(day(2026, 3, 25)) {
+		t.Errorf("NoMatchupWeekError = %+v, want Today 2026-09-14 and SeasonStart 2026-03-25", nmw)
+	}
+}

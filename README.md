@@ -334,8 +334,10 @@ rosterbot recap --out /tmp/recap.html
 rosterbot recap --dates 2026-04-20:2026-04-26 --out /tmp/recap.html
 rosterbot recap --out /tmp/recap.html --open        # render + open in browser
 
-# Build the multi-week static site (one HTML per completed week + index.html)
+# Build the multi-week static site (one HTML per completed week + index.html).
+# Playoff rounds are weeks too: week-23.html is "Playoffs - Round 1", with byes shown.
 rosterbot recap-site --out dist
+rosterbot recap --week 23 --out /tmp/round1.html   # --week N is the league's weekly period N
 ```
 
 </details>

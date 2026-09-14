@@ -493,6 +493,19 @@
     </div>
   </div>
   {{- end}}
+  {{- range .Byes}}
+  {{- $byeLogo := teamLogo $.LogoURLs .TeamID}}
+  <div class="matchup bye">
+    <div class="team home">
+      <div class="name">
+        {{- if $byeLogo}}<img class="team-avatar" src="{{$byeLogo}}" alt=""/>
+        {{- else}}<span class="team-avatar fallback" style="background:{{teamColor .TeamID}}">{{teamInitial .TeamName}}</span>{{end}}
+        <span>{{.TeamName}}</span>
+      </div>
+      <div class="pts">bye</div>
+    </div>
+  </div>
+  {{- end}}
 </section>
 
 {{- if .Season}}

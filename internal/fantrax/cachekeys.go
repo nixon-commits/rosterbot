@@ -21,9 +21,13 @@ const (
 	keyPlayerPool         = "fantrax-player-pool"
 	keyRecentStatsPitcher = "fantrax-recent-stats-pitcher"
 	keyRosterStats        = "fantrax-roster-stats"
-	keySeasonRange        = "fantrax-season-range"
-	keyGSLimits           = "fantrax-gs-limits"
-	keyPeriodDateMap      = "fantrax-period-date-map"
-	keyPlayoffs           = "fantrax-playoffs"
-	keyMLBGameLog         = "mlb-game-log"
+	// keySeasonRange is versioned: the pre-v2 entry held the REGULAR-season end
+	// (rosterbot-0lyz), and at stableTTL a 7-day-old wrong "season end" would
+	// have kept every season-boundary guard firing through the playoffs.
+	keySeasonRange   = "fantrax-season-range-v2"
+	keySchedule      = "fantrax-schedule"
+	keyGSLimits      = "fantrax-gs-limits"
+	keyPeriodDateMap = "fantrax-period-date-map"
+	keyPlayoffs      = "fantrax-playoffs"
+	keyMLBGameLog    = "mlb-game-log"
 )

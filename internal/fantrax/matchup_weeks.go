@@ -20,6 +20,7 @@ import (
 func matchupWeekRanges(matchups []auth_client.Matchup, teamID string) []dateRange {
 	type entry struct {
 		opponent string
+		period   int
 		date     time.Time
 	}
 
@@ -27,6 +28,7 @@ func matchupWeekRanges(matchups []auth_client.Matchup, teamID string) []dateRang
 	var mine []entry
 	for _, m := range matchups {
 		var opp string
+		period := m.ScoringPeriod
 		if m.AwayTeam.TeamID == teamID {
 			opp = m.HomeTeam.TeamID
 		} else if m.HomeTeam.TeamID == teamID {
@@ -43,7 +45,7 @@ func matchupWeekRanges(matchups []auth_client.Matchup, teamID string) []dateRang
 			continue
 		}
 		seen[key] = true
-		mine = append(mine, entry{opp, t})
+		mine = append(mine, entry{opp, period, t})
 	}
 
 	sort.Slice(mine, func(i, j int) bool { return mine[i].date.Before(mine[j].date) })
@@ -51,8 +53,13 @@ func matchupWeekRanges(matchups []auth_client.Matchup, teamID string) []dateRang
 	var ranges []dateRange
 	i := 0
 	for i < len(mine) {
+		// A run is consecutive entries for the same opponent IN THE SAME
+		// scoring period: the completed and future tables both list a week,
+		// which is what the run absorbs. The same opponent in the NEXT period
+		// is a second matchup, not a fortnight — a week-22 opponent drawn
+		// again in playoff Round 1 must stay two weeks.
 		j := i + 1
-		for j < len(mine) && mine[j].opponent == mine[i].opponent {
+		for j < len(mine) && mine[j].opponent == mine[i].opponent && mine[j].period == mine[i].period {
 			j++
 		}
 		runStart := mine[i].date
@@ -162,16 +169,29 @@ type MatchupEntry struct {
 	Date          string
 	HomeID        string
 	AwayID        string
+	// Playoff marks a bracket pairing; Bye marks a playoff week in which
+	// HomeID had no opponent (AwayID is empty). Regular-season rows carry
+	// neither.
+	Playoff bool
+	Bye     bool
 }
 
-// GetAllMatchupEntries returns all matchup pairings for the season.
+// GetAllMatchupEntries returns all matchup pairings for the season: the
+// regular-season rows, then the bracket's real pairings and byes (see
+// playoffEntries). The bracket rows come from the bracket itself rather than
+// the merged matchup list so byes, which are not matchups, are still
+// reported.
 func (c *Client) GetAllMatchupEntries() ([]MatchupEntry, error) {
-	result, err := c.allMatchups()
+	result, bracket, err := c.allMatchupsAndBracket()
 	if err != nil {
 		return nil, err
 	}
-	out := make([]MatchupEntry, 0, len(result.Matchups))
+	playoff := playoffEntries(bracket)
+	out := make([]MatchupEntry, 0, len(result.Matchups)+len(playoff))
 	for _, m := range result.Matchups {
+		if isPlayoffPeriod(bracket, m.ScoringPeriod) {
+			continue // re-added below, from the bracket, with its flags
+		}
 		out = append(out, MatchupEntry{
 			ScoringPeriod: m.ScoringPeriod,
 			Date:          m.Date,
@@ -179,5 +199,19 @@ func (c *Client) GetAllMatchupEntries() ([]MatchupEntry, error) {
 			AwayID:        m.AwayTeam.TeamID,
 		})
 	}
-	return out, nil
+	return append(out, playoff...), nil
+}
+
+// isPlayoffPeriod reports whether the weekly period number is one of the
+// bracket's rounds.
+func isPlayoffPeriod(b *auth_client.PlayoffBracket, period int) bool {
+	if b == nil {
+		return false
+	}
+	for _, r := range b.Rounds {
+		if r.ScoringPeriod == period {
+			return true
+		}
+	}
+	return false
 }

@@ -44,7 +44,6 @@ type RecapClient interface {
 	GetActiveSlots() ([]fantrax.Slot, error)
 	GetPitcherSlots() ([]fantrax.Slot, error)
 	GetAllMatchupEntries() ([]fantrax.MatchupEntry, error)
-	GetMatchupWeekNumberForDate(date time.Time) (int, error)
 	GetTeamPitcherStarts(teamID string, start, end, seasonStart time.Time, cacheDir string, cacheTTL time.Duration) ([]fantrax.DatedPitcherStart, error)
 }
 
@@ -68,7 +67,7 @@ func Run(ctx context.Context, ft RecapClient, opts Options) (*Recap, error) {
 		return nil, fmt.Errorf("season range: %w", err)
 	}
 
-	_, teamMap, teamLogos, err := ft.GetScoringPeriodsAndTeams()
+	periods, teamMap, teamLogos, err := ft.GetScoringPeriodsAndTeams()
 	if err != nil {
 		return nil, fmt.Errorf("teams: %w", err)
 	}
@@ -158,20 +157,17 @@ func Run(ctx context.Context, ft RecapClient, opts Options) (*Recap, error) {
 	}
 	matchups := buildMatchups(weekPairs, teamScore, teamName)
 
+	// The week's number and label come from the league's own period list
+	// (a playoff round carries Fantrax's caption), falling back to the
+	// calendar approximation for a --dates window outside every period.
+	periodNum, periodLabel := weekLabelFor(periods, seasonStart, opts.WeekStart)
 	weekNum := opts.WeekNumber
 	if weekNum == 0 {
-		// Look up the actual Fantrax-aligned week number by date. Falls back
-		// to a simple calendar approximation if the matchup data doesn't
-		// contain the date (e.g., custom --dates window outside the season).
-		if n, err := ft.GetMatchupWeekNumberForDate(opts.WeekStart); err == nil && n > 0 {
-			weekNum = n
-		} else {
-			weekNum = matchupWeekNumber(seasonStart, opts.WeekStart)
-		}
+		weekNum = periodNum
 	}
 	weekLabel := opts.WeekLabel
 	if weekLabel == "" {
-		weekLabel = fmt.Sprintf("Week %d", weekNum)
+		weekLabel = periodLabel
 	}
 
 	awards := Awards{
@@ -240,6 +236,7 @@ func Run(ctx context.Context, ft RecapClient, opts Options) (*Recap, error) {
 		GeneratedAt: time.Now().UTC(),
 		Teams:       teamWeeks,
 		Matchups:    matchups,
+		Byes:        byesForWeek(allMatchups, opts.WeekStart, opts.WeekEnd, teamMap),
 		Awards:      awards,
 		WPCurves:    curves,
 		LogoURLs:    teamLogos,
@@ -611,4 +608,42 @@ func fetchSeasonMeans(ft seasonMeanClient, teamMap map[string]string, seasonStar
 	}
 	_ = g.Wait()
 	return out
+}
+
+// byesForWeek lists the playoff teams with no opponent in the window, in
+// bracket order. Regular-season rows never carry the flag, so this is empty
+// outside the bracket.
+func byesForWeek(entries []fantrax.MatchupEntry, weekStart, weekEnd time.Time, names map[string]string) []ByeLine {
+	startYMD := weekStart.Format("2006-01-02")
+	endYMD := weekEnd.Format("2006-01-02")
+	var out []ByeLine
+	for _, m := range entries {
+		if !m.Bye || m.HomeID == "" {
+			continue
+		}
+		t, err := time.Parse("Mon Jan 2, 2006", m.Date)
+		if err != nil {
+			continue
+		}
+		if ymd := t.Format("2006-01-02"); ymd < startYMD || ymd > endYMD {
+			continue
+		}
+		out = append(out, ByeLine{TeamID: m.HomeID, TeamName: names[m.HomeID]})
+	}
+	return out
+}
+
+// weekLabelFor names the week that starts at weekStart from the league's
+// weekly period list: "Week N" for a regular-season period, Fantrax's own
+// caption ("Playoffs - Round 1") for a bracket round, and the calendar
+// approximation from the opener when no period contains the date.
+func weekLabelFor(periods []fantrax.ScoringPeriod, seasonStart, weekStart time.Time) (int, string) {
+	if p := fantrax.FindCurrentPeriod(periods, weekStart); p != nil {
+		if p.Playoff {
+			return int(p.Number), p.Caption
+		}
+		return int(p.Number), fmt.Sprintf("Week %d", p.Number)
+	}
+	n := matchupWeekNumber(seasonStart, weekStart)
+	return n, fmt.Sprintf("Week %d", n)
 }

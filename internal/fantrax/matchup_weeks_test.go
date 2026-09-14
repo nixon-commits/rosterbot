@@ -89,9 +89,13 @@ func TestMatchupWeekBounds_NoMatch(t *testing.T) {
 	}
 }
 
-func TestMatchupWeekBounds_MultiWeekSameOpponent(t *testing.T) {
+func TestMatchupWeekBounds_SameOpponentInConsecutivePeriodsAreTwoWeeks(t *testing.T) {
 	seasonStart := time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC)
-	// Two consecutive weeks against the same opponent should group together.
+	// Two consecutive scoring periods against the same opponent are two
+	// matchups with two results, not one fortnight. CONTEXT.md's measured
+	// invariant is that matchup weeks and the weekly period list agree 1:1;
+	// merging across periods would break it, and the playoff bracket makes
+	// the case real (a week-22 opponent can be the Round 1 opponent).
 	matchups := []auth_client.Matchup{
 		{ScoringPeriod: 1, Date: "Wed Mar 25, 2026",
 			AwayTeam: auth_client.MatchTeam{TeamID: "myteam"}, HomeTeam: auth_client.MatchTeam{TeamID: "opp1"}},
@@ -101,33 +105,18 @@ func TestMatchupWeekBounds_MultiWeekSameOpponent(t *testing.T) {
 			AwayTeam: auth_client.MatchTeam{TeamID: "opp2"}, HomeTeam: auth_client.MatchTeam{TeamID: "myteam"}},
 	}
 
-	// Day in week 1 should return the full 2-week span vs opp1.
 	start, end := MatchupWeekBounds(matchups, "myteam", seasonStart, seasonStart)
-	wantStart := time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC)
-	wantEnd := time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC) // day before Apr 8
-	if !start.Equal(wantStart) {
-		t.Errorf("weekStart = %s, want %s", start.Format("2006-01-02"), wantStart.Format("2006-01-02"))
+	if !start.Equal(seasonStart) || !end.Equal(time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("week 1 = %s to %s, want 2026-03-25 to 2026-03-31",
+			start.Format("2006-01-02"), end.Format("2006-01-02"))
 	}
-	if !end.Equal(wantEnd) {
-		t.Errorf("weekEnd = %s, want %s", end.Format("2006-01-02"), wantEnd.Format("2006-01-02"))
-	}
-
-	// Day in week 2 (still vs opp1) should return same span.
 	start2, end2 := MatchupWeekBounds(matchups, "myteam", seasonStart, time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC))
-	if !start2.Equal(wantStart) || !end2.Equal(wantEnd) {
-		t.Errorf("mid-run lookup: got %s to %s, want %s to %s",
-			start2.Format("2006-01-02"), end2.Format("2006-01-02"),
-			wantStart.Format("2006-01-02"), wantEnd.Format("2006-01-02"))
+	if !start2.Equal(time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)) || !end2.Equal(time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("week 2 = %s to %s, want 2026-04-01 to 2026-04-07",
+			start2.Format("2006-01-02"), end2.Format("2006-01-02"))
 	}
-
-	// Week 3 (vs opp2) should be its own span.
-	start3, end3 := MatchupWeekBounds(matchups, "myteam", seasonStart, time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC))
-	wantStart3 := time.Date(2026, 4, 8, 0, 0, 0, 0, time.UTC)
-	wantEnd3 := time.Date(2026, 4, 14, 0, 0, 0, 0, time.UTC) // last run, +6 days
-	if !start3.Equal(wantStart3) || !end3.Equal(wantEnd3) {
-		t.Errorf("week 3: got %s to %s, want %s to %s",
-			start3.Format("2006-01-02"), end3.Format("2006-01-02"),
-			wantStart3.Format("2006-01-02"), wantEnd3.Format("2006-01-02"))
+	if n := MatchupWeekNumberForDate(matchups, "myteam", time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC)); n != 2 {
+		t.Errorf("week number for a day in the second period = %d, want 2", n)
 	}
 }
 
