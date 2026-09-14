@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -63,18 +64,22 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	seasonStart, _, err := ft.GetSeasonDateRange()
+	seasonStart, seasonEnd, err := ft.GetSeasonDateRange()
 	if err != nil {
 		return fmt.Errorf("get season start: %w", err)
 	}
 
-	rangeOpts, err := backtestRangeOptions(today, seasonStart)
+	rangeOpts, err := backtestRangeOptions(today, seasonStart, seasonEnd)
 	if err != nil {
 		return err
 	}
-	start, end, err := backtest.ResolveRange(ft, rangeOpts)
+	start, end, notice, err := resolveBacktestWindow(ft, rangeOpts)
 	if err != nil {
-		return fmt.Errorf("resolve range: %w", err)
+		return err
+	}
+	if notice != "" {
+		fmt.Printf("\n%s\n", notice)
+		return nil
 	}
 	if end.Before(start) {
 		return fmt.Errorf("empty backtest window (%s to %s)", start.Format("2006-01-02"), end.Format("2006-01-02"))
@@ -171,10 +176,11 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 // backtestRangeOptions turns the CLI flags into a backtest.RangeOptions. Only
 // --dates parsing lives here (it is CLI syntax); which matchup weeks a window
 // covers is resolved by internal/backtest.
-func backtestRangeOptions(today, seasonStart time.Time) (backtest.RangeOptions, error) {
+func backtestRangeOptions(today, seasonStart, seasonEnd time.Time) (backtest.RangeOptions, error) {
 	opts := backtest.RangeOptions{
 		Today:       today,
 		SeasonStart: seasonStart,
+		SeasonEnd:   seasonEnd,
 		Weeks:       backtestWeeks,
 	}
 	if backtestDates != "" {
@@ -189,6 +195,30 @@ func backtestRangeOptions(today, seasonStart time.Time) (backtest.RangeOptions, 
 		opts.ExplicitEnd = dates[len(dates)-1]
 	}
 	return opts, nil
+}
+
+// resolveBacktestWindow resolves the window to grade. A non-empty notice means
+// there is no window and the run should print it and exit 0.
+//
+// An out-of-season week-relative window is that clean stop, not a failure: the
+// weekly Monday job passes no flags, and past the season's final date it exited
+// 1 with a usage dump and paged every week until the next opener
+// (rosterbot-asy7). The wording mirrors the optimize jobs' season lines.
+func resolveBacktestWindow(wb fantrax.WeekBounder, opts backtest.RangeOptions) (start, end time.Time, notice string, err error) {
+	start, end, err = backtest.ResolveRange(wb, opts)
+	var oos *backtest.OutOfSeasonError
+	if errors.As(err, &oos) {
+		if oos.BeforeOpener() {
+			return time.Time{}, time.Time{}, fmt.Sprintf("Season starts %s. No completed matchup week to grade yet.",
+				oos.Start.Format("2006-01-02")), nil
+		}
+		return time.Time{}, time.Time{}, fmt.Sprintf("Season ended %s. No completed matchup week to grade.",
+			oos.End.Format("2006-01-02")), nil
+	}
+	if err != nil {
+		return time.Time{}, time.Time{}, "", fmt.Errorf("resolve range: %w", err)
+	}
+	return start, end, "", nil
 }
 
 // runRecencyExperiment fetches the extended recency series the trailing-window
