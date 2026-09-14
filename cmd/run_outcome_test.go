@@ -233,3 +233,38 @@ func TestEntrypointRunOutcomeFileFlowsIntoLedgerOutcome(t *testing.T) {
 		t.Errorf("found %d run-ledger invocations passing --outcome, want exactly 1 (the terminal one)", outcomeCalls)
 	}
 }
+
+// An off-season stop exits 0 and says so through the same side channel a
+// tenant-actionable connect uses, so the terminal ledger record carries
+// outcome off_season rather than an indistinguishable SUCCESS.
+func TestRunLedger_AcceptsOffSeasonOutcome(t *testing.T) {
+	t.Setenv("STATE_BUCKET", "")
+	t.Chdir(t.TempDir())
+	runLedgerFixture(t)
+	ledgerCommand = "waivers"
+	ledgerOutcome = lineupapi.RunOutcomeOffSeason
+
+	var stderr bytes.Buffer
+	ledgerCmd.SetErr(&stderr)
+	t.Cleanup(func() { ledgerCmd.SetErr(nil) })
+	if err := runLedger(ledgerCmd, nil); err != nil {
+		t.Fatalf("runLedger: %v", err)
+	}
+	if strings.Contains(stderr.String(), "unknown --outcome") {
+		t.Errorf("off_season was treated as an unknown outcome:\n%s", stderr.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(".lineup", "runs", "task-1.json"))
+	if err != nil {
+		matches, _ := filepath.Glob(filepath.Join(".lineup", "runs", "*", "*.json"))
+		if len(matches) == 0 {
+			matches, _ = filepath.Glob(filepath.Join(".lineup", "runs", "*.json"))
+		}
+		if len(matches) == 0 {
+			t.Fatalf("no ledger record written: %v", err)
+		}
+		raw, _ = os.ReadFile(matches[0])
+	}
+	if !strings.Contains(string(raw), `"outcome":"off_season"`) && !strings.Contains(string(raw), `"outcome": "off_season"`) {
+		t.Errorf("ledger record lacks outcome off_season:\n%s", raw)
+	}
+}

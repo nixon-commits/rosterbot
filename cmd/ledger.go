@@ -82,7 +82,7 @@ func runLedger(cmd *cobra.Command, args []string) error {
 	switch ledgerOutcome {
 	case "":
 		// The ordinary case: nothing to add, the status speaks for itself.
-	case lineupapi.RunOutcomeTenantActionable:
+	case lineupapi.RunOutcomeTenantActionable, lineupapi.RunOutcomeOffSeason:
 		rec.Outcome = ledgerOutcome
 	default:
 		// Degrade to noise, never to silence: the terminal write must land

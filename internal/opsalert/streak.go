@@ -58,6 +58,14 @@ type Record struct {
 // than as a recovery.
 const OutcomeTenantActionable = "tenant_actionable"
 
+// OutcomeOffSeason mirrors lineupapi.RunOutcomeOffSeason: an in-season-only
+// job that exited 0 because the day fell outside the fantasy season. Unlike
+// OutcomeTenantActionable it carries NO special handling here — it is an
+// ordinary SUCCESS to Streak and an ordinary launch to Overdue — and that is
+// the point: a winter of gated runs must read as a healthy schedule, and a
+// job that stops launching in December must still page.
+const OutcomeOffSeason = "off_season"
+
 // Started parses StartedAt. The zero time means the record carries no usable
 // timestamp, which every caller must treat as "unknown", never as "the epoch".
 func (r Record) Started() time.Time {

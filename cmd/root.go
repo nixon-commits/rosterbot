@@ -52,14 +52,22 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "show detailed log output instead of progress display")
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		cache.Verbose = verbose
+		activeCommand = cmd
 	}
 }
+
+// activeCommand is the subcommand being executed, recorded by the root's
+// PersistentPreRun so initApp's season gate can read its name and flags.
+var activeCommand *cobra.Command
 
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		code := exitCodeFor(err)
+		if code != 0 {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		os.Exit(code)
 	}
 }
 
@@ -117,6 +125,14 @@ func initApp(dates []time.Time) (*config.Config, *fantrax.Client, error) {
 	}
 	if !noCache {
 		ft.SetCache(cacheDir)
+	}
+	// The season gate sits here, after the client exists and before any
+	// command reads or writes: an in-season-only job outside the season
+	// exits 0 with outcome off_season instead of paging, writing junk rows
+	// or pushing a dead list (rosterbot-0lyz.4). Year-round commands and
+	// explicit --dates windows pass straight through.
+	if err := checkSeasonGate(context.Background(), activeCommand, ft, todayET()); err != nil {
+		return nil, nil, err
 	}
 	return cfg, ft, nil
 }
