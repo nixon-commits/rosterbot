@@ -1,9 +1,17 @@
 package fantrax
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
+
+// ErrNoMatchupWeek reports that the team has no matchup week containing the
+// requested date. During the bracket that is an ordinary answer — a bye, or a
+// team that is out — so callers test for it with errors.Is and stop cleanly
+// rather than treating it as a fault; in the regular season every team has a
+// matchup every week and it still means Fantrax published no row.
+var ErrNoMatchupWeek = errors.New("no matchup week")
 
 // WeekBounder resolves a calendar date to the matchup week containing it.
 // Satisfied by *Client; declared as an interface so the resolution policy below
@@ -34,7 +42,7 @@ func LastCompletedMatchupWeek(wb WeekBounder, seasonStart, today time.Time) (tim
 		return time.Time{}, time.Time{}, err
 	}
 	if ws.IsZero() {
-		return time.Time{}, time.Time{}, fmt.Errorf("no matchup week found for %s", yesterday.Format("2006-01-02"))
+		return time.Time{}, time.Time{}, fmt.Errorf("%w found for %s", ErrNoMatchupWeek, yesterday.Format("2006-01-02"))
 	}
 
 	// Today inside this week → it is not finished; back up to the prior week.
@@ -45,7 +53,7 @@ func LastCompletedMatchupWeek(wb WeekBounder, seasonStart, today time.Time) (tim
 			return time.Time{}, time.Time{}, err
 		}
 		if ws.IsZero() {
-			return time.Time{}, time.Time{}, fmt.Errorf("no prior matchup week found before %s", prior.Format("2006-01-02"))
+			return time.Time{}, time.Time{}, fmt.Errorf("%w found before %s", ErrNoMatchupWeek, prior.Format("2006-01-02"))
 		}
 	}
 	return ws, we, nil

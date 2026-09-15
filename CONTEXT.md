@@ -56,8 +56,10 @@ The authoritative date → Daily Period mapping, parsed from `getTeamRosterInfo`
 _Avoid_: period resolver, period lookup, anchor.
 
 **Matchup Week**:
-The inclusive calendar-date span of one H2H matchup, derived per-team by grouping consecutive same-opponent entries from `GetAllMatchups` (`MatchupWeekBounds`). Measured 2026-07-25, this agrees with the Weekly Period list **exactly** — same count, same bounds, same numbering, including both irregular weeks — so it is the *same concept reached by a second route*, not a rival axis. Prefer the Weekly Period list when you need Fantrax's own number (GS limits); prefer Matchup Week when you need date bounds without a standings fetch. If they ever disagree, the standings caption is authoritative.
-_Avoid_: matchup period, week bounds, fantasy week.
+The inclusive calendar-date span of one H2H matchup, derived per-team by grouping same-opponent entries **within one scoring period** from `GetAllMatchups` (`MatchupWeekBounds`); the same opponent in the next period is a second week, never a fortnight. Measured 2026-07-25, this agrees with the Weekly Period list **exactly** — same count, same bounds, same numbering, including both irregular weeks — so it is the *same concept reached by a second route*, not a rival axis. Prefer the Weekly Period list when you need Fantrax's own number (GS limits) or a LEAGUE-wide view (the recap); prefer Matchup Week when you need one TEAM's date bounds (backtest, the lineup path). If they ever disagree, the standings caption is authoritative. A team has no Matchup Week for a Playoff Round it is not paired in (`ErrNoMatchupWeek`).
+
+**Playoff Round**:
+One round of the post-season bracket — a Weekly Period like any other (its own number, dates and Fantrax-side GS limits), flagged `ScoringPeriod.Playoff`, in which only the teams paired in the round have a scoring matchup. The standings SCHEDULE view stops at the regular season, so the rounds come from `getStandings view=PLAYOFFS` (`GetPlayoffBracket`, merged in by `GetScoringPeriodsAndTeams` and `allMatchups`). Measured 2026-09-14: 2026 ran three rounds over periods 23-25 (Sep 7-27) with two byes in Round 1, and until rosterbot-0lyz every season-boundary guard took the regular-season end for the end of the season. A bye is a Playoff Round the team is in but not paired in; it is reported on `MatchupEntry.Bye`, never as a matchup.
 
 ### Schedule
 

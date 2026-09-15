@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"testing"
 	"time"
 )
@@ -60,7 +61,7 @@ func TestResolveBacktestWindow_NoFlagsOutsideTheSeasonIsACleanStop(t *testing.T)
 				t.Fatalf("backtestRangeOptions: %v", err)
 			}
 
-			_, _, notice, err := resolveBacktestWindow(zeroBounder{}, opts)
+			_, _, notice, err := resolveBacktestWindow(zeroBounder{}, opts, nil)
 			if err != nil {
 				t.Fatalf("resolveBacktestWindow returned %v; outside the season the job must exit 0", err)
 			}
@@ -83,7 +84,7 @@ func TestResolveBacktestWindow_ExplicitInSeasonDatesStillResolveOffSeason(t *tes
 		t.Fatalf("backtestRangeOptions: %v", err)
 	}
 
-	start, end, notice, err := resolveBacktestWindow(zeroBounder{}, opts)
+	start, end, notice, err := resolveBacktestWindow(zeroBounder{}, opts, nil)
 	if err != nil {
 		t.Fatalf("resolveBacktestWindow: %v", err)
 	}
@@ -95,5 +96,41 @@ func TestResolveBacktestWindow_ExplicitInSeasonDatesStillResolveOffSeason(t *tes
 	}
 	if got, want := end.Format("2006-01-02"), "2026-09-06"; got != want {
 		t.Errorf("end = %s, want %s", got, want)
+	}
+}
+
+// Inside the bracket "no matchup week ending yesterday" is an ordinary
+// answer — the operator's team is on a bye or out — and the Monday job must
+// exit 0 with a line saying so, not page. In the regular season the same
+// lookup result still means Fantrax published no row, which stays a fault;
+// the periods list is what tells the two apart.
+func TestResolveBacktestWindow_NoMatchupWeekInAPlayoffRoundIsACleanStop(t *testing.T) {
+	withBacktestFlags(t, "", 0)
+	seasonEnd := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
+	round2 := fantrax.ScoringPeriod{Number: 24, Caption: "Playoffs - Round 2", Playoff: true,
+		StartDate: time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC), EndDate: time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)}
+	week22 := fantrax.ScoringPeriod{Number: 22, Caption: "Scoring Period 22",
+		StartDate: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), EndDate: time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)}
+
+	// Monday after Round 2, team eliminated in Round 1.
+	opts, err := backtestRangeOptions(time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC), btSeasonStart, seasonEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, notice, err := resolveBacktestWindow(zeroBounder{}, opts, []fantrax.ScoringPeriod{week22, round2})
+	if err != nil {
+		t.Fatalf("resolveBacktestWindow returned %v; a playoff week without a matchup must exit 0", err)
+	}
+	if want := "No matchup week for this team ending 2026-09-20 (Playoffs - Round 2): bye or eliminated. Nothing to grade."; notice != want {
+		t.Errorf("notice = %q, want %q", notice, want)
+	}
+
+	// Same lookup result on a regular-season Monday is still a fault.
+	opts, err = backtestRangeOptions(time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC), btSeasonStart, seasonEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := resolveBacktestWindow(zeroBounder{}, opts, []fantrax.ScoringPeriod{week22}); err == nil {
+		t.Error("regular-season week with no matchup row resolved cleanly; it must stay an error")
 	}
 }

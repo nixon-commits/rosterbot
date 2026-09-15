@@ -24,6 +24,13 @@ type ScoringPeriod struct {
 	Caption   string
 	StartDate time.Time
 	EndDate   time.Time
+	// Playoff marks a bracket round (from getStandings view=PLAYOFFS) rather
+	// than a regular-season period. The number, dates and Fantrax-side GS
+	// limits work identically; what differs is that only the teams paired in
+	// the round have a scoring matchup, so consumers that iterate every team
+	// (gs-check) or assume the operator's team plays (lineup, backtest) must
+	// check the pairings for a Playoff period.
+	Playoff bool
 }
 
 var periodNumRe = regexp.MustCompile(`Scoring Period (\d+)`)
@@ -32,11 +39,48 @@ var dateRangeRe = regexp.MustCompile(`\(.*?(\w+ \w+ \d+, \d{4})\s*-\s*(\w+ \w+ \
 // standingsURL is the Fantrax API endpoint for standings. Var for test overriding.
 var standingsURL = "https://www.fantrax.com/fxpa/req"
 
-// GetScoringPeriodsAndTeams fetches all scoring periods, the team ID→name
-// map, and the team ID→logoURL map from a single getStandings call with
-// view=SCHEDULE. The logos map may have empty values for teams that
-// haven't set a logo (rare); callers should treat empty as "no avatar".
+// scheduleInfo is what one getStandings view=SCHEDULE call yields: the
+// regular-season weekly periods plus the team name and logo maps.
+type scheduleInfo struct {
+	Periods []ScoringPeriod
+	Teams   map[string]string
+	Logos   map[string]string
+}
+
+// fetchScheduleFn is the seam tests use to stub the SCHEDULE fetch.
+var fetchScheduleFn = (*Client).fetchSchedule
+
+// GetScoringPeriodsAndTeams returns every weekly scoring period of the season
+// — the regular-season periods from the standings SCHEDULE view followed by
+// the playoff rounds from the PLAYOFFS view, flagged Playoff — plus the team
+// ID→name and ID→logoURL maps. The logos map may have empty values for teams
+// that haven't set a logo (rare); callers should treat empty as "no avatar".
+//
+// The SCHEDULE half is cached at tierToday (fantrax-schedule-<leagueID>): the
+// captions, dates and team maps it yields are stable within a day, and the
+// call sits under GetSeasonDateRange and LoadInputs, which used to cost a
+// standings round-trip each. The bracket comes through GetPlayoffBracket's
+// own cache. A bracket fetch failure is an error, never a silent fallback to
+// the regular season: that fallback is exactly the bug that made 2026-09-06
+// the "end of the season" for a league still playing (rosterbot-0lyz).
 func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string, map[string]string, error) {
+	sched, err := cached(c, cache.Key(keySchedule, c.leagueID), tierToday,
+		func() (scheduleInfo, error) { return fetchScheduleFn(c) })
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	bracket, err := c.bracketWithRetry()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("playoff bracket: %w", err)
+	}
+	periods := make([]ScoringPeriod, 0, len(sched.Periods)+len(bracket.Rounds))
+	periods = append(periods, sched.Periods...)
+	periods = append(periods, playoffPeriods(bracket)...)
+	return periods, sched.Teams, sched.Logos, nil
+}
+
+// fetchSchedule is the uncached SCHEDULE fetch and parse.
+func (c *Client) fetchSchedule() (scheduleInfo, error) {
 	fullRequest := auth_client.BuildFullRequest(
 		[]auth_client.FantraxMessage{
 			{
@@ -52,7 +96,7 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 
 	jsonStr, err := json.Marshal(fullRequest)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("marshal standings request: %w", err)
+		return scheduleInfo{}, fmt.Errorf("marshal standings request: %w", err)
 	}
 
 	// context.Background() is deliberate: GetScoringPeriodsAndTeams is called
@@ -64,17 +108,17 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 	// this whole surface is out of scope for a noctx lint-compliance pass.
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, standingsURL+"?leagueId="+c.leagueID, bytes.NewBuffer(jsonStr))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create standings request: %w", err)
+		return scheduleInfo{}, fmt.Errorf("create standings request: %w", err)
 	}
 
 	resp, err := c.auth.Do(req)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("send standings request: %w", err)
+		return scheduleInfo{}, fmt.Errorf("send standings request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, nil, fmt.Errorf("standings API returned status %d", resp.StatusCode)
+		return scheduleInfo{}, fmt.Errorf("standings API returned status %d", resp.StatusCode)
 	}
 
 	// ReadBody surfaces an embedded pageError by name. Reading raw here is what
@@ -82,16 +126,16 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 	// "no response data in standings" below (rosterbot-7i3).
 	body, err := auth_client.ReadBody(resp)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("read standings response: %w", err)
+		return scheduleInfo{}, fmt.Errorf("read standings response: %w", err)
 	}
 
 	var standingsResp auth_client.StandingsResponse
 	if err := json.Unmarshal(body, &standingsResp); err != nil {
-		return nil, nil, nil, fmt.Errorf("unmarshal standings response: %w", err)
+		return scheduleInfo{}, fmt.Errorf("unmarshal standings response: %w", err)
 	}
 
 	if len(standingsResp.Responses) == 0 {
-		return nil, nil, nil, fmt.Errorf("no response data in standings")
+		return scheduleInfo{}, fmt.Errorf("no response data in standings")
 	}
 
 	data := standingsResp.Responses[0].Data
@@ -139,7 +183,7 @@ func (c *Client) GetScoringPeriodsAndTeams() ([]ScoringPeriod, map[string]string
 		})
 	}
 
-	return periods, teams, logos, nil
+	return scheduleInfo{Periods: periods, Teams: teams, Logos: logos}, nil
 }
 
 // PitcherSnapshotRow holds a pitcher's YTD GS, YTD fantasy points, name, MLB
@@ -433,4 +477,26 @@ func FindCurrentPeriod(periods []ScoringPeriod, date time.Time) *ScoringPeriod {
 		}
 	}
 	return nil
+}
+
+// LastCompletedPeriod returns the weekly period with the latest end date
+// strictly before today, or nil if none has ended. It is the LEAGUE-wide
+// sibling of LastCompletedMatchupWeek: that one asks "which week did THIS
+// team just finish" and has no answer for a team on a bye or out of the
+// bracket, which is the right question for backtest (it grades one team's
+// lineup) and the wrong one for the recap, which is league-scoped and must
+// render Round 2 whether or not the operator is still in it.
+func LastCompletedPeriod(periods []ScoringPeriod, today time.Time) *ScoringPeriod {
+	todayYMD := today.Format("2006-01-02")
+	var best *ScoringPeriod
+	for i := range periods {
+		p := &periods[i]
+		if p.EndDate.Format("2006-01-02") >= todayYMD {
+			continue
+		}
+		if best == nil || p.EndDate.After(best.EndDate) {
+			best = p
+		}
+	}
+	return best
 }

@@ -9,17 +9,20 @@ import "time"
 // Recap is the full data model for a single matchup-week recap. It's
 // JSON-serializable for debugging and feeds the HTML template.
 type Recap struct {
-	Season      int               `json:"season"`
-	WeekNumber  int               `json:"week_number"`
-	WeekLabel   string            `json:"week_label"`
-	StartDate   time.Time         `json:"start_date"`
-	EndDate     time.Time         `json:"end_date"`
-	GeneratedAt time.Time         `json:"generated_at"`
-	Teams       []TeamWeek        `json:"teams"`
-	Matchups    []MatchupResult   `json:"matchups"`
-	Awards      Awards            `json:"awards"`
-	WPCurves    []MatchupWPCurve  `json:"wp_curves,omitempty"`
-	LogoURLs    map[string]string `json:"logo_urls,omitempty"`
+	Season      int             `json:"season"`
+	WeekNumber  int             `json:"week_number"`
+	WeekLabel   string          `json:"week_label"`
+	StartDate   time.Time       `json:"start_date"`
+	EndDate     time.Time       `json:"end_date"`
+	GeneratedAt time.Time       `json:"generated_at"`
+	Teams       []TeamWeek      `json:"teams"`
+	Matchups    []MatchupResult `json:"matchups"`
+	// Byes are the bracket teams that played nobody this week (playoff
+	// rounds only); empty in the regular season.
+	Byes     []ByeLine         `json:"byes,omitempty"`
+	Awards   Awards            `json:"awards"`
+	WPCurves []MatchupWPCurve  `json:"wp_curves,omitempty"`
+	LogoURLs map[string]string `json:"logo_urls,omitempty"`
 }
 
 // TeamWeek is a single team's aggregated weekly performance.
@@ -30,6 +33,12 @@ type TeamWeek struct {
 	OptimalPts float64 `json:"optimal_pts"`
 	// Efficiency is ActualPts / OptimalPts, in [0, 1]. Zero if OptimalPts <= 0.
 	Efficiency float64 `json:"efficiency"`
+}
+
+// ByeLine is one playoff team with no opponent this week.
+type ByeLine struct {
+	TeamID   string `json:"team_id"`
+	TeamName string `json:"team_name"`
 }
 
 // MatchupResult records a single H2H matchup outcome for the week.

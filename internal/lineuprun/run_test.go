@@ -669,3 +669,102 @@ func TestRun_ExplicitDateOutsideSeasonAppliesNothing(t *testing.T) {
 		})
 	}
 }
+
+// A team on a bye or out of the bracket has no scoring matchup in a playoff
+// round, so there is nothing to optimize: both the hourly today-only run and
+// the daily --matchup pre-write stop cleanly, applying and writing nothing.
+// The check is scoped to playoff periods on purpose — in the regular season
+// every team has a matchup every week, so a missing row there is a Fantrax
+// fault that must stay loud rather than read as a quiet week off.
+func TestRun_PlayoffRoundWithoutAMatchupAppliesNothing(t *testing.T) {
+	seasonStart := time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC)
+	seasonEnd := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
+	regular := fantrax.ScoringPeriod{Number: 22, Caption: "Scoring Period 22",
+		StartDate: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), EndDate: time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)}
+	round2 := fantrax.ScoringPeriod{Number: 24, Caption: "Playoffs - Round 2", Playoff: true,
+		StartDate: time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC), EndDate: time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)}
+	stopLine := "No scoring matchup for this team in Playoffs - Round 2 (2026-09-14 to 2026-09-20): bye or eliminated. Nothing to optimize."
+
+	cases := []struct {
+		name        string
+		today       time.Time
+		periods     []fantrax.ScoringPeriod
+		weekStart   time.Time // zero = the team has no matchup week containing today
+		weekEnd     time.Time
+		matchupFlag bool
+		wantApply   bool
+		wantErr     bool
+		wantLine    string
+	}{
+		{"hourly run, playoff round, team out", time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC), []fantrax.ScoringPeriod{regular, round2},
+			time.Time{}, time.Time{}, false, false, false, stopLine},
+		{"--matchup pre-write, playoff round, team out", time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC), []fantrax.ScoringPeriod{regular, round2},
+			time.Time{}, time.Time{}, true, false, false, stopLine},
+		{"hourly run, playoff round, team alive", time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC), []fantrax.ScoringPeriod{regular, round2},
+			round2.StartDate, round2.EndDate, false, true, false, "Lineup applied successfully."},
+		{"hourly run, regular season, no matchup rows", time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC), []fantrax.ScoringPeriod{regular},
+			time.Time{}, time.Time{}, false, true, false, "Lineup applied successfully."},
+		{"--matchup pre-write, regular season, no matchup rows", time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC), []fantrax.ScoringPeriod{regular},
+			time.Time{}, time.Time{}, true, false, true, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := &fakeLineupClient{
+				hitters: []fantrax.Player{
+					{ID: "h1", Name: "Hot Hitter", MLBTeam: "NYY", Positions: []string{"012"}, Status: "Reserve"},
+					{ID: "h2", Name: "Cold Bat", MLBTeam: "BOS", Positions: []string{"012"}, Status: "Active", RosterPosition: "014"},
+				},
+				pitchers: []fantrax.Player{
+					{ID: "p1", Name: "Steady Reliever", MLBTeam: "BOS", Positions: []string{"016"}, PosShortNames: "RP", Status: "Active", RosterPosition: "017"},
+				},
+				seasonStart: seasonStart,
+				seasonEnd:   seasonEnd,
+				periods:     tc.periods,
+				weekStart:   tc.weekStart,
+				weekEnd:     tc.weekEnd,
+				period:      175,
+			}
+			bat := projections.NewFanGraphsSourceFromEntries([]projections.SourceEntry{
+				{Name: "Hot Hitter", Team: "NYY", Proj: projections.Projection{G: 100, HR: 30}},
+				{Name: "Cold Bat", Team: "BOS", Proj: projections.Projection{G: 100, HR: 5}},
+			})
+			pit := projections.NewFanGraphsPitcherSourceFromEntries([]projections.PitcherSourceEntry{
+				{Name: "Steady Reliever", Team: "BOS", Proj: projections.PitcherProjection{G: 60, IP: 65, K: 70}},
+			})
+			playing := map[string]map[string]bool{}
+			for d := tc.today.AddDate(0, 0, -1); !d.After(tc.today.AddDate(0, 0, 7)); d = d.AddDate(0, 0, 1) {
+				playing[d.Format("2006-01-02")] = map[string]bool{"NYY": true, "BOS": true}
+			}
+			sched := &fakeDateSchedule{fakeSchedule: fakeSchedule{playing: playing}}
+			cfg := &config.Config{LeagueID: "lg1", TeamID: "team1", DryRun: false, AutoApply: true}
+			if !tc.matchupFlag {
+				cfg.Dates = []time.Time{tc.today}
+			}
+			var out bytes.Buffer
+			opts := withFakeDeps(Options{
+				Today:              tc.today,
+				NeedsMatchupLookup: tc.matchupFlag,
+				HitterSystem:       "depthcharts",
+				PitcherSystem:      "depthcharts",
+				Out:                &out,
+			}, bat, pit, sched)
+
+			_, err := Run(context.Background(), ft, cfg, opts)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("Run returned nil; a regular-season week with no matchup row is a fault and must stay loud. output:\n%s", out.String())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if got := len(ft.applies) > 0; got != tc.wantApply {
+				t.Errorf("ApplyLineup called = %v, want %v; output:\n%s", got, tc.wantApply, out.String())
+			}
+			if !strings.Contains(out.String(), tc.wantLine) {
+				t.Errorf("output lacks %q:\n%s", tc.wantLine, out.String())
+			}
+		})
+	}
+}

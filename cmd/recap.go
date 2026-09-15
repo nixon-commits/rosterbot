@@ -135,33 +135,43 @@ func resolveRecapRange(ctx context.Context, ft *fantrax.Client, today time.Time)
 		return dates[0], dates[len(dates)-1], nil
 	}
 
-	if recapWeek > 0 {
-		ws, we, err := ft.GetMatchupWeekByNumber(recapWeek)
-		if err != nil {
-			return time.Time{}, time.Time{}, err
-		}
-		if ws.IsZero() {
-			return time.Time{}, time.Time{}, fmt.Errorf("matchup week %d not found in season schedule", recapWeek)
-		}
-		return ws, we, nil
-	}
-
-	seasonStart, _, err := ft.GetSeasonDateRange()
+	periods, _, _, err := ft.GetScoringPeriodsAndTeams()
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
+	sched := schedule.NewClient()
+	return recapWindow(periods, today, recapWeek, func(day time.Time) bool {
+		done, derr := sched.AllGamesFinalOn(ctx, day)
+		return derr == nil && done
+	})
+}
 
-	// First check today's week: a week whose end date is today is over once all
-	// of that day's MLB games are final (Sunday games finishing in the evening).
-	// The Fantrax weekly points field is a running in-week score and can't
-	// signal closure, so use the MLB schedule instead. If today's games aren't
-	// all final, fall through to the most recent fully-finished week.
-	if ws, we, err := ft.GetMatchupWeekBounds(today, seasonStart); err == nil && !ws.IsZero() && we.Format("2006-01-02") == today.Format("2006-01-02") {
-		sched := schedule.NewClient()
-		if done, derr := sched.AllGamesFinalOn(ctx, we); derr == nil && done {
-			return ws, we, nil
+// recapWindow picks the week from the LEAGUE's weekly period list — regular
+// season and playoff rounds alike — never from the operator's own matchup
+// weeks: a recap is league-scoped and Round 2 must render whether or not the
+// operator's team is still in it. (backtest keeps the team-scoped
+// LastCompletedMatchupWeek because it grades one team's lineup.)
+//
+// --week N is period N. Otherwise a period ending today is over once all of
+// that day's MLB games are final (Sunday games finishing in the evening —
+// the Fantrax weekly points field is a running score and can't signal
+// closure); failing that, the most recent period that ended before today.
+func recapWindow(periods []fantrax.ScoringPeriod, today time.Time, week int, todayDone func(time.Time) bool) (time.Time, time.Time, error) {
+	if week > 0 {
+		for _, p := range periods {
+			if int(p.Number) == week {
+				return p.StartDate, p.EndDate, nil
+			}
 		}
+		return time.Time{}, time.Time{}, fmt.Errorf("week %d not found in the season schedule (%d periods)", week, len(periods))
 	}
-
-	return fantrax.LastCompletedMatchupWeek(ft, seasonStart, today)
+	if p := fantrax.FindCurrentPeriod(periods, today); p != nil &&
+		p.EndDate.Format("2006-01-02") == today.Format("2006-01-02") && todayDone(today) {
+		return p.StartDate, p.EndDate, nil
+	}
+	p := fantrax.LastCompletedPeriod(periods, today)
+	if p == nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("no completed week before %s", today.Format("2006-01-02"))
+	}
+	return p.StartDate, p.EndDate, nil
 }

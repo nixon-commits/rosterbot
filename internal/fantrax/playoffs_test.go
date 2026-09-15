@@ -101,3 +101,24 @@ func TestGetPlayoffBracket_FetchErrorIsReturnedNotCached(t *testing.T) {
 		t.Errorf("after an error: fetched %d times (want 2), rounds %d (want 1)", calls, len(b.Rounds))
 	}
 }
+
+// A league with no playoffs configured is an empty bracket, not an error, and
+// that answer is cached like any other so the PLAYOFFS view is not re-asked
+// on every period lookup all season.
+func TestGetPlayoffBracket_NoTreeIsAnEmptyCachedBracket(t *testing.T) {
+	c := &Client{leagueID: "lg1", cacheDir: t.TempDir()}
+	calls := 0
+	stubPlayoffFetch(t, func(*Client) (*auth_client.PlayoffBracket, error) {
+		calls++
+		return nil, errors.Join(auth_client.ErrNoPlayoffTree, errors.New("(view \"PLAYOFFS\")"))
+	})
+	for i := 0; i < 2; i++ {
+		b, err := c.GetPlayoffBracket()
+		if err != nil || b == nil || len(b.Rounds) != 0 {
+			t.Fatalf("call %d = (%+v, %v), want an empty bracket and no error", i, b, err)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("fetched %d times, want 1 (the empty answer should be cached)", calls)
+	}
+}

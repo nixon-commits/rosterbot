@@ -1,6 +1,7 @@
 package gscheck
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -25,7 +26,10 @@ type fakeGSClient struct {
 	failuresLeft map[string]int // teamID → remaining fetch failures
 	alwaysFail   map[string]bool
 	calls        map[string]int // teamID → GetTeamGS invocations
+	entries      []fantrax.MatchupEntry
 }
+
+func (f *fakeGSClient) GetAllMatchupEntries() ([]fantrax.MatchupEntry, error) { return f.entries, nil }
 
 func (f *fakeGSClient) GetScoringPeriodsAndTeams() ([]fantrax.ScoringPeriod, map[string]string, map[string]string, error) {
 	return f.periods, f.teams, map[string]string{}, nil
@@ -315,5 +319,43 @@ func TestRunGSCheck_TallyBannerEndsAtThePeriodEnd(t *testing.T) {
 	}
 	if today := nowUTC().Format("2006-01-02"); today != end && strings.Contains(out, "to "+today+")") {
 		t.Errorf("tally banner must not print today (%s) as the walk end; got:\n%s", today, out)
+	}
+}
+
+// In a playoff round only the teams with a scoring matchup are bound by the
+// GS limits: a bye team and an eliminated team have nothing to violate, and
+// tallying them would page the whole league "Under Min" every Monday of the
+// bracket. The pairings, not the team list, say who is in.
+func TestRunGSCheck_PlayoffRoundChecksOnlyPairedTeams(t *testing.T) {
+	fastRetries(t)
+	round := justEndedPeriod()
+	round.Number, round.Caption, round.Playoff = 23, "Playoffs - Round 1", true
+	f := &fakeGSClient{
+		periods:  []fantrax.ScoringPeriod{round},
+		teams:    map[string]string{"a": "Alpha", "b": "Bravo", "c": "Charlie", "d": "Delta"},
+		max:      ptrInt(10),
+		gsByTeam: map[string]int{"a": 5, "b": 6, "c": 7, "d": 8},
+		entries: []fantrax.MatchupEntry{
+			{ScoringPeriod: 23, Date: round.StartDate.Format("Mon Jan 2, 2006"), HomeID: "a", AwayID: "b", Playoff: true},
+			{ScoringPeriod: 23, Date: round.StartDate.Format("Mon Jan 2, 2006"), HomeID: "c", Playoff: true, Bye: true},
+		},
+	}
+	out := captureStdout(t, func() {
+		if err := RunGSCheck(context.Background(), f, config.Config{GSTrackingEnabled: true}); err != nil {
+			t.Errorf("RunGSCheck: %v", err)
+		}
+	})
+	for _, id := range []string{"a", "b"} {
+		if f.calls[id] == 0 {
+			t.Errorf("paired team %s was not tallied", id)
+		}
+	}
+	for _, id := range []string{"c", "d"} {
+		if f.calls[id] != 0 {
+			t.Errorf("team %s (bye/eliminated) was tallied %d time(s); output:\n%s", id, f.calls[id], out)
+		}
+	}
+	if !strings.Contains(out, "2 team(s) with a scoring matchup") {
+		t.Errorf("output should say the round was narrowed to paired teams:\n%s", out)
 	}
 }

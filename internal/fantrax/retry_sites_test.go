@@ -89,7 +89,8 @@ func wrappedCalls(t *testing.T) []retrySite {
 // write — fails here rather than shipping.
 func TestWithRetry_WrapsOnlyIdempotentReads(t *testing.T) {
 	allowed := map[retrySite]string{
-		{fn: "allMatchups", label: "getAllMatchups"}:                        "pure read, no disk cache to fall back on (rosterbot-eaa37bb)",
+		{fn: "allMatchupsAndBracket", label: "getAllMatchups"}:              "pure read, no disk cache to fall back on (rosterbot-eaa37bb)",
+		{fn: "bracketWithRetry", label: "getPlayoffBracket"}:                "pure read of the PLAYOFFS view, merged beside getAllMatchups (rosterbot-0lyz)",
 		{fn: "fetchPeriodSnapshot", label: "getTeamRosterInfoRaw"}:          "pure roster read; ~35 per windowed recency fetch (rosterbot-exaf)",
 		{fn: "getPlayerGSSnapshotForPeriod", label: "getTeamRosterInfoRaw"}: "same pure roster read, reached by the GS walk (rosterbot-exaf)",
 	}

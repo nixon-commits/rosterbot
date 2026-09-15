@@ -4,21 +4,9 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/fantrax"
 )
-
-// fakeWeeks serves fixed matchup-week bounds; week index past len(bounds)
-// returns zero times to signal end-of-season.
-type fakeWeeks struct {
-	bounds [][2]time.Time
-}
-
-func (f fakeWeeks) GetMatchupWeekByNumber(n int) (time.Time, time.Time, error) {
-	if n < 1 || n > len(f.bounds) {
-		return time.Time{}, time.Time{}, nil
-	}
-	b := f.bounds[n-1]
-	return b[0], b[1], nil
-}
 
 // fakeChecker reports a fixed completion verdict for any date.
 type fakeChecker struct {
@@ -33,13 +21,26 @@ func ymd(s string) time.Time {
 	return t
 }
 
+// The site enumerates the LEAGUE's weekly periods, regular season and
+// playoff rounds alike, not the operator's own matchup weeks: a bracket round
+// the operator was eliminated before still gets its page.
 func TestCompletedMatchupWeeks(t *testing.T) {
-	weeks := fakeWeeks{bounds: [][2]time.Time{
-		{ymd("2026-05-25"), ymd("2026-05-31")}, // week 1 — fully past
-		{ymd("2026-06-01"), ymd("2026-06-07")}, // week 2 — ends today
-		{ymd("2026-06-08"), ymd("2026-06-14")}, // week 3 — future
-	}}
+	weeks := []fantrax.ScoringPeriod{
+		{Number: 1, Caption: "Scoring Period 1", StartDate: ymd("2026-05-25"), EndDate: ymd("2026-05-31")},                  // fully past
+		{Number: 2, Caption: "Scoring Period 2", StartDate: ymd("2026-06-01"), EndDate: ymd("2026-06-07")},                  // ends today
+		{Number: 3, Caption: "Playoffs - Round 1", Playoff: true, StartDate: ymd("2026-06-08"), EndDate: ymd("2026-06-14")}, // future
+	}
 	today := ymd("2026-06-07")
+
+	t.Run("a finished playoff round is a week with Fantrax's own caption", func(t *testing.T) {
+		got, err := completedMatchupWeeks(t.Context(), weeks, fakeChecker{done: false}, ymd("2026-06-20"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 3 || got[2].n != 3 || got[2].label != "Playoffs - Round 1" || got[0].label != "Week 1" {
+			t.Fatalf("want three weeks with the round captioned, got %+v", got)
+		}
+	})
 
 	t.Run("today's games not all final → exclude today's week", func(t *testing.T) {
 		got, err := completedMatchupWeeks(t.Context(), weeks, fakeChecker{done: false}, today)

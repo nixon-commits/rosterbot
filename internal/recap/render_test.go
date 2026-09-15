@@ -98,3 +98,18 @@ func TestNavWithCurrent(t *testing.T) {
 		t.Errorf("navWithCurrent must not mutate input slice")
 	}
 }
+
+// A playoff bye is rendered beside the week's matchups so the reader can see
+// every bracket team, including the two that played nobody.
+func TestRenderShowsByes(t *testing.T) {
+	r := sampleRecap()
+	r.Byes = []ByeLine{{TeamID: "t9", TeamName: "Pfaadt Wood Kings"}}
+	var buf bytes.Buffer
+	if err := Render(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Pfaadt Wood Kings") || !strings.Contains(out, "bye") {
+		t.Errorf("rendered recap lacks the bye row:\n%s", out)
+	}
+}
