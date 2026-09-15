@@ -151,6 +151,9 @@ clean-cache:
 # every command's exit code — the target could not fail, while CLAUDE.md
 # calls it the canonical pre-push smoke test (rosterbot-ww8). The only way a
 # failure is ignored now is an explicit fallback that says why.
+# The smoke test exercises every command regardless of the calendar; the
+# season gate (cmd/season_gate.go) would otherwise stop nine of them all winter.
+run-all: export ROSTERBOT_SEASON_GATE = off
 run-all:
 	@echo "=== build-modules (nested Go modules) ===";    $(MAKE) build-modules &&                                          echo
 	@echo "=== scoring ===";                              time go run . scoring &&                                          echo

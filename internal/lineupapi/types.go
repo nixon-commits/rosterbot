@@ -147,6 +147,15 @@ type Run struct {
 // skipped either, since a skip would let an older streak re-report.
 const RunOutcomeTenantActionable = "tenant_actionable"
 
+// RunOutcomeOffSeason marks an in-season-only job that exited 0 because the
+// day fell outside the fantasy season (cmd's season gate, rosterbot-0lyz.4):
+// it fetched and wrote nothing. The ledger row is a real heartbeat — the job
+// launched — and an ordinary SUCCESS to opsalert's Streak, so a winter of
+// gated runs reads as a healthy schedule rather than a silent one; the
+// outcome is what lets the dashboard tell "did nothing, correctly" from "did
+// the work".
+const RunOutcomeOffSeason = "off_season"
+
 // RunConnect is the connect task's own verdict on a run, as served on Run.
 //
 // Verdict is the ONLY thing a renderer may colour on. The tenant's live

@@ -582,6 +582,7 @@ Optional:
 | `PROSPECT_MIN_GAMES` | `8` | Minimum games for prospect breakout eligibility. |
 | `PROSPECT_RANK_CACHE_HOURS` | `168` | Hours to cache prospect rankings. |
 | `PROSPECT_UPGRADE_RANK_THRESHOLD` | `20` | Prospect rank threshold for upgrade alerts. |
+| `ROSTERBOT_SEASON_GATE` | — | `off` disables the off-season gate. Outside the fantasy season, in-season-only commands (`optimize`, `backtest`, `grade`, `shadow`, `recap`, `recap-site`, `gs-check`, `waivers`, `prospects`) print one line and exit 0 with run outcome `off_season` unless given an explicit `--dates`/`--week`; year-round commands are unaffected. `make run-all` sets it. |
 | `PUSHOVER_USER_KEY` | — | Personal **operator** channel (connect blocked, stale-cache fallback, GS limit fetch failure, projection status) — and the target of fantasy dual-send while `PUSHOVER_FANTASY_DUAL_SEND` is set. Retained permanently. |
 | `PUSHOVER_GROUP_KEY` | — | Group channel (league-wide GS violation broadcast). Retained permanently — league mates without the app are unreachable by APNs. |
 | `PUSHOVER_API_TOKEN` | — | Pushover application token — shared by every Pushover send, baseball or football. |
