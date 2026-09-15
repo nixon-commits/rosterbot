@@ -20,37 +20,36 @@ type playoffIdleClient interface {
 // seeded — and, when it does, the one line the run prints. Such a day has
 // nothing to optimize: the lineup scores for nobody.
 //
-// The DECISION comes from the matchup-week lookup alone: the merged matchup
-// list carries a row for every team paired in a round and a pending row for
-// every team advanced into a round Fantrax has not drawn yet
-// (fantrax.playoffMatchups), so "no week" there is the whole evidence. The
-// WORDING comes from the bracket (fantrax.PlayoffStatusFor); when the bracket
-// cannot be read the stop still happens with the generic line, because the
-// wording is decoration on a decision already made.
+// The DECISION is fantrax.ClassifyScoringDay's, shared with the lineup-gap
+// grading in cmd/grade.go and the backtest report so the two cannot drift
+// (rosterbot-zg1r): the merged matchup list carries a row for every team
+// paired in a round and a pending row for every team advanced into a round
+// Fantrax has not drawn yet (fantrax.playoffMatchups), so "no week" there is
+// the whole evidence. The WORDING comes from the bracket
+// (fantrax.PlayoffStatusFor); when the bracket cannot be read the stop still
+// happens with the generic line, because the wording is decoration on a
+// decision already made.
 //
-// The check is deliberately scoped to Playoff periods. In the regular season
-// every team has a matchup every week, so a missing week there is a Fantrax
-// fault that must stay loud (ResolveDates keeps returning it as an error);
-// only inside the bracket is "no matchup" an ordinary answer. An error means
-// neither lookup could answer, which the caller treats as "not idle" — an
-// unknown bracket status is not a reason to skip a live day.
+// The stop is deliberately scoped to Playoff periods, which is the only
+// verdict that means "idle" here. A regular-season day is scoring by
+// construction (a missing week there is a Fantrax fault ResolveDates keeps
+// loud), and a date outside every period is the season-end stop's to name,
+// not this one's. An error means the lookup could not answer, which the
+// caller treats as "not idle" — an unknown bracket status is not a reason to
+// skip a live day.
 func playoffIdle(ft playoffIdleClient, teamID string, day, seasonStart time.Time) (idle bool, line string, err error) {
 	periods, _, _, err := ft.GetScoringPeriodsAndTeams()
 	if err != nil {
 		return false, "", fmt.Errorf("scoring periods: %w", err)
 	}
-	p := fantrax.FindCurrentPeriod(periods, day)
-	if p == nil || !p.Playoff {
-		return false, "", nil
-	}
-	ws, _, err := ft.GetMatchupWeekBounds(day, seasonStart)
+	sd, err := fantrax.ClassifyScoringDay(periods, ft, seasonStart, day)
 	if err != nil {
-		return false, "", fmt.Errorf("matchup week: %w", err)
+		return false, "", err
 	}
-	if !ws.IsZero() {
+	if sd.Scoring || sd.Period == nil || !sd.Period.Playoff {
 		return false, "", nil
 	}
-	return true, playoffIdleLine(ft, teamID, p), nil
+	return true, playoffIdleLine(ft, teamID, sd.Period), nil
 }
 
 // playoffIdleLine names the reason a team has no scoring matchup in the

@@ -95,6 +95,11 @@ type Report struct {
 	// Shape is the roster-shape companion to Gate, carried for the same reason
 	// and under the same --skip-projections condition.
 	Shape *RosterShape `json:"roster_shape,omitempty"`
+	// LineupExcluded names the days of the window withheld from lineup
+	// grading because the lineup scored for nobody (SplitScoringDays), so a
+	// window thinned by them is visible rather than silently shorter. Set by
+	// the caller like Gate and Shape; empty on a healthy window.
+	LineupExcluded []ExcludedDay `json:"lineup_excluded,omitempty"`
 }
 
 // ProjectionSummary rolls up projection grading across all days.
@@ -1075,6 +1080,17 @@ func FormatReport(r Report) string {
 	fmt.Fprintln(&b, strings.Repeat("-", 48))
 	fmt.Fprintf(&b, "%-14s %10.2f %10.2f %10.2f\n",
 		"Total", totalActual, totalOptimal, totalActual-totalOptimal)
+
+	// Days the lineup scored for nobody are withheld from the table above,
+	// and named here for the same reason the projection exclusions below are:
+	// a window that quietly shrinks reads like a healthy one.
+	if len(r.LineupExcluded) > 0 {
+		fmt.Fprintf(&b, "\nExcluded from lineup grading: %d day(s) the lineup scored for nobody (of %d in the window).\n",
+			len(r.LineupExcluded), len(r.Lineup)+len(r.LineupExcluded))
+		for _, e := range r.LineupExcluded {
+			fmt.Fprintf(&b, "  %s: %s\n", e.Date.Format("2006-01-02"), e.Reason)
+		}
+	}
 
 	// Top bench misses.
 	if len(r.TopBench) > 0 {

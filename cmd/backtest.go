@@ -78,7 +78,7 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	// no-week case simply stays the error it always was.
 	periods, _, _, perr := ft.GetScoringPeriodsAndTeams()
 	if perr != nil {
-		fmt.Fprintf(os.Stderr, "warning: scoring periods unavailable (%v); a missing matchup week will be reported as an error\n", perr)
+		fmt.Fprintf(os.Stderr, "warning: scoring periods unavailable (%v); a missing matchup week will be reported as an error and the lineup is graded unfiltered\n", perr)
 	}
 	start, end, notice, err := resolveBacktestWindow(ft, rangeOpts, periods)
 	if err != nil {
@@ -117,8 +117,24 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("daily fpts: %w", err)
 	}
 
+	// The lineup side grades only the days the lineup scored for; a playoff
+	// bye, the rounds after an elimination or the days past the bracket's
+	// final measure a decision that counted for nothing (rosterbot-zg1r).
+	// Projection grading, the gate and the shape below keep every day. A
+	// split that cannot be made grades the lineup unfiltered and says so —
+	// this is a report, and a loud unfiltered table beats no table.
+	gapDays, lineupExcluded := days, []backtest.ExcludedDay(nil)
+	if perr == nil {
+		scoring, excluded, serr := backtest.SplitScoringDays(days, backtest.ScoringClassifier(periods, ft, seasonStart))
+		if serr != nil {
+			fmt.Fprintf(os.Stderr, "warning: scoring days unknown (%v); the lineup is graded unfiltered\n", serr)
+		} else {
+			gapDays, lineupExcluded = scoring, excluded
+		}
+	}
+
 	if backtestRecencyExperiment {
-		return runRecencyExperiment(cmd.Context(), ft, cfg, days, start, end, seasonStart, snapTTL, hitterSlots, pitcherSlots)
+		return runRecencyExperiment(cmd.Context(), ft, cfg, gapDays, start, end, seasonStart, snapTTL, hitterSlots, pitcherSlots)
 	}
 
 	snapStore, err := statestore.FromEnv().SnapshotStore()
@@ -126,7 +142,7 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("snapshot store: %w", err)
 	}
 
-	lineup := backtest.RunLineupAnalysis(days, hitterSlots, pitcherSlots)
+	lineup := backtest.RunLineupAnalysis(gapDays, hitterSlots, pitcherSlots)
 
 	// All three snapshot-derived sections are computed together and BEFORE the
 	// --json early return, so they reach every consumer rather than only
@@ -156,6 +172,7 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	report := backtest.BuildReport(start, end, lineup, proj)
 	report.Gate = gate
 	report.Shape = shape
+	report.LineupExcluded = lineupExcluded
 
 	jobwire.RecordOutput("backtest", backtestToWireResult(report))
 

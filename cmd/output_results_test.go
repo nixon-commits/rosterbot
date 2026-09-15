@@ -304,3 +304,24 @@ func childObject(t *testing.T, m map[string]any, key string) map[string]any {
 	}
 	return obj
 }
+
+// A day withheld from lineup grading reaches the wire with its reason: the
+// dashboard's run viewer prints keys verbatim, so a reader of the backtest
+// run sees the window was thinned and why, not merely a shorter days list.
+func TestBacktestToWireResult_MapsLineupExcluded(t *testing.T) {
+	rep := backtest.Report{
+		Start:  time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC),
+		End:    time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC),
+		Lineup: []backtest.LineupDayResult{{Date: time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC), ActualPts: 60, OptimalPts: 79, Gap: -19}},
+		LineupExcluded: []backtest.ExcludedDay{{Date: time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC),
+			Reason: "no scoring matchup for this team in Playoffs - Round 2 (2026-09-14 to 2026-09-20): bye or eliminated"}},
+	}
+	out := backtestToWireResult(rep)
+	if len(out.LineupExcluded) != 1 || out.LineupExcluded[0].Date != "2026-09-14" ||
+		!strings.Contains(out.LineupExcluded[0].Reason, "Playoffs - Round 2") {
+		t.Fatalf("lineup_excluded: %+v", out.LineupExcluded)
+	}
+	if len(out.Days) != 1 {
+		t.Fatalf("days must hold only the graded day, got %+v", out.Days)
+	}
+}
