@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/pmurley/go-fantrax/auth_client"
 	"io"
 	"log"
 	"os"
@@ -220,6 +221,7 @@ type LineupClient interface {
 	GetCurrentPeriod() (fantrax.DailyPeriod, error)
 	GetMatchupWeekBounds(date, seasonStart time.Time) (weekStart, weekEnd time.Time, err error)
 	GetScoringPeriodsAndTeams() ([]fantrax.ScoringPeriod, map[string]string, map[string]string, error)
+	GetPlayoffBracket() (*auth_client.PlayoffBracket, error)
 	DailyPeriodFor(seasonStart, date time.Time) fantrax.DailyPeriod
 	GetHitterRosterForPeriod(period fantrax.DailyPeriod) ([]fantrax.Player, error)
 	GetPitcherRosterForPeriod(period fantrax.DailyPeriod) ([]fantrax.Player, error)
@@ -329,9 +331,9 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		// it always was.
 		var nmw *NoMatchupWeekError
 		if errors.As(err, &nmw) {
-			if p, idle, ierr := playoffIdle(ft, nmw.Today, nmw.SeasonStart); ierr == nil && idle {
-				prog.Logf("%s", playoffIdleLine(p))
-				fmt.Fprintf(out, "\n%s\n", playoffIdleLine(p))
+			if idle, line, ierr := playoffIdle(ft, cfg.TeamID, nmw.Today, nmw.SeasonStart); ierr == nil && idle {
+				prog.Logf("%s", line)
+				fmt.Fprintf(out, "\n%s\n", line)
 				return Result{}, nil
 			}
 		}
@@ -566,11 +568,11 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	// unknown bracket status is not a reason to skip a live day, so a lookup
 	// failure logs and optimizes anyway.
 	if !seasonStart.IsZero() && !multiDate {
-		if p, idle, perr := playoffIdle(ft, day, seasonStart); perr != nil {
+		if idle, line, perr := playoffIdle(ft, cfg.TeamID, day, seasonStart); perr != nil {
 			prog.Logf("WARNING: playoff status unknown (%v) — optimizing anyway", perr)
 		} else if idle {
-			prog.Logf("%s", playoffIdleLine(p))
-			fmt.Fprintf(out, "\n%s\n", playoffIdleLine(p))
+			prog.Logf("%s", line)
+			fmt.Fprintf(out, "\n%s\n", line)
 			return result, nil
 		}
 	}

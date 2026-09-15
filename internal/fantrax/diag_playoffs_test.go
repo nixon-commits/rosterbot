@@ -64,3 +64,40 @@ func slotLabel(s auth_client.PlayoffSlot) string {
 		return s.TeamName
 	}
 }
+
+// TestDiagPlayoffGSLimits prints the live GS min/max for every playoff round,
+// through the same GetGSLimits the lineup path and gs-check use, so a round
+// Fantrax configures differently from a regular-season week (or not at all)
+// is a printed fact rather than a silent gate change.
+//
+//	go test -tags diag -run TestDiagPlayoffGSLimits -v ./internal/fantrax/
+func TestDiagPlayoffGSLimits(t *testing.T) {
+	leagueID := os.Getenv("FANTRAX_LEAGUE_ID")
+	if leagueID == "" {
+		t.Skip("set FANTRAX_LEAGUE_ID (and a session) to run")
+	}
+	t.Chdir("../..")
+	c, err := NewClient(leagueID, os.Getenv("FANTRAX_TEAM_ID"))
+	if err != nil {
+		t.Fatalf("fantrax client: %v", err)
+	}
+	b, err := c.GetPlayoffBracket()
+	if err != nil {
+		t.Fatalf("GetPlayoffBracket: %v", err)
+	}
+	for _, r := range b.Rounds {
+		lo, hi, err := c.GetGSLimits(os.Getenv("FANTRAX_TEAM_ID"), WeeklyPeriod(r.ScoringPeriod))
+		if err != nil {
+			t.Logf("round %d (period %d): GetGSLimits error: %v", r.Number, r.ScoringPeriod, err)
+			continue
+		}
+		t.Logf("round %d (period %d): GS min=%s max=%s", r.Number, r.ScoringPeriod, fmtIntPtr(lo), fmtIntPtr(hi))
+	}
+}
+
+func fmtIntPtr(p *int) string {
+	if p == nil {
+		return "none"
+	}
+	return fmt.Sprint(*p)
+}
