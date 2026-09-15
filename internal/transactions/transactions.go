@@ -583,3 +583,11 @@ func notifyBody(pending, executed []Trade) string {
 	section("Recent Trades", executed)
 	return b.String()
 }
+
+// SeasonTrades groups every executed trade row into Trades valued by HKB,
+// for the year-end page. It is the same grouping and pricing CheckTrades
+// uses for its daily report, exported so the two cannot drift; players is
+// the full HKB roster (picks are priced by scanning it).
+func SeasonTrades(txs []models.Transaction, players []hkb.Player) []Trade {
+	return groupTrades(txs, buildHKBLookup(players), players)
+}
