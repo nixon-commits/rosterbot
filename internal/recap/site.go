@@ -3,6 +3,7 @@ package recap
 import (
 	"context"
 	"fmt"
+	"github.com/pmurley/go-fantrax/auth_client"
 	"os"
 	"path/filepath"
 	"sort"
@@ -55,14 +56,16 @@ func RunSite(ctx context.Context, ft SiteClient, sopts SiteOptions) error {
 	}
 
 	// Build the static portion of the nav (descending — most recent first).
-	nav := make([]WeekLink, len(completed))
-	for i, w := range completed {
-		nav[i] = WeekLink{
+	nav := make([]WeekLink, 0, len(completed)+1)
+	for _, w := range completed {
+		nav = append(nav, WeekLink{
 			WeekNumber: w.n,
 			WeekLabel:  w.label,
 			Filename:   weekFilename(w.n),
-		}
+		})
 	}
+	// The year-end page rides the same picker as the weeks, last in the list.
+	nav = append(nav, WeekLink{WeekLabel: "Season", Filename: seasonFilename})
 
 	// Pass 1: build every week's recap. We can't render eagerly because each
 	// page wants the season-to-date leaderboard, which requires having seen all
@@ -125,6 +128,37 @@ func RunSite(ctx context.Context, ft SiteClient, sopts SiteOptions) error {
 		}
 	}
 
+	// The year-end page: Fantrax's own standings, the bracket, and the season
+	// awards that used to close every week page. Standings and bracket come
+	// live; the awards are the final cumulative set.
+	standings, err := ft.GetStandings()
+	if err != nil {
+		return fmt.Errorf("standings: %w", err)
+	}
+	bracket, err := ft.GetPlayoffBracket()
+	if err != nil {
+		return fmt.Errorf("playoff bracket: %w", err)
+	}
+	var logos map[string]string
+	if latestRecap != nil {
+		logos = latestRecap.LogoURLs
+	}
+	page := BuildSeasonPage(seasonLabel(completed), standings, bracket, latestSeason, logos, sopts.Today)
+	seasonNav := make([]WeekLink, len(nav))
+	copy(seasonNav, nav)
+	seasonNav[len(seasonNav)-1].IsCurrent = true
+	f, err := os.Create(filepath.Join(sopts.OutDir, seasonFilename))
+	if err != nil {
+		return fmt.Errorf("create %s: %w", seasonFilename, err)
+	}
+	if err := RenderSeason(f, page, seasonNav); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("render %s: %w", seasonFilename, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", seasonFilename, err)
+	}
+
 	fmt.Fprintf(os.Stderr, "Built %d weeks → %s\n", len(completed), sopts.OutDir)
 	return nil
 }
@@ -157,6 +191,8 @@ type dayCompletionChecker interface {
 // already reads. *fantrax.Client satisfies it implicitly.
 type SiteClient interface {
 	RecapClient
+	GetPlayoffBracket() (*auth_client.PlayoffBracket, error)
+	GetStandings() ([]fantrax.StandingRow, error)
 }
 
 // completedMatchupWeeks enumerates the LEAGUE's weekly periods — regular
@@ -216,4 +252,12 @@ func writeRender(path string, r *Recap, nav []WeekLink, season *SeasonAwards) er
 		return fmt.Errorf("close %s: %w", path, err)
 	}
 	return nil
+}
+
+// seasonLabel names the season from the weeks that were rendered.
+func seasonLabel(weeks []matchupWeek) string {
+	if len(weeks) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d", weeks[0].start.Year())
 }

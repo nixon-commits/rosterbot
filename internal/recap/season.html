@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>{{.Season}} Season</title>
+{{template "style"}}
+<style>
+  .standings { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .standings th { text-align: left; color: var(--text-dim); font-weight: 600; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .standings td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+  .standings td.num, .standings th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .standings .name { display: flex; align-items: center; gap: 8px; }
+  .bracket { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .round h3 { margin: 0 0 4px; font-size: 14px; }
+  .round .dates { color: var(--text-dim); font-size: 12px; margin-bottom: 10px; }
+  .pairing { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; }
+  .pairing .side { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; }
+  .pairing .side .who { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .pairing .side .who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pairing .side.winner { font-weight: 700; }
+  .pairing .side.placeholder { color: var(--text-dim); font-style: italic; }
+  .pairing .score { font-variant-numeric: tabular-nums; }
+  .champion { display: flex; align-items: center; gap: 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; font-size: 18px; font-weight: 700; }
+  .champion .tbd { color: var(--text-dim); font-weight: 500; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="header-row">
+    <div class="header-text">
+      <div class="week">Season Recap</div>
+      <h1>{{.Season}} Season</h1>
+      <div class="dates">{{if .Champion}}Champion crowned{{else}}Playoffs in progress{{end}}{{if .ThroughWeek}} · awards through week {{.ThroughWeek}}{{end}}</div>
+    </div>
+  </div>
+  {{- if .Nav}}
+  <div class="week-picker">
+    <select id="week-select" aria-label="Switch week">
+      {{- range .Nav}}
+      <option{{if .IsCurrent}} selected{{end}}>{{.WeekLabel}}</option>
+      {{- end}}
+    </select>
+  </div>
+  <script>
+    (function () {
+      var files = [{{range .Nav}}{{.Filename}}, {{end}}];
+      var sel = document.getElementById("week-select");
+      if (sel) sel.addEventListener("change", function () {
+        var f = files[sel.selectedIndex];
+        if (f) location.assign(f);
+      });
+    })();
+  </script>
+  {{- end}}
+</header>
+
+<section>
+  <h2>🏆 Champion</h2>
+  <div class="champion">
+    {{- if .Champion}}
+    {{teamBadge .LogoURLs .Champion.TeamID .Champion.Name}}<span>{{.Champion.Name}}</span>
+    {{- else}}
+    <span class="tbd">TBD — the final round has not been decided</span>
+    {{- end}}
+  </div>
+</section>
+
+{{- if .Bracket}}
+<section>
+  <h2>Playoff Bracket</h2>
+  <div class="bracket">
+    {{- range .Bracket}}
+    <div class="round">
+      <h3>{{.Caption}}</h3>
+      <div class="dates">{{fmtDate .Start}} – {{fmtDate .End}} · period {{.Period}}</div>
+      {{- range .Matchups}}
+      <div class="pairing">
+        <div class="side{{if and .WinnerID (eq .WinnerID .Away.TeamID)}} winner{{end}}{{if ne .Away.Kind "team"}} placeholder{{end}}">
+          <div class="who">{{if eq .Away.Kind "team"}}{{teamBadge $.LogoURLs .Away.TeamID .Away.Name}}{{end}}<span>{{.Away.Label}}</span></div>
+          {{- if and .Scored (eq .Away.Kind "team")}}<div class="score">{{pts .AwayScore}}</div>{{end}}
+        </div>
+        <div class="side{{if and .WinnerID (eq .WinnerID .Home.TeamID)}} winner{{end}}{{if ne .Home.Kind "team"}} placeholder{{end}}">
+          <div class="who">{{if eq .Home.Kind "team"}}{{teamBadge $.LogoURLs .Home.TeamID .Home.Name}}{{end}}<span>{{.Home.Label}}</span></div>
+          {{- if and .Scored (eq .Home.Kind "team")}}<div class="score">{{pts .HomeScore}}</div>{{end}}
+        </div>
+      </div>
+      {{- end}}
+    </div>
+    {{- end}}
+  </div>
+</section>
+{{- end}}
+
+<section>
+  <h2>Final Standings</h2>
+  <div style="overflow-x:auto">
+  <table class="standings">
+    <thead><tr><th>#</th><th>Team</th><th class="num">W</th><th class="num">L</th><th class="num">T</th><th class="num">Win%</th><th class="num">GB</th><th class="num">PF</th><th class="num">PA</th><th>Streak</th></tr></thead>
+    <tbody>
+    {{- range .Standings}}
+    <tr>
+      <td class="num">{{.Rank}}</td>
+      <td><div class="name">{{teamBadge $.LogoURLs .TeamID .TeamName}}<span>{{.TeamName}}</span></div></td>
+      <td class="num">{{.Wins}}</td><td class="num">{{.Losses}}</td><td class="num">{{.Ties}}</td>
+      <td class="num">{{printf "%.3f" .WinPct}}</td><td class="num">{{printf "%.1f" .GamesBack}}</td>
+      <td class="num">{{printf "%.0f" .PointsFor}}</td><td class="num">{{printf "%.0f" .PointsAgainst}}</td>
+      <td>{{.Streak}}</td>
+    </tr>
+    {{- end}}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+{{- if .Awards}}
+<section>
+  <h2>Season Awards · Through Week {{.Awards.ThroughWeek}}</h2>
+  {{- range .Awards.Categories}}
+  <details class="season-cat">
+    <summary>
+      <h3><span class="icon">{{awardEmoji .AwardName}}</span>{{.AwardName}}</h3>
+      <span class="expand-hint"><span class="chevron">▸</span> expand</span>
+    </summary>
+    {{- range $i, $t := .Teams}}
+    <div class="row">
+      <div class="body">
+        <div class="name">{{teamBadge $.LogoURLs $t.TeamID $t.TeamName}}<span>{{$t.TeamName}}</span></div>
+      </div>
+      <div class="stat">{{$t.Count}}</div>
+    </div>
+    {{- end}}
+  </details>
+  {{- end}}
+  {{- if .Awards.Shellings}}
+  <details class="season-cat">
+    <summary>
+      <h3><span class="icon">🐚</span>Top 5 Shellings (Season)</h3>
+      <span class="expand-hint"><span class="chevron">▸</span> expand</span>
+    </summary>
+    {{- range $i, $s := .Awards.Shellings}}
+    <div class="shelling-row">
+      {{mlbBadge $s.MLBTeam}}
+      <div class="body">
+        <div class="name">{{$s.Name}}</div>
+        <div class="meta">Wk {{$s.WeekNumber}} · {{$s.OwnerTeam}}{{if $s.Opponent}} · vs {{$s.Opponent}}{{end}}</div>
+      </div>
+      <div class="pts">{{pts $s.FPts}}</div>
+    </div>
+    {{- end}}
+  </details>
+  {{- end}}
+</section>
+{{- end}}
+
+<footer>
+  {{.Season}} season{{if not .GeneratedAt.IsZero}} · built {{.GeneratedAt.Format "Jan 2, 2006"}}{{end}}
+</footer>
+
+</div>
+</body>
+</html>

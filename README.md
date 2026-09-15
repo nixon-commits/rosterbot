@@ -336,6 +336,8 @@ rosterbot recap --out /tmp/recap.html --open        # render + open in browser
 
 # Build the multi-week static site (one HTML per completed week + index.html).
 # Playoff rounds are weeks too: week-23.html is "Playoffs - Round 1", with byes shown.
+# dist/season.html is the year-end page: Fantrax's final standings, the playoff bracket
+# and champion, and the season awards (which no longer sit on every week page).
 rosterbot recap-site --out dist
 rosterbot recap --week 23 --out /tmp/round1.html   # --week N is the league's weekly period N
 ```
