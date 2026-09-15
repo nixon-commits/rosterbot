@@ -17,6 +17,13 @@ var templateHTML string
 
 var tmpl = template.Must(template.New("recap").Funcs(funcMap).Parse(templateHTML))
 
+// The season page is parsed into the same set so it shares the "style" block
+// template.html defines; tmpl itself stays the week-page root.
+var _ = template.Must(tmpl.New("season").Parse(seasonHTML))
+
+//go:embed season.html
+var seasonHTML string
+
 var funcMap = template.FuncMap{
 	"pts":               fmtPts,
 	"pct":               fmtPct,

@@ -206,11 +206,21 @@ func TestRenderSeasonRankRemovedAndShellingLogo(t *testing.T) {
 			Name: "Garrett Crochet", MLBTeam: "SEA", OwnerTeam: "DillonP33", WeekNumber: 3, FPts: -8,
 		}},
 	}
+	// The awards and shellings render on the season page now, not the week
+	// pages; the week page is rendered too so a regression that re-adds them
+	// there (or drops the badge convention here) fails the same test.
 	var buf bytes.Buffer
-	if err := RenderSite(&buf, r, nil, season); err != nil {
+	if err := RenderSeason(&buf, BuildSeasonPage("2026", nil, nil, season, r.LogoURLs, time.Time{}), nil); err != nil {
 		t.Fatal(err)
 	}
 	html := buf.String()
+	var week bytes.Buffer
+	if err := RenderSite(&week, r, nil, season); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(week.String(), "Garrett Crochet") {
+		t.Error("week page still renders the season shellings")
+	}
 	// Shelling uses the MLB team logo.
 	if !strings.Contains(html, "https://midfield.mlbstatic.com/v1/team/136/spots/96") {
 		t.Error("shelling row missing MLB team logo")

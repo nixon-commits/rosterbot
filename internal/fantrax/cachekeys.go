@@ -29,5 +29,6 @@ const (
 	keyGSLimits      = "fantrax-gs-limits"
 	keyPeriodDateMap = "fantrax-period-date-map"
 	keyPlayoffs      = "fantrax-playoffs"
+	keyStandings     = "fantrax-standings"
 	keyMLBGameLog    = "mlb-game-log"
 )
