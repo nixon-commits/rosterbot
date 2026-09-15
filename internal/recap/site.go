@@ -3,7 +3,10 @@ package recap
 import (
 	"context"
 	"fmt"
+	"github.com/nixon-commits/rosterbot/internal/hkb"
+	"github.com/nixon-commits/rosterbot/internal/transactions"
 	"github.com/pmurley/go-fantrax/auth_client"
+	"github.com/pmurley/go-fantrax/models"
 	"os"
 	"path/filepath"
 	"sort"
@@ -143,7 +146,22 @@ func RunSite(ctx context.Context, ft SiteClient, sopts SiteOptions) error {
 	if latestRecap != nil {
 		logos = latestRecap.LogoURLs
 	}
-	page := BuildSeasonPage(seasonLabel(completed), standings, bracket, latestSeason, logos, sopts.Today)
+	// Derived sections. Efficiency comes from the weeks just rendered; the
+	// leaders are the latest week's board (season-to-date by construction,
+	// same thresholds and owner badges); the trades come from the ledger
+	// priced at today's HKB values. The trades are decoration on a page the
+	// standings and bracket already justify, so their fetch soft-fails to an
+	// empty section with a warning rather than failing the build.
+	extras := SeasonExtras{Efficiency: SeasonEfficiency(recaps)}
+	if latestRecap != nil {
+		extras.WOBALeaders, extras.FIPLeaders = latestRecap.Awards.WOBALeaders, latestRecap.Awards.FIPLeaders
+	}
+	if trades, err := seasonTrades(ctx, ft, completed[0].start, sopts.Recap.CacheDir); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: trades of the year unavailable: %v\n", err)
+	} else {
+		extras.Trades = TradesOfTheYear(trades, tradesOfTheYearN)
+	}
+	page := BuildSeasonPage(seasonLabel(completed), standings, bracket, latestSeason, logos, sopts.Today, extras)
 	seasonNav := make([]WeekLink, len(nav))
 	copy(seasonNav, nav)
 	seasonNav[len(seasonNav)-1].IsCurrent = true
@@ -193,6 +211,7 @@ type SiteClient interface {
 	RecapClient
 	GetPlayoffBracket() (*auth_client.PlayoffBracket, error)
 	GetStandings() ([]fantrax.StandingRow, error)
+	GetRecentTrades(since time.Time) ([]models.Transaction, error)
 }
 
 // completedMatchupWeeks enumerates the LEAGUE's weekly periods — regular
@@ -260,4 +279,24 @@ func seasonLabel(weeks []matchupWeek) string {
 		return ""
 	}
 	return fmt.Sprintf("%d", weeks[0].start.Year())
+}
+
+// tradesOfTheYearN is how many trades the year-end page lists.
+const tradesOfTheYearN = 5
+
+// seasonTrades fetches every executed trade since the season opener and
+// prices it through the same HKB grouping the daily trade report uses.
+func seasonTrades(ctx context.Context, ft SiteClient, since time.Time, cacheDir string) ([]transactions.Trade, error) {
+	txs, err := ft.GetRecentTrades(since)
+	if err != nil {
+		return nil, fmt.Errorf("trades: %w", err)
+	}
+	if len(txs) == 0 {
+		return nil, nil
+	}
+	players, err := hkb.GetPlayers(ctx, cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("hkb: %w", err)
+	}
+	return transactions.SeasonTrades(txs, players), nil
 }

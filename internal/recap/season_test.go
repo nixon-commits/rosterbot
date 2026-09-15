@@ -40,7 +40,7 @@ func seasonFixture() (*auth_client.PlayoffBracket, []fantrax.StandingRow) {
 func TestBuildSeasonPage(t *testing.T) {
 	b, st := seasonFixture()
 	awards := &SeasonAwards{ThroughWeek: 23, Categories: []SeasonAwardCategory{{AwardName: AwardHighestScore, Teams: []SeasonAwardTeam{{TeamID: "pfaadt", TeamName: "Pfaadt Wood Kings", Count: 7}}}}}
-	p := BuildSeasonPage("2026", st, b, awards, map[string]string{"pfaadt": "https://x/logo.png"}, time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC))
+	p := BuildSeasonPage("2026", st, b, awards, map[string]string{"pfaadt": "https://x/logo.png"}, time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC), SeasonExtras{})
 
 	if len(p.Standings) != 2 || p.Standings[0].TeamName != "Pfaadt Wood Kings" || p.Standings[0].Wins != 42 {
 		t.Errorf("standings = %+v", p.Standings)
@@ -66,7 +66,7 @@ func TestBuildSeasonPage(t *testing.T) {
 	}
 
 	b.Champion = &auth_client.PlayoffSlot{Kind: auth_client.PlayoffSlotTeam, TeamID: "jimmy", TeamName: "jimmydyl"}
-	p = BuildSeasonPage("2026", st, b, awards, nil, time.Time{})
+	p = BuildSeasonPage("2026", st, b, awards, nil, time.Time{}, SeasonExtras{})
 	if p.Champion == nil || p.Champion.TeamID != "jimmy" || p.ChampionLabel != "jimmydyl" {
 		t.Errorf("decided champion = %+v / %q", p.Champion, p.ChampionLabel)
 	}
@@ -77,7 +77,7 @@ func TestBuildSeasonPage(t *testing.T) {
 func TestRenderSeason(t *testing.T) {
 	b, st := seasonFixture()
 	awards := &SeasonAwards{ThroughWeek: 23, Categories: []SeasonAwardCategory{{AwardName: AwardHighestScore, Teams: []SeasonAwardTeam{{TeamID: "pfaadt", TeamName: "Pfaadt Wood Kings", Count: 7}}}}}
-	p := BuildSeasonPage("2026", st, b, awards, nil, time.Time{})
+	p := BuildSeasonPage("2026", st, b, awards, nil, time.Time{}, SeasonExtras{})
 	nav := []WeekLink{{WeekNumber: 22, WeekLabel: "Week 22", Filename: "week-22.html"}, {WeekLabel: "Season", Filename: "season.html", IsCurrent: true}}
 	var buf bytes.Buffer
 	if err := RenderSeason(&buf, p, nav); err != nil {

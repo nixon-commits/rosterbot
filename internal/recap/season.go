@@ -24,6 +24,11 @@ type SeasonPage struct {
 	ChampionLabel string
 	Awards        *SeasonAwards
 	LogoURLs      map[string]string
+	// The derived sections; see SeasonExtras.
+	Efficiency  []EfficiencyLine
+	Trades      []TradeLine
+	WOBALeaders []LeaderLine
+	FIPLeaders  []LeaderLine
 }
 
 // StandingLine is one row of the final standings, as Fantrax shows it.
@@ -82,8 +87,9 @@ func bracketSlot(s auth_client.PlayoffSlot) BracketSlot {
 // BuildSeasonPage assembles the year-end page. Standings are taken as Fantrax
 // gives them, never recomputed. Byes and undrawn seeds stay what they are, and
 // the champion is a team only once the bracket names one.
-func BuildSeasonPage(season string, standings []fantrax.StandingRow, b *auth_client.PlayoffBracket, awards *SeasonAwards, logos map[string]string, generatedAt time.Time) *SeasonPage {
-	p := &SeasonPage{Season: season, Awards: awards, LogoURLs: logos, GeneratedAt: generatedAt, ChampionLabel: "TBD"}
+func BuildSeasonPage(season string, standings []fantrax.StandingRow, b *auth_client.PlayoffBracket, awards *SeasonAwards, logos map[string]string, generatedAt time.Time, extras SeasonExtras) *SeasonPage {
+	p := &SeasonPage{Season: season, Awards: awards, LogoURLs: logos, GeneratedAt: generatedAt, ChampionLabel: "TBD",
+		Efficiency: extras.Efficiency, Trades: extras.Trades, WOBALeaders: extras.WOBALeaders, FIPLeaders: extras.FIPLeaders}
 	if awards != nil {
 		p.ThroughWeek = awards.ThroughWeek
 	}

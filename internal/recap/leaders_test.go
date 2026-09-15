@@ -210,7 +210,7 @@ func TestRenderSeasonRankRemovedAndShellingLogo(t *testing.T) {
 	// pages; the week page is rendered too so a regression that re-adds them
 	// there (or drops the badge convention here) fails the same test.
 	var buf bytes.Buffer
-	if err := RenderSeason(&buf, BuildSeasonPage("2026", nil, nil, season, r.LogoURLs, time.Time{}), nil); err != nil {
+	if err := RenderSeason(&buf, BuildSeasonPage("2026", nil, nil, season, r.LogoURLs, time.Time{}, SeasonExtras{}), nil); err != nil {
 		t.Fatal(err)
 	}
 	html := buf.String()
