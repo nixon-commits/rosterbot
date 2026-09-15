@@ -114,6 +114,20 @@ type BacktestResult struct {
 	// (rosterbot-c21e). nil under the same --skip-projections condition,
 	// since it reads the same projection snapshots the gate does.
 	Shape *BacktestShapeOut `json:"roster_shape,omitempty"`
+	// LineupExcluded names the days of the window withheld from lineup
+	// grading because the lineup scored for nobody — a playoff bye, the
+	// rounds after an elimination, the days past the bracket's final
+	// (rosterbot-zg1r). Days holds only the graded days, so without this a
+	// thinned window would read as a shorter healthy one. Empty on a healthy
+	// window.
+	LineupExcluded []BacktestExcludedDayOut `json:"lineup_excluded,omitempty"`
+}
+
+// BacktestExcludedDayOut is one day withheld from lineup grading, with the
+// reason the classifier gave.
+type BacktestExcludedDayOut struct {
+	Date   string `json:"date"`
+	Reason string `json:"reason"`
 }
 
 type BacktestDayOut struct {

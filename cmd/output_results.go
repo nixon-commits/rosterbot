@@ -25,6 +25,11 @@ func backtestToWireResult(rep backtest.Report) jobwire.BacktestResult {
 			Gap:     round1(d.Gap),
 		})
 	}
+	for _, e := range rep.LineupExcluded {
+		out.LineupExcluded = append(out.LineupExcluded, jobwire.BacktestExcludedDayOut{
+			Date: e.Date.UTC().Format(wireDate), Reason: e.Reason,
+		})
+	}
 	if s := rep.ProjectionSummary; s != nil {
 		acc := &jobwire.BacktestAccuracy{MAE: round1(s.MAE), Bias: round1(s.Bias), RMSE: round1(s.RMSE), N: s.TotalPlayerDays}
 		for _, p := range s.ByPosition {

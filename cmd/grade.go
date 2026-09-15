@@ -358,6 +358,28 @@ func runGrade(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("daily fpts: %w", err)
 	}
 
+	// Which of these days the lineup scored for. Projection grading below
+	// takes every day — a projection is judged against real MLB actuals,
+	// which keep arriving whether or not the fantasy lineup counts — but the
+	// lineup gap is withheld for a day the lineup scored for nobody (a
+	// playoff bye, the rounds after an elimination, the days past the
+	// bracket's final), because it grades a decision that counted for
+	// nothing against a baseline calibrated on scoring weeks only
+	// (rosterbot-zg1r). Decided by fantrax.ClassifyScoringDay, the same
+	// verdict the lineup path stops on. An unanswerable split withholds the
+	// whole run's gap rows rather than guess: the gap is recomputable and
+	// the next run's fixed floor re-grades these days, while a row written
+	// for a non-scoring day has no delete and can only be filtered out at
+	// read time forever after.
+	gapDays, gapExcluded, gapErr := scoringGapDays(ft, days, seasonStart)
+	if gapErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: scoring days unknown (%v); lineup gaps withheld for this run\n", gapErr)
+	} else {
+		for _, line := range lineupGapCoverageLines(len(gapDays), gapExcluded) {
+			fmt.Println(line)
+		}
+	}
+
 	// Grade every projection system the shadow command captured. Actuals
 	// (days) are fetched once above and reused — only the projection side
 	// differs per system. Each system's rows land in its own Hive partition
@@ -448,11 +470,40 @@ func runGrade(cmd *cobra.Command, args []string) error {
 	// neither.
 	//
 	// Soft-fail: grades are irreplaceable, and a gap day is recoverable with
-	// `grade --dates`, so a gap hiccup must never fail the run.
-	if err := recordLineupGaps(ft, days); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: lineup gaps not written: %v\n", err)
+	// `grade --dates`, so a gap hiccup must never fail the run. An
+	// unclassified window (gapErr, warned above) writes nothing at all.
+	if gapErr == nil {
+		if err := recordLineupGaps(ft, gapDays); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: lineup gaps not written: %v\n", err)
+		}
 	}
 	return nil
+}
+
+// scoringGapDays splits the fetched window into the days the lineup scored
+// for (graded into the Lineup Gap Store) and the days it did not (withheld,
+// with the reason). The weekly period list is what tells a playoff round
+// from the regular season; without it no verdict is possible.
+func scoringGapDays(ft *fantrax.Client, days []fantrax.DayRoster, seasonStart time.Time) ([]fantrax.DayRoster, []backtest.ExcludedDay, error) {
+	periods, _, _, err := ft.GetScoringPeriodsAndTeams()
+	if err != nil {
+		return nil, nil, fmt.Errorf("scoring periods: %w", err)
+	}
+	return backtest.SplitScoringDays(days, backtest.ScoringClassifier(periods, ft, seasonStart))
+}
+
+// lineupGapCoverageLines renders the gap write's reach: printed on every
+// run, healthy case included, the same rule as the `il-start check:` and
+// `mlb recency coverage:` lines — a gap write that has quietly stopped
+// covering a day is indistinguishable from a quiet one unless the run
+// states its own reach every time. Each withheld day is named with the
+// classifier's reason.
+func lineupGapCoverageLines(scoring int, excluded []backtest.ExcludedDay) []string {
+	lines := []string{fmt.Sprintf("lineup gaps: %d scoring day(s), %d excluded", scoring, len(excluded))}
+	for _, e := range excluded {
+		lines = append(lines, fmt.Sprintf("  %s withheld: %s", e.Date.Format(gradeDateFmt), e.Reason))
+	}
+	return lines
 }
 
 // excludedDay names one date this run refused to grade, and why.

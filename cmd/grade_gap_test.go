@@ -57,3 +57,28 @@ func TestWriteLineupGaps_ReturnsErrorForCallerToSoftFail(t *testing.T) {
 		t.Error("want an error the caller can log-and-continue on, got nil")
 	}
 }
+
+// The coverage line prints on every run, healthy case included — the same
+// rule as `il-start check:` and `mlb recency coverage:`. A gap write that has
+// quietly stopped covering a day is indistinguishable from a quiet one unless
+// the run states its own reach every time.
+func TestLineupGapCoverageLines_HealthyWindowStillPrints(t *testing.T) {
+	got := lineupGapCoverageLines(3, nil)
+	if len(got) != 1 || got[0] != "lineup gaps: 3 scoring day(s), 0 excluded" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestLineupGapCoverageLines_NamesEachExcludedDay(t *testing.T) {
+	got := lineupGapCoverageLines(1, []backtest.ExcludedDay{{
+		Date:   time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC),
+		Reason: "no scoring matchup for this team in Playoffs - Round 2 (2026-09-14 to 2026-09-20): bye or eliminated",
+	}})
+	want := []string{
+		"lineup gaps: 1 scoring day(s), 1 excluded",
+		"  2026-09-14 withheld: no scoring matchup for this team in Playoffs - Round 2 (2026-09-14 to 2026-09-20): bye or eliminated",
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
