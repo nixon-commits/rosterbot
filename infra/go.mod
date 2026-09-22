@@ -3,8 +3,8 @@ module infra
 go 1.26.0
 
 require (
-	github.com/aws/aws-cdk-go/awscdk/v2 v2.268.0
-	github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2 v2.268.0-alpha.0
+	github.com/aws/aws-cdk-go/awscdk/v2 v2.270.0
+	github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2 v2.270.0-alpha.0
 	github.com/aws/constructs-go/constructs/v10 v10.8.1
 	github.com/aws/jsii-runtime-go v1.140.0
 )
