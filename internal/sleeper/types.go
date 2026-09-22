@@ -65,11 +65,14 @@ type WaiverBudgetTransfer struct {
 	Amount   int `json:"amount"`
 }
 
-// Transaction is one league transaction (trade, waiver claim, or free-agent
-// add/drop) for a given week ("round" in Sleeper's API).
+// Transaction is one league transaction (trade, waiver claim, free-agent
+// add/drop, or — in a guillotine league — a chop) for a given week ("round"
+// in Sleeper's API). The same shape is returned by the public REST feed and,
+// with the two trailing fields populated, by the authenticated GraphQL
+// league_transactions_by_status query that Plan 2 reads pending offers from.
 type Transaction struct {
 	TransactionID string                 `json:"transaction_id"`
-	Type          string                 `json:"type"`   // trade, free_agent, waiver
+	Type          string                 `json:"type"`   // trade, free_agent, waiver, chopped
 	Status        string                 `json:"status"` // complete, pending, failed
 	RosterIDs     []int                  `json:"roster_ids"`
 	Adds          map[string]int         `json:"adds"`
@@ -77,6 +80,15 @@ type Transaction struct {
 	DraftPicks    []TransactionDraftPick `json:"draft_picks"`
 	WaiverBudget  []WaiverBudgetTransfer `json:"waiver_budget"`
 	Created       int64                  `json:"created"` // epoch millis
+
+	// Creator is the Sleeper USER id (not roster id) that proposed the
+	// transaction. For a trade it is who sent the offer, which is what
+	// separates "an offer made to me" from "an offer I made".
+	Creator string `json:"creator"`
+	// ConsenterIDs are the ROSTER ids that have accepted so far. On a
+	// completed trade it holds every party; on a pending one it shows who is
+	// still being waited on.
+	ConsenterIDs []int `json:"consenter_ids"`
 }
 
 // NFLState is the current NFL week/season as Sleeper sees it.
