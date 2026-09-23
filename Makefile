@@ -169,7 +169,7 @@ run-all:
 	@echo "=== archive --dry-run ===";                   time go run . archive --dry-run &&                                echo
 	@echo "=== team-values --dry-run ===";               time go run . team-values --dry-run &&                            echo
 	@echo "=== football-values --dry-run ===";           if [ -n "$$SLEEPER_LEAGUE_ID" ]; then time go run . football-values --dry-run; else echo "SKIPPED (SLEEPER_LEAGUE_ID unset; it lives in SSM for the deployment)"; fi && echo
-	@echo "=== football-trades --dry-run ===";           if [ -n "$$SLEEPER_LEAGUE_ID" ]; then time go run . football-trades --dry-run; else echo "SKIPPED (SLEEPER_LEAGUE_ID unset)"; fi && echo
+	@echo "=== football-trades --dry-run ===";           if [ -n "$$SLEEPER_LEAGUE_ID" ] && [ -n "$$SLEEPER_USER_ID" ]; then time go run . football-trades --dry-run; else echo "SKIPPED (SLEEPER_LEAGUE_ID or SLEEPER_USER_ID unset)"; fi && echo
 	@echo "=== backtest ===";                             time go run . backtest &&                                         echo
 	@echo "=== backtest --recency-experiment ===";        time go run . backtest --recency-experiment --dates 2026-05-01:2026-05-07 || echo "(tolerated: needs archived snapshots that may not exist locally)" && echo
 	@echo "=== recap --out /tmp/recap.html ===";          time go run . recap --out /tmp/recap.html &&                      echo
