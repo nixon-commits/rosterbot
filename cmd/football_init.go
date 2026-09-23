@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/nixon-commits/rosterbot/internal/dynasty"
 	"github.com/nixon-commits/rosterbot/internal/sleeper"
 )
 
@@ -12,7 +13,17 @@ import (
 // outright without the four FANTRAX_* vars, and football commands must never
 // need Fantrax credentials.
 type FootballConfig struct {
-	SleeperLeagueID          string
+	// SleeperLeagueID is the single league football-values reads. The
+	// multi-league jobs (football-trades, and Plans 2/3's offers and pickups)
+	// discover leagues from SleeperUserID instead and never read it.
+	SleeperLeagueID string
+	// SleeperUserID is the operator's Sleeper account id — stable where a
+	// username is not. Optional at load so football-values keeps working
+	// without it; the jobs that need it call requireSleeperUserID.
+	SleeperUserID string
+	// FormatOverrides is SLEEPER_FORMAT_OVERRIDES parsed: league id → StatsGuy
+	// column, applied by dynasty.DeriveProfile over its derivation.
+	FormatOverrides          map[string]string
 	DynastyFormat            string
 	FootballPushoverUserKey  string
 	FootballPushoverGroupKey string
@@ -22,6 +33,10 @@ func loadFootballConfig() (*FootballConfig, error) {
 	leagueID := os.Getenv("SLEEPER_LEAGUE_ID")
 	if leagueID == "" {
 		return nil, fmt.Errorf("missing required env var: SLEEPER_LEAGUE_ID")
+	}
+	overrides, err := dynasty.ParseFormatOverrides(os.Getenv("SLEEPER_FORMAT_OVERRIDES"))
+	if err != nil {
+		return nil, err
 	}
 	format := os.Getenv("DYNASTY_FORMAT")
 	if format == "" {
@@ -37,10 +52,22 @@ func loadFootballConfig() (*FootballConfig, error) {
 	}
 	return &FootballConfig{
 		SleeperLeagueID:          leagueID,
+		SleeperUserID:            os.Getenv("SLEEPER_USER_ID"),
+		FormatOverrides:          overrides,
 		DynastyFormat:            format,
 		FootballPushoverUserKey:  userKey,
 		FootballPushoverGroupKey: groupKey,
 	}, nil
+}
+
+// requireSleeperUserID is the check every multi-league job runs first. Kept
+// off loadFootballConfig so a deployment that has not yet set the parameter
+// breaks the new jobs loudly and leaves football-values alone.
+func (c *FootballConfig) requireSleeperUserID() error {
+	if c.SleeperUserID == "" {
+		return fmt.Errorf("missing required env var: SLEEPER_USER_ID (the operator's Sleeper account id; this job discovers leagues from it)")
+	}
+	return nil
 }
 
 // initFootball loads football configuration and creates a Sleeper client,
