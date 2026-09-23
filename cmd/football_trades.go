@@ -30,7 +30,8 @@ internal/dynasty.GradeTrade), and pushes a Pushover alert.
 
 Idempotent: one dedup marker per Sleeper transaction_id, written only after a
 confirmed send (check -> send -> mark). Needs no Fantrax credentials -- only
-SLEEPER_LEAGUE_ID.
+SLEEPER_LEAGUE_ID (for initFootball) and SLEEPER_USER_ID, from which every
+non-complete NFL league is discovered and polled.
 
 Every alerted trade is also appended to the durable Football Trade Log
 (football/trades/log/, or .football/trades/log/ locally), which is what the
@@ -59,37 +60,17 @@ func runFootballTrades(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("sleeper state: %w", err)
 	}
-	rosters, err := sc.Rosters(ctx, cfg.SleeperLeagueID)
+	leagues, err := discoverLeagues(ctx, sc, cfg, state.Season, os.Stdout)
 	if err != nil {
-		return fmt.Errorf("sleeper rosters: %w", err)
-	}
-	users, err := sc.Users(ctx, cfg.SleeperLeagueID)
-	if err != nil {
-		return fmt.Errorf("sleeper users: %w", err)
+		return err
 	}
 	players, err := sc.PlayersNFL(ctx)
 	if err != nil {
 		return fmt.Errorf("sleeper players: %w", err)
 	}
-
 	bundle, err := statsguy.LoadBundle(ctx, cacheDir, cacheTTL(statsguy.CacheTTL))
 	if err != nil {
 		return fmt.Errorf("statsguy bundle: %w", err)
-	}
-
-	names := dynasty.TeamNames(rosters, users)
-
-	var trades []sleeper.Transaction
-	for _, week := range pollWeeks(state) {
-		txns, err := sc.Transactions(ctx, cfg.SleeperLeagueID, week)
-		if err != nil {
-			return fmt.Errorf("sleeper transactions (week %d): %w", week, err)
-		}
-		for _, t := range txns {
-			if t.Type == "trade" && t.Status == "complete" {
-				trades = append(trades, t)
-			}
-		}
 	}
 
 	// Soft: a marker store we cannot build disables dedup, not the alert --
@@ -106,46 +87,112 @@ func runFootballTrades(cmd *cobra.Command, args []string) error {
 		warn("football-trades: init markers: %v (alert will repeat until resolved)", err)
 		markers = nil
 	}
-
 	now := time.Now().UTC()
-	if footballTradesRelog {
-		return relogFootballTrades(ctx, cfg, markers, now, trades, players, bundle, names)
-	}
 
-	res := gradeAndAlertTrades(ctx, tradeRunInputs{
-		markers: markers,
-		now:     now,
-		trades:  trades,
-		players: players,
-		bundle:  bundle,
-		names:   names,
-		format:  cfg.DynastyFormat,
-		dryRun:  dryRun,
-		send:    func(title, body string) error { return sendFootballTradeAlert(ctx, title, body) },
-		out:     os.Stdout,
-	})
-
-	// Soft-fail, and deliberately WITHOUT the `continue` the send path inside
-	// the loop uses: this runs AFTER every send, on the rows that loop returned,
-	// precisely so a log failure cannot reach back and suppress an alert that
-	// already went out. The durable log is additive reporting; the Pushover
-	// alert is the job. Same precedent as cmd/grade.go's lineup gaps never
-	// taking down the irreplaceable grades.
-	if len(res.LogRows) > 0 {
-		if added, err := writeFootballTradeLog(now, res.LogRows); err != nil {
-			warn("football-trades: trade log not written: %v (the alerts still went out, and the markers are set, so the next poll will NOT retry these -- recover with `football-trades --relog`)", err)
-		} else {
-			fmt.Printf("football-trades: logged %d graded trade(s) to dt=%s\n", added, now.Format("2006-01-02"))
+	// Per-league isolation, cmd/archive.go's per-source pattern: one league's
+	// fetch error is printed and the loop continues, so a Sleeper hiccup on
+	// one league never silences the other five; the run still exits non-zero
+	// at the end so ops alerting sees it.
+	var (
+		failed   []string
+		logRows  []dynasty.TradeLogRow
+		found    int
+		totals   tradeRunResult
+		relogged int
+	)
+	for _, lc := range leagues {
+		trades, names, err := loadLeagueTrades(ctx, sc, lc.League.LeagueID, state)
+		if err != nil {
+			warn("football-trades: %s: %v (continuing with the other leagues)", lc.League.Name, err)
+			failed = append(failed, lc.League.Name)
+			continue
 		}
+		found += len(trades)
+
+		if footballTradesRelog {
+			rows, skipped := relogRows(ctx, lc, markers, now, trades, players, bundle, names)
+			if skipped > 0 {
+				fmt.Printf("football-trades --relog: %s: skipped %d trade(s) with no dedup marker -- never alerted, so the next poll will capture them properly\n", lc.League.Name, skipped)
+			}
+			logRows = append(logRows, rows...)
+			relogged += len(rows)
+			continue
+		}
+
+		res := gradeAndAlertTrades(ctx, tradeRunInputs{
+			markers: markers,
+			now:     now,
+			trades:  trades,
+			players: players,
+			bundle:  bundle,
+			names:   names,
+			league:  lc.Profile,
+			dryRun:  dryRun,
+			send:    func(title, body string) error { return sendFootballTradeAlert(ctx, title, body) },
+			out:     os.Stdout,
+		})
+		logRows = append(logRows, res.LogRows...)
+		totals.Graded += res.Graded
+		totals.Alerted += res.Alerted
+		totals.Skipped += res.Skipped
 	}
 
-	fmt.Printf("football-trades: %d trades found, %d already alerted, %d graded, %d sent\n",
-		len(trades), res.Skipped, res.Graded, res.Alerted)
+	if footballTradesRelog {
+		if err := finishRelog(now, logRows, relogged); err != nil {
+			return err
+		}
+	} else {
+		// Soft-fail, and deliberately WITHOUT the `continue` the send path
+		// inside the loop uses: this runs AFTER every send, on the rows the
+		// loop returned, precisely so a log failure cannot reach back and
+		// suppress an alert that already went out. Same precedent as
+		// cmd/grade.go's lineup gaps never taking down the grades.
+		if len(logRows) > 0 {
+			if added, err := writeFootballTradeLog(now, logRows); err != nil {
+				warn("football-trades: trade log not written: %v (the alerts still went out, and the markers are set, so the next poll will NOT retry these -- recover with `football-trades --relog`)", err)
+			} else {
+				fmt.Printf("football-trades: logged %d graded trade(s) to dt=%s\n", added, now.Format("2006-01-02"))
+			}
+		}
+		fmt.Printf("football-trades: %d league(s), %d trades found, %d already alerted, %d graded, %d sent\n",
+			len(leagues), found, totals.Skipped, totals.Graded, totals.Alerted)
+	}
+
+	if len(failed) > 0 {
+		return fmt.Errorf("football-trades: %d of %d league(s) failed: %s", len(failed), len(leagues), strings.Join(failed, ", "))
+	}
 	return nil
 }
 
-// tradeRunInputs is everything gradeAndAlertTrades needs, with the two side
-// effects it cannot own -- sending, and printing -- injected.
+// loadLeagueTrades fetches one league's rosters, users and completed trades
+// for every polled week, plus the roster-id → team-name map the grader
+// labels sides with.
+func loadLeagueTrades(ctx context.Context, sc *sleeper.Client, leagueID string, state *sleeper.NFLState) ([]sleeper.Transaction, map[int]string, error) {
+	rosters, err := sc.Rosters(ctx, leagueID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sleeper rosters: %w", err)
+	}
+	users, err := sc.Users(ctx, leagueID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sleeper users: %w", err)
+	}
+	var trades []sleeper.Transaction
+	for _, week := range pollWeeks(state) {
+		txns, err := sc.Transactions(ctx, leagueID, week)
+		if err != nil {
+			return nil, nil, fmt.Errorf("sleeper transactions (week %d): %w", week, err)
+		}
+		for _, t := range txns {
+			if t.Type == "trade" && t.Status == "complete" {
+				trades = append(trades, t)
+			}
+		}
+	}
+	return trades, dynasty.TeamNames(rosters, users), nil
+}
+
+// tradeRunInputs is everything gradeAndAlertTrades needs for ONE league, with
+// the two side effects it cannot own -- sending, and printing -- injected.
 //
 // The seam exists because runFootballTrades calls initFootball() and
 // statestore.FromEnv() internally and so cannot be driven from a test at all.
@@ -158,47 +205,50 @@ type tradeRunInputs struct {
 	players map[string]sleeper.Player
 	bundle  *statsguy.Bundle
 	names   map[int]string
-	format  string
-	dryRun  bool
-	send    func(title, body string) error
-	out     io.Writer
+	// league supplies the alert's headline format and the identity stamped
+	// onto every log row. It replaced a bare format string when the job went
+	// multi-league: the column is now a property of the league, not the run.
+	league dynasty.LeagueProfile
+	dryRun bool
+	send   func(title, body string) error
+	out    io.Writer
 }
 
-// tradeRunResult is what one poll decided: the rows to log, and the counts.
+// tradeRunResult is what one league's poll decided: the rows to log, and the counts.
 type tradeRunResult struct {
 	LogRows                  []dynasty.TradeLogRow
 	Graded, Alerted, Skipped int
 }
 
-// gradeAndAlertTrades runs the check -> send -> mark loop and returns the rows
-// worth logging. It never writes the log itself: the caller does that after
-// every send has been attempted, which is what keeps a log failure off the
-// alerting path.
+// gradeAndAlertTrades runs the check -> send -> mark loop for one league and
+// returns the rows worth logging. It never writes the log itself: the caller
+// does that after every league's sends have been attempted, which is what
+// keeps a log failure off the alerting path.
 func gradeAndAlertTrades(ctx context.Context, in tradeRunInputs) tradeRunResult {
 	var res tradeRunResult
 
 	// One Marker over the whole poll. in.markers may be nil (the soft-degrade
 	// path in runFootballTrades) -- alertmarker.New(nil, ...) is a working
-	// configuration: no dedup, alert every run, never silence. Its logf
-	// delegates to this package's warn() with the same "football-trades: "
-	// prefix every other line here carries.
+	// configuration: no dedup, alert every run, never silence.
 	m := alertmarker.New(in.markers, alertmarker.WithLogf(func(format string, args ...any) {
 		warn("football-trades: "+format, args...)
 	}))
 
 	for _, txn := range in.trades {
 		// check: already alerted for this transaction_id? A read failure
-		// reads as unsent and is logged by the Marker itself.
+		// reads as unsent and is logged by the Marker itself. Transaction ids
+		// are global Sleeper snowflakes, so one marker namespace serves every
+		// league without collision.
 		if m.Sent(ctx, txn.TransactionID) {
 			res.Skipped++
 			continue
 		}
 
-		sides := dynasty.BuildTradeSides(txn, in.players, in.bundle, in.names, in.format)
+		sides := dynasty.BuildTradeSides(txn, in.players, in.bundle, in.names, in.league.Format)
 		verdict := dynasty.GradeTrade(sides)
 		res.Graded++
 
-		title, body := formatTradeAlert(txn, sides, verdict)
+		title, body := formatTradeAlert(in.league.Name, txn, sides, verdict)
 		fmt.Fprintln(in.out, title)
 		fmt.Fprintln(in.out, body)
 
@@ -221,15 +271,17 @@ func gradeAndAlertTrades(ctx context.Context, in tradeRunInputs) tradeRunResult 
 		// Logged only once the alert has actually gone out, so the log means
 		// exactly "what was reported" -- a send that failed will retry next
 		// poll and be logged then, at that run's prices.
-		res.LogRows = append(res.LogRows, dynasty.BuildTradeLogRow(in.now, txn, in.players, in.bundle, in.names, in.format))
+		res.LogRows = append(res.LogRows,
+			dynasty.BuildTradeLogRow(in.now, txn, in.players, in.bundle, in.names, in.league.Format).
+				InLeague(in.league.LeagueID, in.league.Name))
 	}
 	return res
 }
 
-// relogFootballTrades is the one-shot backfill behind --relog.
+// relogRows is the per-league half of the one-shot --relog backfill.
 //
-// Every trade the league has ever made was already alerted and marked before
-// the durable log existed, and the main loop skips a marked trade BEFORE it
+// Every trade the league had made was already alerted and marked before the
+// durable log existed, and the main loop skips a marked trade BEFORE it
 // grades -- so a log added to that loop alone would ship permanently empty in
 // an offseason league. This rebuilds those rows.
 //
@@ -241,28 +293,19 @@ func gradeAndAlertTrades(ctx context.Context, in tradeRunInputs) tradeRunResult 
 // marker's body, carried across as OriginalSummary.
 //
 // It sends nothing and writes no markers: this is a log repair, not an alert
-// replay, and re-alerting months-old trades would be the worse failure. That is
-// enforced by the signature rather than by care -- markers arrives as the
-// read-only lineupapi.ObjectStore, so Publish is not reachable from here at all,
-// and no send function is passed in.
-func relogFootballTrades(ctx context.Context, cfg *FootballConfig, markers lineupapi.ObjectStore, now time.Time, trades []sleeper.Transaction, players map[string]sleeper.Player, bundle *statsguy.Bundle, names map[int]string) error {
-	var rows []dynasty.TradeLogRow
-	skipped := 0
+// replay. That is enforced by the signature rather than by care -- markers
+// arrives as the read-only lineupapi.ObjectStore, so Publish is not reachable
+// from here at all, and no send function is passed in.
+func relogRows(ctx context.Context, lc leagueContext, markers lineupapi.ObjectStore, now time.Time, trades []sleeper.Transaction, players map[string]sleeper.Player, bundle *statsguy.Bundle, names map[int]string) (rows []dynasty.TradeLogRow, skipped int) {
 	for _, txn := range trades {
 		// ONLY ALREADY-ALERTED TRADES. The marker is the evidence that this
 		// trade predates the log; without one, the next ordinary poll will
-		// alert it and capture a genuine grade-time row. Relogging it here
-		// would write a re-priced row TODAY that the real capture, landing on a
-		// later day, would then have to outrank -- and it is exactly the row
-		// whose values are wrong. DedupeTradeLog's captured-beats-regraded rule
-		// covers that case too, but not writing the bad row in the first place
-		// is the guard that does not depend on a later read getting it right.
-		//
-		// A marker READ FAILURE skips as well. Absent evidence is not evidence
-		// of absence, and the cost of the two mistakes is asymmetric: skipping
-		// a trade that was alerted leaves one row missing from a backfill that
-		// can simply be re-run, while relogging one that was not permanently
-		// substitutes today's prices for a capture that had not happened yet.
+		// alert it and capture a genuine grade-time row. A marker READ
+		// FAILURE skips as well: absent evidence is not evidence of absence,
+		// and skipping a trade that was alerted leaves one row missing from a
+		// backfill that can simply be re-run, while relogging one that was not
+		// permanently substitutes today's prices for a capture that had not
+		// happened yet.
 		body, found, err := markers.Get(ctx, txn.TransactionID)
 		if err != nil {
 			warn("football-trades --relog: marker read %s: %v (skipping -- cannot confirm it was alerted)", txn.TransactionID, err)
@@ -273,19 +316,21 @@ func relogFootballTrades(ctx context.Context, cfg *FootballConfig, markers lineu
 			skipped++
 			continue
 		}
-
-		row := dynasty.BuildTradeLogRow(now, txn, players, bundle, names, cfg.DynastyFormat)
+		row := dynasty.BuildTradeLogRow(now, txn, players, bundle, names, lc.Profile.Format).
+			InLeague(lc.Profile.LeagueID, lc.Profile.Name)
 		row.Regraded = true
 		row.OriginalSummary = strings.TrimSpace(string(body))
 		rows = append(rows, row)
-		fmt.Printf("relog %s (%s): %s\n", txn.TransactionID, tradeDateLabel(row), row.Verdicts[cfg.DynastyFormat].Summary)
+		fmt.Printf("relog [%s] %s (%s): %s\n", lc.Profile.Name, txn.TransactionID, tradeDateLabel(row), row.Verdicts[lc.Profile.Format].Summary)
 	}
-	if skipped > 0 {
-		fmt.Printf("football-trades --relog: skipped %d trade(s) with no dedup marker -- never alerted, so the next poll will capture them properly\n", skipped)
-	}
+	return rows, skipped
+}
 
+// finishRelog writes the rebuilt rows once, across every league, honouring
+// --dry-run.
+func finishRelog(now time.Time, rows []dynasty.TradeLogRow, rebuilt int) error {
 	if dryRun {
-		fmt.Printf("football-trades --relog (dry-run): %d trade(s) rebuilt; not written\n", len(rows))
+		fmt.Printf("football-trades --relog (dry-run): %d trade(s) rebuilt; not written\n", rebuilt)
 		return nil
 	}
 	if len(rows) == 0 {
@@ -297,7 +342,7 @@ func relogFootballTrades(ctx context.Context, cfg *FootballConfig, markers lineu
 		return fmt.Errorf("relog trade log: %w", err)
 	}
 	fmt.Printf("football-trades --relog: %d trade(s) rebuilt, %d written to dt=%s (%d already captured and left untouched)\n",
-		len(rows), added, now.Format("2006-01-02"), len(rows)-added)
+		rebuilt, added, now.Format("2006-01-02"), rebuilt-added)
 	return nil
 }
 
@@ -396,7 +441,10 @@ func pollWeeks(state *sleeper.NFLState) []int {
 	return weeks
 }
 
-func formatTradeAlert(txn sleeper.Transaction, sides []dynasty.TradeSide, v dynasty.TradeVerdict) (title, body string) {
+// formatTradeAlert renders one graded trade. The league name leads the title
+// because the operator's six leagues now share one alert channel, and a
+// verdict with no league is a verdict about nothing in particular.
+func formatTradeAlert(leagueName string, txn sleeper.Transaction, sides []dynasty.TradeSide, v dynasty.TradeVerdict) (title, body string) {
 	var parts []string
 	for _, s := range sides {
 		var assets []string
@@ -423,6 +471,9 @@ func formatTradeAlert(txn sleeper.Transaction, sides []dynasty.TradeSide, v dyna
 		// unpriced asset here would send the operator looking for one that does
 		// not exist.
 		title = "Trade: nothing to compare, so no verdict"
+	}
+	if leagueName != "" {
+		title = "[" + leagueName + "] " + title
 	}
 	// Rune-safe fit to Pushover's limit — the old inline slice could cut a
 	// multibyte team or player name mid-rune.

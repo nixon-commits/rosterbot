@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,7 +163,7 @@ func tradeAlertFixture(t *testing.T) (tradeRunInputs, *[]string) {
 			"9509": {ID: "9509", Value: statsguy.FormatValues{SFDynasty: 11000}},
 		}},
 		names:  map[int]string{1: "Zatch's mom Hawk Tua'd", 2: "CeeDee Top"},
-		format: "sf_dynasty",
+		league: dynasty.LeagueProfile{LeagueID: "L1", Name: "Palm Trees & Promethazine", Format: "sf_dynasty"},
 		send:   func(title, body string) error { *sent = append(*sent, title); return nil },
 		out:    io.Discard,
 	}, sent
@@ -329,14 +330,28 @@ func TestFormatTradeAlert_TitleNamesTheRealReasonForNoVerdict(t *testing.T) {
 		verdict dynasty.TradeVerdict
 		want    string
 	}{
-		{"favors", dynasty.TradeVerdict{Status: dynasty.TradeFavors, FavoredTeamName: "A", Pct: 45}, "Trade: favors A (+45%)"},
-		{"unpriced", dynasty.TradeVerdict{Status: dynasty.TradeIncomplete, UnpricedAssets: 3}, "Trade: too many unpriced assets to grade"},
-		{"all-zero", dynasty.TradeVerdict{Status: dynasty.TradeIncomplete}, "Trade: nothing to compare, so no verdict"},
+		{"favors", dynasty.TradeVerdict{Status: dynasty.TradeFavors, FavoredTeamName: "A", Pct: 45}, "[Palm Trees] Trade: favors A (+45%)"},
+		{"unpriced", dynasty.TradeVerdict{Status: dynasty.TradeIncomplete, UnpricedAssets: 3}, "[Palm Trees] Trade: too many unpriced assets to grade"},
+		{"all-zero", dynasty.TradeVerdict{Status: dynasty.TradeIncomplete}, "[Palm Trees] Trade: nothing to compare, so no verdict"},
 	}
 	for _, c := range cases {
-		title, _ := formatTradeAlert(txn, sides, c.verdict)
+		title, _ := formatTradeAlert("Palm Trees", txn, sides, c.verdict)
 		if title != c.want {
 			t.Errorf("%s: title = %q, want %q", c.name, title, c.want)
 		}
+	}
+}
+
+func TestGradeAndAlertTrades_TitleCarriesTheLeagueAndRowsCarryItsIdentity(t *testing.T) {
+	in, sent := tradeAlertFixture(t)
+	res := gradeAndAlertTrades(context.Background(), in)
+	if len(*sent) != 1 || !strings.HasPrefix((*sent)[0], "[Palm Trees & Promethazine] Trade:") {
+		t.Fatalf("title = %v, want the league name as a prefix", *sent)
+	}
+	if len(res.LogRows) != 1 {
+		t.Fatalf("rows = %d", len(res.LogRows))
+	}
+	if r := res.LogRows[0]; r.LeagueID != "L1" || r.LeagueName != "Palm Trees & Promethazine" || r.AlertFormat != "sf_dynasty" {
+		t.Errorf("row not stamped with its league/format: %+v", r)
 	}
 }

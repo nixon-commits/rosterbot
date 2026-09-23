@@ -50,8 +50,6 @@ func leagueContexts(leagues []sleeper.League, overrides map[string]string) []lea
 // Zero leagues is an error, not an empty success — a user id with no leagues
 // this season is a configuration fault (wrong id, wrong season) and a job
 // that exits 0 over it would read as a quiet week forever.
-//
-//nolint:unused // wired up by the next task (cmd/football_trades.go); no caller lands in this task
 func discoverLeagues(ctx context.Context, sc *sleeper.Client, cfg *FootballConfig, season string, out io.Writer) ([]leagueContext, error) {
 	if err := cfg.requireSleeperUserID(); err != nil {
 		return nil, err
