@@ -89,8 +89,10 @@ type TradeLogRow struct {
 	// never as the epoch.
 	TradeDate time.Time `json:"trade_date"`
 	GradedAt  time.Time `json:"graded_at"`
-	// AlertFormat is the DYNASTY_FORMAT the Pushover alert was rendered in, so
-	// a reader can tell which of the four verdicts was the one actually sent.
+	// AlertFormat is the league's LeagueProfile.Format — the StatsGuy column
+	// its alert was rendered in (multi-league jobs no longer read a single
+	// DYNASTY_FORMAT env var) — so a reader can tell which of the four
+	// verdicts was the one actually sent.
 	AlertFormat string                     `json:"alert_format"`
 	Sides       []TradeLogSide             `json:"sides"`
 	Verdicts    map[string]TradeLogVerdict `json:"verdicts"`
@@ -231,8 +233,9 @@ func MergeTradeLog(prior, fresh []TradeLogRow) []TradeLogRow {
 // genuine grade-time row on a LATER day. Earliest-wins alone would keep the
 // re-price and permanently discard the real capture — the exact substitution
 // this store exists to prevent, arrived at from the opposite direction.
-// relogFootballTrades also refuses to touch an unalerted trade, so this is the
-// second of two independent guards rather than the only one.
+// relogRows (cmd/football_trades.go) also refuses to touch an unalerted
+// trade, so this is the second of two independent guards rather than the
+// only one.
 func DedupeTradeLog(rows []TradeLogRow) []TradeLogRow {
 	byID := make(map[string]TradeLogRow, len(rows))
 	for _, r := range rows {

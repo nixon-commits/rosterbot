@@ -83,11 +83,14 @@ func DeriveProfile(lg sleeper.League, overrides map[string]string) LeagueProfile
 // that should price it.
 //
 // OPERATOR-WRITTEN (spec Section 2). Dynasty and unknown leagues price on the
-// dynasty column (multi-year value); unknown falls back to the deployment's
-// original DYNASTY_FORMAT default. Keeper leagues price on the redraft column
-// — a league that keeps a handful of players is closer to redraft than to
-// dynasty. Redraft and guillotine price on the redraft column (single-season
-// value). Superflex picks sf_* over non_sf_*.
+// dynasty column (multi-year value); unknown is priced on the dynasty column
+// too (sf_dynasty when superflex, else non_sf_dynasty) — the same column the
+// deployment's original single-league default used, not a fallback to a
+// DYNASTY_FORMAT env var, which the multi-league jobs no longer read. Keeper
+// leagues price on the redraft column — a league that keeps a handful of
+// players is closer to redraft than to dynasty. Redraft and guillotine price
+// on the redraft column (single-season value). Superflex picks sf_* over
+// non_sf_*.
 func formatFor(kind LeagueKind, superflex bool) string {
 	dynastyLike := kind == KindDynasty || kind == KindUnknown
 	switch {
