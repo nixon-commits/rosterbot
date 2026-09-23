@@ -77,6 +77,13 @@ type TradeLogVerdict struct {
 type TradeLogRow struct {
 	Dt            string `json:"dt"`
 	TransactionID string `json:"transaction_id"`
+	// LeagueID / LeagueName identify which of the operator's leagues the trade
+	// happened in. Both omitempty: rows written before football-trades went
+	// multi-league carry neither, and they are left blank rather than
+	// backfilled — every such row happens to be from one league, but stamping
+	// that in would write an assumption as a fact.
+	LeagueID   string `json:"league_id,omitempty"`
+	LeagueName string `json:"league_name,omitempty"`
 	// TradeDate is when Sleeper says the trade completed. Zero when the
 	// transaction carried no usable Created timestamp — read it as unknown,
 	// never as the epoch.
@@ -162,6 +169,16 @@ func BuildTradeLogRow(gradedAt time.Time, txn sleeper.Transaction, players map[s
 		Sides:         sides,
 		Verdicts:      verdicts,
 	}
+}
+
+// InLeague returns a copy of the row stamped with the league it was graded
+// in. A setter rather than two more BuildTradeLogRow parameters: the builder
+// already takes six, and the league is known to the caller's loop, not to the
+// grader.
+func (r TradeLogRow) InLeague(id, name string) TradeLogRow {
+	r.LeagueID = id
+	r.LeagueName = name
+	return r
 }
 
 // MergeTradeLog folds freshly graded rows into the rows already in a partition.

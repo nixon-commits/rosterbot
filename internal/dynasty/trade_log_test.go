@@ -467,3 +467,36 @@ func TestDedupeTradeLog_AmongCapturedRowsTheEarliestStillWins(t *testing.T) {
 		t.Errorf("kept %q among regraded rows, want the first", got[0].AlertFormat)
 	}
 }
+
+func TestTradeLogRow_InLeagueStampsIdentityOnly(t *testing.T) {
+	row := TradeLogRow{TransactionID: "t1", AlertFormat: "sf_dynasty"}
+	got := row.InLeague("1312135439800356864", "Palm Trees & Promethazine")
+	if got.LeagueID != "1312135439800356864" || got.LeagueName != "Palm Trees & Promethazine" {
+		t.Errorf("league not stamped: %+v", got)
+	}
+	if got.TransactionID != "t1" || got.AlertFormat != "sf_dynasty" {
+		t.Errorf("other fields disturbed: %+v", got)
+	}
+	if row.LeagueID != "" {
+		t.Errorf("InLeague must return a copy, not mutate the receiver")
+	}
+}
+
+func TestBuildTradeLogModel_CarriesLeagueAndLeavesLegacyBlank(t *testing.T) {
+	when := time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
+	rows := []TradeLogRow{
+		{Dt: "2026-09-22", TransactionID: "new", GradedAt: when, LeagueID: "L1", LeagueName: "Chopped"},
+		{Dt: "2026-08-18", TransactionID: "old", GradedAt: when}, // written before multi-league
+	}
+	m := BuildTradeLogModel(rows, when)
+	byID := map[string]TradeLogEntry{}
+	for _, e := range m.Trades {
+		byID[e.TransactionID] = e
+	}
+	if e := byID["new"]; e.LeagueID != "L1" || e.LeagueName != "Chopped" {
+		t.Errorf("new row: league not carried: %+v", e)
+	}
+	if e := byID["old"]; e.LeagueID != "" || e.LeagueName != "" {
+		t.Errorf("legacy row must stay blank, not be backfilled: %+v", e)
+	}
+}
