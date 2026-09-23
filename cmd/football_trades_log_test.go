@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -353,5 +354,134 @@ func TestGradeAndAlertTrades_TitleCarriesTheLeagueAndRowsCarryItsIdentity(t *tes
 	}
 	if r := res.LogRows[0]; r.LeagueID != "L1" || r.LeagueName != "Palm Trees & Promethazine" || r.AlertFormat != "sf_dynasty" {
 		t.Errorf("row not stamped with its league/format: %+v", r)
+	}
+}
+
+// ---------------------------------------------------------- stale trades (I1)
+
+// A completed trade with no dedup marker that is already older than
+// staleTradeWindow predates this job's coverage of its league -- the first
+// run against a newly-discovered league, or any polling gap wider than the
+// window. It must be marked (so it never resurfaces) but neither sent nor
+// logged: logging it would write a permanent row priced at today's values
+// under a months-old date, exactly the mislabelling the Regraded badge exists
+// to flag when --relog rebuilds an already-alerted trade.
+func TestGradeAndAlertTrades_StaleTradeIsMarkedNotSentNotLogged(t *testing.T) {
+	in, sent := tradeAlertFixture(t)
+	in.trades[0].Created = in.now.Add(-60 * 24 * time.Hour).UnixMilli()
+
+	res := gradeAndAlertTrades(context.Background(), in)
+
+	if len(*sent) != 0 {
+		t.Errorf("sent %d alerts, want 0", len(*sent))
+	}
+	if len(res.LogRows) != 0 {
+		t.Errorf("logged %d rows, want 0", len(res.LogRows))
+	}
+	if res.Stale != 1 {
+		t.Errorf("Stale = %d, want 1", res.Stale)
+	}
+	if res.Graded != 0 {
+		t.Errorf("Graded = %d, want 0 -- a stale trade is caught before grading", res.Graded)
+	}
+
+	body, found, err := in.markers.Get(context.Background(), "t1")
+	if err != nil || !found {
+		t.Fatalf("marker not written (found=%v, err=%v) -- a stale trade must still be marked so it never resurfaces", found, err)
+	}
+	if string(body) != "stale: marked without alert" {
+		t.Errorf("marker body = %q, want %q", string(body), "stale: marked without alert")
+	}
+}
+
+// A dry run must not mark a stale trade either: marking on a dry run would
+// permanently suppress a trade a real run never actually evaluated.
+func TestGradeAndAlertTrades_StaleTradeDryRunMarksNothing(t *testing.T) {
+	in, sent := tradeAlertFixture(t)
+	in.trades[0].Created = in.now.Add(-60 * 24 * time.Hour).UnixMilli()
+	in.dryRun = true
+
+	res := gradeAndAlertTrades(context.Background(), in)
+
+	if res.Stale != 1 {
+		t.Errorf("Stale = %d, want 1", res.Stale)
+	}
+	if len(*sent) != 0 || len(res.LogRows) != 0 {
+		t.Errorf("sent=%d rows=%d, want 0/0", len(*sent), len(res.LogRows))
+	}
+	if _, found, _ := in.markers.Get(context.Background(), "t1"); found {
+		t.Error("dry run marked a stale trade; a later real run would then wrongly treat it as already handled")
+	}
+}
+
+// A zero Created means the trade date is unknown, not old -- it must still
+// alert and log exactly as before this change.
+func TestGradeAndAlertTrades_UnknownCreatedIsNotStale(t *testing.T) {
+	in, sent := tradeAlertFixture(t)
+	in.trades[0].Created = 0
+
+	res := gradeAndAlertTrades(context.Background(), in)
+
+	if res.Stale != 0 {
+		t.Errorf("Stale = %d, want 0", res.Stale)
+	}
+	if res.Graded != 1 || res.Alerted != 1 {
+		t.Errorf("graded=%d alerted=%d, want 1/1", res.Graded, res.Alerted)
+	}
+	if len(*sent) != 1 {
+		t.Errorf("sent %d alerts, want 1", len(*sent))
+	}
+	if len(res.LogRows) != 1 {
+		t.Errorf("logged %d rows, want 1", len(res.LogRows))
+	}
+}
+
+// ---------------------------------------------------------- pollLeagues (I3)
+
+// The one behaviour the spec calls out by name: a league whose load fails is
+// warned and skipped, named in failed, while the others still run and their
+// rows/counts still accumulate. Before this extraction, this loop lived
+// inside runFootballTrades and could not be driven from a test at all, so a
+// later edit turning `continue` into `return err` would have passed every
+// existing test.
+func TestPollLeagues_OneFailingLeagueDoesNotStopTheOthers(t *testing.T) {
+	leagueA := leagueContext{League: sleeper.League{LeagueID: "A", Name: "League A"}, Profile: dynasty.LeagueProfile{LeagueID: "A", Name: "League A", Format: "sf_dynasty"}}
+	leagueB := leagueContext{League: sleeper.League{LeagueID: "B", Name: "League B"}, Profile: dynasty.LeagueProfile{LeagueID: "B", Name: "League B", Format: "sf_dynasty"}}
+	leagueC := leagueContext{League: sleeper.League{LeagueID: "C", Name: "League C"}, Profile: dynasty.LeagueProfile{LeagueID: "C", Name: "League C", Format: "sf_dynasty"}}
+	leagues := []leagueContext{leagueA, leagueB, leagueC}
+
+	load := func(_ context.Context, leagueID string) ([]sleeper.Transaction, map[int]string, error) {
+		if leagueID == "B" {
+			return nil, nil, errors.New("sleeper transactions: boom")
+		}
+		return []sleeper.Transaction{{TransactionID: leagueID + "-t1"}}, map[int]string{}, nil
+	}
+
+	var called []string
+	run := func(lc leagueContext, trades []sleeper.Transaction, names map[int]string) tradeRunResult {
+		called = append(called, lc.League.LeagueID)
+		return tradeRunResult{
+			Graded:  1,
+			Alerted: 1,
+			LogRows: []dynasty.TradeLogRow{{TransactionID: lc.League.LeagueID}},
+		}
+	}
+
+	total, found, failed := pollLeagues(context.Background(), leagues, load, run)
+
+	if want := []string{"A", "C"}; !reflect.DeepEqual(called, want) {
+		t.Errorf("runner called for %v, want %v", called, want)
+	}
+	if want := []string{"League B"}; !reflect.DeepEqual(failed, want) {
+		t.Errorf("failed = %v, want %v", failed, want)
+	}
+	if found != 2 {
+		t.Errorf("found = %d, want 2", found)
+	}
+	if total.Graded != 2 {
+		t.Errorf("total.Graded = %d, want 2", total.Graded)
+	}
+	if len(total.LogRows) != 2 {
+		t.Errorf("len(total.LogRows) = %d, want 2", len(total.LogRows))
 	}
 }
