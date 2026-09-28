@@ -1,7 +1,11 @@
 # Sleeper multi-league pickups and pending offers — design
 
 Date: 2026-09-22
-Status: Approved by interview (2026-09-20..22); not yet decomposed into issues.
+Status: Approved by interview (2026-09-20..22). Revised 2026-09-28 against
+the fuller community reference github.com/Filip-Kin/sleeper-graphql (full
+SDL plus live responses): a live offer's status is `proposed`, not
+`pending`. Section 2 (Plan 1) is implemented on branch claude/rosterbot-
+sleeper-integration-c7318d.
 Extends `docs/dynasty-football.md` (the single-league, read-only football
 spine) and revises one claim in `2026-08-21-sleeper-memberships-design.md`:
 Sleeper *does* have a write path, undocumented, and this design builds the
@@ -36,23 +40,41 @@ user's own Sleeper session against the undocumented GraphQL API, which is
 what Sleeper's web app itself uses. A private partner deal is possible and
 unprovable.
 
-**The undocumented API.** `POST https://sleeper.com/graphql`, JSON body, a
-`User-Agent` header mandatory (403 without one). Auth is the account-scoped
-JWT the web app stores in local storage under `token`, sent raw in an
-`authorization` header (no `Bearer`); it lasts about a year and grants full
-account access. Schema introspection is **open without a token**, using
-snake_case meta fields (`of_type`, `query_type`, not `ofType`). Roots:
-`RootQueryType` (244 fields), `RootMutationType` (355). Pending offers come
+**The undocumented API.** `POST https://sleeper.app/graphql` (the app's own
+host; `sleeper.com/graphql` answers identically), JSON body, a `User-Agent`
+header mandatory (403 without one). The server is Absinthe (Elixir): there
+are no enums, so every status is a plain string; errors arrive as HTTP 200
+with an `errors[]` of `{code, message, path}`; nothing is cached in front of
+it. Auth is the account-scoped JWT the web app stores in local storage under
+`token`, sent raw in an `authorization` header (no `Bearer`); it lasts about
+a year and grants full account access. Schema introspection is **open
+without a token**, using snake_case meta fields (`of_type`, `query_type`,
+not `ofType`). Roots: `RootQueryType` (244 fields), `RootMutationType`
+(355). **A live trade offer has status `"proposed"`**, not `"pending"`,
+which matches nothing; the observed statuses are `proposed`, `complete`,
+`rejected` and `failed` (from the community reference, whose author runs a
+live Sleeper bot; corrected here 2026-09-28). Offers come from
+`league_transactions(league_id: Snowflake!, status, type, roster_id, leg,
+limit)`, where `leg` is optional and `roster_id` filters server-side, or
 from `league_transactions_by_status(status: String!, leg: Int!, league_id:
-Snowflake!)`, returning `LeagueTransaction` with the same shape as the REST
-transaction plus `creator` and `consenter_ids`. The query is token-gated for
-**every** status, not only `pending`. A bad token answers HTTP 401; a gated
-field without a token answers 200 with `errors[].code == "unauthorized"`.
-There is a `me()` query. Mutations exist by name for `accept_trade`,
-`reject_trade`, `propose_trade`, `submit_waiver_claim`, `update_waiver_claim`,
-`cancel_waiver_claim` and `update_matchup_leg` (the real lineup write;
-`roster_update_starters` succeeds, persists and changes nothing that scores).
-The public REST API is Cloudflare-cached and can never confirm a write.
+Snowflake!)`. Both return `LeagueTransaction`: the REST transaction's shape
+plus `creator` (a user id), `consenter_ids` (roster ids),
+`settings.expires_at` (epoch **seconds**) and a `player_map` naming every
+player involved. Both are token-gated for **every** status (verified
+2026-09-28: an unauthenticated call answers `code: "unauthorized"`); a bad
+token answers HTTP 401. `me()` returns the caller, including `email`,
+`phone` and the account's own `token`, so a caller must select `user_id`
+only. Mutations exist by name for `accept_trade`, `reject_trade`,
+`propose_trade`, `submit_waiver_claim`, `update_waiver_claim`,
+`cancel_waiver_claim` and `update_matchup_leg`. The reference reports
+`propose_trade`, `accept_trade` (it records consent; the trade processes
+after `trade_review_days`), `reject_trade` and `update_matchup_leg` as
+exercised live, with `update_matchup_leg` the lineup write that scores:
+`roster_update_starters` changes the roster's `starters` array but not the
+matchup leg, so it reads back correctly and does not play.
+`submit_waiver_claim` is unverified. The public REST API is Cloudflare-
+cached (rosters and transactions up to about 5-10 minutes stale) and can
+never confirm a write.
 
 **Pending offers are invisible publicly.** The operator's dynasty league's
 REST transaction feed returns only `complete` and `failed` rows, and five of
@@ -123,15 +145,21 @@ implementation reads or prints it. `FromEnv()` returns `ErrNoToken` when the
 var is unset, so the command fails fast with a plain message.
 
 **Client.** `Query(ctx, doc string, vars map[string]any, out any) error`
-posts JSON to `https://sleeper.com/graphql` with an explicit `User-Agent`
+posts JSON to `https://sleeper.app/graphql` with an explicit `User-Agent`
 naming rosterbot and the token in `authorization`. **No disk cache**: the
 read exists for freshness, the volume is a dozen calls an hour, and it
-removes any chance of a token-derived cache key. Two typed methods in v1:
-`Me(ctx) (userID string, err)` and `PendingTrades(ctx, leagueID string, leg
-int) ([]sleeper.Transaction, error)`, the latter wrapping
-`league_transactions_by_status(status: "pending")` and selecting the fields
-`dynasty.BuildTradeSidesAll` consumes plus `creator`, `consenter_ids`,
-`roster_ids`, `status`, `created`, `transaction_id`.
+removes any chance of a token-derived cache key. Two typed methods in v1.
+`Me(ctx) (userID string, err)` selects **`user_id` only**: `me` can also
+return the account's email, phone and token, and none of them may reach a
+log line or an error string. `ProposedTrades(ctx, leagueID string, rosterID
+int) ([]sleeper.Transaction, error)` wraps `league_transactions(league_id,
+status: "proposed", type: "trade", roster_id)` with no `leg`, selecting the
+fields `dynasty.BuildTradeSidesAll` consumes plus `creator`,
+`consenter_ids`, `roster_ids`, `status`, `created`, `transaction_id` and
+`settings` (for `expires_at`). If the diag probe (Cross-cutting) shows that
+call misses offers the app displays, it falls back to
+`league_transactions_by_status(status: "proposed", leg)` over the current
+and previous leg.
 
 **Errors.** HTTP 401 and a 200 carrying `code: "unauthorized"` both map to
 one sentinel, `ErrUnauthorized`. No error string may contain the token: a
@@ -203,10 +231,12 @@ user id, is a loud failure rather than a job that runs green and never finds
 an offer.
 
 **Per league.** The operator's roster is the one whose `owner_id` equals
-`SLEEPER_USER_ID`; a league with none is printed and skipped. Pending
-transactions are queried for the current leg and the one before it. Keep
-rows with `type == "trade"`, `status == "pending"`, the operator's roster in
-`roster_ids`, and `creator != SLEEPER_USER_ID`.
+`SLEEPER_USER_ID`; a league with none is printed and skipped. Proposed
+trades are queried for that roster (`ProposedTrades`, no leg window). Keep
+rows with `type == "trade"`, `status == "proposed"`, the operator's roster
+in `roster_ids`, `creator != SLEEPER_USER_ID`, and `settings.expires_at`
+(epoch seconds) absent or still in the future: an offer that has already
+expired is not worth an alert. The alert names the expiry when one is set.
 
 **Grade and alert.** `BuildTradeSidesAll` and `GradeTrade` price all four
 formats; the league profile's `Format` picks the headline. The alert is
@@ -245,6 +275,12 @@ via `archive.Writer` locally and `s3archive` on Fargate. The archive layout
 is already `NoBackfill`, which is the right semantic: Sleeper keeps no
 history. The Infra tab will show the source as a coverage chip; its gaps are
 attributed to the archive producer name, an accepted mislabel.
+
+**Not the GraphQL player list.** `get_active_players(sport)` on the GraphQL
+API is public and live (3,200 NFL rows, 614 with a depth-chart order,
+measured 2026-09-28) and would replace the 14.6 MB CDN-cached REST dump. It
+is deliberately not used: this job is designed to depend only on Sleeper's
+documented API, and a once-a-day snapshot gains nothing from liveness.
 
 **Diff.** Each run loads the most recent prior partition, not strictly
 yesterday, so a missed day widens the window rather than losing the diff.
@@ -302,10 +338,12 @@ player becomes available.
 - **Verification without the token.** Every detector, the profile
   derivation, the grader path and the client's error mapping are hermetic.
   The one thing only the operator can run is the `diag`-tagged probe
-  (`internal/sleeperauth/diag_pending_test.go`, `SLEEPER_TOKEN` from env,
-  never printed) that records a real pending offer's shape and which leg it
-  files under; it is the first implementation task and its output tunes the
-  leg window in Section 3.
+  (`internal/sleeperauth/diag_proposed_test.go`, `SLEEPER_TOKEN` from env,
+  never printed) that records a real proposed offer's shape and confirms
+  `league_transactions(status: "proposed", roster_id)` returns every offer
+  the Sleeper app shows for the operator's roster; it is the first
+  implementation task, and a miss switches Section 1's query to the leg-
+  scoped fallback.
 
 ## Risks
 

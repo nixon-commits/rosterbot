@@ -73,7 +73,7 @@ type WaiverBudgetTransfer struct {
 type Transaction struct {
 	TransactionID string                 `json:"transaction_id"`
 	Type          string                 `json:"type"`   // trade, free_agent, waiver, chopped
-	Status        string                 `json:"status"` // complete, pending, failed
+	Status        string                 `json:"status"` // complete, failed; GraphQL also returns proposed (a live trade offer) and rejected
 	RosterIDs     []int                  `json:"roster_ids"`
 	Adds          map[string]int         `json:"adds"`
 	Drops         map[string]int         `json:"drops"`
