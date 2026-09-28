@@ -43,6 +43,10 @@ func TestSeasonGate_Decision(t *testing.T) {
 		{"recap --week off season", "recap", func(f string) bool { return f == "week" }, gateEnd.AddDate(0, 0, 30), win, nil, "", false},
 		{"team-values off season", "team-values", changedNone, gateEnd.AddDate(0, 0, 30), win, nil, "", false},
 		{"football-trades off season", "football-trades", changedNone, gateEnd.AddDate(0, 0, 30), win, nil, "", false},
+		// The 2026 freeze: recap-site is a weekly MONDAY job and the season
+		// ends on a SUNDAY, so the only day it can ever render the final week
+		// and crown the champion is the first off-season day.
+		{"recap-site on the first off-season day", "recap-site", changedNone, gateEnd.AddDate(0, 0, 1), win, nil, "", false},
 		{"unknown command fails open", "frobnicate", changedNone, gateEnd.AddDate(0, 0, 30), win, nil, "", false},
 		{"window unknowable fails open", "waivers", changedNone, gateEnd.AddDate(0, 0, 30), seasonWindow{}, errors.New("both sources down"), "", false},
 		{"override", "waivers", changedNone, gateEnd.AddDate(0, 0, 30), win, nil, "off", false},

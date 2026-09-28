@@ -31,19 +31,31 @@ type seasonPolicy struct {
 // and trades, the archive, the version pin, and football, which is in
 // season when baseball is not.
 //
+// recap-site is year-round for a different reason than the rest of that list:
+// not because its subject keeps moving, but because its work is finished
+// weeks. It renders only COMPLETED matchup weeks, so its set only grows and
+// the off-season is when it is largest. Decisively, it is a weekly MONDAY job
+// against a season that ends on a SUNDAY, which makes the first off-season day
+// the ONLY day it can ever render the final week and crown the champion —
+// gating that day loses the championship page for the year, and loses it
+// silently, since a gated run is SUCCESS, exit 0, outcome=off_season and pages
+// nobody (measured 2026-09-28: the public 2026 site sat frozen on week 24
+// reading "TBD" while the bracket had a champion). It belongs beside
+// projection-site, the other retrospective renderer, not beside the
+// winter-moving feeds (rosterbot-yqb9).
+//
 // An unclassified command is never gated (fail open); the test
 // TestSeasonGate_EveryScheduledCommandIsClassified is what catches the
 // omission, so the gate itself never has to guess.
 var seasonPolicies = map[string]seasonPolicy{
-	"optimize":   {InSeasonOnly: true, ExplicitFlags: []string{"dates"}},
-	"backtest":   {InSeasonOnly: true, ExplicitFlags: []string{"dates"}},
-	"grade":      {InSeasonOnly: true, ExplicitFlags: []string{"dates"}},
-	"shadow":     {InSeasonOnly: true, ExplicitFlags: []string{"dates"}},
-	"recap":      {InSeasonOnly: true, ExplicitFlags: []string{"dates", "week"}},
-	"gs-check":   {InSeasonOnly: true},
-	"waivers":    {InSeasonOnly: true},
-	"recap-site": {InSeasonOnly: true},
-	"prospects":  {InSeasonOnly: true},
+	"optimize":  {InSeasonOnly: true, ExplicitFlags: []string{"dates"}},
+	"backtest":  {InSeasonOnly: true, ExplicitFlags: []string{"dates"}},
+	"grade":     {InSeasonOnly: true, ExplicitFlags: []string{"dates"}},
+	"shadow":    {InSeasonOnly: true, ExplicitFlags: []string{"dates"}},
+	"recap":     {InSeasonOnly: true, ExplicitFlags: []string{"dates", "week"}},
+	"gs-check":  {InSeasonOnly: true},
+	"waivers":   {InSeasonOnly: true},
+	"prospects": {InSeasonOnly: true},
 
 	"version-check":   {},
 	"transactions":    {},
@@ -51,6 +63,7 @@ var seasonPolicies = map[string]seasonPolicy{
 	"archive":         {},
 	"team-values":     {},
 	"projection-site": {},
+	"recap-site":      {},
 	"football-values": {},
 	"football-trades": {},
 }

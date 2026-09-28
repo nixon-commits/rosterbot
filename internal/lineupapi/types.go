@@ -147,9 +147,13 @@ type Run struct {
 // skipped either, since a skip would let an older streak re-report.
 const RunOutcomeTenantActionable = "tenant_actionable"
 
-// RunOutcomeOffSeason marks an in-season-only job that exited 0 because the
-// day fell outside the fantasy season (cmd's season gate, rosterbot-0lyz.4):
-// it fetched and wrote nothing. The ledger row is a real heartbeat — the job
+// RunOutcomeOffSeason marks a job that exited 0 having fetched and written
+// nothing, because the calendar left it nothing to do. Two writers: cmd's
+// season gate stopping an in-season-only job on a day outside the fantasy
+// season (rosterbot-0lyz.4), and a year-round job whose work has not started
+// existing yet — recap-site renders completed matchup weeks, so a pre-season
+// run against a league whose first week has not closed is this same correct
+// no-op (rosterbot-yqb9). The ledger row is a real heartbeat — the job
 // launched — and an ordinary SUCCESS to opsalert's Streak, so a winter of
 // gated runs reads as a healthy schedule rather than a silent one; the
 // outcome is what lets the dashboard tell "did nothing, correctly" from "did
