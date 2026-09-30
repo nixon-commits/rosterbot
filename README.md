@@ -355,6 +355,7 @@ rosterbot recap --week 23 --out /tmp/round1.html   # --week N is the league's we
 # Durable daily snapshot of ephemeral upstream data (HKB, projections, Savant, prospects)
 rosterbot archive --dry-run                         # fetch + print sizes, write nothing
 rosterbot archive                                   # capture today (the only date it can capture)
+# every run ends with `archive: wrote N/M sources (...)`; a lost source is named and fails the run
 
 # Append today's per-team aggregate HKB dynasty value to the Team Value Store
 # (broken out hitter/pitcher × MLB/minors; the series accumulates forward, one point per day)
