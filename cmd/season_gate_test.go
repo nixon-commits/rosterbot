@@ -47,6 +47,11 @@ func TestSeasonGate_Decision(t *testing.T) {
 		// ends on a SUNDAY, so the only day it can ever render the final week
 		// and crown the champion is the first off-season day.
 		{"recap-site on the first off-season day", "recap-site", changedNone, gateEnd.AddDate(0, 0, 1), win, nil, "", false},
+		// The yesterday-referenced decisions themselves are pinned in
+		// season_gate_refdate_test.go; this is gs-check's dated escape for the
+		// morning it missed (rosterbot-97gs) — an explicit weekly period runs
+		// whatever the date, like --dates does for grade.
+		{"gs-check --period off season", "gs-check", func(f string) bool { return f == "period" }, gateEnd.AddDate(0, 0, 30), win, nil, "", false},
 		{"unknown command fails open", "frobnicate", changedNone, gateEnd.AddDate(0, 0, 30), win, nil, "", false},
 		{"window unknowable fails open", "waivers", changedNone, gateEnd.AddDate(0, 0, 30), seasonWindow{}, errors.New("both sources down"), "", false},
 		{"override", "waivers", changedNone, gateEnd.AddDate(0, 0, 30), win, nil, "off", false},
@@ -61,6 +66,28 @@ func TestSeasonGate_Decision(t *testing.T) {
 				t.Errorf("stop line should name the window and its source: %q", line)
 			}
 		})
+	}
+}
+
+// Every yesterday-referenced policy is also in-season-only: the reference day
+// only means something for a command the gate can stop.
+func TestSeasonGate_YesterdayReferencedCommandsAreInSeasonOnly(t *testing.T) {
+	var yesterday []string
+	for name, pol := range seasonPolicies {
+		if pol.Ref == refYesterday {
+			yesterday = append(yesterday, name)
+			if !pol.InSeasonOnly {
+				t.Errorf("%q is judged on yesterday but is not in-season-only; RefDate is meaningless on a year-round command", name)
+			}
+		}
+	}
+	if len(yesterday) == 0 {
+		t.Fatal("expected grade and gs-check to be judged on yesterday; none are")
+	}
+	// And the zero value is today: a policy that says nothing about its
+	// reference day is judged the way every command was before Ref.
+	if seasonPolicies["optimize"].Ref != refToday {
+		t.Errorf("optimize must be judged on today; Ref = %v", seasonPolicies["optimize"].Ref)
 	}
 }
 

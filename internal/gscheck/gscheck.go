@@ -168,7 +168,44 @@ func coverageErr(skipped []skippedTeam) error {
 	return fmt.Errorf("incomplete GS check: %d team(s) could not be fetched: %s", len(skipped), strings.Join(names, ", "))
 }
 
+// selectPeriod names the check's subject. explicit != 0 selects that weekly
+// period from the schedule and errors when it is absent; explicit == 0 selects
+// the period that ended yesterday, or nil when no period did (an ordinary
+// mid-week morning, which the caller reports as nothing to check).
+func selectPeriod(periods []fantrax.ScoringPeriod, today time.Time, explicit fantrax.WeeklyPeriod) (*fantrax.ScoringPeriod, error) {
+	if explicit == 0 {
+		return fantrax.FindJustEndedPeriod(periods, today), nil
+	}
+	for i := range periods {
+		if periods[i].Number == explicit {
+			return &periods[i], nil
+		}
+	}
+	return nil, fmt.Errorf("--period %d is not in the league's schedule (%d weekly periods known, %d..%d)", explicit, len(periods), periods[0].Number, periods[len(periods)-1].Number)
+}
+
+// RunGSCheck checks the weekly period that ended YESTERDAY — the scheduled
+// morning run's subject. See RunGSCheckPeriod for the explicit form.
 func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error {
+	return RunGSCheckPeriod(ctx, ft, cfg, 0)
+}
+
+// RunGSCheckPeriod is RunGSCheck with the subject chosen by the caller: a
+// non-zero explicit weekly period is checked whatever today is, and zero means
+// the period that ended yesterday.
+//
+// The explicit form exists because the default one is reachable on exactly
+// one wall-clock day per period, and for the season's final period that day
+// is the first off-season day — the day the season gate stops the scheduled
+// run. Period 25 of 2026 was never checked by the job and had to be recovered
+// by hand with the gate overridden on that exact morning (rosterbot-97gs).
+// `gs-check --period N` is the recovery path on any later day, and the gate
+// treats the flag as an explicit window the way --dates is for grade.
+//
+// A period the schedule does not carry is an error, not "nothing to check":
+// the operator named it on purpose, and exit 0 over a typo would read as a
+// clean period.
+func RunGSCheckPeriod(ctx context.Context, ft GSCheckClient, cfg config.Config, explicit fantrax.WeeklyPeriod) error {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	fmt.Printf("Running GS check for date: %s\n", today.Format("2006-01-02"))
 
@@ -181,10 +218,16 @@ func RunGSCheck(ctx context.Context, ft GSCheckClient, cfg config.Config) error 
 		return fmt.Errorf("no scoring periods found")
 	}
 
-	period := fantrax.FindJustEndedPeriod(periods, today)
+	period, err := selectPeriod(periods, today, explicit)
+	if err != nil {
+		return err
+	}
 	if period == nil {
 		fmt.Println("Yesterday was not the end of a scoring period. Nothing to check.")
 		return nil
+	}
+	if explicit != 0 {
+		fmt.Printf("Explicit --period %d: checking it regardless of today's date.\n", explicit)
 	}
 
 	// The real GS min/max come straight from Fantrax's own per-period
