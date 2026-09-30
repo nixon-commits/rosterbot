@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -131,5 +132,54 @@ func TestQuery_Non2xxStatusIsAnErrorWithoutTheBody(t *testing.T) {
 	err := New(testToken).Query(context.Background(), `{ x }`, nil, &struct{}{})
 	if err == nil || !strings.Contains(err.Error(), "502") || strings.Contains(err.Error(), testToken) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestQuery_ServerEchoedTokenInGraphQLMessageIsRedacted(t *testing.T) {
+	// Test that a regular GraphQL error echoing the token is redacted
+	serve(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"errors":[{"code":"x","message":"bad header ` + testToken + `","path":["q"]}]}`))
+	})
+	err := New(testToken).Query(context.Background(), `{ x }`, nil, &struct{}{})
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if strings.Contains(err.Error(), testToken) {
+		t.Fatalf("error contains token: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatalf("error should contain [redacted]: %q", err.Error())
+	}
+
+	// Test that an unauthorized GraphQL error echoing the token is redacted
+	serve(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"errors":[{"code":"unauthorized","message":"bad token ` + testToken + `","path":["league"]}]}`))
+	})
+	err = New(testToken).Query(context.Background(), `{ x }`, nil, &struct{}{})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("err = %v, want ErrUnauthorized", err)
+	}
+	if strings.Contains(err.Error(), testToken) {
+		t.Fatalf("error contains token: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatalf("error should contain [redacted]: %q", err.Error())
+	}
+}
+
+func TestClient_FormattingNeverPrintsTheToken(t *testing.T) {
+	c := New(testToken)
+	for _, s := range []string{
+		fmt.Sprint(c),
+		fmt.Sprintf("%v", c),
+		fmt.Sprintf("%+v", c),
+		fmt.Sprintf("%#v", c),
+	} {
+		if strings.Contains(s, testToken) {
+			t.Fatalf("formatted client contains token: %q", s)
+		}
+		if !strings.Contains(s, "[redacted]") {
+			t.Fatalf("formatted client should contain [redacted]: %q", s)
+		}
 	}
 }

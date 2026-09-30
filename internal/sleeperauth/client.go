@@ -76,6 +76,27 @@ func New(token string) *Client {
 	return &Client{http: &http.Client{Timeout: 20 * time.Second}, token: token}
 }
 
+// String returns a redacted representation of the client.
+func (c *Client) String() string {
+	return "sleeperauth.Client{token: [redacted]}"
+}
+
+// GoString returns a redacted representation of the client for %#v formatting.
+func (c *Client) GoString() string {
+	return c.String()
+}
+
+// redact replaces the token with [redacted] in the given string.
+// Defence in depth: the server controls error message content and could echo
+// the Authorization header. If it does, this scrubs the token before the
+// message reaches the caller's logs or error reporting.
+func (c *Client) redact(s string) string {
+	if c.token == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, c.token, "[redacted]")
+}
+
 // gqlError is one entry of a GraphQL errors[] array. Sleeper always sets
 // code, message and path; data is ignored.
 type gqlError struct {
@@ -145,9 +166,9 @@ func (c *Client) Query(ctx context.Context, doc string, vars map[string]any, out
 		msgs := make([]string, 0, len(env.Errors))
 		for _, e := range env.Errors {
 			if e.Code == "unauthorized" {
-				return fmt.Errorf("%w: %s", ErrUnauthorized, e.String())
+				return fmt.Errorf("%w: %s", ErrUnauthorized, c.redact(e.String()))
 			}
-			msgs = append(msgs, e.String())
+			msgs = append(msgs, c.redact(e.String()))
 		}
 		return fmt.Errorf("sleeperauth: graphql: %s", strings.Join(msgs, "; "))
 	}
