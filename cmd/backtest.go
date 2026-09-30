@@ -221,6 +221,20 @@ func backtestRangeOptions(today, seasonStart, seasonEnd time.Time) (backtest.Ran
 	return opts, nil
 }
 
+// isFirstMatchupWeek reports whether p is the season's first week — the one
+// with nothing behind it to grade.
+//
+// Keyed on the season's own start date, NOT on p being earliest in the periods
+// slice: callers legitimately pass a partial schedule (the playoff test hands
+// over a single regular-season week), and under that reading any lone week
+// looks like the first one, which would turn a real mid-season schedule gap
+// into a silent clean stop. Not keyed on zero bounds either, for the same
+// reason the #212 guard is not — a zero lookup cannot be told apart from that
+// gap, which must keep failing loudly. An unknown season start claims nothing.
+func isFirstMatchupWeek(p fantrax.ScoringPeriod, seasonStart time.Time) bool {
+	return !seasonStart.IsZero() && !p.StartDate.After(seasonStart)
+}
+
 // resolveBacktestWindow resolves the window to grade. A non-empty notice means
 // there is no window and the run should print it and exit 0.
 //
@@ -245,9 +259,21 @@ func resolveBacktestWindow(wb fantrax.WeekBounder, opts backtest.RangeOptions, p
 	}
 	if errors.Is(err, fantrax.ErrNoMatchupWeek) {
 		yesterday := opts.Today.AddDate(0, 0, -1)
-		if p := fantrax.FindCurrentPeriod(periods, yesterday); p != nil && p.Playoff {
-			return time.Time{}, time.Time{}, fmt.Sprintf("No matchup week for this team ending %s (%s): bye or eliminated. Nothing to grade.",
-				yesterday.Format("2006-01-02"), p.Caption), nil
+		if p := fantrax.FindCurrentPeriod(periods, yesterday); p != nil {
+			switch {
+			case p.Playoff:
+				return time.Time{}, time.Time{}, fmt.Sprintf("No matchup week for this team ending %s (%s): bye or eliminated. Nothing to grade.",
+					yesterday.Format("2006-01-02"), p.Caption), nil
+			case isFirstMatchupWeek(*p, opts.SeasonStart):
+				// Yesterday is inside the season's FIRST week and that week is
+				// still running, so the walk stepped back past the opener and
+				// found nothing. There is genuinely nothing behind it to grade
+				// — the same clean stop as opening day, one week later
+				// (rosterbot-8j9v). The 2026 layout put week 1 at 12 days
+				// (03-25..04-05), so Monday 03-30 landed here and paged.
+				return time.Time{}, time.Time{}, fmt.Sprintf("Matchup week %d (%s to %s) is still in progress. No completed matchup week to grade yet.",
+					p.Number, p.StartDate.Format("2006-01-02"), p.EndDate.Format("2006-01-02")), nil
+			}
 		}
 	}
 	if err != nil {
