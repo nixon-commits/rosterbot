@@ -117,9 +117,17 @@ func chopTxn(key string) string {
 }
 
 // FormatPickupDigest renders the title and a body that fits Pushover's
-// limit on whole lines; when lines are dropped the body ends with a count
-// of exactly the lines left out.
-func FormatPickupDigest(profile LeagueProfile, items []PickupItem) (title, body string) {
+// limit on whole lines, and reports how many items it carried.
+//
+// shown is the contract the caller marks against: the digest carries exactly
+// items[:shown], in the order given, so the caller marks those and leaves
+// items[shown:] unmarked to be sent by a later digest. The fit STOPS at the
+// first line that does not fit rather than skipping it and trying shorter
+// ones — a skip-and-continue fit would carry a non-prefix subset, and "…and N
+// more" would no longer mean the N lowest-ranked. When everything fits,
+// shown == len(items) and there is no trailer; otherwise the body ends with
+// "…and N more" for N == len(items)-shown.
+func FormatPickupDigest(profile LeagueProfile, items []PickupItem) (title, body string, shown int) {
 	var drops, roles int
 	chopTxns := map[string]bool{}
 	for _, it := range items {
@@ -138,34 +146,36 @@ func FormatPickupDigest(profile LeagueProfile, items []PickupItem) (title, body 
 	title = fmt.Sprintf("[%s] Pickups: %d chop%s, %d drop%s, %d role change%s", profile.Name,
 		chops, plural(chops), drops, plural(drops), roles, plural(roles))
 
-	body, dropped := fitLines(items, 0)
-	if dropped > 0 {
+	body, shown = fitLines(items, 0)
+	if shown < len(items) {
 		// The "…and N more" trailer needs room of its own, or appending it
 		// would push a full body past the limit and leave Truncate to cut a
-		// line mid-way. Size it for the worst case (every line refused) and
-		// refit: the refusals can only grow, and the count printed is the
-		// count actually refused on this pass.
-		body, dropped = fitLines(items, len(moreTrailer(len(items))))
-		body += moreTrailer(dropped)
+		// line mid-way. Size it for the worst case (every line left out) and
+		// refit: the prefix can only shrink, and the count printed is the
+		// count actually left out on this pass.
+		body, shown = fitLines(items, len(moreTrailer(len(items))))
+		body += moreTrailer(len(items) - shown)
 	}
-	return title, pushover.Truncate(body)
+	return title, pushover.Truncate(body), shown
 }
 
 func moreTrailer(n int) string { return fmt.Sprintf("…and %d more", n) }
 
 // fitLines adds each item's line, newline-terminated, while it fits within
-// MaxMessageLen-reserve, and reports how many it refused. Builder keeps
-// trying after a refusal, so a short lower-ranked line can land after a
-// longer higher-ranked one that did not; the refusal count stays exact.
-func fitLines(items []PickupItem, reserve int) (body string, refused int) {
+// MaxMessageLen-reserve, and stops at the first line that does not. It
+// returns the body and how many items it carried, which are exactly
+// items[:shown]: it never skips a refused line to place a shorter,
+// lower-ranked one after it, so the shown set is always a rank-order prefix.
+func fitLines(items []PickupItem, reserve int) (body string, shown int) {
 	var b pushover.Builder
 	for _, it := range items {
 		line := it.Line + "\n"
 		if b.Len()+len(line) > pushover.MaxMessageLen-reserve || !b.Add(line) {
-			refused++
+			break
 		}
+		shown++
 	}
-	return b.String(), refused
+	return b.String(), shown
 }
 
 func plural(n int) string {
