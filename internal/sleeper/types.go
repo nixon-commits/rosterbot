@@ -1,5 +1,7 @@
 package sleeper
 
+import "time"
+
 // League is a Sleeper fantasy league's static configuration.
 type League struct {
 	LeagueID string `json:"league_id"`
@@ -89,6 +91,31 @@ type Transaction struct {
 	// completed trade it holds every party; on a pending one it shows who is
 	// still being waited on.
 	ConsenterIDs []int `json:"consenter_ids"`
+
+	// Settings is Sleeper's free-form per-transaction map: waiver_bid and seq on
+	// a waiver claim, expires_at on a trade offer. Decoded as any because the
+	// values are not all one type and a single mistyped key would fail the
+	// whole row's decode. Read expires_at through ExpiresAt.
+	Settings map[string]any `json:"settings"`
+}
+
+// ExpiresAt returns settings.expires_at as a UTC time, when present.
+//
+// Sleeper stores it as epoch SECONDS while Created is epoch MILLIS; reading
+// one as the other is off by a factor of a thousand, which is why the unit is
+// pinned here and in the test. Absent, non-numeric or zero reads as "no
+// expiry": an offer without one never lapses on its own, so the safe default
+// is to keep it.
+func (t Transaction) ExpiresAt() (time.Time, bool) {
+	v, ok := t.Settings["expires_at"]
+	if !ok {
+		return time.Time{}, false
+	}
+	f, ok := v.(float64) // encoding/json decodes every JSON number into any as float64
+	if !ok || f <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(int64(f), 0).UTC(), true
 }
 
 // NFLState is the current NFL week/season as Sleeper sees it.
