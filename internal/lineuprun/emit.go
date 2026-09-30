@@ -105,7 +105,7 @@ type EmitInputs struct {
 // failure. They both precede the apply loop simply because they describe what
 // the optimizer decided, and should be durable whether or not the apply lands.
 func Emit(ft emitClient, in EmitInputs) {
-	writeSnapshots(in)
+	Capture(in)
 	publishToday(in)
 
 	for _, dr := range in.Results {
@@ -113,9 +113,19 @@ func Emit(ft emitClient, in EmitInputs) {
 	}
 }
 
-func writeSnapshots(in EmitInputs) {
+// Capture archives each result's projection snapshot and returns the dates
+// it archived. It is the first step of Emit, and the ONLY step Run performs
+// on a playoff-idle day (rosterbot-cwy8): the projection is graded against
+// MLB actuals whether or not the fantasy lineup counts, so the capture has
+// to outlive the lineup stop, while the publish and the apply must not. Run
+// expresses that by calling Capture instead of Emit, not by a flag Emit
+// would have to check — the apply path is then unreachable by construction.
+//
+// Best-effort throughout: every failure is a warning on Out, never an error,
+// because a snapshot is a by-product of a run that is otherwise fine.
+func Capture(in EmitInputs) []time.Time {
 	if !in.WriteSnapshots {
-		return
+		return nil
 	}
 	// A caller that asked for snapshots but supplied no store is a wiring bug,
 	// not a runtime condition. Say so once, rather than panicking per date —
@@ -123,13 +133,17 @@ func writeSnapshots(in EmitInputs) {
 	// so a nil dereference would take down a run that was otherwise fine.
 	if in.SnapshotStore == nil {
 		fmt.Fprintf(in.Out, "  ⚠ snapshot archive skipped: no snapshot store configured\n")
-		return
+		return nil
 	}
+	var archived []time.Time
 	for _, dr := range in.Results {
 		if err := writeProjectionSnapshot(in.Out, dr, in.Projections, in.SlotName, in.SnapshotStore, in.SnapshotRoot); err != nil {
 			fmt.Fprintf(in.Out, "  ⚠ snapshot archive failed for %s: %v\n", dr.date.Format("2006-01-02"), err)
+			continue
 		}
+		archived = append(archived, dr.date)
 	}
+	return archived
 }
 
 // publishToday writes the read-only API's lineup JSON for today only. The iOS

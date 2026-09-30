@@ -457,7 +457,7 @@ The bot's game day, ordered by clock (times shown in ET for reading; the authori
 | 10:30a | Team values | `team-values` | 14:30 UTC daily |
 | 11:00a | Dashboard data | `projection-site --out report` | 15:00 UTC daily |
 | 7:00a Mon | Weekly recap site | `recap-site --out dist` | 7am ET Mondays |
-| 7:40p | Shadow capture | `shadow` | 23:40 UTC daily |
+| 7:30a | Shadow capture | `shadow` | 11:30 UTC daily |
 
 The hourly `optimize` run is **today-only** — an hourly cadence can only legitimately learn anything new about today (late scratches, probables firming up), and re-deciding a future day's lineup every hour was pure churn (measured: 84% of lineup notifications were future-dated `--matchup` speculation re-decided the next hour, with individual players re-flipped 20-30+ times for one future date). The once-daily `optimize --matchup` pass pre-writes the rest of the current matchup week instead, ahead of the hourly window opening at 14:00 UTC.
 
