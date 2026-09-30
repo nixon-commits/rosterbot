@@ -1250,7 +1250,7 @@ func TestGradeAndAlertOffers_FailedSendIsNotMarked(t *testing.T) {
 
 func TestGradeAndAlertOffers_MarkedOfferIsSkippedBeforeGrading(t *testing.T) {
 	in, sent := offerFixture(t)
-	if err := in.markers.Publish(context.Background(), "o1", []byte("x")); err != nil {
+	if err := in.markers.Publish("o1", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
 	res := gradeAndAlertOffers(context.Background(), in)
@@ -1287,7 +1287,7 @@ func TestFormatOfferAlert_ThreeTeamOfferNamesEachGiver(t *testing.T) {
 }
 ```
 
-If `lineupapi.NewFileBlobStore`'s `Publish` signature differs from `(ctx, key, body)`, match what `cmd/football_trades_log_test.go` uses.
+`lineupapi.BlobStore.Publish(key, body)` takes no context and `Get(ctx, key)` does — the same calls `cmd/football_trades_log_test.go` and `relogRows` make.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
