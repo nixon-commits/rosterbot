@@ -53,6 +53,7 @@ var seasonPolicies = map[string]seasonPolicy{
 	"projection-site": {},
 	"football-values": {},
 	"football-trades": {},
+	"football-offers": {},
 }
 
 // seasonGateEnv disables the gate when set to "off": the local smoke test
