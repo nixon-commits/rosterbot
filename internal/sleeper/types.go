@@ -97,6 +97,10 @@ type NFLState struct {
 	Season     string `json:"season"`
 	SeasonType string `json:"season_type"` // pre, regular, post
 	Leg        int    `json:"leg"`
+	// LeagueCreateSeason is the season NEW leagues are created into. Sleeper
+	// flips it ahead of Season in December, so between then and the next
+	// season's start the renewed leagues live only under this value.
+	LeagueCreateSeason string `json:"league_create_season"`
 }
 
 // Player is one entry from Sleeper's full NFL player dump.

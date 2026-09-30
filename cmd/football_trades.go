@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -60,8 +61,14 @@ func runFootballTrades(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("sleeper state: %w", err)
 	}
-	leagues, err := discoverLeagues(ctx, sc, cfg, state.Season, os.Stdout)
+	leagues, err := discoverLeagues(ctx, sc, cfg, state, os.Stdout)
 	if err != nil {
+		// An off-season stop has already printed its one line and recorded
+		// the outcome; silence cobra so the exit-0 path prints nothing else,
+		// exactly as checkSeasonGate does for the baseball commands.
+		if errors.Is(err, errOffSeason) {
+			cmd.SilenceUsage, cmd.SilenceErrors = true, true
+		}
 		return err
 	}
 	players, err := sc.PlayersNFL(ctx)
