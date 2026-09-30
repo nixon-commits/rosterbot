@@ -45,15 +45,16 @@ var seasonPolicies = map[string]seasonPolicy{
 	"recap-site": {InSeasonOnly: true},
 	"prospects":  {InSeasonOnly: true},
 
-	"version-check":   {},
-	"transactions":    {},
-	"claims":          {},
-	"archive":         {},
-	"team-values":     {},
-	"projection-site": {},
-	"football-values": {},
-	"football-trades": {},
-	"football-offers": {},
+	"version-check":    {},
+	"transactions":     {},
+	"claims":           {},
+	"archive":          {},
+	"team-values":      {},
+	"projection-site":  {},
+	"football-values":  {},
+	"football-trades":  {},
+	"football-offers":  {},
+	"football-pickups": {},
 }
 
 // seasonGateEnv disables the gate when set to "off": the local smoke test

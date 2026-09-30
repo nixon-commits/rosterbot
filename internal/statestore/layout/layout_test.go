@@ -423,6 +423,9 @@ func TestFootballPickups_MarkerFamilyAndSnapshotPointer(t *testing.T) {
 	if inAll[m.Name] {
 		t.Error("markers must be absent from All(): a quiet league writes none for weeks")
 	}
+	if !inAll[s.Name] {
+		t.Error("the snapshot pointer must be in All(): it is rewritten daily, so its age IS the job's health")
+	}
 	for _, other := range []Artifact{FootballTrades, FootballOffers, FootballTradeLog} {
 		if strings.HasPrefix(m.S3Prefix, other.S3Prefix) || strings.HasPrefix(other.S3Prefix, m.S3Prefix) ||
 			strings.HasPrefix(s.S3Prefix, other.S3Prefix) || strings.HasPrefix(other.S3Prefix, s.S3Prefix) {

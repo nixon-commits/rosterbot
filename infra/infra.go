@@ -1561,6 +1561,12 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// expiry is worth hearing about within the hour. Minute 20 keeps it
 		// clear of the :00 Lineup launches and the :45 FootballTrades ones.
 		{"FootballOffers", "cron(20 * * * ? *)", jsii.Strings("football-offers"), allDayHourlyGap},
+		// Daily pickup digest per league: depth-chart role changes, valued
+		// drops and guillotine chops, from public data only. 15:15 UTC sits
+		// after FootballValues (14:45) has warmed the StatsGuy cache. Its
+		// snapshot pointer (layout.FootballPickupSnapshot) is rewritten every
+		// run, so the Infra tab reads the job's health from that object's age.
+		{"FootballPickups", "cron(15 15 * * ? *)", jsii.Strings("football-pickups"), dailyGap},
 		// Shadow captures every projection system's lineup projection for the
 		// model-comparison report. It runs in the MORNING UTC window, and that
 		// is a correctness requirement, not a preference.

@@ -98,19 +98,20 @@ var adminOnlyRoutes = []string{
 // the deployment rather than on one team, and they cost real money on someone
 // else's behalf. A member may still launch jobs scoped to their own tenant.
 var leagueWideJobs = map[string]bool{
-	"archive":         true,
-	"recap-site":      true,
-	"recap":           true,
-	"version-check":   true,
-	"team-values":     true,
-	"gs-check":        true,
-	"claims":          true,
-	"transactions":    true,
-	"waivers":         true,
-	"projection-site": true,
-	"football-values": true,
-	"football-trades": true,
-	"football-offers": true,
+	"archive":          true,
+	"recap-site":       true,
+	"recap":            true,
+	"version-check":    true,
+	"team-values":      true,
+	"gs-check":         true,
+	"claims":           true,
+	"transactions":     true,
+	"waivers":          true,
+	"projection-site":  true,
+	"football-values":  true,
+	"football-trades":  true,
+	"football-offers":  true,
+	"football-pickups": true,
 }
 
 func isAdminOnlyPath(path string) bool {

@@ -347,7 +347,7 @@ var (
 // double-count the same objects.
 func All() []Artifact {
 	return []Artifact{
-		TeamValues, TradeOffers, Analysis, LineupGaps, FootballValues, Archive, Backtest,
+		TeamValues, TradeOffers, Analysis, LineupGaps, FootballValues, FootballPickupSnapshot, Archive, Backtest,
 		Lineup, Trades, TradeValues, AvailablePool, RosterValues, Reports, RunLedger, RunOutput, Notification, Claims,
 		Session, Cache, TenantRoster,
 	}
