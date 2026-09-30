@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -31,14 +32,19 @@ func offer(id string, mutate func(*sleeper.Transaction)) sleeper.Transaction {
 	return t
 }
 
-func TestSelectOffers_KeepsOnlyLiveOffersToMeAwaitingMe(t *testing.T) {
+// TestSelectOffers_DoesNotDropAnsweredOffers pins the two halves of the
+// selection contract: an offer whose consenter_ids holds my roster is KEPT (what
+// that field means on a proposed offer is unverified live, and dropping on the
+// wrong reading fails silently forever), and every other row lands in exactly
+// one counted class, so the classes sum to the row count.
+func TestSelectOffers_DoesNotDropAnsweredOffers(t *testing.T) {
 	in := []sleeper.Transaction{
 		offer("keep", nil),
-		offer("mine", func(x *sleeper.Transaction) { x.Creator = "me" }),                 // I sent it (C, deferred)
+		offer("mine", func(x *sleeper.Transaction) { x.Creator = "me" }),                 // I sent it
 		offer("waiver", func(x *sleeper.Transaction) { x.Type = "waiver" }),              // a pending claim
 		offer("done", func(x *sleeper.Transaction) { x.Status = "complete" }),            // not live
 		offer("notme", func(x *sleeper.Transaction) { x.RosterIDs = []int{3, 5} }),       // not my roster
-		offer("answered", func(x *sleeper.Transaction) { x.ConsenterIDs = []int{3, 8} }), // I already accepted
+		offer("answered", func(x *sleeper.Transaction) { x.ConsenterIDs = []int{3, 8} }), // my roster is in consenter_ids
 		offer("expired", func(x *sleeper.Transaction) {
 			x.Settings = map[string]any{"expires_at": float64(offerNow.Add(-time.Minute).Unix())}
 		}),
@@ -46,17 +52,59 @@ func TestSelectOffers_KeepsOnlyLiveOffersToMeAwaitingMe(t *testing.T) {
 			x.Settings = map[string]any{"expires_at": float64(offerNow.Add(time.Hour).Unix())}
 		}),
 	}
-	keep, expired, answered := selectOffers(in, 8, "me", offerNow)
+	sel := selectOffers(in, 8, "me", offerNow)
 	var ids []string
-	for _, k := range keep {
+	for _, k := range sel.Keep {
 		ids = append(ids, k.TransactionID)
 	}
-	if strings.Join(ids, ",") != "keep,fresh" {
-		t.Errorf("kept %v, want keep,fresh", ids)
+	if got := strings.Join(ids, ","); got != "keep,answered,fresh" {
+		t.Errorf("kept %v, want keep,answered,fresh: an offer with my roster in consenter_ids must still alert", ids)
 	}
-	if expired != 1 || answered != 1 {
-		t.Errorf("expired=%d answered=%d, want 1 and 1", expired, answered)
+	if sel.Expired != 1 || sel.Answered != 1 || sel.SentByMe != 1 {
+		t.Errorf("expired=%d answered=%d sentByMe=%d, want 1, 1 and 1", sel.Expired, sel.Answered, sel.SentByMe)
 	}
+	if got := strings.Join(sel.Unexpected, ","); got != "waiver,done,notme" {
+		t.Errorf("unexpected = %v, want waiver,done,notme (the rows that failed the server-side filters)", sel.Unexpected)
+	}
+	// Answered is a subset of Keep, not a fourth disposition; the other three
+	// plus Keep account for every row.
+	if n := len(sel.Keep) + sel.Expired + sel.SentByMe + len(sel.Unexpected); n != len(in) {
+		t.Errorf("classes sum to %d, want %d: a row was dropped uncounted", n, len(in))
+	}
+}
+
+// captureStderr runs f with os.Stderr redirected and returns what it wrote.
+// warn() prints straight to os.Stderr and is not a seam, so the warning lines
+// are asserted this way; nothing in package cmd's tests runs in parallel, which
+// is what makes swapping the process-wide handle safe here.
+func captureStderr(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		b, rerr := io.ReadAll(r)
+		if rerr != nil {
+			b = append(b, []byte("read error: "+rerr.Error())...)
+		}
+		done <- string(b)
+	}()
+	func() {
+		defer func() { os.Stderr = old }()
+		f()
+	}()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return got
 }
 
 func offerFixture(t *testing.T) (offerRunInputs, *[]string) {
@@ -211,6 +259,33 @@ func TestFormatOfferAlert_ConsentStateCopy(t *testing.T) {
 	}
 }
 
+func TestFormatOfferAlert_AlreadyAcceptedCopy(t *testing.T) {
+	in, _ := offerFixture(t)
+
+	// Two teams, my roster (8) in consenter_ids: the body says so instead of
+	// "waiting on you", which would be false under the accepted-so-far reading.
+	two := offer("o2", func(x *sleeper.Transaction) { x.ConsenterIDs = []int{3, 8} })
+	sides := dynasty.BuildTradeSides(two, in.players, in.bundle, in.names, in.league.Format)
+	_, body := formatOfferAlert(in.league, 8, two, sides, dynasty.GradeTrade(sides))
+	if !strings.HasSuffix(body, " | you have already accepted, waiting on others") || strings.Contains(body, "waiting on you") {
+		t.Errorf("two-team body = %q, want the already-accepted copy and no \"waiting on you\"", body)
+	}
+
+	// Three teams: the already-accepted state takes precedence over the count.
+	three := offer("o3", func(x *sleeper.Transaction) {
+		x.RosterIDs = []int{3, 5, 8}
+		x.ConsenterIDs = []int{3, 8}
+		x.Adds = map[string]int{"4984": 8, "9509": 5}
+		x.Drops = map[string]int{"4984": 3, "9509": 8}
+	})
+	in.names[5] = "Ghost Riders"
+	sides = dynasty.BuildTradeSides(three, in.players, in.bundle, in.names, in.league.Format)
+	_, body = formatOfferAlert(in.league, 8, three, sides, dynasty.GradeTrade(sides))
+	if !strings.HasSuffix(body, " | you have already accepted, waiting on others") || strings.Contains(body, "of 3 accepted") {
+		t.Errorf("three-team body = %q, want the already-accepted copy", body)
+	}
+}
+
 func TestVerifyOfferIdentity_MismatchNamesBothIDs(t *testing.T) {
 	if err := verifyOfferIdentity("738883211463155712", "738883211463155712"); err != nil {
 		t.Errorf("matching ids: %v", err)
@@ -331,5 +406,57 @@ func TestPollOffers_CoverageLinePrintsTheZeroCase(t *testing.T) {
 	// result rather than a special branch.
 	if strings.Join(h.ran, ",") != "A" || h.keeps["A"] != 0 {
 		t.Errorf("ran=%v keeps=%v, want runner called once for A with an empty keep", h.ran, h.keeps)
+	}
+}
+
+// TestPollOffers_UnexpectedRowIsWarnedAndCounted: a row that fails the filters
+// the server was asked to apply is the in-band sign that the query does not mean
+// what the code assumes. It must be named in a warning (ids included) rather
+// than dropped, and the rows it does not cover must still be counted.
+func TestPollOffers_UnexpectedRowIsWarnedAndCounted(t *testing.T) {
+	h := &pollHarness{}
+	var out bytes.Buffer
+	var (
+		total offerRunResult
+		found int
+		err   error
+	)
+	stderr := captureStderr(t, func() {
+		total, found, _, err = pollOffers(context.Background(), []leagueContext{pollLeague("A", "Alpha")}, "me", offerNow,
+			func(context.Context, leagueContext) (leagueOffers, error) {
+				return leagueOffers{myRoster: 8, offers: []sleeper.Transaction{
+					offer("live", nil),
+					offer("done", func(x *sleeper.Transaction) { x.Status = "complete" }),
+					offer("mine", func(x *sleeper.Transaction) { x.Creator = "me" }),
+				}}, nil
+			}, h.run, &out)
+	})
+	if err != nil {
+		t.Fatalf("err = %v, want nil: an unexpected row is a warning, not a failure", err)
+	}
+	for _, want := range []string{"Alpha", "1 unexpected row(s)", "ids done", "server filter did not hold"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, missing %q", stderr, want)
+		}
+	}
+	if found != 3 || total.SentByMe != 1 {
+		t.Errorf("found=%d sentByMe=%d, want 3 and 1", found, total.SentByMe)
+	}
+	if h.keeps["A"] != 1 {
+		t.Errorf("keeps = %v, want only the live offer handed to the runner", h.keeps)
+	}
+}
+
+func TestPollOffers_NoUnexpectedRowsIsSilent(t *testing.T) {
+	h := &pollHarness{}
+	var out bytes.Buffer
+	stderr := captureStderr(t, func() {
+		_, _, _, _ = pollOffers(context.Background(), []leagueContext{pollLeague("A", "Alpha")}, "me", offerNow,
+			func(context.Context, leagueContext) (leagueOffers, error) {
+				return leagueOffers{myRoster: 8, offers: []sleeper.Transaction{offer("live", nil)}}, nil
+			}, h.run, &out)
+	})
+	if strings.Contains(stderr, "unexpected") {
+		t.Errorf("stderr = %q, want no warning for a clean league", stderr)
 	}
 }

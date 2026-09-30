@@ -32,8 +32,8 @@ undocumented GraphQL API with the operator's own session token
 (SLEEPER_TOKEN -- the only job that receives it), grades each with the same
 StatsGuy sum football-trades uses, and pushes one alert per offer written
 from the operator's side: what you get, what you give, the verdict, when it
-expires, and the consent state ("waiting on you", or for an offer between more
-than two rosters how many have accepted).
+expires, and the consent state ("waiting on you", how many have accepted for an
+offer between more than two rosters, or that you have already accepted it).
 
 Read-only: nothing is accepted, rejected or countered. Idempotent via one
 dedup marker per transaction_id under football/offers/ (check -> send ->
@@ -74,8 +74,14 @@ func runFootballOffers(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("sleeper state: %w", err)
 	}
-	leagues, err := discoverLeagues(ctx, sc, cfg, state.Season, os.Stdout)
+	leagues, err := discoverLeagues(ctx, sc, cfg, state, os.Stdout)
 	if err != nil {
+		// An off-season stop has already printed its one line and recorded
+		// the outcome; silence cobra so the exit-0 path prints nothing else,
+		// exactly as checkSeasonGate does for the baseball commands.
+		if errors.Is(err, errOffSeason) {
+			cmd.SilenceUsage, cmd.SilenceErrors = true, true
+		}
 		return err
 	}
 	players, err := sc.PlayersNFL(ctx)
@@ -120,8 +126,8 @@ func runFootballOffers(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("football-offers: %d league(s), %d proposed, %d already alerted, %d expired, %d already answered, %d graded, %d sent\n",
-		len(leagues), found, total.Skipped, total.Expired, total.Answered, total.Graded, total.Alerted)
+	fmt.Printf("football-offers: %d league(s), %d proposed, %d already alerted, %d expired, %d already accepted by you, %d sent by you, %d graded, %d sent\n",
+		len(leagues), found, total.Skipped, total.Expired, total.Answered, total.SentByMe, total.Graded, total.Alerted)
 	if len(failed) > 0 {
 		return fmt.Errorf("football-offers: %d of %d league(s) failed: %s", len(failed), len(leagues), strings.Join(failed, ", "))
 	}
@@ -159,6 +165,10 @@ type offerRunner func(lc leagueContext, li leagueOffers, keep []sleeper.Transact
 //   - Every other league prints the coverage line unconditionally, zero case
 //     included: a league with no offers and a query that returns nothing look
 //     identical without it.
+//   - Every row the query returned is accounted for. A row that fails the
+//     filters the server was asked to apply is the one in-band sign that the
+//     query semantics differ from what the code assumes, so it is named in a
+//     warning rather than dropped.
 func pollOffers(ctx context.Context, leagues []leagueContext, myUserID string, now time.Time, load offerLoader, run offerRunner, out io.Writer) (total offerRunResult, found int, failed []string, err error) {
 	for _, lc := range leagues {
 		li, lerr := load(ctx, lc)
@@ -174,13 +184,18 @@ func pollOffers(ctx context.Context, leagues []leagueContext, myUserID string, n
 			fmt.Fprintf(out, "football-offers: %s: no roster owned by %s; skipped\n", lc.League.Name, myUserID)
 			continue
 		}
-		keep, expired, answered := selectOffers(li.offers, li.myRoster, myUserID, now)
+		sel := selectOffers(li.offers, li.myRoster, myUserID, now)
 		found += len(li.offers)
-		total.Expired += expired
-		total.Answered += answered
-		fmt.Fprintf(out, "football-offers: %s: %d proposed for roster %d, %d to me and live\n", lc.League.Name, len(li.offers), li.myRoster, len(keep))
+		total.Expired += sel.Expired
+		total.Answered += sel.Answered
+		total.SentByMe += sel.SentByMe
+		if len(sel.Unexpected) > 0 {
+			warn("football-offers: %s: %d unexpected row(s) from the proposed-trades query (ids %s) — the server filter did not hold; check the query",
+				lc.League.Name, len(sel.Unexpected), strings.Join(sel.Unexpected, ","))
+		}
+		fmt.Fprintf(out, "football-offers: %s: %d proposed for roster %d, %d to me and live\n", lc.League.Name, len(li.offers), li.myRoster, len(sel.Keep))
 
-		res := run(lc, li, keep)
+		res := run(lc, li, sel.Keep)
 		total.Graded += res.Graded
 		total.Alerted += res.Alerted
 		total.Skipped += res.Skipped
@@ -221,26 +236,62 @@ func loadLeagueOffers(ctx context.Context, sc *sleeper.Client, auth *sleeperauth
 	return li, nil
 }
 
+// offerSelection is selectOffers' account of EVERY row the proposed-trades
+// query returned: Keep + Expired + SentByMe + len(Unexpected) == the row count.
+// Answered is not a fifth class -- it counts the kept offers whose consenter_ids
+// already holds my roster.
+type offerSelection struct {
+	Keep []sleeper.Transaction
+	// Expired: live-status offers whose expires_at has passed.
+	Expired int
+	// Answered: KEPT offers whose consenter_ids includes my roster. Counted for
+	// the summary only; they still alert (see selectOffers).
+	Answered int
+	// SentByMe: offers I proposed, a separate and deferred feature.
+	SentByMe int
+	// Unexpected: ids of rows that failed a filter the server was asked to
+	// apply (type, status, my roster in roster_ids).
+	Unexpected []string
+}
+
 // selectOffers keeps the offers worth alerting: live trades proposed by
-// someone else that involve my roster and still await my consent. The two
-// dropped classes worth counting are returned so the summary can say why a
-// proposed offer produced no alert.
-func selectOffers(txns []sleeper.Transaction, myRoster int, myUserID string, now time.Time) (keep []sleeper.Transaction, expired, answered int) {
+// someone else that involve my roster. Every row is accounted for in the
+// returned offerSelection, so the run summary sums to the row count.
+//
+// It deliberately does NOT drop an offer because consenter_ids holds my roster.
+// What that field means on a PROPOSED offer is unverified live, and the two
+// readings pull in opposite directions: "the roster ids that have accepted so
+// far" (my roster present = I already accepted, nothing left for me to do) or
+// "who is still being waited on" (my roster present = waiting on ME, the very
+// offer this job exists to surface). Dropping on the first reading, were the
+// second true, would discard every offer made to the operator on a green run
+// forever -- the failure this job's spec names, and one that raises no error.
+// Keeping costs at worst one alert, deduped by transaction id, for an offer the
+// operator has in fact accepted; formatOfferAlert renders the state from the
+// data so the alert says what it saw, and Answered counts how often it happens.
+func selectOffers(txns []sleeper.Transaction, myRoster int, myUserID string, now time.Time) offerSelection {
+	var sel offerSelection
 	for _, t := range txns {
-		if t.Type != "trade" || t.Status != "proposed" || t.Creator == myUserID || !slices.Contains(t.RosterIDs, myRoster) {
+		// Re-check the predicates the server was asked to apply. A row that
+		// fails them means the query did not mean what we think it means.
+		if t.Type != "trade" || t.Status != "proposed" || !slices.Contains(t.RosterIDs, myRoster) {
+			sel.Unexpected = append(sel.Unexpected, t.TransactionID)
+			continue
+		}
+		if t.Creator == myUserID {
+			sel.SentByMe++
 			continue
 		}
 		if exp, ok := t.ExpiresAt(); ok && !exp.After(now) {
-			expired++
+			sel.Expired++
 			continue
 		}
 		if slices.Contains(t.ConsenterIDs, myRoster) {
-			answered++ // I already accepted; it is waiting on someone else
-			continue
+			sel.Answered++
 		}
-		keep = append(keep, t)
+		sel.Keep = append(sel.Keep, t)
 	}
-	return keep, expired, answered
+	return sel
 }
 
 // offerRunInputs is everything gradeAndAlertOffers needs for ONE league, with
@@ -262,7 +313,7 @@ type offerRunInputs struct {
 
 // offerRunResult is what one league's poll decided.
 type offerRunResult struct {
-	Graded, Alerted, Skipped, Expired, Answered int
+	Graded, Alerted, Skipped, Expired, Answered, SentByMe int
 }
 
 // gradeAndAlertOffers runs check -> send -> mark over one league's live
@@ -309,8 +360,9 @@ func gradeAndAlertOffers(ctx context.Context, in offerRunInputs) offerRunResult 
 // Title: "[League] Offer from <proposer>: favors you (+N%)" -- or favors
 // them, dead even, or the two no-verdict reasons formatTradeAlert names.
 // Body: "You get: ... | You give: ... | <column> | expires ... | waiting on
-// you". A three-team offer names each other team and what it gets instead of
-// "You give".
+// you" (or "you have already accepted, waiting on others" when my roster is in
+// consenter_ids). A three-team offer names each other team and what it gets
+// instead of "You give".
 func formatOfferAlert(league dynasty.LeagueProfile, myRoster int, txn sleeper.Transaction, sides []dynasty.TradeSide, v dynasty.TradeVerdict) (title, body string) {
 	me := strconv.Itoa(myRoster)
 	var mine *dynasty.TradeSide
@@ -361,12 +413,21 @@ func formatOfferAlert(league dynasty.LeagueProfile, myRoster int, txn sleeper.Tr
 	if exp, ok := txn.ExpiresAt(); ok {
 		parts = append(parts, "expires "+exp.Format("2006-01-02 15:04 UTC"))
 	}
-	// ConsenterIDs includes the proposer's own consent, so in a two-team offer
-	// "1 of 2 accepted" is always true and says nothing; only a multi-team offer
-	// has a consent count worth naming.
-	if len(txn.RosterIDs) > 2 {
+	// The consent state is rendered from the data, never assumed: selectOffers
+	// keeps an offer whose consenter_ids holds my roster, so this is where the
+	// two cases part. This copy reads consenter_ids as "accepted so far"; the
+	// live probe (internal/sleeperauth/diag_proposed_test.go) settles whether
+	// that is right.
+	//
+	// Otherwise, ConsenterIDs includes the proposer's own consent, so in a
+	// two-team offer "1 of 2 accepted" is always true and says nothing; only a
+	// multi-team offer has a consent count worth naming.
+	switch {
+	case slices.Contains(txn.ConsenterIDs, myRoster):
+		parts = append(parts, "you have already accepted, waiting on others")
+	case len(txn.RosterIDs) > 2:
 		parts = append(parts, fmt.Sprintf("%d of %d accepted, waiting on you", len(txn.ConsenterIDs), len(txn.RosterIDs)))
-	} else {
+	default:
 		parts = append(parts, "waiting on you")
 	}
 	return title, pushover.Truncate(strings.Join(parts, " | "))

@@ -417,6 +417,11 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	for k, v := range *botOpts.Secrets {
 		offersSecrets[k] = v
 	}
+	// MERGE ORDER: the SSM parameter /rosterbot/SLEEPER_TOKEN must exist in
+	// us-west-1 BEFORE this deploys. Because the secret is on OffersTask only, a
+	// missing parameter fails only the hourly FootballOffers launches (each one
+	// pages as a failed run), not every job -- unlike SLEEPER_USER_ID on the
+	// shared task, whose absence would fail them all.
 	offersSecrets["SLEEPER_TOKEN"] = secret("SLEEPER_TOKEN")
 	offersOpts := *botOpts
 	offersOpts.Secrets = &offersSecrets

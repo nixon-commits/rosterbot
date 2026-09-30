@@ -53,6 +53,21 @@ func TestDiagProposed(t *testing.T) {
 		}
 	}
 	fmt.Printf("league %s: my roster_id=%d (0 = none found)\n", leagueID, myRoster)
+	// Without a roster the roster-scoped query below would run with roster_id=0
+	// and read as "the query returns 0 rows" -- the exact signal that would
+	// wrongly switch the job to the leg-scoped fallback. A wrong league id, a
+	// wrong user id or a co-owned roster is a setup mistake, not a finding.
+	if myRoster == 0 {
+		t.Skipf("no roster in league %s is owned by SLEEPER_USER_ID %s — wrong DIAG_LEAGUE_ID or SLEEPER_USER_ID", leagueID, userID)
+	}
+
+	// Compare the output below against the Sleeper app, for an offer made TO you:
+	fmt.Println("CHECKLIST, for a live offer made TO you (read the rows below against the app):")
+	fmt.Println("  (1) the offer TO you appears in the roster-scoped count;")
+	fmt.Println("  (2) `consenters` does NOT include your roster before you act;")
+	fmt.Println("  (3) `creator` is the proposer's USER id, not a roster id;")
+	fmt.Println("  (4) `expires` is a plausible near-future date (seconds, not millis);")
+	fmt.Println("  (5) each pick's owner_id is the roster RECEIVING it.")
 
 	// 1. The query the job will use.
 	mine, err := c.ProposedTrades(ctx, leagueID, myRoster)
