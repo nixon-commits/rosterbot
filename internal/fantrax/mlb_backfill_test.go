@@ -2,12 +2,14 @@ package fantrax
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -915,6 +917,12 @@ func TestFetchMLBGameLogUncached_StalledServerFailsInsteadOfHanging(t *testing.T
 	mlbBackfillHTTPTimeout = 150 * time.Millisecond
 	defer func() { mlbBackfillHTTPTimeout = prevTimeout }()
 
+	// Shrunk so the whole attempt budget fits the deadline below. What is
+	// under test is that the fetch gives up at all, not the pause schedule.
+	prevBackoff := mlbBackfillBackoff
+	mlbBackfillBackoff = []time.Duration{time.Millisecond}
+	defer func() { mlbBackfillBackoff = prevBackoff }()
+
 	done := make(chan error, 1)
 	go func() {
 		_, err := fetchMLBGameLogUncached(672515, "hitting", 2026)
@@ -925,6 +933,9 @@ func TestFetchMLBGameLogUncached_StalledServerFailsInsteadOfHanging(t *testing.T
 	case err := <-done:
 		if err == nil {
 			t.Fatal("stalled server produced no error; the fetch must fail rather than return success")
+		}
+		if !errors.Is(err, errRetryExhausted) {
+			t.Errorf("err = %v; a server that never answers should exhaust the retry budget", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("fetchMLBGameLogUncached never returned against a server that never responds: the call is unbounded (rosterbot-5zp1)")
@@ -937,5 +948,77 @@ func TestFetchMLBGameLogUncached_StalledServerFailsInsteadOfHanging(t *testing.T
 func TestMLBBackfillHTTPTimeoutIsNonZero(t *testing.T) {
 	if mlbBackfillHTTPTimeout <= 0 {
 		t.Fatalf("mlbBackfillHTTPTimeout = %v; a zero or negative http.Client.Timeout means UNBOUNDED, which is the rosterbot-5zp1 hang", mlbBackfillHTTPTimeout)
+	}
+}
+
+// A single stalled statsapi request must not burn the whole render. The 15s
+// ceiling added for rosterbot-5zp1 stops the hang, but on its own it converts
+// one blip into a failed run -- and a run makes ~600 of these fetches, so at
+// the observed rate (~1 stall in 650) a no-retry render would fail about as
+// often as it succeeded. The first attempt here stalls past the timeout; the
+// second answers, and the fetch must return that answer.
+func TestFetchMLBGameLogUncached_RetriesPastAStalledAttempt(t *testing.T) {
+	var attempts int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			<-release // first attempt: accept, never answer
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"stats":[{"splits":[{"date":"2026-09-15","stat":{"hits":2,"homeRuns":1}}]}]}`))
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	prevURL := mlbBackfillGameLogURL
+	mlbBackfillGameLogURL = srv.URL + "/people/%d/stats?stats=gameLog&group=%s&season=%d&sportId=1"
+	defer func() { mlbBackfillGameLogURL = prevURL }()
+
+	prevTimeout := mlbBackfillHTTPTimeout
+	mlbBackfillHTTPTimeout = 150 * time.Millisecond
+	defer func() { mlbBackfillHTTPTimeout = prevTimeout }()
+
+	prevBackoff := mlbBackfillBackoff
+	mlbBackfillBackoff = []time.Duration{time.Millisecond}
+	defer func() { mlbBackfillBackoff = prevBackoff }()
+
+	days, err := fetchMLBGameLogUncached(672515, "hitting", 2026)
+	if err != nil {
+		t.Fatalf("fetch failed despite a healthy second attempt: %v", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Errorf("attempts = %d, want 2 (one stall, one success)", got)
+	}
+	if len(days) != 1 {
+		t.Fatalf("got %d game-log days, want 1", len(days))
+	}
+}
+
+// A render makes ~600 game-log fetches. Retrying a durable 4xx — an unknown
+// player, a malformed id — would add three attempts and two backoff pauses per
+// call for an answer that cannot change, turning a cheap permanent failure
+// into minutes of dead time. Only 429 and 5xx are worth another attempt.
+func TestFetchMLBGameLogUncached_DoesNotRetryDurableStatus(t *testing.T) {
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	prevURL := mlbBackfillGameLogURL
+	mlbBackfillGameLogURL = srv.URL + "/people/%d/stats?stats=gameLog&group=%s&season=%d&sportId=1"
+	defer func() { mlbBackfillGameLogURL = prevURL }()
+
+	prevBackoff := mlbBackfillBackoff
+	mlbBackfillBackoff = []time.Duration{time.Millisecond, time.Millisecond}
+	defer func() { mlbBackfillBackoff = prevBackoff }()
+
+	if _, err := fetchMLBGameLogUncached(672515, "hitting", 2026); err == nil {
+		t.Fatal("404 returned no error")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1: a 404 is durable and must not be retried", got)
 	}
 }

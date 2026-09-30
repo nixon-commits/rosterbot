@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -274,6 +275,12 @@ func TestFetchPitchingChunk_StalledServerFailsInsteadOfHanging(t *testing.T) {
 	seasonPitchingHTTPTimeout = 150 * time.Millisecond
 	defer func() { seasonPitchingHTTPTimeout = prev }()
 
+	// Shrunk so the whole attempt budget fits the deadline below. What is
+	// under test is that the fetch gives up at all, not the pause schedule.
+	prevBackoff := seasonPitchingBackoff
+	seasonPitchingBackoff = []time.Duration{time.Millisecond}
+	defer func() { seasonPitchingBackoff = prevBackoff }()
+
 	done := make(chan error, 1)
 	go func() {
 		done <- fetchPitchingChunk(context.Background(), srv.URL, map[int]pitchSeason{})
@@ -286,5 +293,42 @@ func TestFetchPitchingChunk_StalledServerFailsInsteadOfHanging(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("fetchPitchingChunk never returned against a server that never responds: the call is unbounded (rosterbot-5zp1)")
+	}
+}
+
+// Same reasoning as the game-log fetch: the 15s ceiling makes a stall
+// detectable, the retry makes it survivable. One stalled attempt must not cost
+// the render its leaders board (rosterbot-5zp1).
+func TestFetchPitchingChunk_RetriesPastAStalledAttempt(t *testing.T) {
+	var attempts int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			<-release // first attempt: accept, never answer
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"people":[{"id":592789,"stats":[{"splits":[{"stat":{"inningsPitched":"180.0","homeRuns":20,"baseOnBalls":40,"hitBatsmen":5,"strikeOuts":200,"earnedRuns":70}}]}]}]}`))
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	prevTimeout := seasonPitchingHTTPTimeout
+	seasonPitchingHTTPTimeout = 150 * time.Millisecond
+	defer func() { seasonPitchingHTTPTimeout = prevTimeout }()
+
+	prevBackoff := seasonPitchingBackoff
+	seasonPitchingBackoff = []time.Duration{time.Millisecond}
+	defer func() { seasonPitchingBackoff = prevBackoff }()
+
+	out := map[int]pitchSeason{}
+	if err := fetchPitchingChunk(context.Background(), srv.URL, out); err != nil {
+		t.Fatalf("fetch failed despite a healthy second attempt: %v", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Errorf("attempts = %d, want 2 (one stall, one success)", got)
+	}
+	if len(out) != 1 {
+		t.Fatalf("got %d pitchers, want 1", len(out))
 	}
 }
