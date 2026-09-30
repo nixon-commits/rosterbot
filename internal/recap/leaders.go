@@ -266,12 +266,23 @@ func fetchSeasonPitching(ctx context.Context, ids []int, year int) (map[int]pitc
 	return out, nil
 }
 
+// seasonPitchingHTTPTimeout bounds one season-pitching chunk fetch. 15s matches
+// the other statsapi fetches. Must never be zero: http.Client reads that as
+// "no timeout", which is the rosterbot-5zp1 hang. A var so tests can shrink it.
+var seasonPitchingHTTPTimeout = 15 * time.Second
+
 func fetchPitchingChunk(ctx context.Context, url string, out map[int]pitchSeason) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// Not http.DefaultClient: it has no Timeout, and the ctx handed down here
+	// has no deadline either (cmd/root.go calls Execute(), not
+	// ExecuteContext()), so this fetch was unbounded and could stall a render
+	// indefinitely -- the rosterbot-5zp1 failure, whose observed instance was
+	// the sibling fetch in internal/fantrax. Both bounds apply, so a caller
+	// that does pass a tighter deadline still wins.
+	resp, err := (&http.Client{Timeout: seasonPitchingHTTPTimeout}).Do(req)
 	if err != nil {
 		return err
 	}

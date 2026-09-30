@@ -2,6 +2,7 @@ package recap
 
 import (
 	"bytes"
+	"context"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -252,5 +253,38 @@ func TestFetchSeasonPitching(t *testing.T) {
 	}
 	if !approx(stats[1].IP, 60+2.0/3) || stats[1].SO != 70 {
 		t.Errorf("pitcher 1 parsed wrong: %+v", stats[1])
+	}
+}
+
+// The leaders board's season-pitching fetch is the second unbounded call in the
+// recap-site path: http.DefaultClient has no Timeout, and the ctx it is handed
+// carries no deadline either, because cmd/root.go calls Execute() rather than
+// ExecuteContext(). Same shape as the rosterbot-5zp1 hang in
+// fantrax.fetchMLBGameLogUncached, so it gets the same ceiling — a statsapi
+// connection that is accepted and then never answered must not stall a render.
+func TestFetchPitchingChunk_StalledServerFailsInsteadOfHanging(t *testing.T) {
+	blocked := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-blocked // accept the connection, then never respond
+	}))
+	defer srv.Close()
+	defer close(blocked)
+
+	prev := seasonPitchingHTTPTimeout
+	seasonPitchingHTTPTimeout = 150 * time.Millisecond
+	defer func() { seasonPitchingHTTPTimeout = prev }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- fetchPitchingChunk(context.Background(), srv.URL, map[int]pitchSeason{})
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("stalled server produced no error; the fetch must fail rather than return success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fetchPitchingChunk never returned against a server that never responds: the call is unbounded (rosterbot-5zp1)")
 	}
 }
