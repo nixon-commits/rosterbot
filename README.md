@@ -372,7 +372,7 @@ rosterbot projection-site --out report --open
 <details>
 <summary><b>Dynasty football</b> — <code>football-values</code> · <code>football-trades</code> · <code>football-offers</code> (Sleeper + StatsGuy)</summary>
 
-The bot's second sport. Read-only: Sleeper's public API has no lineup-write endpoint, so there's no `optimize`/apply equivalent here — just a value store and a trade monitor. Needs only `SLEEPER_LEAGUE_ID`, not any `FANTRAX_*` credential.
+The bot's second sport. Read-only: Sleeper's public API has no lineup-write endpoint, so there's no `optimize`/apply equivalent here — just a value store, a trade monitor and an offer grader. Needs no `FANTRAX_*` credential: `SLEEPER_LEAGUE_ID` for `football-values`, `SLEEPER_USER_ID` for the multi-league jobs, and `SLEEPER_TOKEN` for `football-offers` alone.
 
 ```bash
 # Append today's per-player dynasty value rows (players + owned future picks) to the Dynasty Value Store
@@ -597,7 +597,7 @@ Optional:
 | `APNS_KEY_ID` | unset | Key ID of the APNs auth key. |
 | `APNS_TEAM_ID` | unset | Apple developer team id the provider token signs as (set in infra; not a secret). |
 | `DYNASTY_FORMAT` | `sf_dynasty` | Which StatsGuy format `football-values`' printed summary reads. The multi-league jobs ignore it — each league's column comes from its own profile (superflex from roster slots, kind from `settings.type`, or `SLEEPER_FORMAT_OVERRIDES`). |
-| `SLEEPER_USER_ID` | — | The operator's Sleeper account id. `football-trades` and `football-offers` (and the pickups job) discover every non-complete NFL league from it and fail fast without it; `football-values` does not read it. |
+| `SLEEPER_USER_ID` | — | The operator's Sleeper account id. `football-trades` and `football-offers` discover every non-complete NFL league from it and fail fast without it; `football-values` does not read it. |
 | `SLEEPER_FORMAT_OVERRIDES` | — | `<league_id>=<format>,...` — pins the StatsGuy column for a league whose format the derivation from Sleeper's undocumented `settings.type` gets wrong. A malformed entry fails config load rather than being skipped. Every run prints the column each league resolved to and whether it was derived or overridden. |
 | `SLEEPER_TOKEN` | — | The operator's Sleeper session token, read by `football-offers` **only** (locally from `.env`; in AWS it reaches that one task from SSM `/rosterbot/SLEEPER_TOKEN`). It is the `token` value under the Sleeper web app's local storage (DevTools → Application → Local Storage → `sleeper.com`): account-scoped, full access, roughly a year's lifetime, and Sleeper does not document or support the API it unlocks. Never commit it. When it expires or is revoked, `football-offers` fails every run and ops alerting pages on the third; paste a fresh one into the parameter to recover. |
 | `FOOTBALL_PUSHOVER_USER_KEY` | `PUSHOVER_USER_KEY` | Reserved. `football-trades` alerts now route through the notify dispatcher (activity feed + APNs + dual-send) rather than this key. |

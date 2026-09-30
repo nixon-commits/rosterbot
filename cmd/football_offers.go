@@ -31,8 +31,9 @@ non-complete NFL league SLEEPER_USER_ID belongs to, through Sleeper's
 undocumented GraphQL API with the operator's own session token
 (SLEEPER_TOKEN -- the only job that receives it), grades each with the same
 StatsGuy sum football-trades uses, and pushes one alert per offer written
-from the operator's side: what you get, what you give, the verdict, who has
-already accepted, and when it expires.
+from the operator's side: what you get, what you give, the verdict, when it
+expires, and the consent state ("waiting on you", or for an offer between more
+than two rosters how many have accepted).
 
 Read-only: nothing is accepted, rejected or countered. Idempotent via one
 dedup marker per transaction_id under football/offers/ (check -> send ->
@@ -308,7 +309,8 @@ func gradeAndAlertOffers(ctx context.Context, in offerRunInputs) offerRunResult 
 // Title: "[League] Offer from <proposer>: favors you (+N%)" -- or favors
 // them, dead even, or the two no-verdict reasons formatTradeAlert names.
 // Body: "You get: ... | You give: ... | <column> | expires ... | waiting on
-// you". A three-team offer names each giving side instead of "You give".
+// you". A three-team offer names each other team and what it gets instead of
+// "You give".
 func formatOfferAlert(league dynasty.LeagueProfile, myRoster int, txn sleeper.Transaction, sides []dynasty.TradeSide, v dynasty.TradeVerdict) (title, body string) {
 	me := strconv.Itoa(myRoster)
 	var mine *dynasty.TradeSide
