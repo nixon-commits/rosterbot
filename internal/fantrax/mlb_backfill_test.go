@@ -891,3 +891,51 @@ func TestPitcherFPtsFromGame_ErasedRunnerIsANoHitterNotAPerfectGame(t *testing.T
 			"satisfies BattersFaced==Outs but must not award the perfect-game bonus", got)
 	}
 }
+
+// A stalled MLB statsapi response used to hang the entire render forever.
+// fetchMLBGameLogUncached paired context.Background() with http.DefaultClient,
+// and neither of those carries a deadline, so a server that accepts the
+// connection and then never answers blocked recap-site indefinitely — observed
+// in Fargate on 2026-09-30 (rosterbot-5zp1): 27 minutes of silence mid-render,
+// no error, task stuck at RUNNING until it was killed. The fetch has to give up
+// on its own, because nothing above it will.
+func TestFetchMLBGameLogUncached_StalledServerFailsInsteadOfHanging(t *testing.T) {
+	blocked := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-blocked // accept the connection, then never respond
+	}))
+	defer srv.Close()
+	defer close(blocked)
+
+	prevURL := mlbBackfillGameLogURL
+	mlbBackfillGameLogURL = srv.URL + "/people/%d/stats?stats=gameLog&group=%s&season=%d&sportId=1"
+	defer func() { mlbBackfillGameLogURL = prevURL }()
+
+	prevTimeout := mlbBackfillHTTPTimeout
+	mlbBackfillHTTPTimeout = 150 * time.Millisecond
+	defer func() { mlbBackfillHTTPTimeout = prevTimeout }()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := fetchMLBGameLogUncached(672515, "hitting", 2026)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("stalled server produced no error; the fetch must fail rather than return success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fetchMLBGameLogUncached never returned against a server that never responds: the call is unbounded (rosterbot-5zp1)")
+	}
+}
+
+// http.Client{Timeout: 0} means NO timeout, so zeroing this value silently
+// restores the rosterbot-5zp1 hang rather than failing loudly. Nothing else
+// bounds this fetch, so the non-zero default is the guarantee.
+func TestMLBBackfillHTTPTimeoutIsNonZero(t *testing.T) {
+	if mlbBackfillHTTPTimeout <= 0 {
+		t.Fatalf("mlbBackfillHTTPTimeout = %v; a zero or negative http.Client.Timeout means UNBOUNDED, which is the rosterbot-5zp1 hang", mlbBackfillHTTPTimeout)
+	}
+}

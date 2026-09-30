@@ -23,6 +23,13 @@ var mlbBackfillGameLogURL = "https://statsapi.mlb.com/api/v1/people/%d/stats?sta
 // prospects (1h compromise between freshness and warm-cache reuse).
 const mlbBackfillGameLogTTL = time.Hour
 
+// mlbBackfillHTTPTimeout bounds a single game-log fetch. 15s matches the other
+// MLB statsapi fetches (playername.resolve, projections.mlb_handedness). It is
+// the ONLY bound this fetch has — see the note at the Do() call — so it must
+// never be zero, which http.Client reads as "no timeout". A var, not a const,
+// so tests can shrink it.
+var mlbBackfillHTTPTimeout = 15 * time.Second
+
 // resolveBackfillNames maps Fantrax player names → MLBAM IDs for the
 // backfill. Indirected through a var so tests can inject a deterministic
 // resolver without going through the live MLB statsapi.
@@ -337,7 +344,13 @@ func fetchMLBGameLogUncached(mlbamID int, group string, season int) ([]mlbGameLo
 	if err != nil {
 		return nil, fmt.Errorf("build game log request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// Not http.DefaultClient: it has no Timeout, and the ctx above has no
+	// deadline, so the pair left this fetch unbounded — a statsapi connection
+	// that was accepted and then never answered hung the whole recap-site
+	// render for 27 minutes with no error until the task was killed
+	// (rosterbot-5zp1). Since no caller can bound it, the client timeout is
+	// the only stop, which is why it must never be zero.
+	resp, err := (&http.Client{Timeout: mlbBackfillHTTPTimeout}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch game log: %w", err)
 	}
