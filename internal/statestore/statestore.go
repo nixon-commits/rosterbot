@@ -82,6 +82,7 @@ var (
 	reportsArtifact          = of(layout.Reports)
 	footballTradesArtifact   = of(layout.FootballTrades)
 	footballTradeLogArtifact = of(layout.FootballTradeLog)
+	footballOffersArtifact   = of(layout.FootballOffers)
 	ilStartsArtifact         = of(layout.ILStarts)
 	gsFloorArtifact          = of(layout.GSFloorAlerts)
 	lineupApplyArtifact      = of(layout.LineupApplyAlerts)
@@ -425,6 +426,15 @@ func (s *Selector) ReportsStore() (lineupapi.BlobStore, error) {
 // store can enumerate the other's objects.
 func (s *Selector) FootballTradeMarkers() (lineupapi.BlobStore, error) {
 	return blobStore(s, footballTradesArtifact, "")
+}
+
+// FootballOfferMarkers is one dedup marker object per Sleeper trade offer
+// alerted by football-offers -- S3 under football/offers/ when STATE_BUCKET is
+// set, else .football/offers/. Same BlobStore machinery as the trade markers;
+// a separate prefix because an offer and the trade it becomes share a
+// transaction_id and must not silence each other.
+func (s *Selector) FootballOfferMarkers() (lineupapi.BlobStore, error) {
+	return blobStore(s, footballOffersArtifact, "")
 }
 
 // FootballTradeLogWriter returns the write side of the Football Trade Log -- S3
