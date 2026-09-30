@@ -1455,7 +1455,27 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		{"LineupMatchup", "cron(45 13 * * ? *)", jsii.Strings("optimize", "--matchup", "--archive-projections"), dailyGap},
 		{"Transactions", "cron(0 14 * * ? *)", jsii.Strings("transactions"), dailyGap},
 		{"Claims", "cron(20 14 * * ? *)", jsii.Strings("claims"), dailyGap},
-		{"Recap", "cron(0 11 ? * MON *)", jsii.Strings("recap-site", "--out", "dist"), weeklyGap},
+		// DISABLED 2026-09-30 (rosterbot-5zp1). recap-site HANGS in Fargate. The
+		// rosterbot-yqb9 fix made it year-round, so this Monday rule finally
+		// launches it for real -- and a control run stalled entering week 24's
+		// bulk MLB backfill, then sat at lastStatus=RUNNING for 27 minutes with
+		// zero log output until it was killed (exit 143). Fargate has no task
+		// timeout, so leaving this enabled burns a task every Monday and strands
+		// a RUNNING ledger row. Nothing pages: opsalert leadingFailures streaks
+		// on FAILED, and a hung run never reaches a terminal status at all.
+		// The published site is not at risk -- entrypoint.sh runs sync_up only
+		// after the command returns -- so pausing the schedule costs nothing
+		// while 5zp1 is open, and the 2026 site is already complete and correct.
+		//
+		// Commented out rather than gated, deliberately: this table is the single
+		// source for the rules AND for JOB_SCHEDULES below, so withdrawing the
+		// entry also withdraws the rosterbot-ys8 heartbeat's expectation. A
+		// heartbeat that pages about a job someone deliberately stopped is
+		// exactly the alert that teaches people to ignore the channel -- the same
+		// reasoning that gates HeartbeatRule on schedulesEnabled. There is no
+		// per-job enable flag; schedulesEnabled is all-or-nothing. Restore the
+		// line below verbatim once 5zp1 is fixed.
+		// {"Recap", "cron(0 11 ? * MON *)", jsii.Strings("recap-site", "--out", "dist"), weeklyGap},
 		{"Backtest", "cron(0 12 ? * MON *)", jsii.Strings("backtest"), weeklyGap},
 		// SPLIT IN TWO (rosterbot-crq.14 follow-up). projection-site produces
 		// two unrelated kinds of artifact: the three PRIVATE per-tenant reports
