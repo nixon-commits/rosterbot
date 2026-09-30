@@ -24,6 +24,9 @@ rosterbot
 # that package (already-tracked files were unaffected, which is why it went
 # unnoticed).
 /report/
+# Anchored for the same reason /report/ is: recap-site's publish dir is ./dist
+# at the repo root, and unanchored this would also match any nested dist/.
+/dist/
 .waivers/
 .lineup/
 # Local dedup markers for the IL-start and GS-floor alerts (layout.ILStarts,
