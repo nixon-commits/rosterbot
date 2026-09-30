@@ -155,13 +155,7 @@ func playerDisplayName(players map[string]sleeper.Player, id string) string {
 	if !ok {
 		return id
 	}
-	name := p.FirstName
-	if p.LastName != "" {
-		if name != "" {
-			name += " "
-		}
-		name += p.LastName
-	}
+	name := PlayerDisplayName(p)
 	if name == "" {
 		return id
 	}
