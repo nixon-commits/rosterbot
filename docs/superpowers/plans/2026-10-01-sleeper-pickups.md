@@ -286,7 +286,7 @@ func PlayerDisplayName(p sleeper.Player) string {
 }
 ```
 
-If `internal/dynasty/trade_grade.go` already defines `playerDisplayName(players map[string]sleeper.Player, id string) string`, leave its signature alone and make its body use `PlayerDisplayName` for the found case, so the two cannot spell a name differently.
+`internal/dynasty/aggregate.go:153` already defines `playerDisplayName(players map[string]sleeper.Player, id string) string`; leave its signature alone and make its body use `PlayerDisplayName` for the found case, so the two cannot spell a name differently.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -296,7 +296,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/dynasty/pickups_snapshot.go internal/dynasty/pickups_snapshot_test.go internal/dynasty/trade_grade.go
+git add internal/dynasty/pickups_snapshot.go internal/dynasty/pickups_snapshot_test.go internal/dynasty/aggregate.go
 git commit -m "feat(dynasty): daily player snapshot for pickups (rosterable positions, nullable depth order)"
 ```
 
@@ -930,16 +930,15 @@ git commit -m "feat(dynasty): pickup digest — per-player items, operator-ranke
 
 ---
 
-### Task 5: Wiring — classification, admin-only, schedule, smoke line, layout, statestore
+### Task 5: Layout and statestore — the marker family and the snapshot pointer
 
 **Files:**
-- Modify: `cmd/season_gate.go` (`seasonPolicies`), `internal/lineupapi/authz.go` (`leagueWideJobs`), `infra/infra.go` (jobs table), `Makefile` (`run-all`)
 - Modify: `internal/statestore/layout/layout.go`, `internal/statestore/layout/layout_test.go`, `internal/statestore/tenant_test.go`, `internal/statestore/statestore.go`
 
-These land together because three guard tests couple them: `TestSeasonGate_EveryScheduledCommandIsClassified` and `TestLeagueWideJobsCoversEveryInfraSingleton` read the infra table, and a layout artifact naming `Producer: "FootballPickups"` must name a schedule that exists.
+The snapshot artifact is DECLARED here but joins `All()` only in Task 6, because four guard tests couple the wiring: `TestAll_ProducersAreRealSchedules` (an `All()` member's `Producer` must name a schedule in `infra/infra.go`), `TestSeasonGate_EveryScheduledCommandIsClassified` (every scheduled command must be classified AND registered with cobra), and `TestLeagueWideJobsCoversEveryInfraSingleton`. The command is what registers `football-pickups`, so the schedule row, the classification, the admin-only entry, the `All()` membership and the smoke line all land with the command in Task 6.
 
 **Interfaces:**
-- Produces: `layout.FootballPickups` (`football/pickups/` ↔ `.football/pickups`; durable; no `MaxAge`; absent from `All()`), `layout.FootballPickupSnapshot` (`football/pickups-snapshot/` ↔ `.football/pickups-snapshot`; durable; `MaxAge: 2 * Day`; `Producer: "FootballPickups"`; IN `All()`); `(*Selector).FootballPickupMarkers()` and `(*Selector).FootballPickupSnapshot()`, both `(lineupapi.BlobStore, error)`.
+- Produces: `layout.FootballPickups` (`football/pickups/` ↔ `.football/pickups`; durable; no `MaxAge`; absent from `All()`), `layout.FootballPickupSnapshot` (`football/pickups-snapshot/` ↔ `.football/pickups-snapshot`; durable; `MaxAge: 2 * Day`; `Producer: "FootballPickups"`; joins `All()` in Task 6); `(*Selector).FootballPickupMarkers()` and `(*Selector).FootballPickupSnapshot()`, both `(lineupapi.BlobStore, error)`.
 
 - [ ] **Step 1: Write the failing layout test**
 
@@ -962,9 +961,6 @@ func TestFootballPickups_MarkerFamilyAndSnapshotPointer(t *testing.T) {
 	if inAll[m.Name] {
 		t.Error("markers must be absent from All(): a quiet league writes none for weeks")
 	}
-	if !inAll[s.Name] {
-		t.Error("the snapshot pointer must be in All(): it is rewritten daily, so its age IS the job's health")
-	}
 	for _, other := range []Artifact{FootballTrades, FootballOffers, FootballTradeLog} {
 		if strings.HasPrefix(m.S3Prefix, other.S3Prefix) || strings.HasPrefix(other.S3Prefix, m.S3Prefix) ||
 			strings.HasPrefix(s.S3Prefix, other.S3Prefix) || strings.HasPrefix(other.S3Prefix, s.S3Prefix) {
@@ -974,11 +970,11 @@ func TestFootballPickups_MarkerFamilyAndSnapshotPointer(t *testing.T) {
 }
 ```
 
-Also add `FootballPickups` and `FootballPickupSnapshot` to the ops-alert prefix-collision list in `layout_test.go` and `FootballPickups` to the `all := append(layout.All(), …)` list in `internal/statestore/tenant_test.go` (the snapshot is already in `All()`; neither is PerTenant).
+Also add `FootballPickups` and `FootballPickupSnapshot` to the ops-alert prefix-collision list in `layout_test.go` and BOTH to the `all := append(layout.All(), …)` list in `internal/statestore/tenant_test.go` (neither is PerTenant; the snapshot joins `All()` itself in Task 6, at which point it may be removed from that append).
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `go test ./internal/statestore/... -run 'FootballPickups|OpsAlert|PerTenant|Producers' -v`
+Run: `go test ./internal/statestore/... -run 'FootballPickups|OpsAlert|PerTenant' -v`
 Expected: FAIL — `undefined: FootballPickups`.
 
 - [ ] **Step 3: Layout + statestore**
@@ -1003,7 +999,7 @@ In `internal/statestore/layout/layout.go`, after `FootballOffers`:
 	FootballPickupSnapshot = Artifact{Name: "Football Pickup Snapshot", S3Prefix: "football/pickups-snapshot/", LocalDir: ".football/pickups-snapshot", Durable: true, MaxAge: 2 * Day, Producer: "FootballPickups"}
 ```
 
-and add `FootballPickupSnapshot` to `All()` (next to `FootballValues`).
+Do NOT add it to `All()` yet — Task 6 does, once the schedule its `Producer` names exists.
 
 In `internal/statestore/statestore.go`: `footballPickupsArtifact = of(layout.FootballPickups)`, `footballPickupSnapArtifact = of(layout.FootballPickupSnapshot)`, and
 
@@ -1021,37 +1017,16 @@ func (s *Selector) FootballPickupSnapshot() (lineupapi.BlobStore, error) {
 }
 ```
 
-- [ ] **Step 4: Classification, admin-only, schedule, smoke line**
+- [ ] **Step 4: Verify**
 
-- `cmd/season_gate.go`: add `"football-pickups": {},` after `"football-offers": {},`.
-- `internal/lineupapi/authz.go`: add `"football-pickups": true,` to `leagueWideJobs` beside `football-offers`.
-- `infra/infra.go`, jobs table, after the `FootballOffers` row (positional, on the shared task — no `jobTaskDefs` entry):
+Run: `go test ./internal/statestore/...`
+Expected: PASS (the producer guard is untouched because the snapshot is not yet in `All()`).
 
-```go
-		// Daily pickup digest per league: depth-chart role changes, valued
-		// drops and guillotine chops, from public data only. 15:15 UTC sits
-		// after FootballValues (14:45) has warmed the StatsGuy cache. Its
-		// snapshot pointer (layout.FootballPickupSnapshot) is rewritten every
-		// run, so the Infra tab reads the job's health from that object's age.
-		{"FootballPickups", "cron(15 15 * * ? *)", jsii.Strings("football-pickups"), dailyGap},
-```
-
-- `Makefile` `run-all`, after the `football-offers` line (one tab-indented line):
-
-```make
-	@echo "=== football-pickups --dry-run ===";         if [ -n "$$SLEEPER_LEAGUE_ID" ] && [ -n "$$SLEEPER_USER_ID" ]; then time go run . football-pickups --dry-run; else echo "SKIPPED (SLEEPER_LEAGUE_ID or SLEEPER_USER_ID unset)"; fi && echo
-```
-
-- [ ] **Step 5: Verify**
-
-Run: `go test ./internal/statestore/... ./internal/lineupapi/ -run 'FootballPickups|OpsAlert|PerTenant|Producers|LeagueWide' && go test ./cmd/ -run SeasonGate && (cd infra && go test ./...) && make build-modules && make check-pins && cat -e -t -v Makefile | grep football-pickups`
-Expected: all PASS; the Makefile line shows a leading `^I` and ends in `$` on one line. (`TestSeasonGate_EveryScheduledCommandIsClassified` passes because the policy and the row land together; `go test ./cmd/` compiles even though the command does not exist yet — the policy map is just a map.)
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add cmd/season_gate.go internal/lineupapi/authz.go infra/infra.go Makefile internal/statestore/layout/layout.go internal/statestore/layout/layout_test.go internal/statestore/tenant_test.go internal/statestore/statestore.go
-git commit -m "feat(layout,infra): FootballPickups markers + snapshot pointer; daily FootballPickups schedule; classification, admin-only, run-all gate"
+git add internal/statestore/layout/layout.go internal/statestore/layout/layout_test.go internal/statestore/tenant_test.go internal/statestore/statestore.go
+git commit -m "feat(layout): FootballPickups marker family and the latest.json snapshot pointer"
 ```
 
 ---
@@ -1579,10 +1554,33 @@ func sendFootballPickupAlert(ctx context.Context, title, body string) error {
 
 If `lineupapi.ObjectStore` is not the read-only interface's name (Plan 1's `relogRows` takes `markers lineupapi.ObjectStore`, so it exists), use it as there.
 
-- [ ] **Step 4: Tests, lint, tidy, the depcheck**
+- [ ] **Step 3b: Wiring that must land with the command**
 
-Run: `go test ./cmd/ -run 'AlertPickups|PollPickups|PickupSnapshot|CoverageLine|SeasonGate' -v && go test ./internal/sleeperauth/ && make lint && go mod tidy && git diff --stat go.mod go.sum`
-Expected: PASS (the `sleeperauth` depcheck still passes: this file does not import it); lint clean; go.mod/go.sum unchanged.
+Add `FootballPickupSnapshot` to `layout.All()` (next to `FootballValues`) and, in `internal/statestore/layout/layout_test.go`'s `TestFootballPickups_MarkerFamilyAndSnapshotPointer`, add back the assertion `if !inAll[s.Name] { t.Error("the snapshot pointer must be in All(): it is rewritten daily, so its age IS the job's health") }`; remove `FootballPickupSnapshot` from `tenant_test.go`'s `append(...)` list (it is in `All()` now). Then:
+
+- `cmd/season_gate.go`: add `"football-pickups": {},` after `"football-offers": {},`.
+- `internal/lineupapi/authz.go`: add `"football-pickups": true,` to `leagueWideJobs` beside `football-offers`.
+- `infra/infra.go`, jobs table, after the `FootballOffers` row (positional, on the shared task — no `jobTaskDefs` entry):
+
+```go
+		// Daily pickup digest per league: depth-chart role changes, valued
+		// drops and guillotine chops, from public data only. 15:15 UTC sits
+		// after FootballValues (14:45) has warmed the StatsGuy cache. Its
+		// snapshot pointer (layout.FootballPickupSnapshot) is rewritten every
+		// run, so the Infra tab reads the job's health from that object's age.
+		{"FootballPickups", "cron(15 15 * * ? *)", jsii.Strings("football-pickups"), dailyGap},
+```
+
+- `Makefile` `run-all`, after the `football-offers` line (one tab-indented line):
+
+```make
+	@echo "=== football-pickups --dry-run ===";         if [ -n "$$SLEEPER_LEAGUE_ID" ] && [ -n "$$SLEEPER_USER_ID" ]; then time go run . football-pickups --dry-run; else echo "SKIPPED (SLEEPER_LEAGUE_ID or SLEEPER_USER_ID unset)"; fi && echo
+```
+
+- [ ] **Step 4: Tests, lint, tidy, the guards**
+
+Run: `go test ./cmd/ -run 'AlertPickups|PollPickups|PickupSnapshot|CoverageLine|SeasonGate' -v && go test ./internal/statestore/... ./internal/lineupapi/ -run 'FootballPickups|OpsAlert|PerTenant|Producers|LeagueWide' && go test ./internal/sleeperauth/ && (cd infra && go test ./...) && make build-modules && make check-pins && make lint && go mod tidy && git diff --stat go.mod go.sum && cat -e -t -v Makefile | grep football-pickups`
+Expected: all PASS (season gate: the command is registered and classified and its schedule row exists; producer guard: `FootballPickups` is now a real schedule; the `sleeperauth` depcheck: this file does not import it); lint clean; go.mod/go.sum unchanged; the Makefile line shows a leading `^I` on one line.
 
 - [ ] **Step 5: Live dry-run (operator's `.env` has `SLEEPER_LEAGUE_ID` and `SLEEPER_USER_ID`; no token needed)**
 
@@ -1595,8 +1593,8 @@ Expected on the first run: six profile lines, then `football-pickups: no prior c
 - [ ] **Step 6: Commit**
 
 ```bash
-git add cmd/football_pickups.go cmd/football_pickups_test.go
-git commit -m "feat(football-pickups): daily per-league pickup digest from a day-over-day depth-chart snapshot and completed drops"
+git add cmd/football_pickups.go cmd/football_pickups_test.go cmd/season_gate.go internal/lineupapi/authz.go infra/infra.go Makefile internal/statestore/layout/layout.go internal/statestore/layout/layout_test.go internal/statestore/tenant_test.go
+git commit -m "feat(football-pickups): daily per-league pickup digest; schedule, classification, admin-only, run-all gate"
 ```
 
 ---
@@ -1641,7 +1639,7 @@ git commit -m "docs: football-pickups"
 - Diff against the most recent prior capture; first run baseline → Task 6. ✔
 - Three detectors, pure, in `internal/dynasty` → Task 3. ✔
 - Digest per league, non-empty only, ordering with the operator's rule, unvalued role changes listed, `pushover.Builder` → Task 4. ✔
-- Markers `(league, player, capture date)` / `(league, transaction, player)`; check → send → mark; dry-run neither; kind `waivers` → Tasks 5, 6. ✔
+- Markers `(league, player, capture date)` / `(league, transaction, player)`; check → send → mark; dry-run neither; kind `waivers` → Tasks 5, 6. ✔ (The schedule row, classification, admin-only entry, smoke line and the snapshot's `All()` membership land in Task 6 with the command, because the season-gate test requires a classified command to be registered.)
 - Coverage line unconditional → Task 6. ✔
 - Deferred "best available" not built. ✔
 - Cross-cutting: run-all line, schedule, classification, docs → Tasks 5, 7. ✔
