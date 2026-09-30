@@ -465,3 +465,19 @@ func TestTransaction_ExpiresAtAbsentOrMalformedIsNoExpiry(t *testing.T) {
 		}
 	}
 }
+
+func TestPlayer_DecodesDepthChartAndNullOrder(t *testing.T) {
+	var starter, bench Player
+	if err := json.Unmarshal([]byte(`{"player_id":"1","position":"QB","team":"MIN","depth_chart_position":"QB","depth_chart_order":1}`), &starter); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(`{"player_id":"2","position":"WR","team":"FA","depth_chart_position":null,"depth_chart_order":null}`), &bench); err != nil {
+		t.Fatal(err)
+	}
+	if starter.DepthChartPosition != "QB" || starter.DepthChartOrder == nil || *starter.DepthChartOrder != 1 {
+		t.Errorf("starter = %+v", starter)
+	}
+	if bench.DepthChartPosition != "" || bench.DepthChartOrder != nil {
+		t.Errorf("null order must decode to nil, got %+v", bench)
+	}
+}

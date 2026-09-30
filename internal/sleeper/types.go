@@ -141,6 +141,15 @@ type Player struct {
 	Status           string   `json:"status"`
 	InjuryStatus     string   `json:"injury_status"`
 
+	// DepthChartPosition/DepthChartOrder are Sleeper's editorial depth chart:
+	// the slot name ("QB", "RB", "LWR", "RWR", "SWR", "TE", ...) and 1 for the
+	// starter. Order is a pointer because Sleeper sends null for most of the
+	// pool; nil means "no recorded slot", which the pickups detector treats as
+	// distinct from 2+. Measured 2026-09-21: Drew Lock and Carson Wentz both
+	// read QB/1 the week they were picked up for real FAAB.
+	DepthChartPosition string `json:"depth_chart_position"`
+	DepthChartOrder    *int   `json:"depth_chart_order"`
+
 	// SearchRank is Sleeper's own depth-chart/relevance ranking (lower =
 	// more relevant; undrafted/irrelevant players carry a large sentinel
 	// value). Used as the starter-selection fallback when a roster's
