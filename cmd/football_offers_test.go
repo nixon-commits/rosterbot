@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/dynasty"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/sleeper"
+	"github.com/nixon-commits/rosterbot/internal/sleeperauth"
 	"github.com/nixon-commits/rosterbot/internal/statsguy"
 )
 
@@ -180,5 +182,154 @@ func TestFormatOfferAlert_ThreeTeamOfferNamesEachGiver(t *testing.T) {
 	}
 	if !strings.Contains(body, "Ghost Riders gets: Bijan Robinson") {
 		t.Errorf("body = %q", body)
+	}
+}
+
+func TestFormatOfferAlert_ConsentStateCopy(t *testing.T) {
+	in, _ := offerFixture(t)
+
+	// Two teams: ConsenterIDs [3] is just the proposer's own consent, so
+	// "1 of 2 accepted" would be true of every offer and say nothing.
+	two := offer("o2", nil)
+	sides := dynasty.BuildTradeSides(two, in.players, in.bundle, in.names, in.league.Format)
+	_, body := formatOfferAlert(in.league, 8, two, sides, dynasty.GradeTrade(sides))
+	if !strings.HasSuffix(body, " | waiting on you") || strings.Contains(body, "1 of 2") || strings.Contains(body, "accepted") {
+		t.Errorf("two-team body = %q, want a bare \"waiting on you\"", body)
+	}
+
+	// Three teams: a count is information.
+	three := offer("o3", func(x *sleeper.Transaction) {
+		x.RosterIDs = []int{3, 5, 8}
+		x.Adds = map[string]int{"4984": 8, "9509": 5}
+		x.Drops = map[string]int{"4984": 3, "9509": 8}
+	})
+	in.names[5] = "Ghost Riders"
+	sides = dynasty.BuildTradeSides(three, in.players, in.bundle, in.names, in.league.Format)
+	_, body = formatOfferAlert(in.league, 8, three, sides, dynasty.GradeTrade(sides))
+	if !strings.HasSuffix(body, "1 of 3 accepted, waiting on you") {
+		t.Errorf("three-team body = %q, want \"1 of 3 accepted, waiting on you\"", body)
+	}
+}
+
+func TestVerifyOfferIdentity_MismatchNamesBothIDs(t *testing.T) {
+	if err := verifyOfferIdentity("738883211463155712", "738883211463155712"); err != nil {
+		t.Errorf("matching ids: %v", err)
+	}
+	err := verifyOfferIdentity("111", "222")
+	if err == nil {
+		t.Fatal("a token for another account must fail the run")
+	}
+	if !strings.Contains(err.Error(), "111") || !strings.Contains(err.Error(), "222") {
+		t.Errorf("error %q must name both ids", err)
+	}
+}
+
+func pollLeague(id, name string) leagueContext {
+	return leagueContext{
+		League:  sleeper.League{LeagueID: id, Name: name},
+		Profile: dynasty.LeagueProfile{LeagueID: id, Name: name, Format: "sf_dynasty"},
+	}
+}
+
+// pollHarness records which leagues were loaded and run, and with what.
+type pollHarness struct {
+	loaded []string
+	ran    []string
+	keeps  map[string]int
+}
+
+func (h *pollHarness) run(lc leagueContext, _ leagueOffers, keep []sleeper.Transaction) offerRunResult {
+	h.ran = append(h.ran, lc.League.LeagueID)
+	if h.keeps == nil {
+		h.keeps = map[string]int{}
+	}
+	h.keeps[lc.League.LeagueID] = len(keep)
+	return offerRunResult{Graded: len(keep), Alerted: len(keep)}
+}
+
+func TestPollOffers_UnauthorizedAbortsTheRun(t *testing.T) {
+	h := &pollHarness{}
+	leagues := []leagueContext{pollLeague("A", "Alpha"), pollLeague("B", "Bravo")}
+	var out bytes.Buffer
+	_, _, _, err := pollOffers(context.Background(), leagues, "me", offerNow,
+		func(_ context.Context, lc leagueContext) (leagueOffers, error) {
+			h.loaded = append(h.loaded, lc.League.LeagueID)
+			return leagueOffers{}, sleeperauth.ErrUnauthorized
+		}, h.run, &out)
+	if !errors.Is(err, sleeperauth.ErrUnauthorized) {
+		t.Fatalf("err = %v, want it to wrap ErrUnauthorized", err)
+	}
+	if strings.Join(h.loaded, ",") != "A" {
+		t.Errorf("loaded %v: a rejected token must stop the run before league B is touched", h.loaded)
+	}
+	if len(h.ran) != 0 {
+		t.Errorf("runner called for %v", h.ran)
+	}
+}
+
+func TestPollOffers_OneFailingLeagueDoesNotStopTheOthers(t *testing.T) {
+	h := &pollHarness{}
+	leagues := []leagueContext{pollLeague("A", "Alpha"), pollLeague("B", "Bravo"), pollLeague("C", "Charlie")}
+	var out bytes.Buffer
+	total, found, failed, err := pollOffers(context.Background(), leagues, "me", offerNow,
+		func(_ context.Context, lc leagueContext) (leagueOffers, error) {
+			if lc.League.LeagueID == "B" {
+				return leagueOffers{}, errors.New("sleeper 502")
+			}
+			return leagueOffers{myRoster: 8, offers: []sleeper.Transaction{offer("o-"+lc.League.LeagueID, nil)}}, nil
+		}, h.run, &out)
+	if err != nil {
+		t.Fatalf("err = %v, want nil: a plain league failure is reported through failed", err)
+	}
+	if strings.Join(h.ran, ",") != "A,C" {
+		t.Errorf("runner called for %v, want A,C", h.ran)
+	}
+	if strings.Join(failed, ",") != "Bravo" {
+		t.Errorf("failed = %v, want [Bravo] (league names, not ids)", failed)
+	}
+	if found != 2 {
+		t.Errorf("found = %d, want 2", found)
+	}
+	if total.Graded != 2 || total.Alerted != 2 {
+		t.Errorf("total = %+v, want the healthy leagues' results accumulated", total)
+	}
+}
+
+func TestPollOffers_NoRosterIsSkippedAndSaid(t *testing.T) {
+	h := &pollHarness{}
+	var out bytes.Buffer
+	_, found, failed, err := pollOffers(context.Background(), []leagueContext{pollLeague("A", "Alpha")}, "me", offerNow,
+		func(context.Context, leagueContext) (leagueOffers, error) { return leagueOffers{myRoster: 0}, nil },
+		h.run, &out)
+	if err != nil || len(failed) != 0 || found != 0 {
+		t.Errorf("err=%v failed=%v found=%d", err, failed, found)
+	}
+	if len(h.ran) != 0 {
+		t.Errorf("runner called for %v: there is nothing to grade without a roster", h.ran)
+	}
+	if !strings.Contains(out.String(), "no roster owned by me") {
+		t.Errorf("out = %q, want the skip line", out.String())
+	}
+}
+
+func TestPollOffers_CoverageLinePrintsTheZeroCase(t *testing.T) {
+	h := &pollHarness{}
+	var out bytes.Buffer
+	_, found, _, err := pollOffers(context.Background(), []leagueContext{pollLeague("A", "Alpha")}, "me", offerNow,
+		func(context.Context, leagueContext) (leagueOffers, error) { return leagueOffers{myRoster: 8}, nil },
+		h.run, &out)
+	if err != nil || found != 0 {
+		t.Errorf("err=%v found=%d", err, found)
+	}
+	for _, want := range []string{"Alpha", "0 proposed for roster 8", "0 to me and live"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("out = %q, missing %q", out.String(), want)
+		}
+	}
+	// The runner IS called with an empty keep: a league with nothing live still
+	// flows through the same path, and is what makes the zero case a counted
+	// result rather than a special branch.
+	if strings.Join(h.ran, ",") != "A" || h.keeps["A"] != 0 {
+		t.Errorf("ran=%v keeps=%v, want runner called once for A with an empty keep", h.ran, h.keeps)
 	}
 }

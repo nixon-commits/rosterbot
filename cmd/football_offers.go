@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -63,8 +64,8 @@ func runFootballOffers(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("sleeper identity check: %w", err)
 	}
-	if uid != cfg.SleeperUserID {
-		return fmt.Errorf("SLEEPER_TOKEN belongs to Sleeper user %s but SLEEPER_USER_ID is %s: the token is from another account, or the user id is wrong", uid, cfg.SleeperUserID)
+	if err := verifyOfferIdentity(uid, cfg.SleeperUserID); err != nil {
+		return err
 	}
 	fmt.Printf("football-offers: token verified for user %s\n", uid)
 
@@ -93,51 +94,29 @@ func runFootballOffers(cmd *cobra.Command, args []string) error {
 	}
 	now := time.Now().UTC()
 
-	var (
-		failed []string
-		total  offerRunResult
-		found  int
+	total, found, failed, err := pollOffers(ctx, leagues, cfg.SleeperUserID, now,
+		func(ctx context.Context, lc leagueContext) (leagueOffers, error) {
+			return loadLeagueOffers(ctx, sc, auth, cfg.SleeperUserID, lc.League.LeagueID)
+		},
+		func(lc leagueContext, li leagueOffers, keep []sleeper.Transaction) offerRunResult {
+			return gradeAndAlertOffers(ctx, offerRunInputs{
+				markers:  markers,
+				now:      now,
+				offers:   keep,
+				myRoster: li.myRoster,
+				players:  players,
+				bundle:   bundle,
+				names:    li.names,
+				league:   lc.Profile,
+				dryRun:   dryRun,
+				send:     func(title, body string) error { return sendFootballOfferAlert(ctx, title, body) },
+				out:      os.Stdout,
+			})
+		},
+		os.Stdout,
 	)
-	for _, lc := range leagues {
-		li, err := loadLeagueOffers(ctx, sc, auth, cfg.SleeperUserID, lc.League.LeagueID)
-		if err != nil {
-			if errors.Is(err, sleeperauth.ErrUnauthorized) {
-				// Every league would fail the same way; fail the run so ops
-				// alerting sees a real outage rather than six warnings.
-				return fmt.Errorf("football-offers: %s: %w", lc.League.Name, err)
-			}
-			warn("football-offers: %s: %v (continuing with the other leagues)", lc.League.Name, err)
-			failed = append(failed, lc.League.Name)
-			continue
-		}
-		if li.myRoster == 0 {
-			fmt.Printf("football-offers: %s: no roster owned by %s; skipped\n", lc.League.Name, cfg.SleeperUserID)
-			continue
-		}
-		keep, expired, answered := selectOffers(li.offers, li.myRoster, cfg.SleeperUserID, now)
-		found += len(li.offers)
-		total.Expired += expired
-		total.Answered += answered
-		// Unconditional coverage line, zero case included: a league with no
-		// offers and a query that returns nothing look identical without it.
-		fmt.Printf("football-offers: %s: %d proposed for roster %d, %d to me and live\n", lc.League.Name, len(li.offers), li.myRoster, len(keep))
-
-		res := gradeAndAlertOffers(ctx, offerRunInputs{
-			markers:  markers,
-			now:      now,
-			offers:   keep,
-			myRoster: li.myRoster,
-			players:  players,
-			bundle:   bundle,
-			names:    li.names,
-			league:   lc.Profile,
-			dryRun:   dryRun,
-			send:     func(title, body string) error { return sendFootballOfferAlert(ctx, title, body) },
-			out:      os.Stdout,
-		})
-		total.Graded += res.Graded
-		total.Alerted += res.Alerted
-		total.Skipped += res.Skipped
+	if err != nil {
+		return err
 	}
 
 	fmt.Printf("football-offers: %d league(s), %d proposed, %d already alerted, %d expired, %d already answered, %d graded, %d sent\n",
@@ -146,6 +125,66 @@ func runFootballOffers(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("football-offers: %d of %d league(s) failed: %s", len(failed), len(leagues), strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// verifyOfferIdentity compares the Sleeper user the token authenticates as
+// against SLEEPER_USER_ID. Split out of runFootballOffers (which calls
+// initFootball, sleeperauth.FromEnv and statestore.FromEnv and so cannot be
+// driven from a test) so that dropping the comparison fails a test rather than
+// quietly turning a wrong-account token into a run that is green forever.
+func verifyOfferIdentity(got, want string) error {
+	if got != want {
+		return fmt.Errorf("SLEEPER_TOKEN belongs to Sleeper user %s but SLEEPER_USER_ID is %s: the token is from another account, or the user id is wrong", got, want)
+	}
+	return nil
+}
+
+// offerLoader fetches one league's offer inputs.
+type offerLoader func(ctx context.Context, lc leagueContext) (leagueOffers, error)
+
+// offerRunner grades and alerts one league's kept offers.
+type offerRunner func(lc leagueContext, li leagueOffers, keep []sleeper.Transaction) offerRunResult
+
+// pollOffers runs load -> select -> run for every league: the extracted body of
+// runFootballOffers' loop, on pollLeagues' precedent, so the four rules that
+// live in it are asserted rather than read.
+//
+//   - ErrUnauthorized aborts the run at once and no further league is loaded:
+//     every league would fail the same way, and six warnings read as six
+//     problems where there is one.
+//   - Any other load error is warned, names the league in failed, and the
+//     loop continues, so one league's hiccup never silences the rest.
+//   - A league where the operator owns no roster prints a skip line.
+//   - Every other league prints the coverage line unconditionally, zero case
+//     included: a league with no offers and a query that returns nothing look
+//     identical without it.
+func pollOffers(ctx context.Context, leagues []leagueContext, myUserID string, now time.Time, load offerLoader, run offerRunner, out io.Writer) (total offerRunResult, found int, failed []string, err error) {
+	for _, lc := range leagues {
+		li, lerr := load(ctx, lc)
+		if lerr != nil {
+			if errors.Is(lerr, sleeperauth.ErrUnauthorized) {
+				return total, found, failed, fmt.Errorf("football-offers: %s: %w", lc.League.Name, lerr)
+			}
+			warn("football-offers: %s: %v (continuing with the other leagues)", lc.League.Name, lerr)
+			failed = append(failed, lc.League.Name)
+			continue
+		}
+		if li.myRoster == 0 {
+			fmt.Fprintf(out, "football-offers: %s: no roster owned by %s; skipped\n", lc.League.Name, myUserID)
+			continue
+		}
+		keep, expired, answered := selectOffers(li.offers, li.myRoster, myUserID, now)
+		found += len(li.offers)
+		total.Expired += expired
+		total.Answered += answered
+		fmt.Fprintf(out, "football-offers: %s: %d proposed for roster %d, %d to me and live\n", lc.League.Name, len(li.offers), li.myRoster, len(keep))
+
+		res := run(lc, li, keep)
+		total.Graded += res.Graded
+		total.Alerted += res.Alerted
+		total.Skipped += res.Skipped
+	}
+	return total, found, failed, nil
 }
 
 // leagueOffers is one league's inputs: the operator's roster id there (0 when
@@ -187,29 +226,20 @@ func loadLeagueOffers(ctx context.Context, sc *sleeper.Client, auth *sleeperauth
 // proposed offer produced no alert.
 func selectOffers(txns []sleeper.Transaction, myRoster int, myUserID string, now time.Time) (keep []sleeper.Transaction, expired, answered int) {
 	for _, t := range txns {
-		if t.Type != "trade" || t.Status != "proposed" || t.Creator == myUserID || !containsInt(t.RosterIDs, myRoster) {
+		if t.Type != "trade" || t.Status != "proposed" || t.Creator == myUserID || !slices.Contains(t.RosterIDs, myRoster) {
 			continue
 		}
 		if exp, ok := t.ExpiresAt(); ok && !exp.After(now) {
 			expired++
 			continue
 		}
-		if containsInt(t.ConsenterIDs, myRoster) {
+		if slices.Contains(t.ConsenterIDs, myRoster) {
 			answered++ // I already accepted; it is waiting on someone else
 			continue
 		}
 		keep = append(keep, t)
 	}
 	return keep, expired, answered
-}
-
-func containsInt(xs []int, x int) bool {
-	for _, v := range xs {
-		if v == x {
-			return true
-		}
-	}
-	return false
 }
 
 // offerRunInputs is everything gradeAndAlertOffers needs for ONE league, with
@@ -329,9 +359,11 @@ func formatOfferAlert(league dynasty.LeagueProfile, myRoster int, txn sleeper.Tr
 	if exp, ok := txn.ExpiresAt(); ok {
 		parts = append(parts, "expires "+exp.Format("2006-01-02 15:04 UTC"))
 	}
-	accepted := len(txn.ConsenterIDs)
-	if accepted > 0 {
-		parts = append(parts, fmt.Sprintf("%d of %d accepted, waiting on you", accepted, len(txn.RosterIDs)))
+	// ConsenterIDs includes the proposer's own consent, so in a two-team offer
+	// "1 of 2 accepted" is always true and says nothing; only a multi-team offer
+	// has a consent count worth naming.
+	if len(txn.RosterIDs) > 2 {
+		parts = append(parts, fmt.Sprintf("%d of %d accepted, waiting on you", len(txn.ConsenterIDs), len(txn.RosterIDs)))
 	} else {
 		parts = append(parts, "waiting on you")
 	}
