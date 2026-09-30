@@ -3,6 +3,7 @@ package fantrax
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,6 +35,30 @@ var mlbBackfillHTTPTimeout = 15 * time.Second
 // mlbBackfillBackoff is the pause before each RETRY, so len+1 is the attempt
 // budget. A var so tests need not sleep.
 var mlbBackfillBackoff = []time.Duration{time.Second, 4 * time.Second}
+
+// mlbBackfillFailureBudget is how many CONSECUTIVE fetches may exhaust their
+// retries before the pass gives up on the endpoint entirely.
+//
+// The 15s ceiling bounds a REQUEST and the retry makes one blip survivable,
+// but neither bounds the RUN: against a persistently dead statsapi every fetch
+// costs the whole attempt budget (~50s), and a render makes ~600 of them, so
+// the job would grind for hours and still produce a useless render. That is
+// the rosterbot-5zp1 hang wearing a third hat, and it is the cost ceiling the
+// retry commit flagged for review.
+//
+// Only EXHAUSTED failures count, never a durable 4xx: statsapi answers an
+// unknown player immediately and no number of attempts changes that, so a
+// roster carrying several unknown players in a row is a data problem, not an
+// outage, and must not fail the render. The counter resets on every success,
+// so an intermittently flaky endpoint still completes the pass.
+const mlbBackfillFailureBudget = 5
+
+// errBackfillAbandoned is the verdict that the endpoint, not the roster, is
+// the problem. It fails the run rather than degrading quietly: abandoned
+// players render as zero FPts on days they actually played, and recap-site
+// publishes what it renders, so a quiet degrade would put wrong numbers on a
+// public page.
+var errBackfillAbandoned = errors.New("mlb backfill abandoned: statsapi unreachable")
 
 // resolveBackfillNames maps Fantrax player names → MLBAM IDs for the
 // backfill. Indirected through a var so tests can inject a deterministic
@@ -137,7 +162,8 @@ func (c *Client) backfillDailyFPts(days []DayRoster) (backfillStats, error) {
 		return stats, fmt.Errorf("pitcher scoring weights: %w", err)
 	}
 
-	for _, t := range targets {
+	exhaustedInARow := 0
+	for i, t := range targets {
 		mlbID, ok := resolved.ByName[playername.Normalize(t.Name)]
 		if !ok || mlbID == 0 {
 			stats.Unresolved++
@@ -151,8 +177,21 @@ func (c *Client) backfillDailyFPts(days []DayRoster) (backfillStats, error) {
 		if err != nil {
 			stats.FetchFailed++
 			stats.LastFetchErr = err
+			if !errors.Is(err, errRetryExhausted) {
+				// A durable answer about ONE player says nothing about the
+				// endpoint's health, so it must not move the budget.
+				continue
+			}
+			exhaustedInARow++
+			if exhaustedInARow >= mlbBackfillFailureBudget {
+				stats.Abandoned = len(targets) - (i + 1)
+				fmt.Fprintln(os.Stderr, stats.String())
+				return stats, fmt.Errorf("%w: %d consecutive fetches exhausted their retries (last: %w)",
+					errBackfillAbandoned, exhaustedInARow, err)
+			}
 			continue
 		}
+		exhaustedInARow = 0
 		fpts, hadGame := computeFPtsFromGameLog(log, t.Date, t.IsPitcher, hitterWeights, pitcherWeights)
 		days[t.DayIdx].Players[t.PlayerIdx].FPts = fpts
 		days[t.DayIdx].Players[t.PlayerIdx].HadGame = hadGame
@@ -182,6 +221,7 @@ type backfillStats struct {
 	NoGame      int
 	Unresolved  int // name → MLBAM ID lookup produced nothing; no request was made
 	FetchFailed int // had an ID, but the game-log request failed
+	Abandoned   int // never attempted: the failure budget tripped first
 
 	// LastFetchErr is reported alongside the counts so a fetch failure names its
 	// cause instead of only its count.
@@ -191,6 +231,9 @@ type backfillStats struct {
 func (s backfillStats) String() string {
 	msg := fmt.Sprintf("mlb backfill: %d flagged, %d resolved, %d no-game, %d unresolved-name, %d fetch-failed",
 		s.Flagged, s.Resolved, s.NoGame, s.Unresolved, s.FetchFailed)
+	if s.Abandoned > 0 {
+		msg += fmt.Sprintf(", %d abandoned", s.Abandoned)
+	}
 	if s.LastFetchErr != nil {
 		msg += fmt.Sprintf(" (last fetch error: %v)", s.LastFetchErr)
 	}

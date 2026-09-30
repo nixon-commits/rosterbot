@@ -158,6 +158,20 @@ func (s *Syncer) Up(ctx context.Context, bucket, prefix, localDir string, opts U
 	if !opts.Delete {
 		return nil
 	}
+	// An EMPTY upload set never authorizes a delete pass. The reconciliation
+	// below calls every remote object an orphan, so mirroring a directory that
+	// produced no keys erases the whole prefix — and that directory is easy to
+	// produce by accident: recap-site creates ./dist with MkdirAll before it
+	// fetches anything, and entrypoint.sh runs sync_up regardless of the
+	// command's exit code, so ANY failed render published an empty mirror over
+	// the live site (rosterbot-5zp1; measured against the fake, 3 objects in,
+	// 0 out). A render with nothing in it is a failure to publish, never an
+	// instruction to unpublish, so the safe reading of zero keys is "say so and
+	// change nothing" rather than "the site is now empty".
+	if len(uploaded) == 0 {
+		return fmt.Errorf("refusing to mirror %s into %s/%s with --delete: it produced no files, which would delete every object under that prefix",
+			localDir, bucket, prefix)
+	}
 	return s.deleteOrphans(ctx, bucket, prefix, uploaded)
 }
 
