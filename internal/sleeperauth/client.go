@@ -76,13 +76,17 @@ func New(token string) *Client {
 	return &Client{http: &http.Client{Timeout: 20 * time.Second}, token: token}
 }
 
-// String returns a redacted representation of the client.
-func (c *Client) String() string {
+// String returns a redacted representation of the client. The receiver is a
+// VALUE, not a pointer, so formatting a dereferenced Client (which only has
+// the value method set) cannot fall through to reflection and print the
+// unexported token.
+func (c Client) String() string {
 	return "sleeperauth.Client{token: [redacted]}"
 }
 
 // GoString returns a redacted representation of the client for %#v formatting.
-func (c *Client) GoString() string {
+// Value receiver for the same reason as String.
+func (c Client) GoString() string {
 	return c.String()
 }
 
@@ -124,7 +128,9 @@ func (e gqlError) String() string {
 // the status only (the body is dropped — Sleeper sometimes answers with an
 // HTML page, and a body is the one place a token could be echoed back);
 // other GraphQL errors are joined into one error naming each path and
-// message. The token is never formatted into anything.
+// message. The token is never formatted into anything, and server-supplied
+// errors[] text is redacted (the token replaced with [redacted]) before it
+// reaches an error, in case the server echoes the Authorization header back.
 func (c *Client) Query(ctx context.Context, doc string, vars map[string]any, out any) error {
 	payload := map[string]any{"query": doc}
 	if vars != nil {

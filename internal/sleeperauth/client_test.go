@@ -169,11 +169,17 @@ func TestQuery_ServerEchoedTokenInGraphQLMessageIsRedacted(t *testing.T) {
 
 func TestClient_FormattingNeverPrintsTheToken(t *testing.T) {
 	c := New(testToken)
+	// Both the pointer and the dereferenced value: the stringers have value
+	// receivers, so a copied Client cannot print the unexported token either.
 	for _, s := range []string{
 		fmt.Sprint(c),
 		fmt.Sprintf("%v", c),
 		fmt.Sprintf("%+v", c),
 		fmt.Sprintf("%#v", c),
+		fmt.Sprint(*c),
+		fmt.Sprintf("%v", *c),
+		fmt.Sprintf("%+v", *c),
+		fmt.Sprintf("%#v", *c),
 	} {
 		if strings.Contains(s, testToken) {
 			t.Fatalf("formatted client contains token: %q", s)
