@@ -92,8 +92,11 @@ func gateReferenceDate(pol seasonPolicy, today time.Time) time.Time {
 // carries a Ref: their default window is the last COMPLETED matchup week, and
 // the Monday-after-the-final case #216 left standing (rosterbot-asy7) is
 // reached with the --dates / --week escape both of them declare. That is the
-// dividing line for Ref — grade and gs-check have no such flag, so their
-// scheduled run is the only writer there will ever be.
+// dividing line for Ref — grade's and gs-check's scheduled runs are the only
+// writers there will ever be, since a missed morning cannot be rescheduled.
+// gs-check's --period is the recovery path for exactly that missed morning
+// (rosterbot-97gs): an explicit weekly period, registered here so the gate
+// treats it as the explicit window it is, off-season included.
 //
 // An unclassified command is never gated (fail open); the test
 // TestSeasonGate_EveryScheduledCommandIsClassified is what catches the
@@ -104,7 +107,7 @@ var seasonPolicies = map[string]seasonPolicy{
 	"grade":     {InSeasonOnly: true, Ref: refYesterday, ExplicitFlags: []string{"dates"}},
 	"shadow":    {InSeasonOnly: true, ExplicitFlags: []string{"dates"}},
 	"recap":     {InSeasonOnly: true, ExplicitFlags: []string{"dates", "week"}},
-	"gs-check":  {InSeasonOnly: true, Ref: refYesterday},
+	"gs-check":  {InSeasonOnly: true, Ref: refYesterday, ExplicitFlags: []string{"period"}},
 	"waivers":   {InSeasonOnly: true},
 	"prospects": {InSeasonOnly: true},
 

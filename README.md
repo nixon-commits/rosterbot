@@ -175,6 +175,9 @@ rosterbot transactions --dry-run
 # League-wide games-started violation check (most recently completed period)
 rosterbot gs-check --dry-run
 
+# Check one specific weekly period on any later day (recovers a missed morning run, off-season too)
+rosterbot gs-check --dry-run --period 25
+
 # Print the league's stat → fantasy-point weights
 rosterbot scoring
 
@@ -182,7 +185,7 @@ rosterbot scoring
 rosterbot version-check
 ```
 
-`gs-check` needs `GS_TRACKING_ENABLED=true` plus Pushover credentials; it's a clean no-op when tracking is off.
+`gs-check` needs `GS_TRACKING_ENABLED=true` plus Pushover credentials; it's a clean no-op when tracking is off. Its subject is the period that ended **yesterday**, so the season's final period is checkable on exactly one day — the first off-season morning — which the season gate judges on yesterday for this command (and for `grade`) so that run still happens; `--period N` names any weekly period explicitly for a later recovery.
 
 `version-check` exits non-zero on a confirmed `STALE_CLIENT` rejection — an inconclusive probe (transport error, unrecognized response) exits 0 with a warning rather than raising a second alert for a Fantrax outage that every other scheduled job already pages through.
 
@@ -352,6 +355,7 @@ rosterbot recap --week 23 --out /tmp/round1.html   # --week N is the league's we
 # Durable daily snapshot of ephemeral upstream data (HKB, projections, Savant, prospects)
 rosterbot archive --dry-run                         # fetch + print sizes, write nothing
 rosterbot archive                                   # capture today (the only date it can capture)
+# every run ends with `archive: wrote N/M sources (...)`; a lost source is named and fails the run
 
 # Append today's per-team aggregate HKB dynasty value to the Team Value Store
 # (broken out hitter/pitcher × MLB/minors; the series accumulates forward, one point per day)
@@ -585,7 +589,7 @@ Optional:
 | `PROSPECT_MIN_GAMES` | `8` | Minimum games for prospect breakout eligibility. |
 | `PROSPECT_RANK_CACHE_HOURS` | `168` | Hours to cache prospect rankings. |
 | `PROSPECT_UPGRADE_RANK_THRESHOLD` | `20` | Prospect rank threshold for upgrade alerts. |
-| `ROSTERBOT_SEASON_GATE` | — | `off` disables the off-season gate. Outside the fantasy season, in-season-only commands (`optimize`, `backtest`, `grade`, `shadow`, `recap`, `recap-site`, `gs-check`, `waivers`, `prospects`) print one line and exit 0 with run outcome `off_season` unless given an explicit `--dates`/`--week`; year-round commands are unaffected. `make run-all` sets it. |
+| `ROSTERBOT_SEASON_GATE` | — | `off` disables the off-season gate. Outside the fantasy season, in-season-only commands (`optimize`, `backtest`, `grade`, `shadow`, `recap`, `gs-check`, `waivers`, `prospects`) print one line and exit 0 with run outcome `off_season` unless given an explicit `--dates`/`--week`/`--period`; year-round commands are unaffected. `grade` and `gs-check` describe yesterday, so the gate judges them on yesterday: the morning after the final still runs, the day after is gated. `make run-all` sets it. |
 | `PUSHOVER_USER_KEY` | — | Personal **operator** channel (connect blocked, stale-cache fallback, GS limit fetch failure, projection status) — and the target of fantasy dual-send while `PUSHOVER_FANTASY_DUAL_SEND` is set. Retained permanently. |
 | `PUSHOVER_GROUP_KEY` | — | Group channel (league-wide GS violation broadcast). Retained permanently — league mates without the app are unreachable by APNs. |
 | `PUSHOVER_API_TOKEN` | — | Pushover application token — shared by every Pushover send, baseball or football. |

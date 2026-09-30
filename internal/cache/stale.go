@@ -40,10 +40,43 @@ var StaleMarkers StaleMarkerStore
 // rather than re-reading a multi-megabyte cached payload just to date it.
 func staleMarkerKey(cacheKey string) string { return "stale-" + cacheKey }
 
-// episodeID identifies one continuous run of staleness by the timestamp of the
-// copy being served. It changes the moment a fresh fetch lands, so a later
-// outage is a new episode and alerts again on its own.
-func episodeID(fetchedAt time.Time) string { return fetchedAt.UTC().Format(time.RFC3339) }
+// episodeID identifies one alertable episode of staleness: the timestamp of
+// the copy being served, plus the ET calendar day of the run.
+//
+// The stamp is the edge — it changes the moment a fresh fetch lands, so a
+// later outage is a new episode and alerts again on its own. The day is the
+// FLOOR (rosterbot-jyt0.6). With the stamp alone, a source that kept failing
+// served the same frozen copy with the same fetched_at forever, so the
+// episode never changed and the marker's compare-on-change suppressed every
+// run after the first: one alert per key per outage, then permanent silence.
+// Verified at source during the 2026-09-26 FanGraphs 403. And because
+// loadAnyAt ignores TTL, the frozen copy is served indefinitely, so the
+// failure could never escalate to a hard error either — a 403 returning in
+// the winter would carry a frozen 2026 copy into the 2027 opener unannounced.
+// Adding the ET day keeps same-day repeats suppressed (the August flood was
+// 104 same-day pushes) while a source still failing tomorrow pushes once
+// more tomorrow.
+//
+// ET, not UTC: the scheduled runs and every other daily boundary in the tree
+// are anchored to the ET calendar, and a UTC boundary would re-push the
+// 20:00 ET run as "tomorrow".
+func episodeID(fetchedAt, now time.Time) string {
+	return fetchedAt.UTC().Format(time.RFC3339) + "|" + now.In(etLocation).Format("2006-01-02")
+}
+
+// etLocation is the day-boundary zone for episodeID. A load failure (no tzdata)
+// falls back to UTC — a boundary a few hours off is a worse day-split, not a
+// worse alert, and this is a stdlib-only leaf that must not panic over it.
+var etLocation = func() *time.Location {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}()
+
+// staleNow is the stale path's clock, a var so tests can step the ET day.
+var staleNow = time.Now
 
 // staleMarker builds a *Marker over the current StaleMarkers store, routing
 // its degrade warnings to stderr with the same "warning: stale-alert " prefix
@@ -61,7 +94,8 @@ func staleMarker() *alertmarker.Marker {
 // marker written before a failed send would suppress an alert that never went
 // out. Every marker-store failure therefore degrades to a DUPLICATE alert, and
 // never to silence.
-func reportStale(key string, fetchedAt time.Time, age time.Duration, cause error) {
+func reportStale(key string, fetchedAt, now time.Time, cause error) {
+	age := now.Sub(fetchedAt)
 	if Notify == nil {
 		return
 	}
@@ -76,7 +110,7 @@ func reportStale(key string, fetchedAt time.Time, age time.Duration, cause error
 	}
 
 	marker := staleMarkerKey(key)
-	episode := []byte(episodeID(fetchedAt))
+	episode := []byte(episodeID(fetchedAt, now))
 
 	_, _ = staleMarker().SendOnChange(context.Background(), marker, episode, func() error {
 		Notify("⚠️ Stale cache", fmt.Sprintf("Serving stale %s — %s old (%v)", key, roundAge(age), cause))
