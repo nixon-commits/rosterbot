@@ -88,15 +88,21 @@ func gateReferenceDate(pol seasonPolicy, today time.Time) time.Time {
 // projection-site, the other retrospective renderer, not beside the
 // winter-moving feeds (rosterbot-yqb9).
 //
-// backtest and recap are week-relative rather than day-relative, so neither
-// carries a Ref: their default window is the last COMPLETED matchup week, and
-// the Monday-after-the-final case #216 left standing (rosterbot-asy7) is
-// reached with the --dates / --week escape both of them declare. That is the
-// dividing line for Ref — grade's and gs-check's scheduled runs are the only
-// writers there will ever be, since a missed morning cannot be rescheduled.
-// gs-check's --period is the recovery path for exactly that missed morning
-// (rosterbot-97gs): an explicit weekly period, registered here so the gate
-// treats it as the explicit window it is, off-season included.
+// backtest and recap carry no Ref because Ref answers a question they do not
+// have: which SINGLE day does this run's work fall on. Their unit is a whole
+// completed matchup week, so neither today nor yesterday is the right day to
+// judge them by, and #216 accepted their Monday-after-the-final case
+// deliberately (rosterbot-asy7).
+//
+// Escape flags are a SEPARATE axis — recoverability, not classification — and
+// earlier versions of this comment conflated the two, claiming grade and
+// gs-check had no flag and that a missed morning could not be rescheduled.
+// Both halves were wrong: grade has always declared --dates, and gs-check
+// gained --period in rosterbot-97gs precisely so a missed final-period morning
+// is recoverable without ROSTERBOT_SEASON_GATE=off. Of the in-season-only
+// commands only waivers and prospects declare no escape at all. Ref is not
+// about whether a run can be redone by hand; it is what makes the SCHEDULED
+// run land on the right day, so nobody has to notice it did not.
 //
 // An unclassified command is never gated (fail open); the test
 // TestSeasonGate_EveryScheduledCommandIsClassified is what catches the
