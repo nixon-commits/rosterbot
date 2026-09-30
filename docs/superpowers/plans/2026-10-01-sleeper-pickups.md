@@ -641,7 +641,7 @@ git commit -m "feat(dynasty): pickup detectors — role change, valued drop, gui
   - `func PickupItems(captureDate string, chops []Chop, drops []DroppedPlayer, roles []RoleChange) []PickupItem` — renders one item per drop and role change, and ONE item per chop **player** (so each player is marked individually) with the chop's roster on the line.
   - `func pickupRank(it PickupItem, superflex bool) (tier int, value int)` — **operator-written**; lower tier first, then higher value first.
   - `func OrderPickups(items []PickupItem, superflex bool) []PickupItem` — stable sort by `pickupRank`.
-  - `func FormatPickupDigest(profile LeagueProfile, items []PickupItem) (title, body string)` — `pushover.Builder`, whole lines.
+  - `func FormatPickupDigest(profile LeagueProfile, items []PickupItem) (title, body string, shown int)` — `pushover.Builder`, whole lines, STOPS at the first line that does not fit (so rank order is preserved and "…and N more" means the N lowest-ranked) and returns how many items it showed; the caller marks only those.
 
 **⚠ Operator contribution.** `pickupRank` decides how a valued drop ranks against an unvalued role change (the spec reserves it). The executor prepares the stub and STOPS before Step 3 for the operator's choice; a suggested default is included so the task can proceed if the operator approves it as-is.
 
@@ -1156,6 +1156,32 @@ func TestAlertPickups_NilMarkersStillSends(t *testing.T) {
 	}
 }
 
+func TestAlertPickups_RefusedTailIsNotMarked(t *testing.T) {
+	in, sent := pickupAlertFixture(t)
+	var many []dynasty.PickupItem
+	for i := 0; i < 40; i++ {
+		many = append(many, dynasty.PickupItem{Kind: "drop", Key: "drop-t-" + strings.Repeat("p", 1) + string(rune('a'+i%26)) + string(rune('a'+i/26)), PlayerID: "p", Line: strings.Repeat("x", 60), Value: 100 - i, Priced: true})
+	}
+	in.items = many
+	res := alertPickups(context.Background(), in)
+	if res.Sent != 1 || len(*sent) != 1 {
+		t.Fatalf("res=%+v", res)
+	}
+	marked := 0
+	for _, it := range many {
+		if _, found, _ := in.markers.Get(context.Background(), "L1-"+it.Key); found {
+			marked++
+		}
+	}
+	if marked == 0 || marked == len(many) {
+		t.Errorf("marked %d of %d: an overflowing digest must mark only the items it carried, so the tail alerts next run", marked, len(many))
+	}
+	// The first (highest-ranked) items are the marked ones.
+	if _, found, _ := in.markers.Get(context.Background(), "L1-"+many[0].Key); !found {
+		t.Error("the top-ranked item was shown and must be marked")
+	}
+}
+
 func TestAlertPickups_EmptyItemsSendsNothing(t *testing.T) {
 	in, sent := pickupAlertFixture(t)
 	in.items = nil
@@ -1512,8 +1538,9 @@ type pickupAlertInputs struct {
 }
 
 // alertPickups sends ONE digest per league carrying only the items with no
-// marker, then marks each of them: check -> send -> mark. A failed send marks
-// nothing; a marker-write failure degrades to a repeat next run.
+// marker, then marks the items the digest showed: check -> send -> mark. A
+// failed send marks nothing; a marker-write failure degrades to a repeat next
+// run; an item the digest could not fit stays unmarked for the next run.
 func alertPickups(ctx context.Context, in pickupAlertInputs) pickupRunResult {
 	var res pickupRunResult
 	m := alertmarker.New(in.markers, alertmarker.WithLogf(func(format string, args ...any) {
@@ -1530,7 +1557,7 @@ func alertPickups(ctx context.Context, in pickupAlertInputs) pickupRunResult {
 	if len(fresh) == 0 {
 		return res
 	}
-	title, body := dynasty.FormatPickupDigest(in.league, fresh)
+	title, body, shown := dynasty.FormatPickupDigest(in.league, fresh)
 	fmt.Fprintln(in.out, title)
 	fmt.Fprintln(in.out, body)
 	if in.dryRun {
@@ -1541,7 +1568,11 @@ func alertPickups(ctx context.Context, in pickupAlertInputs) pickupRunResult {
 		return res
 	}
 	res.Sent = 1
-	for _, it := range fresh {
+	// Mark ONLY the items the digest actually carried. A line the digest
+	// refused for space is still unmarked, so it leads the next run's digest
+	// instead of being muted forever -- the silent-loss failure this repo's
+	// check -> send -> mark rule exists to prevent.
+	for _, it := range fresh[:shown] {
 		m.Record(in.league.LeagueID+"-"+it.Key, []byte(it.Line))
 	}
 	return res
