@@ -1,6 +1,8 @@
 package dynasty
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,5 +72,58 @@ func TestBuildPlayerSnapshot_RecordsWhetherDepthDataExists(t *testing.T) {
 	snap2 := BuildPlayerSnapshot(now, players2, map[string]bool{"QB": true, "RB": true})
 	if !snap2.HasDepthData {
 		t.Errorf("HasDepthData should be true when at least one order > 0")
+	}
+}
+
+// HasDepthData describes the snapshot's contents, so a player the filter
+// dropped must not set it: here the only order-1 player is a kicker the
+// league cannot roster.
+func TestBuildPlayerSnapshot_DepthFlagIgnoresFilteredPlayers(t *testing.T) {
+	now := time.Date(2026, 10, 1, 15, 15, 0, 0, time.UTC)
+	players := map[string]sleeper.Player{
+		"1": {PlayerID: "1", FirstName: "Some", LastName: "Kicker", Position: "K", Team: "CHI", DepthChartOrder: intp(1)},
+		"2": {PlayerID: "2", FirstName: "No", LastName: "Order", Position: "WR", Team: "DET", DepthChartOrder: nil},
+	}
+	snap := BuildPlayerSnapshot(now, players, map[string]bool{"QB": true, "RB": true, "WR": true, "TE": true})
+	if len(snap.Players) != 1 {
+		t.Fatalf("players = %v", snap.Players)
+	}
+	if snap.HasDepthData {
+		t.Error("an excluded player's depth order must not set HasDepthData")
+	}
+}
+
+// The snapshot is archived forever (~2,500 rows a day), so the wire format is
+// compact — zero-valued optional fields are omitted — and always UTC, however
+// the caller's clock is zoned.
+func TestPlayerSnapshot_WireFormatIsCompactAndUTC(t *testing.T) {
+	edt := time.FixedZone("EDT", -4*3600)
+	now := time.Date(2026, 10, 1, 11, 15, 0, 0, edt)
+	players := map[string]sleeper.Player{
+		"1": {PlayerID: "1", FirstName: "Deep", LastName: "Bench", Position: "WR", Team: "DET", DepthChartOrder: nil},
+	}
+	snap := BuildPlayerSnapshot(now, players, map[string]bool{"WR": true})
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		CapturedAt string                     `json:"captured_at"`
+		Players    map[string]json.RawMessage `json:"players"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(wire.CapturedAt, "Z") {
+		t.Errorf("captured_at = %q, want a UTC timestamp ending in Z", wire.CapturedAt)
+	}
+	var row map[string]any
+	if err := json.Unmarshal(wire.Players["1"], &row); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"depth_chart_order", "injury_status"} {
+		if _, present := row[key]; present {
+			t.Errorf("%s should be omitted for a player with none: %s", key, wire.Players["1"])
+		}
 	}
 }

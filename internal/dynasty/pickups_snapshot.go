@@ -94,8 +94,7 @@ func BuildPlayerSnapshot(now time.Time, players map[string]sleeper.Player, posit
 }
 
 // PlayerDisplayName is the one spelling of a Sleeper player's name this
-// package uses (the trade grader's playerDisplayName renders the same way; if
-// that helper exists, make it call this).
+// package uses; playerDisplayName in aggregate.go delegates to it.
 func PlayerDisplayName(p sleeper.Player) string {
 	return strings.TrimSpace(p.FirstName + " " + p.LastName)
 }
