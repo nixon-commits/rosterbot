@@ -118,7 +118,7 @@ func TestPerTenantSplitIsDeliberate(t *testing.T) {
 		"Published Lineup": true, "Pending Offers": true, "Trade Offer Log": true,
 		"Private Dashboard Reports": true, "Fantrax Session": true, "Run Progress": true,
 	}
-	all := append(layout.All(), layout.Progress, layout.FootballTrades, layout.FootballTradeLog)
+	all := append(layout.All(), layout.Progress, layout.FootballTrades, layout.FootballTradeLog, layout.FootballOffers)
 	for _, a := range all {
 		if got, want := a.PerTenant, wantPerTenant[a.Name]; got != want {
 			t.Errorf("%q PerTenant = %v, want %v — adding an artifact must be a "+

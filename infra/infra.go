@@ -282,7 +282,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		return awsecs.Secret_FromSsmParameter(p)
 	}
 
-	botContainer := taskDef.AddContainer(jsii.String("bot"), &awsecs.ContainerDefinitionOptions{
+	botOpts := &awsecs.ContainerDefinitionOptions{
 		Image: awsecs.ContainerImage_FromEcrRepository(repo, jsii.String("latest")),
 		Logging: awsecs.LogDriver_AwsLogs(&awsecs.AwsLogDriverProps{
 			LogGroup:     logGroup,
@@ -392,7 +392,50 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			"APNS_AUTH_KEY": secret("APNS_AUTH_KEY"),
 			"APNS_KEY_ID":   secret("APNS_KEY_ID"),
 		},
+	}
+	botContainer := taskDef.AddContainer(jsii.String("bot"), botOpts)
+
+	// --- football-offers: the one task that carries the operator's Sleeper
+	// session token (rosterbot spec 2026-09-22, Section 1) ---
+	//
+	// A SECOND task definition rather than one more entry in botOpts.Secrets:
+	// the token grants full access to the operator's Sleeper account for about
+	// a year, and every other job -- the hourly lineup job, the API-launched
+	// ones, the per-tenant fan-out -- would otherwise carry it in its
+	// environment for no reason. Same image, same roles, same environment and
+	// the same secrets plus one; the container options are copied from
+	// botOpts so the two cannot drift.
+	//
+	// Shares TaskRole and ExecutionRole with the main task on purpose: the S3
+	// and SSM grants above apply unchanged, and CDK adds the read on the new
+	// parameter to the shared execution role when the container is added.
+	//
+	// The one thing botContainer receives that this container does not is
+	// the DASHBOARD_CF_DIST_ID_PARAM environment added later for
+	// projection-site, which this job never runs.
+	offersSecrets := map[string]awsecs.Secret{}
+	for k, v := range *botOpts.Secrets {
+		offersSecrets[k] = v
+	}
+	// MERGE ORDER: the SSM parameter /rosterbot/SLEEPER_TOKEN must exist in
+	// us-west-1 BEFORE this deploys. Because the secret is on OffersTask only, a
+	// missing parameter fails only the hourly FootballOffers launches (each one
+	// pages as a failed run), not every job -- unlike SLEEPER_USER_ID on the
+	// shared task, whose absence would fail them all.
+	offersSecrets["SLEEPER_TOKEN"] = secret("SLEEPER_TOKEN")
+	offersOpts := *botOpts
+	offersOpts.Secrets = &offersSecrets
+	offersTaskDef := awsecs.NewFargateTaskDefinition(stack, jsii.String("OffersTask"), &awsecs.FargateTaskDefinitionProps{
+		Cpu:            jsii.Number(1024),
+		MemoryLimitMiB: jsii.Number(2048),
+		RuntimePlatform: &awsecs.RuntimePlatform{
+			CpuArchitecture:       awsecs.CpuArchitecture_ARM64(),
+			OperatingSystemFamily: awsecs.OperatingSystemFamily_LINUX(),
+		},
+		TaskRole:      taskDef.TaskRole(),
+		ExecutionRole: taskDef.ExecutionRole(),
 	})
+	offersTaskDef.AddContainer(jsii.String("bot"), &offersOpts)
 
 	awscdk.NewCfnOutput(stack, jsii.String("ClusterName"), &awscdk.CfnOutputProps{Value: cluster.ClusterName()})
 	awscdk.NewCfnOutput(stack, jsii.String("TaskDefArn"), &awscdk.CfnOutputProps{Value: taskDef.TaskDefinitionArn()})
@@ -1408,15 +1451,29 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// real worst case is the 11h overnight gap, and a "1h" tolerance would page
 	// every single morning.
 	const (
-		hourlyGap    = 13 * time.Hour     // 11h overnight window + 2h slack
-		sixHourlyGap = 8 * time.Hour      // 6h nominal + 2h slack; runs all day, no Lineup-style window
-		dailyGap     = 26 * time.Hour     // 24h + 2h slack
-		weeklyGap    = 8 * 24 * time.Hour // 7d + 1d slack
+		hourlyGap       = 13 * time.Hour     // 11h overnight window + 2h slack
+		sixHourlyGap    = 8 * time.Hour      // 6h nominal + 2h slack; runs all day, no Lineup-style window
+		allDayHourlyGap = 3 * time.Hour      // 1h nominal + 2h slack; runs all day, unlike Lineup's windowed hourlyGap
+		dailyGap        = 26 * time.Hour     // 24h + 2h slack
+		weeklyGap       = 8 * 24 * time.Hour // 7d + 1d slack
 	)
 	type job struct {
 		id, cron string
 		cmd      *[]*string
 		maxGap   time.Duration
+	}
+	// jobTaskDefs overrides the shared task definition per job id. Only
+	// FootballOffers appears: that job alone carries SLEEPER_TOKEN.
+	//
+	// A side map rather than a field on job. Go struct literals are all-or-
+	// nothing -- a positional row must list every field -- so a fifth field
+	// would either break every existing positional row or force them all to
+	// keyed form, and the keyed form is invisible to the regexes that parse
+	// this table (infra/schedule_test.go, internal/statestore/layout/
+	// producer_test.go, cmd/season_gate_test.go). Keeping FootballOffers a
+	// positional row keeps it inside those guards.
+	jobTaskDefs := map[string]awsecs.FargateTaskDefinition{
+		"FootballOffers": offersTaskDef,
 	}
 	jobs := []job{
 		// TODAY ONLY (rosterbot-cem, design (b)). An hourly cadence can only
@@ -1516,6 +1573,12 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// like TeamValues/FootballValues. Idempotent via a per-transaction_id
 		// dedup marker, so overlapping polls never double-alert.
 		{"FootballTrades", "cron(45 */6 * * ? *)", jsii.Strings("football-trades"), sixHourlyGap},
+		// Every trade offer proposed TO the operator, graded before they
+		// respond. Hourly all day: Sleeper offers wait on the operator, so the
+		// value is the grade, not the notification -- but an offer with a short
+		// expiry is worth hearing about within the hour. Minute 20 keeps it
+		// clear of the :00 Lineup launches and the :45 FootballTrades ones.
+		{"FootballOffers", "cron(20 * * * ? *)", jsii.Strings("football-offers"), allDayHourlyGap},
 		// Shadow captures every projection system's lineup projection for the
 		// model-comparison report. It runs in the MORNING UTC window, and that
 		// is a correctness requirement, not a preference.
@@ -1682,7 +1745,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		}
 		r.AddTarget(awseventstargets.NewEcsTask(&awseventstargets.EcsTaskProps{
 			Cluster:         cluster,
-			TaskDefinition:  taskDef,
+			TaskDefinition:  jobTaskDef(jobTaskDefs[j.id], taskDef),
 			AssignPublicIp:  jsii.Bool(true),
 			SubnetSelection: &awsec2.SubnetSelection{SubnetType: awsec2.SubnetType_PUBLIC},
 			ContainerOverrides: &[]*awseventstargets.ContainerOverride{{
@@ -1812,6 +1875,15 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	}
 
 	return stack
+}
+
+// jobTaskDef picks a job's own task definition when it has one, else the
+// shared one.
+func jobTaskDef(own, shared awsecs.FargateTaskDefinition) awsecs.FargateTaskDefinition {
+	if own != nil {
+		return own
+	}
+	return shared
 }
 
 func main() {

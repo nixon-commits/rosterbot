@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLeagueParsesResponse(t *testing.T) {
@@ -426,5 +427,41 @@ func TestTransaction_DecodesCreatorAndConsenters(t *testing.T) {
 	}
 	if len(txn.ConsenterIDs) != 1 || txn.ConsenterIDs[0] != 3 {
 		t.Errorf("ConsenterIDs = %v, want [3]", txn.ConsenterIDs)
+	}
+}
+
+func TestTransaction_ExpiresAtReadsEpochSeconds(t *testing.T) {
+	const body = `{"transaction_id":"t1","type":"trade","status":"proposed",
+	  "created":1788371562251,"settings":{"expires_at":1788630762}}`
+	var txn Transaction
+	if err := json.Unmarshal([]byte(body), &txn); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, ok := txn.ExpiresAt()
+	if !ok {
+		t.Fatalf("ExpiresAt: want ok")
+	}
+	if got.Unix() != 1788630762 {
+		t.Errorf("ExpiresAt = %v (unix %d), want unix 1788630762 — settings.expires_at is SECONDS, not millis", got, got.Unix())
+	}
+	if got.Location() != time.UTC {
+		t.Errorf("ExpiresAt location = %v, want UTC", got.Location())
+	}
+}
+
+func TestTransaction_ExpiresAtAbsentOrMalformedIsNoExpiry(t *testing.T) {
+	for name, body := range map[string]string{
+		"no settings":    `{"transaction_id":"t1"}`,
+		"other settings": `{"transaction_id":"t1","settings":{"waiver_bid":35,"seq":2}}`,
+		"string value":   `{"transaction_id":"t1","settings":{"expires_at":"soon"}}`,
+		"zero":           `{"transaction_id":"t1","settings":{"expires_at":0}}`,
+	} {
+		var txn Transaction
+		if err := json.Unmarshal([]byte(body), &txn); err != nil {
+			t.Fatalf("%s: unmarshal: %v", name, err)
+		}
+		if _, ok := txn.ExpiresAt(); ok {
+			t.Errorf("%s: ExpiresAt reported an expiry from %s", name, body)
+		}
 	}
 }
