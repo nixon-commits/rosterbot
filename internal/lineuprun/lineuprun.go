@@ -567,13 +567,23 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	// and applying a lineup that scores for nobody through the bracket. An
 	// unknown bracket status is not a reason to skip a live day, so a lookup
 	// failure logs and optimizes anyway.
+	//
+	// Idle stops the LINEUP side only — the board, the publish, the apply —
+	// not the run. The projection pipeline still runs and Capture archives
+	// the day's snapshot, because a projection is graded against MLB actuals
+	// whether or not the fantasy lineup counts (cmd/grade.go, rosterbot-zg1r).
+	// Until rosterbot-cwy8 this was a return: the capture died with the
+	// apply, so every eliminated tenant's snapshots and grades ended on the
+	// elimination day and the rest of the bracket was lost to the Analysis
+	// Store, unrecoverably (the stale-capture guard refuses a backdated redo).
+	var idleLine string
 	if !seasonStart.IsZero() && !multiDate {
 		if idle, line, perr := playoffIdle(ft, cfg.TeamID, day, seasonStart); perr != nil {
 			prog.Logf("WARNING: playoff status unknown (%v) — optimizing anyway", perr)
 		} else if idle {
+			idleLine = line
 			prog.Logf("%s", line)
 			fmt.Fprintf(out, "\n%s\n", line)
-			return result, nil
 		}
 	}
 
@@ -582,7 +592,14 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	// side effects the phase deliberately does not perform — writing to the
 	// progress display and actually sending the Pushover it asked for.
 	var gsBudget *optimizer.GSBudget
-	if cfg.GSTrackingEnabled {
+	switch {
+	case idleLine != "":
+		// A week the lineup scores for nobody has no cap to enforce and no
+		// floor to be short of — and the floor alert would page about a
+		// shortfall that costs nothing. Said out loud, like the other two
+		// branches, so the dropped gate is never mistaken for a fail-open.
+		fmt.Fprintln(out, "  gs budget check: skipped — no scoring matchup this round, so no cap, no floor, no floor alert")
+	case cfg.GSTrackingEnabled:
 		prog.Start("GS budget")
 
 		dec := ComputeGSBudget(ctx, ft, schedClient, GSInputs{
@@ -653,7 +670,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 			DryRun: cfg.DryRun,
 			Out:    out,
 		})
-	} else {
+	default:
 		// The disabled path owes the reader a line, on the same reasoning as
 		// the "gs floor check:" and "il-start check:" coverage lines above it:
 		// three things are dropped here — the weekly CAP (applyGSGate no-ops on
@@ -730,7 +747,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	// already decided, so an HKB outage costs the age/value columns and
 	// nothing else.
 	var hkbMeta map[string]lineupapi.Dynasty
-	if opts.Publisher != nil {
+	if opts.Publisher != nil && idleLine == "" {
 		var err error
 		if hkbMeta, err = opts.LoadHKBMeta(ctx, cacheDir); err != nil {
 			prog.Logf("WARNING: HKB values unavailable — publishing lineup without age/value: %v", err)
@@ -740,7 +757,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	prog.Finish()
 
 	// --- Emit: snapshot, publish, print, apply, notify ---
-	Emit(ft, EmitInputs{
+	in := EmitInputs{
 		Results:        results,
 		MultiDate:      multiDate,
 		SlotName:       slotName,
@@ -783,7 +800,17 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 			return notify.Send(ctx, notify.Event{Kind: "lineup", Title: "Fantrax Lineup", Message: message})
 		},
 		ApplyFailMarkers: opts.ApplyFailMarkers,
-	})
+	}
+	if idleLine != "" {
+		// Only the capture runs. Emit is never called, so the apply path is
+		// unreachable by construction on an idle day rather than gated by a
+		// flag it would have to remember to check.
+		for _, d := range Capture(in) {
+			fmt.Fprintf(out, "  projection snapshot archived for %s — lineup idle, nothing published or applied\n", d.Format("2006-01-02"))
+		}
+		return result, nil
+	}
+	Emit(ft, in)
 
 	return result, nil
 }

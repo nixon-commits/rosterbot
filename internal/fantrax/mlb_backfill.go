@@ -3,7 +3,9 @@ package fantrax
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -22,6 +24,41 @@ var mlbBackfillGameLogURL = "https://statsapi.mlb.com/api/v1/people/%d/stats?sta
 // mlbBackfillGameLogTTL — in-season game logs grow daily; same cadence as
 // prospects (1h compromise between freshness and warm-cache reuse).
 const mlbBackfillGameLogTTL = time.Hour
+
+// mlbBackfillHTTPTimeout bounds a single game-log fetch. 15s matches the other
+// MLB statsapi fetches (playername.resolve, projections.mlb_handedness). It is
+// the ONLY bound this fetch has — see the note at the Do() call — so it must
+// never be zero, which http.Client reads as "no timeout". A var, not a const,
+// so tests can shrink it.
+var mlbBackfillHTTPTimeout = 15 * time.Second
+
+// mlbBackfillBackoff is the pause before each RETRY, so len+1 is the attempt
+// budget. A var so tests need not sleep.
+var mlbBackfillBackoff = []time.Duration{time.Second, 4 * time.Second}
+
+// mlbBackfillFailureBudget is how many CONSECUTIVE fetches may exhaust their
+// retries before the pass gives up on the endpoint entirely.
+//
+// The 15s ceiling bounds a REQUEST and the retry makes one blip survivable,
+// but neither bounds the RUN: against a persistently dead statsapi every fetch
+// costs the whole attempt budget (~50s), and a render makes ~600 of them, so
+// the job would grind for hours and still produce a useless render. That is
+// the rosterbot-5zp1 hang wearing a third hat, and it is the cost ceiling the
+// retry commit flagged for review.
+//
+// Only EXHAUSTED failures count, never a durable 4xx: statsapi answers an
+// unknown player immediately and no number of attempts changes that, so a
+// roster carrying several unknown players in a row is a data problem, not an
+// outage, and must not fail the render. The counter resets on every success,
+// so an intermittently flaky endpoint still completes the pass.
+const mlbBackfillFailureBudget = 5
+
+// errBackfillAbandoned is the verdict that the endpoint, not the roster, is
+// the problem. It fails the run rather than degrading quietly: abandoned
+// players render as zero FPts on days they actually played, and recap-site
+// publishes what it renders, so a quiet degrade would put wrong numbers on a
+// public page.
+var errBackfillAbandoned = errors.New("mlb backfill abandoned: statsapi unreachable")
 
 // resolveBackfillNames maps Fantrax player names → MLBAM IDs for the
 // backfill. Indirected through a var so tests can inject a deterministic
@@ -125,7 +162,8 @@ func (c *Client) backfillDailyFPts(days []DayRoster) (backfillStats, error) {
 		return stats, fmt.Errorf("pitcher scoring weights: %w", err)
 	}
 
-	for _, t := range targets {
+	exhaustedInARow := 0
+	for i, t := range targets {
 		mlbID, ok := resolved.ByName[playername.Normalize(t.Name)]
 		if !ok || mlbID == 0 {
 			stats.Unresolved++
@@ -139,8 +177,21 @@ func (c *Client) backfillDailyFPts(days []DayRoster) (backfillStats, error) {
 		if err != nil {
 			stats.FetchFailed++
 			stats.LastFetchErr = err
+			if !errors.Is(err, errRetryExhausted) {
+				// A durable answer about ONE player says nothing about the
+				// endpoint's health, so it must not move the budget.
+				continue
+			}
+			exhaustedInARow++
+			if exhaustedInARow >= mlbBackfillFailureBudget {
+				stats.Abandoned = len(targets) - (i + 1)
+				fmt.Fprintln(os.Stderr, stats.String())
+				return stats, fmt.Errorf("%w: %d consecutive fetches exhausted their retries (last: %w)",
+					errBackfillAbandoned, exhaustedInARow, err)
+			}
 			continue
 		}
+		exhaustedInARow = 0
 		fpts, hadGame := computeFPtsFromGameLog(log, t.Date, t.IsPitcher, hitterWeights, pitcherWeights)
 		days[t.DayIdx].Players[t.PlayerIdx].FPts = fpts
 		days[t.DayIdx].Players[t.PlayerIdx].HadGame = hadGame
@@ -170,6 +221,7 @@ type backfillStats struct {
 	NoGame      int
 	Unresolved  int // name → MLBAM ID lookup produced nothing; no request was made
 	FetchFailed int // had an ID, but the game-log request failed
+	Abandoned   int // never attempted: the failure budget tripped first
 
 	// LastFetchErr is reported alongside the counts so a fetch failure names its
 	// cause instead of only its count.
@@ -179,6 +231,9 @@ type backfillStats struct {
 func (s backfillStats) String() string {
 	msg := fmt.Sprintf("mlb backfill: %d flagged, %d resolved, %d no-game, %d unresolved-name, %d fetch-failed",
 		s.Flagged, s.Resolved, s.NoGame, s.Unresolved, s.FetchFailed)
+	if s.Abandoned > 0 {
+		msg += fmt.Sprintf(", %d abandoned", s.Abandoned)
+	}
 	if s.LastFetchErr != nil {
 		msg += fmt.Sprintf(" (last fetch error: %v)", s.LastFetchErr)
 	}
@@ -331,19 +386,74 @@ func (c *Client) fetchMLBGameLog(mlbamID int, group string, season int) ([]mlbGa
 // noctx lint-compliance pass. This is the outermost point that can name that
 // tradeoff, so the explicit Background() lives here rather than silently
 // deep inside http.Get.
+// retryableMLBStatus reports whether a statsapi status is worth another try.
+//
+// Deliberately NOT projections.retryableStatus: that one also retries 403,
+// which is right for FanGraphs (an unauthenticated endpoint where a 403 is
+// only ever Cloudflare's unsolved challenge) and wrong here. statsapi is
+// unauthenticated too, but it answers a genuinely unknown player with a 4xx
+// that will say the same thing on every attempt, and a render makes ~600 of
+// these calls -- burning three attempts each on durable 4xx would add minutes
+// for nothing.
+func retryableMLBStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
+
+// fetchMLBGameLogUncached retries the failures that clear on their own.
+//
+// The 15s ceiling alone stops the rosterbot-5zp1 hang but turns one blip into
+// a failed render, and a render makes ~600 of these fetches: at the rate
+// actually observed in Fargate (~1 stall in 650) a single-attempt render would
+// fail about as often as it finished. So the ceiling and the retry are one
+// fix, not two -- the timeout makes a stall detectable, the retry makes it
+// survivable.
+//
+// Reads only. Nothing here mutates, so a repeated attempt is always safe.
 func fetchMLBGameLogUncached(mlbamID int, group string, season int) ([]mlbGameLogDay, error) {
+	var lastErr error
+	for attempt := 0; attempt <= len(mlbBackfillBackoff); attempt++ {
+		if attempt > 0 {
+			time.Sleep(mlbBackfillBackoff[attempt-1])
+		}
+		days, retryable, err := fetchMLBGameLogOnce(mlbamID, group, season)
+		if err == nil {
+			return days, nil
+		}
+		lastErr = err
+		if !retryable {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("game log: %w after %d attempts: %w",
+		errRetryExhausted, len(mlbBackfillBackoff)+1, lastErr)
+}
+
+// fetchMLBGameLogOnce makes exactly one attempt. retryable says whether the
+// failure is the kind another attempt could clear.
+func fetchMLBGameLogOnce(mlbamID int, group string, season int) (_ []mlbGameLogDay, retryable bool, _ error) {
 	url := fmt.Sprintf(mlbBackfillGameLogURL, mlbamID, group, season)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build game log request: %w", err)
+		return nil, false, fmt.Errorf("build game log request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// Not http.DefaultClient: it has no Timeout, and the ctx above has no
+	// deadline, so the pair left this fetch unbounded — a statsapi connection
+	// that was accepted and then never answered hung the whole recap-site
+	// render for 27 minutes with no error until the task was killed
+	// (rosterbot-5zp1). Since no caller can bound it, the client timeout is
+	// the only stop, which is why it must never be zero.
+	resp, err := (&http.Client{Timeout: mlbBackfillHTTPTimeout}).Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetch game log: %w", err)
+		// Always retryable: this is where the timeout lands, and a connection
+		// that never completed cannot have had an effect worth worrying about.
+		return nil, true, fmt.Errorf("fetch game log: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("game log status %d", resp.StatusCode)
+		// Drain before the deferred Close so a retry reuses the connection
+		// instead of redialing.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		return nil, retryableMLBStatus(resp.StatusCode), fmt.Errorf("game log status %d", resp.StatusCode)
 	}
 
 	// The MLB statsapi shares JSON keys between hitting and pitching contexts
@@ -391,7 +501,9 @@ func fetchMLBGameLogUncached(mlbamID int, group string, season int) ([]mlbGameLo
 		} `json:"stats"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("decode game log: %w", err)
+		// A truncated body is retryable; a genuinely malformed one fails the
+		// same way on the last attempt and surfaces then.
+		return nil, true, fmt.Errorf("decode game log: %w", err)
 	}
 
 	var out []mlbGameLogDay
@@ -435,7 +547,7 @@ func fetchMLBGameLogUncached(mlbamID int, group string, season int) ([]mlbGameLo
 			out = append(out, d)
 		}
 	}
-	return out, nil
+	return out, false, nil
 }
 
 // parseInningsPitched converts MLB notation ("6.1" = 6 IP + 1 out = 6.333)

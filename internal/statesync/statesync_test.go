@@ -265,3 +265,37 @@ func writeFile(t *testing.T, path, body string) {
 		t.Fatal(err)
 	}
 }
+
+// An EMPTY local directory must never be mirrored with --delete. recap-site
+// creates ./dist with MkdirAll before it fetches anything, so ANY later error
+// leaves the directory existing and empty — and entrypoint.sh runs sync_up
+// regardless of the command's exit code. Without this guard the reconciliation
+// pass sees zero uploaded keys, calls every remote object an orphan, and
+// deletes the entire published site (proved against this fake: 3 objects in,
+// 0 out). An empty render is never a legitimate publish (rosterbot-5zp1).
+func TestUp_EmptyDirectoryNeverDeletesTheRemote(t *testing.T) {
+	live := map[string][]byte{
+		"index.html":   []byte("<html>the live site</html>"),
+		"season.html":  []byte("<html>champion</html>"),
+		"week-25.html": []byte("<html>final</html>"),
+	}
+	f := &fakeS3{objects: live}
+	s := &Syncer{s3: f}
+
+	// Exists, contains nothing — exactly what a failed render leaves behind.
+	// It reports rather than silently skipping: publishSite warns on the error,
+	// so the operator learns the publish was declined instead of assuming a
+	// clean run. The error must not be the only defence though, so the object
+	// count below is what actually pins the behavior.
+	err := s.Up(context.Background(), "site-bucket", "", t.TempDir(), UpOptions{Delete: true})
+	if err == nil {
+		t.Error("Up returned nil for an empty delete-mirror; it should say why it declined")
+	}
+
+	if got := len(f.objects); got != 3 {
+		t.Fatalf("%d objects left, want 3 — an empty render deleted the published site: %v", got, keys(f.objects))
+	}
+	if f.puts != 0 {
+		t.Errorf("puts = %d, want 0 — nothing to upload from an empty directory", f.puts)
+	}
+}
