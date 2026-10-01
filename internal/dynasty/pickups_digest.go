@@ -28,7 +28,13 @@ func (it PickupItem) PlayerIDIs(id string) bool { return it.PlayerID == id }
 // each is marked individually: a chop with fourteen players is fourteen
 // markers under one transaction, and a digest that already sent nine of them
 // carries only the other five.
-func PickupItems(captureDate string, chops []Chop, drops []DroppedPlayer, roles []RoleChange) []PickupItem {
+//
+// baselineDate (YYYY-MM-DD) is the date of the capture the detectors diffed
+// AGAINST, not of the capture just taken: it scopes a role change's key, and
+// the key must be identical on every run that re-detects the same event
+// against the same baseline (the pointer is held while a tail is
+// outstanding). DROP and CHOP keys are per-transaction and ignore it.
+func PickupItems(baselineDate string, chops []Chop, drops []DroppedPlayer, roles []RoleChange) []PickupItem {
 	var out []PickupItem
 	for _, c := range chops {
 		for _, p := range c.Players {
@@ -59,7 +65,7 @@ func PickupItems(captureDate string, chops []Chop, drops []DroppedPlayer, roles 
 			val = fmt.Sprintf("%d", r.Value)
 		}
 		out = append(out, PickupItem{
-			Kind: "role", Key: "role-" + r.PlayerID + "-" + captureDate, PlayerID: r.PlayerID,
+			Kind: "role", Key: "role-" + r.PlayerID + "-" + baselineDate, PlayerID: r.PlayerID,
 			Line:     fmt.Sprintf("ROLE %s %s %s now #1 %s (%s) (%s)", r.Name, r.Position, r.Team, r.DepthChartPosition, was, val),
 			Position: r.Position, Value: r.Value, Priced: r.Priced,
 		})

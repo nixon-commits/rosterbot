@@ -82,8 +82,13 @@ func DetectRoleChanges(prev, cur PlayerSnapshot, rostered map[string]bool, bundl
 				rc.PrevTeam = before.Team
 			}
 		}
+		// Priced only on a POSITIVE value: the bundle lists a player with a
+		// zero in any format that does not value him, and "(0)" on a digest
+		// line reads as a price rather than as the absence of one.
 		if sv, ok := bundlePlayer(bundle, id); ok {
-			rc.Value, rc.Priced = sv.Value.Get(format), true
+			if v := sv.Value.Get(format); v > 0 {
+				rc.Value, rc.Priced = v, true
+			}
 		}
 		out = append(out, rc)
 	}
@@ -104,8 +109,9 @@ func DetectRoleChanges(prev, cur PlayerSnapshot, rostered map[string]bool, bundl
 // groups guillotine chops by transaction. A trade lists its swapped players
 // under drops too and is excluded by type: those are not releases (measured
 // 2026-09-21, the dynasty league's top three "drops" were all trade halves).
-// An unpriced player is not reported — the spec prices drops in the league's
-// column, and a drop with no value is not the signal this job carries.
+// An unpriced player — absent from the bundle, or valued 0 in the league's
+// column — is not reported: the spec prices drops in the league's column, and
+// a drop with no value is not the signal this job carries.
 //
 // Each Drops map is iterated in random order, so every output slice is sorted
 // on a total key (value desc, name, player id; chops by transaction id).
@@ -123,8 +129,12 @@ func DetectDrops(txns []sleeper.Transaction, since time.Time, rostered map[strin
 			if rostered[pid] {
 				continue // claimed since; not available
 			}
-			sv, priced := bundlePlayer(bundle, pid)
-			if !priced {
+			sv, inBundle := bundlePlayer(bundle, pid)
+			// A zero in the league's own column is not a price either: the
+			// bundle keeps a player listed with 0 in a format that does not
+			// value him (measured live 2026-10-01: "DROP Drew Lock (0)" in the
+			// redraft leagues), and a valued drop must have a value.
+			if !inBundle || sv.Value.Get(format) <= 0 {
 				continue
 			}
 			p := players[pid]

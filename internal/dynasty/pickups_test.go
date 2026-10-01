@@ -170,3 +170,44 @@ func TestDetectDrops_OrdersByValueThenName(t *testing.T) {
 		t.Errorf("want brown (3696) before maye (2496): %+v", drops)
 	}
 }
+
+// StatsGuy keeps a player in the bundle with a zero in a format that does not
+// value him (measured live 2026-10-01: "DROP Drew Lock QB SEA (0)" in the
+// redraft leagues). A zero is not a price: it must neither surface as a valued
+// drop nor render as "(0)" on a role change.
+func zeroValueBundle() *statsguy.Bundle {
+	return &statsguy.Bundle{Players: map[string]statsguy.Player{
+		"zero": {ID: "zero", Value: statsguy.FormatValues{SFDynasty: 50, NonSFRedraft: 0}},
+	}}
+}
+
+func TestDetectDrops_ZeroValueInTheLeaguesFormatIsNotAValuedDrop(t *testing.T) {
+	players := map[string]sleeper.Player{"zero": {PlayerID: "zero", FirstName: "Zed", LastName: "Zero", Position: "QB", Team: "SEA"}}
+	txns := []sleeper.Transaction{
+		dropTxn("fa", "free_agent", t0.Add(time.Hour), map[string]int{"zero": 7}),
+		dropTxn("chop", "chopped", t0.Add(2*time.Hour), map[string]int{"zero": 9}),
+	}
+	drops, chops := DetectDrops(txns, t0, nil, players, zeroValueBundle(), "non_sf_redraft", nil)
+	if len(drops) != 0 || len(chops) != 0 {
+		t.Errorf("a player valued 0 in non_sf_redraft must not be reported: drops=%+v chops=%+v", drops, chops)
+	}
+	// The same player IS valued in a format that prices him, so the skip is
+	// about the league's column and not about the player.
+	drops, _ = DetectDrops(txns, t0, nil, players, zeroValueBundle(), "sf_dynasty", nil)
+	if len(drops) != 1 || drops[0].Value != 50 {
+		t.Errorf("sf_dynasty drops = %+v, want the player at 50", drops)
+	}
+}
+
+func TestDetectRoleChanges_ZeroValueInTheLeaguesFormatIsUnpriced(t *testing.T) {
+	prev := snapOf(t0, SnapPlayer{ID: "zero", Name: "Zed Zero", Team: "SEA", Position: "QB", DepthChartOrder: 2})
+	cur := snapOf(t1, SnapPlayer{ID: "zero", Name: "Zed Zero", Team: "SEA", Position: "QB", DepthChartPosition: "QB", DepthChartOrder: 1})
+	got := DetectRoleChanges(prev, cur, nil, zeroValueBundle(), "non_sf_redraft")
+	if len(got) != 1 || got[0].Priced || got[0].Value != 0 {
+		t.Fatalf("got %+v, want one unpriced role change", got)
+	}
+	got = DetectRoleChanges(prev, cur, nil, zeroValueBundle(), "sf_dynasty")
+	if len(got) != 1 || !got[0].Priced || got[0].Value != 50 {
+		t.Errorf("sf_dynasty: got %+v, want priced at 50", got)
+	}
+}
