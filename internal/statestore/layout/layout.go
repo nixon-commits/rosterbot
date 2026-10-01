@@ -259,8 +259,9 @@ var (
 	// latest.json, the most recent filtered player capture the job FINISHED
 	// delivering against (the diff baseline). It is overwritten after a run whose
 	// alerts all went out, and HELD (left on the older capture) when a league
-	// failed, a send failed or a digest left items unsent, so the next run
-	// re-detects those events instead of skipping past them; the history
+	// failed, a send failed or a digest left items unsent (the last only while a
+	// marker store exists to keep the resend quiet), so the next run re-detects
+	// those events instead of skipping past them; the history
 	// partition is written either way. It exists because the Daily Archive
 	// store is write-only — the history goes there as source sleeper-players —
 	// and the diff needs "the most recent prior capture, whenever that was",

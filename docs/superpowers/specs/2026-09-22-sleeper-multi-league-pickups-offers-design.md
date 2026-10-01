@@ -320,7 +320,7 @@ second contribution.**
 
 **Dedup and delivery.** A marker per event under `FootballPickups`
 (`football/pickups/` ↔ `.football/pickups`; durable, no `MaxAge`, absent
-from `All()`): role changes key on `(league, player, snapshot date)`; drops
+from `All()`): role changes key on `(league, player, baseline capture timestamp)` (2026-09-30 correction: the full `20060102T150405Z` stamp of the BASELINE capture, not a date — stable across a held pointer, and two baselines on one day cannot collide); drops
 and chops on `(league, transaction, player)`. Check → send → mark;
 `--dry-run` does neither. Delivery is `notify.Send` with kind `waivers`.
 

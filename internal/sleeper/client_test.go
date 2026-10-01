@@ -481,3 +481,33 @@ func TestPlayer_DecodesDepthChartAndNullOrder(t *testing.T) {
 		t.Errorf("null order must decode to nil, got %+v", bench)
 	}
 }
+
+// The pickups detector's completion-time rule (DetectDrops) is only as good
+// as this one struct tag: nothing else in the tree decodes `status_updated`
+// from real JSON, and the dynasty fixtures set the field directly. A typo in
+// the tag would make every row read StatusUpdated == 0, fall back to Created,
+// and silently restore the 42% waiver-drop loss with every test green
+// (fix-wave re-review, 2026-09-30).
+func TestTransaction_DecodesStatusUpdatedAndZeroWhenAbsent(t *testing.T) {
+	const withField = `{"transaction_id":"w1","type":"waiver","status":"complete",
+	  "created":1759212660000,"status_updated":1759222200000,"drops":{"9509":7}}`
+	var txn Transaction
+	if err := json.Unmarshal([]byte(withField), &txn); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if txn.StatusUpdated != 1759222200000 {
+		t.Errorf("StatusUpdated = %d, want 1759222200000 decoded from \"status_updated\"", txn.StatusUpdated)
+	}
+	if txn.Created != 1759212660000 {
+		t.Errorf("Created = %d, want 1759212660000", txn.Created)
+	}
+
+	const without = `{"transaction_id":"f1","type":"free_agent","status":"complete","created":1759212660000}`
+	var bare Transaction
+	if err := json.Unmarshal([]byte(without), &bare); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if bare.StatusUpdated != 0 {
+		t.Errorf("StatusUpdated = %d for a row without the field, want 0 (the Created fallback)", bare.StatusUpdated)
+	}
+}

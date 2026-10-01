@@ -1,6 +1,8 @@
 package dynasty
 
 import (
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -298,5 +300,25 @@ func TestDetectDrops_ZeroStatusUpdatedFallsBackToCreated(t *testing.T) {
 	got := dropIDs(first(DetectDrops(txns, t0, nil, pickupDropPlayers(), pickupBundle(), "non_sf_redraft", nil)))
 	if !got["lock"] || got["brown"] {
 		t.Errorf("with StatusUpdated == 0 the filter must use Created: want lock only, got %v", got)
+	}
+}
+
+// The completion-time rule reaches production only through the
+// `status_updated` struct tag on sleeper.Transaction; every other test here
+// sets StatusUpdated directly, so a tag typo would pass them all while every
+// real row fell back to Created. This decodes a row shaped like the public
+// feed (status_updated after the baseline, created before it) and asks the
+// detector itself.
+func TestDetectDrops_RealFeedRowReportsOnStatusUpdated(t *testing.T) {
+	raw := fmt.Sprintf(`[{"transaction_id":"w1","type":"waiver","status":"complete","roster_ids":[7],
+	  "created":%d,"status_updated":%d,"drops":{"lock":7}}]`,
+		t0.Add(-20*time.Hour).UnixMilli(), t0.Add(17*time.Hour).UnixMilli())
+	var txns []sleeper.Transaction
+	if err := json.Unmarshal([]byte(raw), &txns); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := dropIDs(first(DetectDrops(txns, t0, nil, pickupDropPlayers(), pickupBundle(), "non_sf_redraft", nil)))
+	if !got["lock"] {
+		t.Fatalf("a feed row whose status_updated is after the baseline must be reported; got %v (is the json tag still \"status_updated\"?)", got)
 	}
 }

@@ -1566,8 +1566,9 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// after FootballValues (14:45) has warmed the StatsGuy cache. Its
 		// snapshot pointer (layout.FootballPickupSnapshot) is rewritten after
 		// every fully delivered run and HELD while a league failed, a send failed
-		// or a digest left items unsent, so the Infra tab reads the job's health
-		// from that object's age.
+		// or a digest left items unsent (the last only while a marker store exists
+		// to keep the resend quiet), so the Infra tab reads the job's health from
+		// that object's age.
 		{"FootballPickups", "cron(15 15 * * ? *)", jsii.Strings("football-pickups"), dailyGap},
 		// Shadow captures every projection system's lineup projection for the
 		// model-comparison report. It runs in the MORNING UTC window, and that
