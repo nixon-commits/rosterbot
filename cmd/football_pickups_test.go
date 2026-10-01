@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/archive"
 	"github.com/nixon-commits/rosterbot/internal/dynasty"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/sleeper"
@@ -259,22 +260,277 @@ func TestCoverageLine_PrintsTheZeroCase(t *testing.T) {
 
 func TestShouldAdvancePointer(t *testing.T) {
 	cases := []struct {
-		name   string
-		total  pickupRunResult
-		failed []string
-		want   bool
+		name      string
+		total     pickupRunResult
+		failed    []string
+		markersOK bool
+		want      bool
 	}{
-		{"clean run advances", pickupRunResult{New: 4, Sent: 2}, nil, true},
-		{"a quiet run advances", pickupRunResult{}, nil, true},
-		{"a failed league holds", pickupRunResult{Sent: 1}, []string{"Bravo"}, false},
-		{"an unsent tail holds", pickupRunResult{New: 29, Sent: 1, Tail: 11}, nil, false},
-		{"a failed send holds", pickupRunResult{New: 2, SendFailed: 1, Tail: 2}, nil, false},
-		{"a failed send alone holds", pickupRunResult{SendFailed: 1}, nil, false},
+		{"clean run advances", pickupRunResult{New: 4, Sent: 2}, nil, true, true},
+		{"a quiet run advances", pickupRunResult{}, nil, true, true},
+		{"a failed league holds", pickupRunResult{Sent: 1}, []string{"Bravo"}, true, false},
+		{"an unsent tail holds", pickupRunResult{New: 29, Sent: 1, Tail: 11}, nil, true, false},
+		{"a failed send holds", pickupRunResult{New: 2, SendFailed: 1, Tail: 2}, nil, true, false},
+		{"a failed send alone holds", pickupRunResult{SendFailed: 1}, nil, true, false},
+		// No marker store: dedup is off, so holding for a tail could only
+		// repeat the same digest forever. The tail is abandoned instead.
+		{"an unsent tail without a marker store advances", pickupRunResult{New: 29, Sent: 1, Tail: 11}, nil, false, true},
+		{"a failed league without a marker store still holds", pickupRunResult{Sent: 1}, []string{"Bravo"}, false, false},
+		{"a failed send without a marker store still holds", pickupRunResult{New: 2, SendFailed: 1, Tail: 2}, nil, false, false},
 	}
 	for _, c := range cases {
-		if got := shouldAdvancePointer(c.total, c.failed); got != c.want {
-			t.Errorf("%s: shouldAdvancePointer(%+v, %v) = %v, want %v", c.name, c.total, c.failed, got, c.want)
+		if got := shouldAdvancePointer(c.total, c.failed, c.markersOK); got != c.want {
+			t.Errorf("%s: shouldAdvancePointer(%+v, %v, %v) = %v, want %v", c.name, c.total, c.failed, c.markersOK, got, c.want)
 		}
+	}
+}
+
+// memBlob is an in-memory lineupapi.BlobStore that can be made to fail its
+// writes and counts them.
+type memBlob struct {
+	objs       map[string][]byte
+	publishErr error
+	publishes  int
+}
+
+func newMemBlob() *memBlob { return &memBlob{objs: map[string][]byte{}} }
+
+func (m *memBlob) Get(_ context.Context, key string) ([]byte, bool, error) {
+	b, ok := m.objs[key]
+	return b, ok, nil
+}
+
+func (m *memBlob) Publish(key string, data []byte) error {
+	m.publishes++
+	if m.publishErr != nil {
+		return m.publishErr
+	}
+	m.objs[key] = data
+	return nil
+}
+
+// memArchive is an in-memory archive.Store recording the partitions written.
+type memArchive struct {
+	dirs []string
+	err  error
+}
+
+func (m *memArchive) WritePartition(dir string, _ []archive.Artifact) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.dirs = append(m.dirs, dir)
+	return nil
+}
+
+func (m *memArchive) provider(calls *int) archiveWriterFunc {
+	return func() (archive.Writer, error) {
+		if calls != nil {
+			*calls++
+		}
+		return archive.NewWriter(m), nil
+	}
+}
+
+func finishFixture(t *testing.T) (prev, cur dynasty.PlayerSnapshot, snap *memBlob) {
+	t.Helper()
+	prev = dynasty.PlayerSnapshot{CapturedAt: time.Date(2026, 9, 30, 15, 15, 0, 0, time.UTC), HasDepthData: true, Players: map[string]dynasty.SnapPlayer{}}
+	cur = dynasty.PlayerSnapshot{CapturedAt: time.Date(2026, 10, 1, 15, 15, 0, 0, time.UTC), HasDepthData: true, Players: map[string]dynasty.SnapPlayer{}}
+	snap = newMemBlob()
+	if err := savePickupSnapshot(snap, prev); err != nil {
+		t.Fatal(err)
+	}
+	snap.publishes = 0
+	return prev, cur, snap
+}
+
+func pointerAt(t *testing.T, snap *memBlob) time.Time {
+	t.Helper()
+	got, found, err := loadPickupSnapshot(context.Background(), snap)
+	if err != nil || !found {
+		t.Fatalf("pointer unreadable: found=%v err=%v", found, err)
+	}
+	return got.CapturedAt
+}
+
+// finishPickupRun owns the dry-run contract and the hold rule's WIRING. Each
+// case below fails under one deletion that the pure shouldAdvancePointer test
+// cannot see: dropping the advance guard in persistPickupSnapshot, passing a
+// constant true instead of the decision, or dropping the dry-run guard.
+func TestFinishPickupRun(t *testing.T) {
+	now := time.Date(2026, 10, 1, 15, 15, 0, 0, time.UTC)
+	const wantDir = "sleeper-players/dt=2026-10-01"
+	cases := []struct {
+		name         string
+		dryRun       bool
+		total        pickupRunResult
+		failed       []string
+		markersOK    bool
+		archiveErr   error
+		publishErr   error
+		wantErr      string // substring; "" means no error
+		wantArchived bool
+		wantPointer  string // "prev" or "cur"
+		wantOut      []string
+		notOut       []string
+	}{
+		{name: "held: archive written, pointer unchanged", total: pickupRunResult{New: 29, Sent: 1, Tail: 11}, markersOK: true,
+			wantArchived: true, wantPointer: "prev", wantOut: []string{"pointer HELD at 2026-09-30", "11 unsent item(s)"}, notOut: []string{"pointer advanced"}},
+		{name: "failed league holds", total: pickupRunResult{Sent: 1}, failed: []string{"Bravo"}, markersOK: true,
+			wantArchived: true, wantPointer: "prev", wantOut: []string{"pointer HELD", "1 failed league(s)"}},
+		{name: "advance: both written", total: pickupRunResult{New: 4, Sent: 2}, markersOK: true,
+			wantArchived: true, wantPointer: "cur", wantOut: []string{"pointer advanced to 2026-10-01"}, notOut: []string{"HELD"}},
+		{name: "dry-run: neither written", dryRun: true, total: pickupRunResult{New: 4, Sent: 2}, markersOK: true,
+			wantArchived: false, wantPointer: "prev", wantOut: []string{"dry-run", "not archived, pointer not moved"}, notOut: []string{"pointer advanced", "HELD"}},
+		{name: "archive failure: pointer unchanged and the error surfaced", total: pickupRunResult{New: 4, Sent: 2}, markersOK: true,
+			archiveErr: errors.New("s3 down"), wantErr: "archive sleeper-players: s3 down", wantArchived: false, wantPointer: "prev", notOut: []string{"pointer advanced"}},
+		{name: "pointer write failure: archive written and the error surfaced", total: pickupRunResult{New: 4, Sent: 2}, markersOK: true,
+			publishErr: errors.New("throttled"), wantErr: "save snapshot pointer: throttled", wantArchived: true, wantPointer: "prev", notOut: []string{"pointer advanced"}},
+		{name: "no marker store: tail abandoned loudly, pointer advances", total: pickupRunResult{New: 29, Sent: 1, Tail: 11}, markersOK: false,
+			wantArchived: true, wantPointer: "cur",
+			wantOut: []string{"pointer advanced", "marker store unavailable: 11 unsent item(s) abandoned, pointer not held for them"}, notOut: []string{"HELD"}},
+		{name: "no marker store but a failed send: still held, nothing abandoned", total: pickupRunResult{New: 2, SendFailed: 1, Tail: 2}, markersOK: false,
+			wantArchived: true, wantPointer: "prev", wantOut: []string{"pointer HELD"}, notOut: []string{"abandoned"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			prev, cur, snap := finishFixture(t)
+			snap.publishErr = c.publishErr
+			arch := &memArchive{err: c.archiveErr}
+			var providerCalls int
+			var out bytes.Buffer
+			err := finishPickupRun(&out, c.dryRun, now, cur, prev, c.total, c.failed, c.markersOK, snap, arch.provider(&providerCalls))
+			if c.wantErr == "" && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)) {
+				t.Fatalf("error = %v, want one containing %q", err, c.wantErr)
+			}
+			if archived := len(arch.dirs) == 1 && arch.dirs[0] == wantDir; archived != c.wantArchived {
+				t.Errorf("archive partitions = %v, want written=%v (%s)", arch.dirs, c.wantArchived, wantDir)
+			}
+			if c.dryRun && (providerCalls != 0 || snap.publishes != 0 || len(arch.dirs) != 0) {
+				t.Errorf("a dry-run must not even build the archive writer: provider=%d publishes=%d partitions=%v", providerCalls, snap.publishes, arch.dirs)
+			}
+			wantPointer := prev.CapturedAt
+			if c.wantPointer == "cur" {
+				wantPointer = cur.CapturedAt
+			}
+			if got := pointerAt(t, snap); !got.Equal(wantPointer) {
+				t.Errorf("pointer = %s, want the %s capture %s", got, c.wantPointer, wantPointer)
+			}
+			for _, want := range c.wantOut {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("output missing %q:\n%s", want, out.String())
+				}
+			}
+			for _, bad := range c.notOut {
+				if strings.Contains(out.String(), bad) {
+					t.Errorf("output must not contain %q:\n%s", bad, out.String())
+				}
+			}
+		})
+	}
+}
+
+func TestFinishPickupRun_AnArchiveWriterThatCannotBeBuiltFailsTheRunAndHoldsThePointer(t *testing.T) {
+	prev, cur, snap := finishFixture(t)
+	err := finishPickupRun(io.Discard, false, cur.CapturedAt, cur, prev, pickupRunResult{}, nil, true, snap,
+		func() (archive.Writer, error) { return archive.Writer{}, errors.New("no bucket") })
+	if err == nil || !strings.Contains(err.Error(), "init archive writer: no bucket") {
+		t.Fatalf("err = %v", err)
+	}
+	if snap.publishes != 0 {
+		t.Error("a pointer that moved without its history landing is worse than the reverse")
+	}
+}
+
+func TestWriteFirstBaseline(t *testing.T) {
+	_, cur, _ := finishFixture(t)
+	cur.Players["lock"] = dynasty.SnapPlayer{ID: "lock"}
+	t.Run("dry-run prints its own line INSTEAD of claiming a write", func(t *testing.T) {
+		snap, arch := newMemBlob(), &memArchive{}
+		var out bytes.Buffer
+		if err := writeFirstBaseline(&out, true, cur.CapturedAt, cur, snap, arch.provider(nil)); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out.String(), "wrote baseline") || !strings.Contains(out.String(), "(dry-run)") || !strings.Contains(out.String(), "not written") {
+			t.Errorf("output = %q", out.String())
+		}
+		if snap.publishes != 0 || len(arch.dirs) != 0 {
+			t.Error("a dry-run baseline writes nothing")
+		}
+	})
+	t.Run("a real run writes both and then says so", func(t *testing.T) {
+		snap, arch := newMemBlob(), &memArchive{}
+		var out bytes.Buffer
+		if err := writeFirstBaseline(&out, false, cur.CapturedAt, cur, snap, arch.provider(nil)); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "wrote baseline of 1 players") || len(arch.dirs) != 1 || snap.publishes != 1 {
+			t.Errorf("out=%q archived=%v publishes=%d", out.String(), arch.dirs, snap.publishes)
+		}
+	})
+	t.Run("a failed write never claims success", func(t *testing.T) {
+		snap, arch := newMemBlob(), &memArchive{err: errors.New("s3 down")}
+		var out bytes.Buffer
+		if err := writeFirstBaseline(&out, false, cur.CapturedAt, cur, snap, arch.provider(nil)); err == nil {
+			t.Fatal("want the archive error")
+		}
+		if strings.Contains(out.String(), "wrote baseline") || snap.publishes != 0 {
+			t.Errorf("out=%q publishes=%d", out.String(), snap.publishes)
+		}
+	})
+}
+
+// The run's verdict names every cause, and is nil only when nothing went
+// wrong. A failed send or a failed persist used to exit 0, so the ledger
+// recorded SUCCESS and opsalert's Streak could never fire.
+func TestPickupRunError(t *testing.T) {
+	if err := pickupRunError(3, nil, 0, nil); err != nil {
+		t.Errorf("a clean run is nil, got %v", err)
+	}
+	for _, c := range []struct {
+		name       string
+		failed     []string
+		sendFailed int
+		persistErr error
+		want       []string
+	}{
+		{"a failed league", []string{"Bravo"}, 0, nil, []string{"1 of 3 league(s) failed: Bravo"}},
+		{"a failed send", nil, 2, nil, []string{"2 digest send(s) failed"}},
+		{"a failed persist", nil, 0, errors.New("archive sleeper-players: s3 down"), []string{"archive sleeper-players: s3 down"}},
+		{"all three", []string{"Bravo"}, 1, errors.New("save snapshot pointer: throttled"), []string{"1 of 3 league(s) failed: Bravo", "1 digest send(s) failed", "save snapshot pointer: throttled"}},
+	} {
+		err := pickupRunError(3, c.failed, c.sendFailed, c.persistErr)
+		if err == nil {
+			t.Errorf("%s: want an error", c.name)
+			continue
+		}
+		for _, w := range c.want {
+			if !strings.Contains(err.Error(), w) {
+				t.Errorf("%s: %q missing %q", c.name, err.Error(), w)
+			}
+		}
+		if !strings.HasPrefix(err.Error(), "football-pickups: ") {
+			t.Errorf("%s: %q", c.name, err.Error())
+		}
+	}
+}
+
+// Under --dry-run nothing is marked, so the unshowable-head warning must not
+// say it was.
+func TestUnshowableHeadWarning(t *testing.T) {
+	live := unshowableHeadWarning("Palm Trees", "drop-huge", false)
+	if !strings.Contains(live, "marked without alert") || strings.Contains(live, "would be") {
+		t.Errorf("live = %q", live)
+	}
+	dry := unshowableHeadWarning("Palm Trees", "drop-huge", true)
+	if !strings.Contains(dry, "would be marked without alert") || !strings.Contains(dry, "nothing marked") {
+		t.Errorf("dry-run = %q", dry)
+	}
+	if !strings.Contains(live, "Palm Trees") || !strings.Contains(live, "drop-huge") {
+		t.Errorf("the league and item must be named: %q", live)
 	}
 }
 
@@ -340,8 +596,22 @@ func TestDetectLeaguePickups_RoleKeysAreScopedToTheBaselineNotToday(t *testing.T
 	if first.items[0].Key != second.items[0].Key {
 		t.Errorf("keys differ across a held pointer: %q vs %q", first.items[0].Key, second.items[0].Key)
 	}
-	if first.items[0].Key != "role-lock-2026-09-30" {
-		t.Errorf("key = %q, want the baseline's date (2026-09-30)", first.items[0].Key)
+	if first.items[0].Key != "role-lock-20260930T151500Z" {
+		t.Errorf("key = %q, want the baseline's full UTC timestamp (20260930T151500Z)", first.items[0].Key)
+	}
+
+	// Two baselines on the SAME UTC date (a manual rerun that advanced the
+	// pointer, then the next scheduled run) must not share role keys, or a
+	// player who regained #1 in between would be silenced by the earlier
+	// baseline's marker.
+	prevLater := prev
+	prevLater.CapturedAt = prev.CapturedAt.Add(3 * time.Hour)
+	sameDay := detectLeaguePickups(prevLater, cur, lc, pickupLeagueInputs{rostered: map[string]bool{}}, nil, bundle)
+	if len(sameDay.items) != 1 {
+		t.Fatalf("sameDay = %+v", sameDay.items)
+	}
+	if sameDay.items[0].Key == first.items[0].Key {
+		t.Errorf("two baselines on one UTC date must yield different role keys, both gave %q", first.items[0].Key)
 	}
 }
 

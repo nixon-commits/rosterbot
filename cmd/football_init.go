@@ -13,9 +13,11 @@ import (
 // outright without the four FANTRAX_* vars, and football commands must never
 // need Fantrax credentials.
 type FootballConfig struct {
-	// SleeperLeagueID is the single league football-values reads. The
-	// multi-league jobs (football-trades, and Plans 2/3's offers and pickups)
-	// discover leagues from SleeperUserID instead and never read it.
+	// SleeperLeagueID is the single league football-values reads.
+	// loadFootballConfig requires it for EVERY football command, so the
+	// multi-league jobs (football-trades, offers, pickups) must have it set too,
+	// but they discover their leagues from SleeperUserID instead and never use
+	// the value.
 	SleeperLeagueID string
 	// SleeperUserID is the operator's Sleeper account id — stable where a
 	// username is not. Optional at load so football-values keeps working

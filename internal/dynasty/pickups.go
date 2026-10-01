@@ -63,7 +63,10 @@ func bundlePlayer(bundle *statsguy.Bundle, id string) (statsguy.Player, bool) {
 // cached for 24 h, so a capture built from a cache entry the previous binary
 // wrote has order 0 for every player; diffing the next real capture against
 // it would report every unrostered starter in the league as a role change.
-// Silence is the safe failure here — the next day's pair diffs correctly.
+// Silence is the safe failure here, but it lasts TWO runs after a deploy, not
+// one: the first depth-less capture still becomes the baseline (the pointer
+// moves on any fully delivered run), so the next run's pair is depth-less on
+// its prev side too. The coverage line's depth=<prev>/<cur> shows it.
 func DetectRoleChanges(prev, cur PlayerSnapshot, rostered map[string]bool, bundle *statsguy.Bundle, format string) []RoleChange {
 	if !prev.HasDepthData || !cur.HasDepthData {
 		return nil
@@ -159,7 +162,7 @@ func DetectDrops(txns []sleeper.Transaction, since time.Time, rostered map[strin
 			sv, inBundle := bundlePlayer(bundle, pid)
 			// A zero in the league's own column is not a price either: the
 			// bundle keeps a player listed with 0 in a format that does not
-			// value him (measured live 2026-10-01: "DROP Drew Lock (0)" in the
+			// value him (measured live 2026-09-30: "DROP Drew Lock (0)" in the
 			// redraft leagues), and a valued drop must have a value.
 			if !inBundle || sv.Value.Get(format) <= 0 {
 				continue

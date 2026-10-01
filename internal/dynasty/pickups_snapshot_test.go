@@ -93,7 +93,7 @@ func TestBuildPlayerSnapshot_DepthFlagIgnoresFilteredPlayers(t *testing.T) {
 	}
 }
 
-// The snapshot is archived forever (~2,500 rows a day), so the wire format is
+// The snapshot is archived forever (about 900 rows a day), so the wire format is
 // compact — zero-valued optional fields are omitted — and always UTC, however
 // the caller's clock is zoned.
 func TestPlayerSnapshot_WireFormatIsCompactAndUTC(t *testing.T) {

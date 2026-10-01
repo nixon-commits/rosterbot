@@ -1564,8 +1564,10 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		// Daily pickup digest per league: depth-chart role changes, valued
 		// drops and guillotine chops, from public data only. 15:15 UTC sits
 		// after FootballValues (14:45) has warmed the StatsGuy cache. Its
-		// snapshot pointer (layout.FootballPickupSnapshot) is rewritten every
-		// run, so the Infra tab reads the job's health from that object's age.
+		// snapshot pointer (layout.FootballPickupSnapshot) is rewritten after
+		// every fully delivered run and HELD while a league failed, a send failed
+		// or a digest left items unsent, so the Infra tab reads the job's health
+		// from that object's age.
 		{"FootballPickups", "cron(15 15 * * ? *)", jsii.Strings("football-pickups"), dailyGap},
 		// Shadow captures every projection system's lineup projection for the
 		// model-comparison report. It runs in the MORNING UTC window, and that

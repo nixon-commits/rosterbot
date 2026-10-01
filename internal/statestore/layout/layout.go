@@ -249,7 +249,7 @@ var (
 	FootballOffers = Artifact{Name: "Football Offer Markers", S3Prefix: "football/offers/", LocalDir: ".football/offers", Durable: true, Producer: "FootballOffers"}
 
 	// FootballPickups holds one dedup marker per pickup EVENT football-pickups
-	// has alerted: a role change keyed (league, player, baseline capture date),
+	// has alerted: a role change keyed (league, player, baseline capture timestamp),
 	// a drop or chop keyed (league, transaction, player). Same shape and
 	// reasoning as FootballTrades/FootballOffers: durable, no MaxAge, absent
 	// from All().

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/pushover"
 )
@@ -29,26 +30,37 @@ func (it PickupItem) PlayerIDIs(id string) bool { return it.PlayerID == id }
 // markers under one transaction, and a digest that already sent nine of them
 // carries only the other five.
 //
-// baselineDate (YYYY-MM-DD) is the date of the capture the detectors diffed
-// AGAINST, not of the capture just taken: it scopes a role change's key, and
-// the key must be identical on every run that re-detects the same event
+// baselineStamp (see BaselineStamp) identifies the capture the detectors
+// diffed AGAINST, not the capture just taken: it scopes a role change's key,
+// and the key must be identical on every run that re-detects the same event
 // against the same baseline (the pointer is held while a tail is
-// outstanding). DROP and CHOP keys are per-transaction and ignore it.
-func PickupItems(baselineDate string, chops []Chop, drops []DroppedPlayer, roles []RoleChange) []PickupItem {
+// outstanding). It is the baseline's full UTC timestamp rather than its date,
+// so two baselines captured on the same UTC date (a manual rerun that
+// advanced the pointer, then the next scheduled run) cannot share keys and
+// silence a player who regains #1. DROP and CHOP keys are per-transaction and
+// ignore it.
+//
+// Every line joins only its non-empty fields, so a player with no club or a
+// drop with no known dropper never prints a double space or a dangling "by".
+func PickupItems(baselineStamp string, chops []Chop, drops []DroppedPlayer, roles []RoleChange) []PickupItem {
 	var out []PickupItem
 	for _, c := range chops {
 		for _, p := range c.Players {
 			out = append(out, PickupItem{
 				Kind: "chop", Key: "chop-" + c.TransactionID + "-" + p.PlayerID, PlayerID: p.PlayerID,
-				Line:     fmt.Sprintf("CHOP %s %s %s (%d) — %s eliminated", p.Name, p.Position, p.Team, p.Value, c.RosterName),
+				Line:     joinFields("CHOP", p.Name, p.Position, p.Team, fmt.Sprintf("(%d)", p.Value), "—", c.RosterName, "eliminated"),
 				Position: p.Position, Value: p.Value, Priced: true, ChopSize: len(c.Players),
 			})
 		}
 	}
 	for _, d := range drops {
+		by := ""
+		if d.DroppedByName != "" {
+			by = "by " + d.DroppedByName
+		}
 		out = append(out, PickupItem{
 			Kind: "drop", Key: "drop-" + d.TransactionID + "-" + d.PlayerID, PlayerID: d.PlayerID,
-			Line:     fmt.Sprintf("DROP %s %s %s (%d) by %s", d.Name, d.Position, d.Team, d.Value, d.DroppedByName),
+			Line:     joinFields("DROP", d.Name, d.Position, d.Team, fmt.Sprintf("(%d)", d.Value), by),
 			Position: d.Position, Value: d.Value, Priced: true,
 		})
 	}
@@ -65,12 +77,35 @@ func PickupItems(baselineDate string, chops []Chop, drops []DroppedPlayer, roles
 			val = fmt.Sprintf("%d", r.Value)
 		}
 		out = append(out, PickupItem{
-			Kind: "role", Key: "role-" + r.PlayerID + "-" + baselineDate, PlayerID: r.PlayerID,
-			Line:     fmt.Sprintf("ROLE %s %s %s now #1 %s (%s) (%s)", r.Name, r.Position, r.Team, r.DepthChartPosition, was, val),
+			Kind: "role", Key: "role-" + r.PlayerID + "-" + baselineStamp, PlayerID: r.PlayerID,
+			Line:     joinFields("ROLE", r.Name, r.Position, r.Team, "now #1", r.DepthChartPosition, "("+was+")", "("+val+")"),
 			Position: r.Position, Value: r.Value, Priced: r.Priced,
 		})
 	}
 	return out
+}
+
+// BaselineStampLayout is the time layout of a role key's baseline scope: the
+// capture's UTC timestamp to the second.
+const BaselineStampLayout = "20060102T150405Z"
+
+// BaselineStamp formats a baseline capture's time as PickupItems' role-key
+// scope. Stable for a given baseline across every run that diffs against it,
+// and distinct for two baselines captured on the same UTC date.
+func BaselineStamp(capturedAt time.Time) string {
+	return capturedAt.UTC().Format(BaselineStampLayout)
+}
+
+// joinFields joins the non-empty fields with single spaces, so an absent field
+// leaves no double space or dangling connective behind.
+func joinFields(fields ...string) string {
+	kept := fields[:0:0]
+	for _, f := range fields {
+		if f != "" {
+			kept = append(kept, f)
+		}
+	}
+	return strings.Join(kept, " ")
 }
 
 // pickupRank orders a league's digest: lower tier first, then higher value.

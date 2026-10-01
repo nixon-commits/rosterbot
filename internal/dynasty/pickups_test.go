@@ -172,7 +172,7 @@ func TestDetectDrops_OrdersByValueThenName(t *testing.T) {
 }
 
 // StatsGuy keeps a player in the bundle with a zero in a format that does not
-// value him (measured live 2026-10-01: "DROP Drew Lock QB SEA (0)" in the
+// value him (measured live 2026-09-30: "DROP Drew Lock QB SEA (0)" in the
 // redraft leagues). A zero is not a price: it must neither surface as a valued
 // drop nor render as "(0)" on a role change.
 func zeroValueBundle() *statsguy.Bundle {

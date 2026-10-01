@@ -9,8 +9,10 @@ import (
 
 // SnapPlayer is one player as the daily pickups snapshot records them: the
 // fields the role-change detector compares day over day, nothing else. Kept
-// small on purpose — ~2,500 rows a day are archived forever (the archive is
-// NoBackfill: Sleeper keeps no depth-chart history).
+// small on purpose — about 900 rows a day are archived forever (measured
+// 2026-09-30: 897 rosterable on-club players, out of 2,758 on-club before the
+// position filter; the archive is NoBackfill: Sleeper keeps no depth-chart
+// history).
 type SnapPlayer struct {
 	ID                 string `json:"id"`
 	Name               string `json:"name"`

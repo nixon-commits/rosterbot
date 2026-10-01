@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/pushover"
 )
@@ -284,4 +285,47 @@ func keysOf(items []PickupItem) []string {
 		out = append(out, it.Key)
 	}
 	return out
+}
+
+// A player with no club and a drop with no known dropper must render without a
+// double space or a dangling "by": the digest is the user-facing product, and
+// Sleeper does list club-less players (free agents between clubs).
+func TestPickupItems_LinesJoinOnlyTheNonEmptyFields(t *testing.T) {
+	chops := []Chop{{TransactionID: "c1", RosterID: 9, RosterName: "", Players: []DroppedPlayer{
+		{TransactionID: "c1", PlayerID: "maye", Name: "Drake Maye", Position: "QB", Team: "", Kind: "chopped", Value: 2496},
+	}}}
+	drops := []DroppedPlayer{
+		{TransactionID: "d1", PlayerID: "jam", Name: "Jam Miller", Position: "RB", Team: "", Kind: "free_agent", DroppedByName: "", Value: 13},
+		{TransactionID: "d2", PlayerID: "lock", Name: "Drew Lock", Position: "QB", Team: "SEA", Kind: "free_agent", DroppedByName: "Flint Tropics", Value: 90},
+	}
+	roles := []RoleChange{{PlayerID: "bates", Name: "John Bates", Team: "", Position: "TE", DepthChartPosition: "TE"}}
+	want := map[string]string{
+		"chop-c1-maye": "CHOP Drake Maye QB (2496) — eliminated",
+		"drop-d1-jam":  "DROP Jam Miller RB (13)",
+		"drop-d2-lock": "DROP Drew Lock QB SEA (90) by Flint Tropics",
+		"role-bates-S": "ROLE John Bates TE now #1 TE (was unlisted) (unvalued)",
+	}
+	for _, it := range PickupItems("S", chops, drops, roles) {
+		if w, ok := want[it.Key]; !ok || it.Line != w {
+			t.Errorf("%s: line = %q, want %q", it.Key, it.Line, w)
+		}
+		if strings.Contains(it.Line, "  ") || strings.HasSuffix(it.Line, " ") || strings.HasSuffix(it.Line, "by") {
+			t.Errorf("%s: malformed line %q", it.Key, it.Line)
+		}
+	}
+}
+
+func TestBaselineStamp_IsTheFullUTCTimestamp(t *testing.T) {
+	at := time.Date(2026, 9, 30, 15, 15, 7, 0, time.UTC)
+	if got := BaselineStamp(at); got != "20260930T151507Z" {
+		t.Errorf("BaselineStamp = %q, want 20260930T151507Z", got)
+	}
+	// A non-UTC zone is converted, never printed in local time.
+	est := time.FixedZone("EST", -5*3600)
+	if got := BaselineStamp(at.In(est)); got != "20260930T151507Z" {
+		t.Errorf("BaselineStamp(EST) = %q, want the UTC reading", got)
+	}
+	if BaselineStamp(at) == BaselineStamp(at.Add(time.Hour)) {
+		t.Error("two baselines on one UTC date must not share a stamp")
+	}
 }
