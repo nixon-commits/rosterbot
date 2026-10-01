@@ -1678,3 +1678,18 @@ git commit -m "docs: football-pickups"
 **Placeholder scan:** Task 4 Step 3 is an explicit operator hand-off with a compilable reference default. Task 6 Step 5's local diff recipe is concrete. No TBDs.
 
 **Type consistency:** `PickupItem{Kind, Key, PlayerID, Line, Position, Value, Priced, ChopSize}` (Task 4) is what `alertPickups` (Task 6) reads (`Key`, `Line`) and the tests construct. `DetectDrops(txns, since, rostered, players, bundle, format, names)` (Task 3) matches its call in Task 6's runner. `PlayerSnapshot.CapturedAt` (Task 2) is the `since` Task 6 passes. `FormatPickupDigest(profile, items)` returns `(title, body)` as `alertPickups` uses. `layout.FootballPickupSnapshot`/`FootballPickupMarkers()` (Task 5) back `snapStore`/`markers` in Task 6. `lineupapi.BlobStore.Publish(key, body)` has no ctx and `Get(ctx, key)` does — as in Plans 1 and 2.
+
+## Post-review amendments (2026-09-30)
+
+The final whole-branch review (908ad95..1b93038) found one Critical and three Important issues; one fix wave addresses them. Nothing above was rewritten; this records what changed from the plan.
+
+**Commit 1 (Critical).** Task 3's `DetectDrops` filtered `t.Created <= since`, copying the spec's "created after the prior snapshot's date". `created` on a waiver claim is its SUBMISSION time; the claim completes at `status_updated` (waivers process about 08:00 UTC) and a pending claim is invisible in the public feed, so a claim submitted before the previous capture and processed after it was skipped and never re-examined (measured 2026-09-30: 10 of 24 completed waiver drops lost in one league, 42%; free-agent moves unaffected). `sleeper.Transaction` gains `StatusUpdated`; `DetectDrops` filters on `status_updated` (fallback `created`) against `since - pickupOverlap`, `pickupOverlap = 1h` (at least the 15-minute `sleeper.RosterTTL`). The spec's Section 4 carries a dated correction.
+
+**Commit 2 (Important and minor).**
+- I1: a failed archive write, failed pointer write or any failed send returns a non-nil error at the END of the run (after every league has alerted), so the run ledger records FAILURE.
+- I2: the persist/finish block moves into `finishPickupRun` with the archive writer injected; four table cases (held, advance, dry-run, archive failure) pin the hold rule and the dry-run contract.
+- I3: with no marker store an unsent tail does NOT hold the pointer (dedup is off, so a hold could only repeat the same digest); a loud line names the abandoned items. Failed leagues and failed sends still hold.
+- M1: role marker keys carry the baseline's full UTC timestamp (`20060102T150405Z`), not its date, so two baselines on one UTC date cannot share keys.
+- M2/M3: dry-run wording (no "wrote baseline" before "not written"; no "marked" under `--dry-run`).
+- Digest lines: a drop line with no dropper or no club joins only the non-empty fields.
+- Comments and docs: infra row (pointer rewritten after a fully delivered run), snapshot row count (897 rosterable on-club players), `loadFootballConfig` does require `SLEEPER_LEAGUE_ID`, the role detector is silent for TWO runs after a deploy, Task 7's measurement dates and `Selector` method wording, README intro.

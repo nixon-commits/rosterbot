@@ -82,6 +82,18 @@ type Transaction struct {
 	DraftPicks    []TransactionDraftPick `json:"draft_picks"`
 	WaiverBudget  []WaiverBudgetTransfer `json:"waiver_budget"`
 	Created       int64                  `json:"created"` // epoch millis
+	// StatusUpdated is when the transaction reached its current status, epoch
+	// millis. On a waiver claim that is the moment waivers PROCESSED it
+	// (about 08:00 UTC), not the moment it was submitted: Created is the
+	// submission time, and a claim can sit pending for hours or days before it
+	// completes. The public feed lists only complete and failed rows, so a
+	// pending claim is invisible until StatusUpdated. Measured 2026-09-30 in
+	// one league, rounds 1-4: 10 of 24 completed waiver transactions carrying a
+	// drop completed in a later daily capture window than they were created in,
+	// while free-agent moves (0 of 128) always carry StatusUpdated == Created. Zero
+	// means the feed did not carry the field; read the effective time as
+	// StatusUpdated, falling back to Created.
+	StatusUpdated int64 `json:"status_updated"`
 
 	// Creator is the Sleeper USER id (not roster id) that proposed the
 	// transaction. For a trade it is who sent the offer, which is what

@@ -294,6 +294,20 @@ The first run writes a baseline, prints that it did, and alerts nothing.
 - **Valued drop.** A player dropped by a completed `waiver` or `free_agent`
   transaction created after the prior snapshot's date, priced in the
   league's `Format`, and still unrostered now. `trade` is excluded by type.
+  **Correction 2026-09-30:** "created after" is the wrong premise. On a
+  waiver claim `created` is when the claim was SUBMITTED; it completes when
+  waivers process (`status_updated`, about 08:00 UTC), and a pending claim is
+  never visible in the public feed. A claim submitted before the previous
+  day's 15:15 capture and processed the next morning was skipped on the day
+  it completed and never re-examined once the pointer advanced. Measured live
+  (one league, rounds 1-4): 10 of 24 completed waiver drops (42%) lost this
+  way; free-agent moves are unaffected (`status_updated == created` on 128 of
+  128). The rule is now: completed after the prior snapshot's capture time,
+  where the time is `status_updated` (falling back to `created`), looked back
+  by a one-hour overlap (at least the 15-minute transactions cache) so a
+  transaction that completed between the cache fill and the next baseline is
+  not lost. Re-detection inside the overlap is harmless: drop and chop markers
+  key on `(league, transaction, player)`.
 - **Chop.** The same for `chopped`, reported as a group: the eliminated
   roster and its priced players.
 

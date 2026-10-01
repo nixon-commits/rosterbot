@@ -137,10 +137,10 @@ func TestDetectDrops_ValuedCompletedDropsSinceTheCapture(t *testing.T) {
 	}
 	names := map[int]string{7: "Flint Tropics", 9: "Ghost Riders"}
 	txns := []sleeper.Transaction{
-		dropTxn("old", "free_agent", t0.Add(-time.Hour), map[string]int{"maye": 7}),   // before the capture
-		dropTxn("fa", "free_agent", t0.Add(time.Hour), map[string]int{"lock": 7}),     // valued, kept
-		dropTxn("wv", "waiver", t0.Add(2*time.Hour), map[string]int{"nobody": 7}),     // unvalued, dropped
-		dropTxn("claimed", "waiver", t0.Add(3*time.Hour), map[string]int{"brown": 7}), // rostered again since
+		dropTxn("old", "free_agent", t0.Add(-2*pickupOverlap), map[string]int{"maye": 7}), // before the capture and its overlap
+		dropTxn("fa", "free_agent", t0.Add(time.Hour), map[string]int{"lock": 7}),         // valued, kept
+		dropTxn("wv", "waiver", t0.Add(2*time.Hour), map[string]int{"nobody": 7}),         // unvalued, dropped
+		dropTxn("claimed", "waiver", t0.Add(3*time.Hour), map[string]int{"brown": 7}),     // rostered again since
 		{TransactionID: "trade", Type: "trade", Status: "complete", Created: t0.Add(4 * time.Hour).UnixMilli(), Drops: map[string]int{"maye": 9}, RosterIDs: []int{7, 9}},
 		{TransactionID: "pending", Type: "waiver", Status: "pending", Created: t0.Add(5 * time.Hour).UnixMilli(), Drops: map[string]int{"maye": 7}},
 		dropTxn("chop", "chopped", t0.Add(6*time.Hour), map[string]int{"maye": 9, "brown": 9, "nobody": 9}),
@@ -209,5 +209,94 @@ func TestDetectRoleChanges_ZeroValueInTheLeaguesFormatIsUnpriced(t *testing.T) {
 	got = DetectRoleChanges(prev, cur, nil, zeroValueBundle(), "sf_dynasty")
 	if len(got) != 1 || !got[0].Priced || got[0].Value != 50 {
 		t.Errorf("sf_dynasty: got %+v, want priced at 50", got)
+	}
+}
+
+// waiverDone is a completed waiver claim submitted at created and processed
+// at done: Sleeper's `created` is the SUBMISSION time and `status_updated` is
+// when waivers ran (measured 2026-09-30).
+func waiverDone(id string, created, done time.Time, drops map[string]int) sleeper.Transaction {
+	tx := dropTxn(id, "waiver", created, drops)
+	tx.StatusUpdated = done.UnixMilli()
+	return tx
+}
+
+func pickupDropPlayers() map[string]sleeper.Player {
+	return map[string]sleeper.Player{
+		"lock":  {PlayerID: "lock", FirstName: "Drew", LastName: "Lock", Position: "QB", Team: "SEA"},
+		"brown": {PlayerID: "brown", FirstName: "A.J.", LastName: "Brown", Position: "WR", Team: "PHI"},
+	}
+}
+
+func dropIDs(ds []DroppedPlayer) map[string]bool {
+	out := map[string]bool{}
+	for _, d := range ds {
+		out[d.PlayerID] = true
+	}
+	return out
+}
+
+// A waiver claim submitted BEFORE the baseline and processed after it must be
+// reported on the day it completes. Filtering on `created` lost 10 of 24
+// completed waiver drops (42%) in one league (measured 2026-09-30).
+func TestDetectDrops_WaiverSubmittedBeforeTheBaselineButCompletedAfterIsReported(t *testing.T) {
+	txns := []sleeper.Transaction{
+		waiverDone("w1", t0.Add(-20*time.Hour), t0.Add(17*time.Hour), map[string]int{"lock": 7}),
+	}
+	drops, _ := DetectDrops(txns, t0, nil, pickupDropPlayers(), pickupBundle(), "non_sf_redraft", nil)
+	if len(drops) != 1 || drops[0].PlayerID != "lock" {
+		t.Fatalf("a claim completed after the baseline must be reported even though it was created before it: %+v", drops)
+	}
+}
+
+// Completion decides, not submission: a waiver that completed before the
+// baseline (outside the overlap) was already visible to the previous run.
+func TestDetectDrops_WaiverCompletedBeforeTheBaselineAndOverlapIsNotReported(t *testing.T) {
+	txns := []sleeper.Transaction{
+		waiverDone("w1", t0.Add(-30*time.Hour), t0.Add(-pickupOverlap-time.Minute), map[string]int{"lock": 7}),
+	}
+	drops, _ := DetectDrops(txns, t0, nil, pickupDropPlayers(), pickupBundle(), "non_sf_redraft", nil)
+	if len(drops) != 0 {
+		t.Fatalf("a claim that completed before since-overlap was seen by the previous run: %+v", drops)
+	}
+	// And a claim created AFTER the baseline but whose recorded completion is
+	// before it (clock skew or a replayed row) is judged on completion too.
+	txns = []sleeper.Transaction{
+		waiverDone("w2", t0.Add(time.Hour), t0.Add(-5*time.Hour), map[string]int{"lock": 7}),
+	}
+	if drops, _ := DetectDrops(txns, t0, nil, pickupDropPlayers(), pickupBundle(), "non_sf_redraft", nil); len(drops) != 0 {
+		t.Errorf("completion, not creation, is the filter: %+v", drops)
+	}
+}
+
+// A transaction that completed between the shared transactions cache's fill
+// and the next baseline's capture time is invisible to that run; the next run
+// must look back past its baseline by pickupOverlap to catch it.
+func TestDetectDrops_OverlapCatchesACompletionJustBeforeTheBaseline(t *testing.T) {
+	txns := []sleeper.Transaction{
+		waiverDone("inside", t0.Add(-5*time.Hour), t0.Add(-30*time.Minute), map[string]int{"lock": 7}),
+		waiverDone("outside", t0.Add(-5*time.Hour), t0.Add(-pickupOverlap-time.Minute), map[string]int{"brown": 7}),
+	}
+	got := dropIDs(first(DetectDrops(txns, t0, nil, pickupDropPlayers(), pickupBundle(), "non_sf_redraft", nil)))
+	if !got["lock"] {
+		t.Errorf("a completion 30m before the baseline sits inside the %s overlap and must be reported: %v", pickupOverlap, got)
+	}
+	if got["brown"] {
+		t.Errorf("a completion past the overlap must not be reported: %v", got)
+	}
+}
+
+func first(drops []DroppedPlayer, _ []Chop) []DroppedPlayer { return drops }
+
+// A row without status_updated (an older feed shape, or a free-agent move
+// whose two stamps coincide) falls back to created, in both directions.
+func TestDetectDrops_ZeroStatusUpdatedFallsBackToCreated(t *testing.T) {
+	txns := []sleeper.Transaction{
+		dropTxn("after", "free_agent", t0.Add(time.Hour), map[string]int{"lock": 7}),
+		dropTxn("before", "free_agent", t0.Add(-pickupOverlap-time.Minute), map[string]int{"brown": 7}),
+	}
+	got := dropIDs(first(DetectDrops(txns, t0, nil, pickupDropPlayers(), pickupBundle(), "non_sf_redraft", nil)))
+	if !got["lock"] || got["brown"] {
+		t.Errorf("with StatusUpdated == 0 the filter must use Created: want lock only, got %v", got)
 	}
 }

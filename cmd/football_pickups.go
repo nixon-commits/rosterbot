@@ -175,8 +175,9 @@ func runFootballPickups(cmd *cobra.Command, args []string) error {
 // The pointer IS the diff baseline: the next run detects only what changed
 // since it. Advancing it past an event this run did not finish delivering
 // loses that event for good, because neither detector looks behind its
-// baseline (DetectDrops filters on the baseline's capture time, and
-// DetectRoleChanges skips anyone already at #1 in it). So the pointer is held
+// baseline (DetectDrops filters on completion time against the baseline's
+// capture time less a one-hour overlap, and DetectRoleChanges skips anyone
+// already at #1 in it). So the pointer is held
 // when any league failed to load (its whole window would be lost), when a
 // digest left items out (the tail would be lost), or when a send failed
 // (everything it carried would be). Holding keeps the window open: the next
