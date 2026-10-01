@@ -3,6 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/archive"
@@ -105,21 +108,47 @@ func runArchive(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("archive store: %w", err)
 		}
 	}
-	return runArchiveSources(context.Background(), sources, w, date, archiveDryRun)
+	return runArchiveSources(context.Background(), sources, w, date, archiveDryRun, os.Stdout)
 }
 
-// runArchiveSources runs each source independently. A single source failure is
-// logged and skipped; the command errors only when every source failed.
-func runArchiveSources(ctx context.Context, sources []archive.Source, w archive.Writer, date time.Time, dryRun bool) error {
+// runArchiveSources runs each source independently and reports the run as a
+// whole. Isolation is kept — a lost source never stops the next one from
+// being fetched and written — but the run is no longer silent about the loss.
+//
+// Two lines are the positive control (rosterbot-kvgw). Every lost source gets
+// its own `archive: LOST source <name>: <reason>` line, and every run ends
+// with one summary, `archive: wrote N/M sources (…); lost K (…)`, printed
+// unconditionally. Before this a healthy run logged NOTHING: measured over the
+// 14:15Z CloudWatch slot, nine of eleven days had zero events and the two
+// FanGraphs-403 days had nine `warn:` lines, so a flawless run and a total loss
+// of two as-of-date sources were indistinguishable by log content, and
+// dt=2026-09-26/27 of projections and prospects were permanently gone before
+// anyone diffed S3 by hand. A line that prints only on failure cannot prove a
+// success happened; the count can.
+//
+// The exit policy escalates by GRAIN. A whole source lost — fetch error, write
+// error, or a fetch that produced zero artifacts, which is the same absent
+// partition by another route — fails the run, so the ledger records FAILED and
+// opsalert's Streak pages on it; the other sources are already written by
+// then, so the failure costs nothing they captured. A partial loss INSIDE a
+// source (projections archiving six of its eight FanGraphs blobs) is that
+// source's own warning to stderr and stays one: the day has a partition, and
+// the shortfall is named where it happened.
+func runArchiveSources(ctx context.Context, sources []archive.Source, w archive.Writer, date time.Time, dryRun bool, out io.Writer) error {
 	if len(sources) == 0 {
 		return nil
 	}
-	var failed int
+	var written, lost []string
 	for _, s := range sources {
 		arts, err := s.Fetch(ctx, date)
-		if err != nil {
-			warn("archive %s: %v", s.Name(), err)
-			failed++
+		switch {
+		case err != nil:
+			fmt.Fprintf(out, "archive: LOST source %s: %v\n", s.Name(), err)
+			lost = append(lost, s.Name())
+			continue
+		case len(arts) == 0:
+			fmt.Fprintf(out, "archive: LOST source %s: produced 0 artifacts\n", s.Name())
+			lost = append(lost, s.Name())
 			continue
 		}
 		if dryRun {
@@ -127,16 +156,30 @@ func runArchiveSources(ctx context.Context, sources []archive.Source, w archive.
 			for _, a := range arts {
 				total += len(a.Bytes)
 			}
-			fmt.Printf("archive %s (dry-run): %d artifact(s), %d bytes\n", s.Name(), len(arts), total)
+			fmt.Fprintf(out, "archive %s (dry-run): %d artifact(s), %d bytes\n", s.Name(), len(arts), total)
+			written = append(written, s.Name())
 			continue
 		}
 		if err := w.Write(date, s.Name(), arts); err != nil {
-			warn("archive write %s: %v", s.Name(), err)
-			failed++
+			fmt.Fprintf(out, "archive: LOST source %s: write: %v\n", s.Name(), err)
+			lost = append(lost, s.Name())
+			continue
 		}
+		written = append(written, s.Name())
 	}
-	if failed == len(sources) {
-		return fmt.Errorf("archive: all %d sources failed", len(sources))
+
+	verb, prefix := "wrote", "archive"
+	if dryRun {
+		verb, prefix = "fetched", "archive (dry-run)"
+	}
+	summary := fmt.Sprintf("%s: %s %d/%d sources (%s)", prefix, verb, len(written), len(sources), strings.Join(written, ", "))
+	if len(lost) > 0 {
+		summary += fmt.Sprintf("; lost %d (%s)", len(lost), strings.Join(lost, ", "))
+	}
+	fmt.Fprintln(out, summary)
+
+	if len(lost) > 0 {
+		return fmt.Errorf("archive: lost %d of %d source(s): %s", len(lost), len(sources), strings.Join(lost, ", "))
 	}
 	return nil
 }

@@ -2,10 +2,12 @@ package recap
 
 import (
 	"bytes"
+	"context"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -252,5 +254,81 @@ func TestFetchSeasonPitching(t *testing.T) {
 	}
 	if !approx(stats[1].IP, 60+2.0/3) || stats[1].SO != 70 {
 		t.Errorf("pitcher 1 parsed wrong: %+v", stats[1])
+	}
+}
+
+// The leaders board's season-pitching fetch is the second unbounded call in the
+// recap-site path: http.DefaultClient has no Timeout, and the ctx it is handed
+// carries no deadline either, because cmd/root.go calls Execute() rather than
+// ExecuteContext(). Same shape as the rosterbot-5zp1 hang in
+// fantrax.fetchMLBGameLogUncached, so it gets the same ceiling — a statsapi
+// connection that is accepted and then never answered must not stall a render.
+func TestFetchPitchingChunk_StalledServerFailsInsteadOfHanging(t *testing.T) {
+	blocked := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-blocked // accept the connection, then never respond
+	}))
+	defer srv.Close()
+	defer close(blocked)
+
+	prev := seasonPitchingHTTPTimeout
+	seasonPitchingHTTPTimeout = 150 * time.Millisecond
+	defer func() { seasonPitchingHTTPTimeout = prev }()
+
+	// Shrunk so the whole attempt budget fits the deadline below. What is
+	// under test is that the fetch gives up at all, not the pause schedule.
+	prevBackoff := seasonPitchingBackoff
+	seasonPitchingBackoff = []time.Duration{time.Millisecond}
+	defer func() { seasonPitchingBackoff = prevBackoff }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- fetchPitchingChunk(context.Background(), srv.URL, map[int]pitchSeason{})
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("stalled server produced no error; the fetch must fail rather than return success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fetchPitchingChunk never returned against a server that never responds: the call is unbounded (rosterbot-5zp1)")
+	}
+}
+
+// Same reasoning as the game-log fetch: the 15s ceiling makes a stall
+// detectable, the retry makes it survivable. One stalled attempt must not cost
+// the render its leaders board (rosterbot-5zp1).
+func TestFetchPitchingChunk_RetriesPastAStalledAttempt(t *testing.T) {
+	var attempts int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			<-release // first attempt: accept, never answer
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"people":[{"id":592789,"stats":[{"splits":[{"stat":{"inningsPitched":"180.0","homeRuns":20,"baseOnBalls":40,"hitBatsmen":5,"strikeOuts":200,"earnedRuns":70}}]}]}]}`))
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	prevTimeout := seasonPitchingHTTPTimeout
+	seasonPitchingHTTPTimeout = 150 * time.Millisecond
+	defer func() { seasonPitchingHTTPTimeout = prevTimeout }()
+
+	prevBackoff := seasonPitchingBackoff
+	seasonPitchingBackoff = []time.Duration{time.Millisecond}
+	defer func() { seasonPitchingBackoff = prevBackoff }()
+
+	out := map[int]pitchSeason{}
+	if err := fetchPitchingChunk(context.Background(), srv.URL, out); err != nil {
+		t.Fatalf("fetch failed despite a healthy second attempt: %v", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Errorf("attempts = %d, want 2 (one stall, one success)", got)
+	}
+	if len(out) != 1 {
+		t.Fatalf("got %d pitchers, want 1", len(out))
 	}
 }

@@ -163,9 +163,9 @@ func (c *FileCache[T]) GetWithStaleFallbackAt(key string, fetch func() (T, error
 
 	// Fresh fetch failed — serve any stale cached value.
 	if stale, fetchedAt, ok := c.loadAnyAt(key); ok {
-		age := time.Since(fetchedAt)
-		fmt.Fprintf(os.Stderr, "⚠️ stale cache: %s (%s old) (%v)\n", key, roundAge(age), err)
-		reportStale(key, fetchedAt, age, err)
+		now := staleNow()
+		fmt.Fprintf(os.Stderr, "⚠️ stale cache: %s (%s old) (%v)\n", key, roundAge(now.Sub(fetchedAt)), err)
+		reportStale(key, fetchedAt, now, err)
 		return stale, fetchedAt, nil
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -266,52 +267,108 @@ func fetchSeasonPitching(ctx context.Context, ids []int, year int) (map[int]pitc
 	return out, nil
 }
 
+// seasonPitchingHTTPTimeout bounds one season-pitching chunk fetch. 15s matches
+// the other statsapi fetches. Must never be zero: http.Client reads that as
+// "no timeout", which is the rosterbot-5zp1 hang. A var so tests can shrink it.
+var seasonPitchingHTTPTimeout = 15 * time.Second
+
+// seasonPitchingBackoff is the pause before each RETRY, so len+1 is the
+// attempt budget. A var so tests need not sleep.
+var seasonPitchingBackoff = []time.Duration{time.Second, 4 * time.Second}
+
+// retryableStatsAPIStatus reports whether a statsapi status is worth another
+// attempt. Same rule as the game-log fetch in internal/fantrax, for the same
+// upstream; each package owns its own policy here the way projections and
+// fantrax already do, rather than sharing one across a package boundary for
+// two call sites.
+func retryableStatsAPIStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
+
+// fetchPitchingChunk GETs one chunk of season pitching and merges it into out,
+// retrying the failures that clear on their own.
+//
+// The client timeout makes a stalled statsapi detectable (rosterbot-5zp1); the
+// retry is what keeps one stall from costing the render its leaders board. A
+// read, so repeating an attempt is always safe.
 func fetchPitchingChunk(ctx context.Context, url string, out map[int]pitchSeason) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("statsapi pitching: status %d", resp.StatusCode)
-	}
-	var payload struct {
-		People []struct {
-			ID    int `json:"id"`
-			Stats []struct {
-				Splits []struct {
-					Stat struct {
-						InningsPitched string `json:"inningsPitched"`
-						HomeRuns       int    `json:"homeRuns"`
-						BaseOnBalls    int    `json:"baseOnBalls"`
-						HitBatsmen     int    `json:"hitBatsmen"`
-						StrikeOuts     int    `json:"strikeOuts"`
-						EarnedRuns     int    `json:"earnedRuns"`
-					} `json:"stat"`
-				} `json:"splits"`
-			} `json:"stats"`
-		} `json:"people"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return err
-	}
-	for _, person := range payload.People {
-		for _, st := range person.Stats {
-			for _, sp := range st.Splits {
-				out[person.ID] = pitchSeason{
-					IP:  scoring.ParseIP(sp.Stat.InningsPitched),
-					HR:  float64(sp.Stat.HomeRuns),
-					BB:  float64(sp.Stat.BaseOnBalls),
-					HBP: float64(sp.Stat.HitBatsmen),
-					SO:  float64(sp.Stat.StrikeOuts),
-					ER:  float64(sp.Stat.EarnedRuns),
+	var lastErr error
+	for attempt := 0; attempt <= len(seasonPitchingBackoff); attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(seasonPitchingBackoff[attempt-1]):
+			}
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		// Not http.DefaultClient: it has no Timeout, and the ctx handed down
+		// here has no deadline either (cmd/root.go calls Execute(), not
+		// ExecuteContext()), so this fetch was unbounded and could stall a
+		// render indefinitely -- rosterbot-5zp1, whose observed instance was
+		// the sibling fetch in internal/fantrax. Both bounds apply, so a
+		// caller that does pass a tighter deadline still wins.
+		resp, err := (&http.Client{Timeout: seasonPitchingHTTPTimeout}).Do(req)
+		if err != nil {
+			lastErr = err
+			continue // transport error, including the timeout: always retry
+		}
+		if resp.StatusCode != http.StatusOK {
+			// Drain before closing so a retry reuses the connection.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+			_ = resp.Body.Close()
+			lastErr = fmt.Errorf("statsapi pitching: status %d", resp.StatusCode)
+			if !retryableStatsAPIStatus(resp.StatusCode) {
+				return lastErr
+			}
+			continue
+		}
+
+		var payload struct {
+			People []struct {
+				ID    int `json:"id"`
+				Stats []struct {
+					Splits []struct {
+						Stat struct {
+							InningsPitched string `json:"inningsPitched"`
+							HomeRuns       int    `json:"homeRuns"`
+							BaseOnBalls    int    `json:"baseOnBalls"`
+							HitBatsmen     int    `json:"hitBatsmen"`
+							StrikeOuts     int    `json:"strikeOuts"`
+							EarnedRuns     int    `json:"earnedRuns"`
+						} `json:"stat"`
+					} `json:"splits"`
+				} `json:"stats"`
+			} `json:"people"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&payload)
+		_ = resp.Body.Close()
+		if err != nil {
+			// A truncated body is retryable; a malformed one fails the same
+			// way on the last attempt and surfaces then.
+			lastErr = err
+			continue
+		}
+
+		for _, person := range payload.People {
+			for _, st := range person.Stats {
+				for _, sp := range st.Splits {
+					out[person.ID] = pitchSeason{
+						IP:  scoring.ParseIP(sp.Stat.InningsPitched),
+						HR:  float64(sp.Stat.HomeRuns),
+						BB:  float64(sp.Stat.BaseOnBalls),
+						HBP: float64(sp.Stat.HitBatsmen),
+						SO:  float64(sp.Stat.StrikeOuts),
+						ER:  float64(sp.Stat.EarnedRuns),
+					}
 				}
 			}
 		}
+		return nil
 	}
-	return nil
+	return lastErr
 }
