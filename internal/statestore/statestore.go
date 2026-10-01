@@ -64,31 +64,33 @@ func of(a layout.Artifact) artifact {
 }
 
 var (
-	cacheArtifact            = of(layout.Artifact{Name: layout.Cache.Name, S3Prefix: layout.Cache.S3Prefix}) // local: default fsStore, dir unused
-	analysisArtifact         = of(layout.Analysis)
-	teamValueArtifact        = of(layout.TeamValues)
-	footballValueArtifact    = of(layout.FootballValues)
-	lineupGapArtifact        = of(layout.LineupGaps)
-	runLedgerArtifact        = of(layout.RunLedger)
-	runOutputArtifact        = of(layout.RunOutput)
-	notificationArtifact     = of(layout.Notification)
-	progressArtifact         = of(layout.Progress)
-	lineupArtifact           = of(layout.Lineup)
-	tradesArtifact           = of(layout.Trades)
-	tradeValuesArtifact      = of(layout.TradeValues)
-	availablePoolArtifact    = of(layout.AvailablePool)
-	rosterValuesArtifact     = of(layout.RosterValues)
-	tradeOfferArtifact       = of(layout.TradeOffers)
-	reportsArtifact          = of(layout.Reports)
-	footballTradesArtifact   = of(layout.FootballTrades)
-	footballTradeLogArtifact = of(layout.FootballTradeLog)
-	footballOffersArtifact   = of(layout.FootballOffers)
-	ilStartsArtifact         = of(layout.ILStarts)
-	gsFloorArtifact          = of(layout.GSFloorAlerts)
-	lineupApplyArtifact      = of(layout.LineupApplyAlerts)
-	staleCacheArtifact       = of(layout.StaleCacheAlerts)
-	archiveArtifact          = of(layout.Archive)
-	backtestArtifact         = of(layout.Backtest)
+	cacheArtifact              = of(layout.Artifact{Name: layout.Cache.Name, S3Prefix: layout.Cache.S3Prefix}) // local: default fsStore, dir unused
+	analysisArtifact           = of(layout.Analysis)
+	teamValueArtifact          = of(layout.TeamValues)
+	footballValueArtifact      = of(layout.FootballValues)
+	lineupGapArtifact          = of(layout.LineupGaps)
+	runLedgerArtifact          = of(layout.RunLedger)
+	runOutputArtifact          = of(layout.RunOutput)
+	notificationArtifact       = of(layout.Notification)
+	progressArtifact           = of(layout.Progress)
+	lineupArtifact             = of(layout.Lineup)
+	tradesArtifact             = of(layout.Trades)
+	tradeValuesArtifact        = of(layout.TradeValues)
+	availablePoolArtifact      = of(layout.AvailablePool)
+	rosterValuesArtifact       = of(layout.RosterValues)
+	tradeOfferArtifact         = of(layout.TradeOffers)
+	reportsArtifact            = of(layout.Reports)
+	footballTradesArtifact     = of(layout.FootballTrades)
+	footballTradeLogArtifact   = of(layout.FootballTradeLog)
+	footballOffersArtifact     = of(layout.FootballOffers)
+	footballPickupsArtifact    = of(layout.FootballPickups)
+	footballPickupSnapArtifact = of(layout.FootballPickupSnapshot)
+	ilStartsArtifact           = of(layout.ILStarts)
+	gsFloorArtifact            = of(layout.GSFloorAlerts)
+	lineupApplyArtifact        = of(layout.LineupApplyAlerts)
+	staleCacheArtifact         = of(layout.StaleCacheAlerts)
+	archiveArtifact            = of(layout.Archive)
+	backtestArtifact           = of(layout.Backtest)
 )
 
 // Bucket is the single os.Getenv("STATE_BUCKET") read in the codebase. Empty
@@ -435,6 +437,18 @@ func (s *Selector) FootballTradeMarkers() (lineupapi.BlobStore, error) {
 // transaction_id and must not silence each other.
 func (s *Selector) FootballOfferMarkers() (lineupapi.BlobStore, error) {
 	return blobStore(s, footballOffersArtifact, "")
+}
+
+// FootballPickupMarkers is one dedup marker per alerted pickup event.
+func (s *Selector) FootballPickupMarkers() (lineupapi.BlobStore, error) {
+	return blobStore(s, footballPickupsArtifact, "")
+}
+
+// FootballPickupSnapshot holds latest.json, the capture football-pickups
+// diffs against. A BlobStore because the diff wants exactly one known key,
+// read then overwritten; the archive store keeps the history.
+func (s *Selector) FootballPickupSnapshot() (lineupapi.BlobStore, error) {
+	return blobStore(s, footballPickupSnapArtifact, "")
 }
 
 // FootballTradeLogWriter returns the write side of the Football Trade Log -- S3

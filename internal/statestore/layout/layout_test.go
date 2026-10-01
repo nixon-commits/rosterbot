@@ -356,7 +356,7 @@ func TestOpsAlertMarkers_LayoutChoicesArePinned(t *testing.T) {
 	if a.S3Prefix != "opsalert/" {
 		t.Errorf("S3Prefix = %q, want opsalert/ — the CDK lifecycle rule and IAM grant restate this literal", a.S3Prefix)
 	}
-	for _, other := range []Artifact{ILStarts, GSFloorAlerts, StaleCacheAlerts, FootballTrades, FootballOffers, Notification} {
+	for _, other := range []Artifact{ILStarts, GSFloorAlerts, StaleCacheAlerts, FootballTrades, FootballOffers, FootballPickups, Notification} {
 		if a.S3Prefix == other.S3Prefix {
 			t.Errorf("shares a prefix with %s; one marker family would overwrite the other", other.Name)
 		}
@@ -404,5 +404,32 @@ func TestFootballOffers_IsAMarkerFamilyLikeFootballTrades(t *testing.T) {
 	// markers nor the trade log may see an offer marker, and vice versa.
 	if strings.HasPrefix(a.S3Prefix, FootballTrades.S3Prefix) || strings.HasPrefix(FootballTrades.S3Prefix, a.S3Prefix) {
 		t.Errorf("FootballOffers %q nests with FootballTrades %q", a.S3Prefix, FootballTrades.S3Prefix)
+	}
+}
+
+func TestFootballPickups_MarkerFamilyAndSnapshotPointer(t *testing.T) {
+	m := FootballPickups
+	if m.S3Prefix != "football/pickups/" || m.LocalDir != ".football/pickups" || !m.Durable || m.MaxAge != 0 || m.PerTenant {
+		t.Errorf("markers: %+v", m)
+	}
+	s := FootballPickupSnapshot
+	if s.S3Prefix != "football/pickups-snapshot/" || s.LocalDir != ".football/pickups-snapshot" || !s.Durable || s.MaxAge != 2*Day || s.PerTenant || s.Partitioned || s.Producer != "FootballPickups" {
+		t.Errorf("snapshot: %+v", s)
+	}
+	inAll := map[string]bool{}
+	for _, a := range All() {
+		inAll[a.Name] = true
+	}
+	if inAll[m.Name] {
+		t.Error("markers must be absent from All(): a quiet league writes none for weeks")
+	}
+	if !inAll[s.Name] {
+		t.Error("the snapshot pointer must be in All(): it is rewritten daily, so its age IS the job's health")
+	}
+	for _, other := range []Artifact{FootballTrades, FootballOffers, FootballTradeLog} {
+		if strings.HasPrefix(m.S3Prefix, other.S3Prefix) || strings.HasPrefix(other.S3Prefix, m.S3Prefix) ||
+			strings.HasPrefix(s.S3Prefix, other.S3Prefix) || strings.HasPrefix(other.S3Prefix, s.S3Prefix) {
+			t.Errorf("prefix nests with %s", other.Name)
+		}
 	}
 }

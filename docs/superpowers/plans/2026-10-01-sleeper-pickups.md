@@ -641,7 +641,7 @@ git commit -m "feat(dynasty): pickup detectors — role change, valued drop, gui
   - `func PickupItems(captureDate string, chops []Chop, drops []DroppedPlayer, roles []RoleChange) []PickupItem` — renders one item per drop and role change, and ONE item per chop **player** (so each player is marked individually) with the chop's roster on the line.
   - `func pickupRank(it PickupItem, superflex bool) (tier int, value int)` — **operator-written**; lower tier first, then higher value first.
   - `func OrderPickups(items []PickupItem, superflex bool) []PickupItem` — stable sort by `pickupRank`.
-  - `func FormatPickupDigest(profile LeagueProfile, items []PickupItem) (title, body string)` — `pushover.Builder`, whole lines.
+  - `func FormatPickupDigest(profile LeagueProfile, items []PickupItem) (title, body string, shown int)` — `pushover.Builder`, whole lines, STOPS at the first line that does not fit (so rank order is preserved and "…and N more" means the N lowest-ranked) and returns how many items it showed; the caller marks only those.
 
 **⚠ Operator contribution.** `pickupRank` decides how a valued drop ranks against an unvalued role change (the spec reserves it). The executor prepares the stub and STOPS before Step 3 for the operator's choice; a suggested default is included so the task can proceed if the operator approves it as-is.
 
@@ -1156,6 +1156,32 @@ func TestAlertPickups_NilMarkersStillSends(t *testing.T) {
 	}
 }
 
+func TestAlertPickups_RefusedTailIsNotMarked(t *testing.T) {
+	in, sent := pickupAlertFixture(t)
+	var many []dynasty.PickupItem
+	for i := 0; i < 40; i++ {
+		many = append(many, dynasty.PickupItem{Kind: "drop", Key: "drop-t-" + strings.Repeat("p", 1) + string(rune('a'+i%26)) + string(rune('a'+i/26)), PlayerID: "p", Line: strings.Repeat("x", 60), Value: 100 - i, Priced: true})
+	}
+	in.items = many
+	res := alertPickups(context.Background(), in)
+	if res.Sent != 1 || len(*sent) != 1 {
+		t.Fatalf("res=%+v", res)
+	}
+	marked := 0
+	for _, it := range many {
+		if _, found, _ := in.markers.Get(context.Background(), "L1-"+it.Key); found {
+			marked++
+		}
+	}
+	if marked == 0 || marked == len(many) {
+		t.Errorf("marked %d of %d: an overflowing digest must mark only the items it carried, so the tail alerts next run", marked, len(many))
+	}
+	// The first (highest-ranked) items are the marked ones.
+	if _, found, _ := in.markers.Get(context.Background(), "L1-"+many[0].Key); !found {
+		t.Error("the top-ranked item was shown and must be marked")
+	}
+}
+
 func TestAlertPickups_EmptyItemsSendsNothing(t *testing.T) {
 	in, sent := pickupAlertFixture(t)
 	in.items = nil
@@ -1512,8 +1538,9 @@ type pickupAlertInputs struct {
 }
 
 // alertPickups sends ONE digest per league carrying only the items with no
-// marker, then marks each of them: check -> send -> mark. A failed send marks
-// nothing; a marker-write failure degrades to a repeat next run.
+// marker, then marks the items the digest showed: check -> send -> mark. A
+// failed send marks nothing; a marker-write failure degrades to a repeat next
+// run; an item the digest could not fit stays unmarked for the next run.
 func alertPickups(ctx context.Context, in pickupAlertInputs) pickupRunResult {
 	var res pickupRunResult
 	m := alertmarker.New(in.markers, alertmarker.WithLogf(func(format string, args ...any) {
@@ -1530,7 +1557,7 @@ func alertPickups(ctx context.Context, in pickupAlertInputs) pickupRunResult {
 	if len(fresh) == 0 {
 		return res
 	}
-	title, body := dynasty.FormatPickupDigest(in.league, fresh)
+	title, body, shown := dynasty.FormatPickupDigest(in.league, fresh)
 	fmt.Fprintln(in.out, title)
 	fmt.Fprintln(in.out, body)
 	if in.dryRun {
@@ -1541,7 +1568,11 @@ func alertPickups(ctx context.Context, in pickupAlertInputs) pickupRunResult {
 		return res
 	}
 	res.Sent = 1
-	for _, it := range fresh {
+	// Mark ONLY the items the digest actually carried. A line the digest
+	// refused for space is still unmarked, so it leads the next run's digest
+	// instead of being muted forever -- the silent-loss failure this repo's
+	// check -> send -> mark rule exists to prevent.
+	for _, it := range fresh[:shown] {
 		m.Record(in.league.LeagueID+"-"+it.Key, []byte(it.Line))
 	}
 	return res
@@ -1606,11 +1637,11 @@ git commit -m "feat(football-pickups): daily per-league pickup digest; schedule,
 
 - [ ] **Step 1: README**
 
-In the football `<details>` block add `rosterbot football-pickups --dry-run` to the examples and append: "`football-pickups` (daily, 15:15 UTC) snapshots Sleeper's player dump once a day — players on an NFL club at a position some discovered league can roster — archives it as source `sleeper-players`, and diffs it against the most recent prior capture (kept as a `latest.json` pointer; a missed day widens the window rather than losing the diff). Per league it reports, in one ranked digest sent only when non-empty, unrostered players who just became depth-chart starters (the signal that caught real FAAB pickups while StatsGuy's value sat still), priced players released by completed waiver/free-agent moves (trades excluded), and guillotine chops with the eliminated roster's priced players. An unvalued role change is listed with its depth-chart fact rather than hidden. Public data only; one dedup marker per event; `--dry-run` sends, marks and archives nothing; the first run writes a baseline and alerts nothing. Unconditional per-league coverage line, zero case included."
+In the football `<details>` block add `rosterbot football-pickups --dry-run` to the examples and append: "`football-pickups` (daily, 15:15 UTC) snapshots Sleeper's player dump once a day — players on an NFL club at a position some discovered league can roster — archives it as source `sleeper-players`, and diffs it against the most recent prior capture (kept as a `latest.json` pointer; a missed day widens the window rather than losing the diff). Per league it reports, in one ranked digest sent only when non-empty, unrostered players who just became depth-chart starters (the signal that caught real FAAB pickups while StatsGuy's value sat still), priced players released by completed waiver/free-agent moves (trades excluded), and guillotine chops with the eliminated roster's priced players. An unvalued role change is listed with its depth-chart fact rather than hidden. Public data only; one dedup marker per event; `--dry-run` sends, marks and archives nothing; the first run writes a baseline and alerts nothing. The diff baseline advances only when every league loaded, every digest sent, and nothing was left out of a digest for space — otherwise it is held so the next run re-detects the same events and the markers keep the already-sent ones quiet. A player StatsGuy values at zero in the league's column is treated as unvalued. Unconditional per-league coverage line, zero case included."
 
 - [ ] **Step 2: `docs/dynasty-football.md`**
 
-After the `football-offers` paragraph add a `**football-pickups**` paragraph covering: the snapshot (`dynasty.BuildPlayerSnapshot`, `RosterablePositions` and why K/DEF are filtered by the leagues' own slots), the archive source `sleeper-players` (NoBackfill: Sleeper keeps no depth-chart history) AND the `latest.json` pointer in `layout.FootballPickupSnapshot` (why: the archive store is write-only; the pointer answers "most recent prior capture, whenever that was" without listing; it is in `All()` with a 2-day `MaxAge` because its age is the job's health), the three detectors with their measured rationale (Lock/Wentz at QB/1; trade halves under `drops`; the 2026-09-15 chop), `PickupItems`/`pickupRank` (operator-written; the chosen rule) /`OrderPickups`/`FormatPickupDigest` (whole lines, "…and N more"), one item and one marker per player so a partly-sent chop resumes, `alertPickups`' check → send → mark with one digest per league, `pollPickups` isolation, `persistPickupSnapshot` ordering (archive before pointer; runs AFTER the alerts so a crash keeps the old baseline and the markers keep it quiet), the coverage line, the GraphQL `get_active_players` alternative deliberately not used, and the schedule/Infra facts.
+After the `football-offers` paragraph add a `**football-pickups**` paragraph covering: the snapshot (`dynasty.BuildPlayerSnapshot`, `RosterablePositions` and why K/DEF are filtered by the leagues' own slots), the archive source `sleeper-players` (NoBackfill: Sleeper keeps no depth-chart history) AND the `latest.json` pointer in `layout.FootballPickupSnapshot` (why: the archive store is write-only; the pointer answers "most recent prior capture, whenever that was" without listing; it is in `All()` with a 2-day `MaxAge` because its age is the job's health), the three detectors with their measured rationale (Lock/Wentz at QB/1; trade halves under `drops`; the 2026-09-15 chop), `PickupItems`/`pickupRank` (operator-written; the chosen rule) /`OrderPickups`/`FormatPickupDigest` (whole lines, "…and N more"), one item and one marker per player; `alertPickups`' check → send → mark with one digest per league, marking ONLY the items the digest carried (`FormatPickupDigest` returns `shown`, stops at the first line that does not fit, and the trailer's N is the N lowest-ranked); **the pointer-hold rule** (`shouldAdvancePointer`): the daily archive partition is always written, but `latest.json` — the diff baseline — advances only when no league failed, no send failed and no league left an unsent tail, because the next run can only re-detect those events against the SAME baseline (drops created before a new capture are skipped by `DetectDrops`, roles already #1 in it by `DetectRoleChanges`); role marker keys are therefore scoped to the BASELINE capture date, not today's, so re-detection reuses the keys and only the tail alerts, and the tail shrinks by `shown` per run so the hold is bounded; `pollPickups` isolation; the coverage line (`depth=<prev>/<cur>`, because `DetectRoleChanges` is silent unless both captures carry depth data — a capture built from the 24 h cache written by the previous binary has order 0 for everyone); value 0 in the league's column counts as unpriced (a `(0)` drop is noise; a 0-valued role change reads `unvalued`); roles filtered to the league's OWN rosterable positions (the snapshot is built from the union across leagues); the GraphQL `get_active_players` alternative deliberately not used, and the schedule/Infra facts.
 
 - [ ] **Step 3: `docs/aws-deployment.md` and `CLAUDE.md`**
 
@@ -1647,3 +1678,18 @@ git commit -m "docs: football-pickups"
 **Placeholder scan:** Task 4 Step 3 is an explicit operator hand-off with a compilable reference default. Task 6 Step 5's local diff recipe is concrete. No TBDs.
 
 **Type consistency:** `PickupItem{Kind, Key, PlayerID, Line, Position, Value, Priced, ChopSize}` (Task 4) is what `alertPickups` (Task 6) reads (`Key`, `Line`) and the tests construct. `DetectDrops(txns, since, rostered, players, bundle, format, names)` (Task 3) matches its call in Task 6's runner. `PlayerSnapshot.CapturedAt` (Task 2) is the `since` Task 6 passes. `FormatPickupDigest(profile, items)` returns `(title, body)` as `alertPickups` uses. `layout.FootballPickupSnapshot`/`FootballPickupMarkers()` (Task 5) back `snapStore`/`markers` in Task 6. `lineupapi.BlobStore.Publish(key, body)` has no ctx and `Get(ctx, key)` does — as in Plans 1 and 2.
+
+## Post-review amendments (2026-09-30)
+
+The final whole-branch review (908ad95..1b93038) found one Critical and three Important issues; one fix wave addresses them. Nothing above was rewritten; this records what changed from the plan.
+
+**Commit 1 (Critical).** Task 3's `DetectDrops` filtered `t.Created <= since`, copying the spec's "created after the prior snapshot's date". `created` on a waiver claim is its SUBMISSION time; the claim completes at `status_updated` (waivers process about 08:00 UTC) and a pending claim is invisible in the public feed, so a claim submitted before the previous capture and processed after it was skipped and never re-examined (measured 2026-09-30: 10 of 24 completed waiver drops lost in one league, 42%; free-agent moves unaffected). `sleeper.Transaction` gains `StatusUpdated`; `DetectDrops` filters on `status_updated` (fallback `created`) against `since - pickupOverlap`, `pickupOverlap = 1h` (at least the 15-minute `sleeper.RosterTTL`). The spec's Section 4 carries a dated correction.
+
+**Commit 2 (Important and minor).**
+- I1: a failed archive write, failed pointer write or any failed send returns a non-nil error at the END of the run (after every league has alerted), so the run ledger records FAILURE.
+- I2: the persist/finish block moves into `finishPickupRun` with the archive writer injected; four table cases (held, advance, dry-run, archive failure) pin the hold rule and the dry-run contract.
+- I3: with no marker store an unsent tail does NOT hold the pointer (dedup is off, so a hold could only repeat the same digest); a loud line names the abandoned items. Failed leagues and failed sends still hold.
+- M1: role marker keys carry the baseline's full UTC timestamp (`20060102T150405Z`), not its date, so two baselines on one UTC date cannot share keys.
+- M2/M3: dry-run wording (no "wrote baseline" before "not written"; no "marked" under `--dry-run`).
+- Digest lines: a drop line with no dropper or no club joins only the non-empty fields.
+- Comments and docs: infra row (pointer rewritten after a fully delivered run), snapshot row count (897 rosterable on-club players), `loadFootballConfig` does require `SLEEPER_LEAGUE_ID`, the role detector is silent for TWO runs after a deploy, Task 7's measurement dates and `Selector` method wording, README intro.
