@@ -375,6 +375,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			// EventBridge schedules fail every run with "missing required env
 			// var: SLEEPER_LEAGUE_ID" once deployed.
 			"SLEEPER_LEAGUE_ID": secret("SLEEPER_LEAGUE_ID"),
+			// SLEEPER_USER_ID is the operator's Sleeper account id. The
+			// multi-league football jobs (football-trades, and the offers and
+			// pickups jobs that follow it) discover every league from it;
+			// they fail fast without it (requireSleeperUserID). Same
+			// merge-order rule as APNS_AUTH_KEY below: the SSM parameter must
+			// exist before this deploys.
+			"SLEEPER_USER_ID": secret("SLEEPER_USER_ID"),
 			// APNs provider-token credentials (the .p8 body and its Key ID).
 			// MERGE-ORDER LOAD-BEARING: an ECS Secret naming an SSM parameter
 			// that does not exist fails EVERY task launch at provisioning

@@ -129,3 +129,39 @@ func TestInitFootballSetsClientCacheDirUnlessNoCache(t *testing.T) {
 		t.Errorf("CacheDir = %q, want empty (--no-cache set)", sc.CacheDir)
 	}
 }
+
+func TestLoadFootballConfig_SleeperUserIDIsOptionalAtLoad(t *testing.T) {
+	t.Setenv("SLEEPER_LEAGUE_ID", "L")
+	t.Setenv("SLEEPER_USER_ID", "")
+	cfg, err := loadFootballConfig()
+	if err != nil {
+		t.Fatalf("football-values must still load without SLEEPER_USER_ID: %v", err)
+	}
+	if err := cfg.requireSleeperUserID(); err == nil {
+		t.Errorf("requireSleeperUserID must fail when unset")
+	}
+	t.Setenv("SLEEPER_USER_ID", "738883211463155712")
+	cfg, err = loadFootballConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SleeperUserID != "738883211463155712" || cfg.requireSleeperUserID() != nil {
+		t.Errorf("user id not read: %+v", cfg)
+	}
+}
+
+func TestLoadFootballConfig_FormatOverridesParsedAndRejected(t *testing.T) {
+	t.Setenv("SLEEPER_LEAGUE_ID", "L")
+	t.Setenv("SLEEPER_FORMAT_OVERRIDES", "1=sf_redraft")
+	cfg, err := loadFootballConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FormatOverrides["1"] != "sf_redraft" {
+		t.Errorf("override not parsed: %v", cfg.FormatOverrides)
+	}
+	t.Setenv("SLEEPER_FORMAT_OVERRIDES", "1=nope")
+	if _, err := loadFootballConfig(); err == nil {
+		t.Errorf("a malformed override must fail config load, not be skipped")
+	}
+}
