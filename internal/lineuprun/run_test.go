@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
@@ -852,6 +853,105 @@ func TestRun_PlayoffStopNamesTheReason(t *testing.T) {
 			}
 			if !strings.Contains(out.String(), tc.wantLine) {
 				t.Errorf("output lacks %q:\n%s", tc.wantLine, out.String())
+			}
+		})
+	}
+}
+
+// TestRun_PlayoffIdleDayStillCapturesTheSnapshot pins rosterbot-cwy8: a
+// playoff day the team has no scoring matchup in still archives its
+// projection snapshot, because a projection is judged against MLB actuals
+// whether or not the fantasy lineup counts (the policy cmd/grade.go states,
+// rosterbot-zg1r) — while the lineup side stays stopped: no board, no apply.
+// Before the fix the idle stop returned before Emit, so the capture died with
+// the apply and every eliminated tenant lost the rest of the bracket from the
+// Analysis Store (measured 2026-09-30: snapshots and grades both end on the
+// elimination day, 2026-09-13).
+func TestRun_PlayoffIdleDayStillCapturesTheSnapshot(t *testing.T) {
+	seasonStart := time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC)
+	seasonEnd := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
+	regular := fantrax.ScoringPeriod{Number: 22, Caption: "Scoring Period 22",
+		StartDate: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), EndDate: time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)}
+	round2 := fantrax.ScoringPeriod{Number: 24, Caption: "Playoffs - Round 2", Playoff: true,
+		StartDate: time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC), EndDate: time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)}
+	today := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
+	stopLine := "No scoring matchup for this team in Playoffs - Round 2 (2026-09-14 to 2026-09-20): bye or eliminated. Nothing to optimize."
+
+	cases := []struct {
+		name   string
+		dryRun bool
+		root   string
+	}{
+		{"shadow capture: dry-run into a per-system partition", true, "snapshots-systems/system=depthcharts"},
+		{"hourly optimize: live run into the flat partition", false, "snapshots"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := &fakeLineupClient{
+				hitters: []fantrax.Player{
+					{ID: "h1", Name: "Hot Hitter", MLBTeam: "NYY", Positions: []string{"012"}, Status: "Reserve"},
+					{ID: "h2", Name: "Cold Bat", MLBTeam: "BOS", Positions: []string{"012"}, Status: "Active", RosterPosition: "014"},
+				},
+				pitchers: []fantrax.Player{
+					{ID: "p1", Name: "Steady Reliever", MLBTeam: "BOS", Positions: []string{"016"}, PosShortNames: "RP", Status: "Active", RosterPosition: "017"},
+				},
+				seasonStart: seasonStart,
+				seasonEnd:   seasonEnd,
+				periods:     []fantrax.ScoringPeriod{regular, round2},
+				// weekStart/weekEnd zero: the team has no matchup week containing today.
+				period: 175,
+			}
+			bat := projections.NewFanGraphsSourceFromEntries([]projections.SourceEntry{
+				{Name: "Hot Hitter", Team: "NYY", Proj: projections.Projection{G: 100, HR: 30}},
+				{Name: "Cold Bat", Team: "BOS", Proj: projections.Projection{G: 100, HR: 5}},
+			})
+			pit := projections.NewFanGraphsPitcherSourceFromEntries([]projections.PitcherSourceEntry{
+				{Name: "Steady Reliever", Team: "BOS", Proj: projections.PitcherProjection{G: 60, IP: 65, K: 70}},
+			})
+			sched := &fakeDateSchedule{fakeSchedule: fakeSchedule{playing: map[string]map[string]bool{
+				today.Format("2006-01-02"): {"NYY": true, "BOS": true},
+			}}}
+			st := backtest.NewFileSnapshotStore(t.TempDir())
+			cfg := &config.Config{LeagueID: "lg1", TeamID: "team1", DryRun: tc.dryRun, AutoApply: true, Dates: []time.Time{today}}
+			var out bytes.Buffer
+			opts := withFakeDeps(Options{
+				Today:          today,
+				HitterSystem:   "depthcharts",
+				PitcherSystem:  "depthcharts",
+				Out:            &out,
+				WriteSnapshots: true,
+				SnapshotStore:  st,
+				SnapshotRoot:   tc.root,
+			}, bat, pit, sched)
+
+			if _, err := Run(context.Background(), ft, cfg, opts); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(ft.applies) > 0 {
+				t.Errorf("ApplyLineup was called on an idle day; output:\n%s", out.String())
+			}
+			if !strings.Contains(out.String(), stopLine) {
+				t.Errorf("output lacks the idle stop line %q:\n%s", stopLine, out.String())
+			}
+			if strings.Contains(out.String(), "Changes (") {
+				t.Errorf("an idle day printed a planned-moves block; the lineup side must stay stopped:\n%s", out.String())
+			}
+			// The capture says so on the run output: an idle day that archived
+			// nothing and one that archived quietly must not read the same.
+			if want := "projection snapshot archived for 2026-09-15 — lineup idle, nothing published or applied"; !strings.Contains(out.String(), want) {
+				t.Errorf("output lacks the capture line %q:\n%s", want, out.String())
+			}
+
+			snap, ok := backtest.LoadSnapshot(st, tc.root, today)
+			if !ok {
+				t.Fatalf("no snapshot archived under %s for %s — the capture died with the apply; output:\n%s",
+					tc.root, today.Format("2006-01-02"), out.String())
+			}
+			if len(snap.Hitters) != 2 || len(snap.Pitchers) != 1 {
+				t.Errorf("snapshot rows = %d hitters / %d pitchers, want 2 / 1", len(snap.Hitters), len(snap.Pitchers))
+			}
+			if snap.ProjectionSystem != "depthcharts" {
+				t.Errorf("snapshot projection_system = %q, want depthcharts", snap.ProjectionSystem)
 			}
 		})
 	}

@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
+	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/recap"
 	"github.com/spf13/cobra"
 )
@@ -55,7 +57,7 @@ func runRecapSite(cmd *cobra.Command, args []string) error {
 			TopPlayers: recapSiteTopN,
 		},
 	}); err != nil {
-		return err
+		return recapSiteStop(cmd, err, today)
 	}
 
 	if recapSiteOpen {
@@ -65,4 +67,25 @@ func runRecapSite(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+// recapSiteStop decides what a failed build means. Nothing rendered yet — a
+// pre-season run against a league whose first week has not closed — is a clean
+// stop, not a failure: the same exit-0, off_season-outcome, cobra-silenced shape
+// the season gate uses (checkSeasonGate). recap-site is year-round precisely so
+// it can render the final week on the first off-season day, which means the
+// gate's start bound no longer hides the empty-week case; left as an error it
+// would be a FAILED ledger row every Monday from a new league's creation until
+// its first week completes, and opsalert.leadingFailures pages on the streak.
+// Every other error is a real failure and passes through untouched.
+func recapSiteStop(cmd *cobra.Command, err error, today time.Time) error {
+	if err == nil || !errors.Is(err, recap.ErrNoCompletedWeeks) {
+		return err
+	}
+	line := fmt.Sprintf("No completed matchup weeks yet as of %s: nothing to render. Nothing to do.",
+		today.Format("2006-01-02"))
+	fmt.Println(line)
+	recordRunOutcome(lineupapi.RunOutcomeOffSeason)
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	return &offSeasonStop{line: line}
 }

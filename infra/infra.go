@@ -1462,6 +1462,24 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		{"LineupMatchup", "cron(45 13 * * ? *)", jsii.Strings("optimize", "--matchup", "--archive-projections"), dailyGap},
 		{"Transactions", "cron(0 14 * * ? *)", jsii.Strings("transactions"), dailyGap},
 		{"Claims", "cron(20 14 * * ? *)", jsii.Strings("claims"), dailyGap},
+		// Paused 2026-09-30 and restored 2026-10-01. recap-site hung indefinitely
+		// the first time this rule could actually launch it (rosterbot-5zp1: two
+		// statsapi fetches paired a deadline-free ctx with http.DefaultClient, so
+		// a connection that was accepted and never answered blocked forever). Now
+		// bounded and retried, and the abandon budget stops a broad outage from
+		// grinding. Restored only after a manual control run proved it end to end:
+		// task eb61316e, SUCCESS exit 0, 25/25 weeks, zero fetch-failed.
+		//
+		// Runtime grows steeply with completed weeks -- 24 min at 22 weeks
+		// (09-07, 09-14), 65 min at 24 (09-21), 90 min at 25 -- so a late-season
+		// run overruns the 12:00 Backtest below. That already happened on 09-21
+		// (finished 12:06) with no observed harm; they are separate tasks. Worth
+		// knowing before adding anything else to the Monday window.
+		//
+		// Each run re-renders ALL completed weeks, and that is not idempotent:
+		// week pages re-derive scores from MLB game logs, which take stat
+		// corrections for weeks, so a Monday run can silently rewrite already
+		// published history and disagree with season.html (rosterbot-non9).
 		{"Recap", "cron(0 11 ? * MON *)", jsii.Strings("recap-site", "--out", "dist"), weeklyGap},
 		{"Backtest", "cron(0 12 ? * MON *)", jsii.Strings("backtest"), weeklyGap},
 		// SPLIT IN TWO (rosterbot-crq.14 follow-up). projection-site produces

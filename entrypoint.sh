@@ -77,17 +77,51 @@ CMD="$*"
 export RUN_ID="$ID"
 export RUN_OUTCOME_FILE=/tmp/rosterbot.outcome
 rm -f "$RUN_OUTCOME_FILE" 2>/dev/null || true
-{ ./rosterbot "$@" 2>&1; echo $? >/tmp/rosterbot.rc; } | tee /tmp/rosterbot.log
+# terminal_ledger writes the run's FINAL ledger row. It is a function because
+# two paths reach it -- the normal end of the run and the SIGTERM trap below --
+# and a second copy of the command would be a second thing to keep in sync.
+# cmd's TestEntrypointRunOutcomeFileFlowsIntoLedgerOutcome also requires exactly
+# one terminal (--exit-code) write in this file, which the function preserves.
+terminal_ledger() {
+  _rc=$1
+  _status=SUCCESS
+  [ "$_rc" = "0" ] || _status=FAILED
+  ./rosterbot run-ledger --id "$ID" --command "$CMD" --status "$_status" \
+    --exit-code "$_rc" --started "$STARTED" --ended "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --trigger "$TRIGGER" --user "$RUN_USER" --log-file /tmp/rosterbot.log \
+    --outcome "$(cat "$RUN_OUTCOME_FILE" 2>/dev/null || true)" || true
+}
+
+# A stopped task must still leave a TERMINAL ledger row. ECS stops a task by
+# sending SIGTERM (through tini, see the Dockerfile ENTRYPOINT) and SIGKILLs it
+# stopTimeout later; without a trap the shell dies before the write and the row
+# stays RUNNING forever. rosterbot-5zp1's killed control run is still sitting in
+# the ledger exactly that way, and the audit's "no RUNNING rows" control reads
+# it as an incident rather than as a task somebody stopped.
+#
+# sync_up is deliberately NOT called on this path. A stopped run's ./dist is
+# partial or empty, and publishing it would mirror that over the live site --
+# which statesync.Up now also refuses on its own (rosterbot-5zp1), belt and
+# braces, because these two defences fail independently.
+on_term() {
+  trap - TERM INT
+  echo "entrypoint: stopped by signal; recording the run as FAILED (143), not publishing" >&2
+  terminal_ledger 143
+  exit 143
+}
+trap on_term TERM INT
+
+# The bot runs in the BACKGROUND and we wait for it, rather than in the
+# foreground as before: a POSIX shell cannot run a trap while it is blocked on a
+# foreground child, so a trap alone would never fire for the case that needs it
+# most -- a bot that is hung and will never return on its own. `wait` IS
+# interrupted by a trapped signal. The braces+echo still capture the bot's real
+# exit code through the pipe (POSIX sh has no PIPESTATUS).
+{ ./rosterbot "$@" 2>&1; echo $? >/tmp/rosterbot.rc; } | tee /tmp/rosterbot.log &
+wait $!
 rc=$(cat /tmp/rosterbot.rc 2>/dev/null || echo 1)
 
-ENDED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-STATUS=SUCCESS
-[ "$rc" = "0" ] || STATUS=FAILED
-
-./rosterbot run-ledger --id "$ID" --command "$CMD" --status "$STATUS" \
-  --exit-code "$rc" --started "$STARTED" --ended "$ENDED" \
-  --trigger "$TRIGGER" --user "$RUN_USER" --log-file /tmp/rosterbot.log \
-  --outcome "$(cat "$RUN_OUTCOME_FILE" 2>/dev/null || true)" || true
+terminal_ledger "$rc"
 
 sync_up
 exit "$rc"

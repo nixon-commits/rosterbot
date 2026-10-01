@@ -3,6 +3,7 @@ package gscheck
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -357,5 +358,103 @@ func TestRunGSCheck_PlayoffRoundChecksOnlyPairedTeams(t *testing.T) {
 	}
 	if !strings.Contains(out, "2 team(s) with a scoring matchup") {
 		t.Errorf("output should say the round was narrowed to paired teams:\n%s", out)
+	}
+}
+
+// --- explicit --period: the escape hatch for a missed morning ---
+//
+// gs-check's subject is the period that ended YESTERDAY, so the day after the
+// season's final round is the only day the final period can ever be checked,
+// and it is the first off-season day. Until rosterbot-97gs the season gate
+// stopped that run and there was no way back short of ROSTERBOT_SEASON_GATE=off
+// on that exact wall-clock day; period 25 of 2026 was recovered by hand. An
+// explicit period is the recovery path: any later day, any period.
+
+// periodEndedDaysAgo builds a period that closed n days ago, so
+// FindJustEndedPeriod does NOT select it (n > 1) and only an explicit request
+// can reach it.
+func periodEndedDaysAgo(n int, number fantrax.WeeklyPeriod) fantrax.ScoringPeriod {
+	today := nowUTC()
+	return fantrax.ScoringPeriod{
+		Number:    number,
+		Caption:   fmt.Sprintf("Scoring Period %d", number),
+		StartDate: today.AddDate(0, 0, -n-6),
+		EndDate:   today.AddDate(0, 0, -n),
+	}
+}
+
+func TestRunGSCheckPeriod_ExplicitPeriodIsCheckedRegardlessOfToday(t *testing.T) {
+	f := &fakeGSClient{
+		periods:  []fantrax.ScoringPeriod{periodEndedDaysAgo(8, 25)},
+		teams:    map[string]string{"a": "Alpha", "b": "Beta"},
+		min:      ptrInt(7),
+		max:      ptrInt(12),
+		gsByTeam: map[string]int{"a": 14, "b": 9},
+	}
+	cfg := config.Config{TeamID: "t1", DryRun: true}
+
+	// The default subject is yesterday's period, which does not exist here.
+	out := captureStdout(t, func() {
+		if err := RunGSCheck(t.Context(), f, cfg); err != nil {
+			t.Fatalf("default run: %v", err)
+		}
+	})
+	if !strings.Contains(out, "Nothing to check") || strings.Contains(out, "Alpha: 14 GS") {
+		t.Fatalf("with no period ending yesterday the default run must have nothing to check; got:\n%s", out)
+	}
+
+	out = captureStdout(t, func() {
+		if err := RunGSCheckPeriod(t.Context(), f, cfg, 25); err != nil {
+			t.Fatalf("explicit period: %v", err)
+		}
+	})
+	if !strings.Contains(out, "Checking: Scoring Period 25") {
+		t.Errorf("explicit period 25 must be the subject; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Alpha: 14 GS") || !strings.Contains(out, "Beta: 9 GS") {
+		t.Errorf("explicit period must tally every team; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Alpha") || !strings.Contains(out, "+2") {
+		t.Errorf("the closed period's max violation must be reported; got:\n%s", out)
+	}
+}
+
+// A period Fantrax's schedule does not carry is an error, not a quiet
+// "nothing to check": the operator typed it on purpose to recover a missed
+// run, and exit 0 over a typo would read as a clean period.
+func TestRunGSCheckPeriod_UnknownPeriodIsAnError(t *testing.T) {
+	f := &fakeGSClient{
+		periods: []fantrax.ScoringPeriod{periodEndedDaysAgo(8, 25)},
+		teams:   map[string]string{"a": "Alpha"},
+		max:     ptrInt(12),
+	}
+	err := RunGSCheckPeriod(t.Context(), f, config.Config{TeamID: "t1", DryRun: true}, 99)
+	if err == nil {
+		t.Fatal("an explicit period absent from the schedule must be an error")
+	}
+	if !strings.Contains(err.Error(), "99") {
+		t.Errorf("the error must name the period it could not find: %v", err)
+	}
+	if f.calls["a"] != 0 {
+		t.Errorf("no team may be tallied against a period that does not exist; got %d GetTeamGS call(s)", f.calls["a"])
+	}
+}
+
+// Zero is "no explicit period": RunGSCheckPeriod(…, 0) is RunGSCheck, so a
+// caller wiring an unset flag through gets yesterday's period, never period 0.
+func TestRunGSCheckPeriod_ZeroMeansYesterdaysPeriod(t *testing.T) {
+	f := &fakeGSClient{
+		periods:  []fantrax.ScoringPeriod{justEndedPeriod()},
+		teams:    map[string]string{"a": "Alpha"},
+		max:      ptrInt(12),
+		gsByTeam: map[string]int{"a": 9},
+	}
+	out := captureStdout(t, func() {
+		if err := RunGSCheckPeriod(t.Context(), f, config.Config{TeamID: "t1", DryRun: true}, 0); err != nil {
+			t.Fatalf("zero period: %v", err)
+		}
+	})
+	if !strings.Contains(out, "Checking: Scoring Period 5") {
+		t.Errorf("period 0 must fall back to the period that ended yesterday; got:\n%s", out)
 	}
 }

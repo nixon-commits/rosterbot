@@ -58,8 +58,8 @@ func newStaleHarness(t *testing.T) *staleHarness {
 	h := &staleHarness{store: NewMemStore(), markers: newFakeMarkers()}
 	h.cache = &FileCache[string]{store: h.store, ttl: time.Hour}
 
-	prevNotify, prevMarkers, prevAfter := Notify, StaleMarkers, StaleAlertAfter
-	t.Cleanup(func() { Notify, StaleMarkers, StaleAlertAfter = prevNotify, prevMarkers, prevAfter })
+	prevNotify, prevMarkers, prevAfter, prevNow := Notify, StaleMarkers, StaleAlertAfter, staleNow
+	t.Cleanup(func() { Notify, StaleMarkers, StaleAlertAfter, staleNow = prevNotify, prevMarkers, prevAfter, prevNow })
 
 	Notify = func(title, message string) { h.alerts = append(h.alerts, title+" | "+message) }
 	StaleMarkers = h.markers
@@ -290,5 +290,104 @@ func TestGetWithStaleFallbackAt_UndatedCopyReportsZero(t *testing.T) {
 	}
 	if !fetchedAt.IsZero() {
 		t.Errorf("fetchedAt = %v, want zero for an undated copy", fetchedAt)
+	}
+}
+
+// --- the floor on the dedup: a standing outage re-announces itself daily ---
+//
+// The episode used to be the served copy's fetched_at alone. While fetches
+// keep failing the served copy never changes, so the episode never changed:
+// ONE alert per key per outage, then permanent silence, however long it ran.
+// Verified at source during the 2026-09-26 FanGraphs 403 (rosterbot-jyt0.6).
+// Because loadAnyAt ignores TTL the frozen copy is served indefinitely, so the
+// failure could not escalate to a hard error either — a 403 that returned in
+// the winter would serve a frozen 2026 copy into the 2027 opener with no
+// second push. The episode now also carries the ET day, so a source still
+// failing tomorrow pushes once more tomorrow: one per source per ET day, with
+// the first alert still immediate and same-day repeats still suppressed.
+
+// at pins the stale path's clock so the ET day can be stepped without waiting.
+func (h *staleHarness) at(now time.Time) { staleNow = func() time.Time { return now } }
+
+func TestStaleFallback_RePushesAStandingOutageOnTheNextETDay(t *testing.T) {
+	h := newStaleHarness(t)
+	day1 := time.Date(2026, 9, 26, 14, 0, 0, 0, time.UTC) // 10:00 ET
+	seedStale(t, h.store, "fangraphs-bat", day1.Add(-30*time.Hour), "frozen")
+
+	h.at(day1)
+	for i := 0; i < 3; i++ {
+		if _, err := h.cache.GetWithStaleFallback("fangraphs-bat", failingFetch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(h.alerts) != 1 {
+		t.Fatalf("same ET day: one push, got %d: %v", len(h.alerts), h.alerts)
+	}
+
+	// Still failing the next ET day: the served copy is byte-identical and its
+	// fetched_at unchanged, which is exactly what used to keep it silent.
+	h.at(day1.AddDate(0, 0, 1))
+	for i := 0; i < 3; i++ {
+		if _, err := h.cache.GetWithStaleFallback("fangraphs-bat", failingFetch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(h.alerts) != 2 {
+		t.Fatalf("next ET day, still failing: a second push, got %d: %v", len(h.alerts), h.alerts)
+	}
+}
+
+func TestStaleFallback_RecoveryAfterADailyRePushIsReportedOnce(t *testing.T) {
+	h := newStaleHarness(t)
+	day1 := time.Date(2026, 9, 26, 14, 0, 0, 0, time.UTC)
+	seedStale(t, h.store, "fangraphs-bat", day1.Add(-30*time.Hour), "frozen")
+
+	h.at(day1)
+	if _, err := h.cache.GetWithStaleFallback("fangraphs-bat", failingFetch); err != nil {
+		t.Fatal(err)
+	}
+	h.at(day1.AddDate(0, 0, 1))
+	if _, err := h.cache.GetWithStaleFallback("fangraphs-bat", failingFetch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cache.GetWithStaleFallback("fangraphs-bat", func() (string, error) { return "fresh", nil }); err != nil {
+		t.Fatal(err)
+	}
+	var stale, recoveries int
+	for _, a := range h.alerts {
+		if isRecovery(a) {
+			recoveries++
+		} else {
+			stale++
+		}
+	}
+	if stale != 2 || recoveries != 1 {
+		t.Fatalf("want 2 stale pushes then exactly 1 recovery, got %d/%d: %v", stale, recoveries, h.alerts)
+	}
+}
+
+// The day boundary is ET, not UTC: the scheduled runs and every other daily
+// marker in the tree are anchored to the ET calendar, and a UTC boundary would
+// re-push the 20:00 ET run as "tomorrow".
+func TestEpisodeID_IsTheCopyStampPlusTheETDay(t *testing.T) {
+	fetched := time.Date(2026, 9, 25, 11, 30, 46, 0, time.UTC)
+	eveningET := time.Date(2026, 9, 26, 23, 30, 0, 0, time.UTC) // 19:30 ET on 09-26
+	lateET := time.Date(2026, 9, 27, 3, 30, 0, 0, time.UTC)     // 23:30 ET, still 09-26
+	nextET := time.Date(2026, 9, 27, 4, 30, 0, 0, time.UTC)     // 00:30 ET on 09-27
+
+	a, b, c := episodeID(fetched, eveningET), episodeID(fetched, lateET), episodeID(fetched, nextET)
+	if a != b {
+		t.Errorf("two instants on one ET day (different UTC days) must share an episode: %q vs %q", a, b)
+	}
+	if a == c {
+		t.Errorf("the next ET day must be a new episode: %q vs %q", a, c)
+	}
+	if !strings.Contains(a, "2026-09-25T11:30:46Z") || !strings.Contains(a, "2026-09-26") {
+		t.Errorf("the episode must carry both the copy's stamp and the ET day: %q", a)
+	}
+	// And a fresh copy on the same day is a new episode too — recovery then
+	// re-break within a day still alerts, as before.
+	if episodeID(fetched.Add(time.Hour), eveningET) == a {
+		t.Error("a different fetched_at on the same day must be a different episode")
 	}
 }

@@ -2,6 +2,7 @@ package recap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
 	"github.com/nixon-commits/rosterbot/internal/transactions"
@@ -15,6 +16,15 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/schedule"
 )
+
+// ErrNoCompletedWeeks is what RunSite reports when the league has no finished
+// matchup week to render yet — a pre-season run against a freshly created
+// league, before its first week closes. It is a sentinel rather than a plain
+// error because the right response is the caller's to pick, not this package's:
+// cmd/recap_site.go turns it into a clean exit-0 stop that still prints the
+// reason, so a scheduled run does not page and an operator watching a local
+// build is told why no site appeared.
+var ErrNoCompletedWeeks = errors.New("no completed matchup weeks")
 
 // SiteOptions configures a multi-week site build.
 type SiteOptions struct {
@@ -55,7 +65,7 @@ func RunSite(ctx context.Context, ft SiteClient, sopts SiteOptions) error {
 		return err
 	}
 	if len(completed) == 0 {
-		return fmt.Errorf("no completed matchup weeks before %s", sopts.Today.Format("2006-01-02"))
+		return fmt.Errorf("%w before %s", ErrNoCompletedWeeks, sopts.Today.Format("2006-01-02"))
 	}
 
 	// Build the static portion of the nav (descending — most recent first).
