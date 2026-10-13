@@ -238,6 +238,16 @@ var (
 	// layout, and only All() members are gap-scanned.
 	FootballTradeLog = Artifact{Name: "Football Trade Log", S3Prefix: "football/trades/log/", LocalDir: ".football/trades/log", Durable: true, Producer: "FootballTrades", Partitioned: true}
 
+	// FootballOffers holds one dedup marker per Sleeper trade OFFER the
+	// operator has been alerted about (football-offers, Plan 2). Same shape
+	// and reasoning as FootballTrades: keyed on the global transaction_id,
+	// written check -> send -> mark, no MaxAge and absent from All() because a
+	// league with no offers writes nothing for weeks. A sibling prefix, not a
+	// child of football/trades/: an offer and the completed trade it becomes
+	// share a transaction_id, and one namespace would let the offer's marker
+	// silence the completed-trade alert (or the reverse).
+	FootballOffers = Artifact{Name: "Football Offer Markers", S3Prefix: "football/offers/", LocalDir: ".football/offers", Durable: true, Producer: "FootballOffers"}
+
 	// ILStarts holds one dedup marker per (player, start date) for the
 	// "IL-slotted player has an announced start" alert. Same shape and same
 	// reasoning as FootballTrades: no MaxAge and absent from All(), because a
