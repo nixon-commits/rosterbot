@@ -77,13 +77,22 @@ type TradeLogVerdict struct {
 type TradeLogRow struct {
 	Dt            string `json:"dt"`
 	TransactionID string `json:"transaction_id"`
+	// LeagueID / LeagueName identify which of the operator's leagues the trade
+	// happened in. Both omitempty: rows written before football-trades went
+	// multi-league carry neither, and they are left blank rather than
+	// backfilled — every such row happens to be from one league, but stamping
+	// that in would write an assumption as a fact.
+	LeagueID   string `json:"league_id,omitempty"`
+	LeagueName string `json:"league_name,omitempty"`
 	// TradeDate is when Sleeper says the trade completed. Zero when the
 	// transaction carried no usable Created timestamp — read it as unknown,
 	// never as the epoch.
 	TradeDate time.Time `json:"trade_date"`
 	GradedAt  time.Time `json:"graded_at"`
-	// AlertFormat is the DYNASTY_FORMAT the Pushover alert was rendered in, so
-	// a reader can tell which of the four verdicts was the one actually sent.
+	// AlertFormat is the league's LeagueProfile.Format — the StatsGuy column
+	// its alert was rendered in (multi-league jobs no longer read a single
+	// DYNASTY_FORMAT env var) — so a reader can tell which of the four
+	// verdicts was the one actually sent.
 	AlertFormat string                     `json:"alert_format"`
 	Sides       []TradeLogSide             `json:"sides"`
 	Verdicts    map[string]TradeLogVerdict `json:"verdicts"`
@@ -164,6 +173,16 @@ func BuildTradeLogRow(gradedAt time.Time, txn sleeper.Transaction, players map[s
 	}
 }
 
+// InLeague returns a copy of the row stamped with the league it was graded
+// in. A setter rather than two more BuildTradeLogRow parameters: the builder
+// already takes six, and the league is known to the caller's loop, not to the
+// grader.
+func (r TradeLogRow) InLeague(id, name string) TradeLogRow {
+	r.LeagueID = id
+	r.LeagueName = name
+	return r
+}
+
 // MergeTradeLog folds freshly graded rows into the rows already in a partition.
 //
 // ndjsonstore.Write is a WHOLE-OBJECT overwrite, and the producer polls every
@@ -214,8 +233,9 @@ func MergeTradeLog(prior, fresh []TradeLogRow) []TradeLogRow {
 // genuine grade-time row on a LATER day. Earliest-wins alone would keep the
 // re-price and permanently discard the real capture — the exact substitution
 // this store exists to prevent, arrived at from the opposite direction.
-// relogFootballTrades also refuses to touch an unalerted trade, so this is the
-// second of two independent guards rather than the only one.
+// relogRows (cmd/football_trades.go) also refuses to touch an unalerted
+// trade, so this is the second of two independent guards rather than the
+// only one.
 func DedupeTradeLog(rows []TradeLogRow) []TradeLogRow {
 	byID := make(map[string]TradeLogRow, len(rows))
 	for _, r := range rows {
