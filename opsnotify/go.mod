@@ -1,6 +1,6 @@
 module github.com/nixon-commits/rosterbot/opsnotify
 
-go 1.27
+go 1.26.1
 
 require (
 	github.com/aws/aws-lambda-go v1.55.1
