@@ -57,7 +57,7 @@ check-pins:
 # Pinned so an upstream golangci-lint release cannot turn CI red with no code
 # change. CI installs exactly this version via `make lint-install`, so the
 # version developers run and the version that gates a PR are one string.
-GOLANGCI_LINT_VERSION ?= v2.13.1
+GOLANGCI_LINT_VERSION ?= v2.14.0
 
 # One .golangci.yml at the repo root serves all four modules — golangci-lint
 # walks up from each module dir to find it, so there is a single definition of
