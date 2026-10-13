@@ -169,7 +169,7 @@ run-all:
 	@echo "=== archive --dry-run ===";                   time go run . archive --dry-run &&                                echo
 	@echo "=== team-values --dry-run ===";               time go run . team-values --dry-run &&                            echo
 	@echo "=== football-values --dry-run ===";           if [ -n "$$SLEEPER_LEAGUE_ID" ]; then time go run . football-values --dry-run; else echo "SKIPPED (SLEEPER_LEAGUE_ID unset; it lives in SSM for the deployment)"; fi && echo
-	@echo "=== football-trades --dry-run ===";           if [ -n "$$SLEEPER_LEAGUE_ID" ] && [ -n "$$SLEEPER_USER_ID" ]; then time go run . football-trades --dry-run; else echo "SKIPPED (SLEEPER_LEAGUE_ID or SLEEPER_USER_ID unset)"; fi && echo
+	@echo "=== football-trades --dry-run ===";           if [ -n "$$SLEEPER_USER_ID" ]; then time go run . football-trades --dry-run; else echo "SKIPPED (SLEEPER_USER_ID unset)"; fi && echo
 	@echo "=== football-offers --dry-run ===";           m=""; [ -z "$$SLEEPER_TOKEN" ] && m="$$m SLEEPER_TOKEN"; [ -z "$$SLEEPER_USER_ID" ] && m="$$m SLEEPER_USER_ID"; if [ -z "$$m" ]; then time go run . football-offers --dry-run; else echo "SKIPPED: unset in the shell environment (make does not read .env):$$m (football-offers needs the operator's Sleeper session token)"; fi && echo
 	@echo "=== football-pickups --dry-run ===";         if [ -n "$$SLEEPER_USER_ID" ]; then time go run . football-pickups --dry-run; else echo "SKIPPED (SLEEPER_USER_ID unset)"; fi && echo
 	@echo "=== backtest ===";                             time go run . backtest &&                                         echo
