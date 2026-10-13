@@ -376,7 +376,7 @@ rosterbot projection-site --out report --open
 <details>
 <summary><b>Dynasty football</b> — <code>football-values</code> · <code>football-trades</code> · <code>football-offers</code> · <code>football-pickups</code> (Sleeper + StatsGuy)</summary>
 
-The bot's second sport. Read-only: Sleeper's public API has no lineup-write endpoint, so there's no `optimize`/apply equivalent here — just a value store, a trade monitor, an offer grader and a pickup digest. Needs no `FANTRAX_*` credential: `SLEEPER_LEAGUE_ID` is required by every football command (the shared config loader checks it, though only `football-values` reads the league it names), `SLEEPER_USER_ID` additionally by the multi-league jobs, and `SLEEPER_TOKEN` by `football-offers` alone.
+The bot's second sport. Read-only: Sleeper's public API has no lineup-write endpoint, so there's no `optimize`/apply equivalent here — just a value store, a trade monitor, an offer grader and a pickup digest. Needs no `FANTRAX_*` credential: `SLEEPER_LEAGUE_ID` is required by `football-values` alone (the one league it reads), `SLEEPER_USER_ID` by the multi-league jobs (`football-trades`, `football-offers`, `football-pickups`, which discover every league from it), and `SLEEPER_TOKEN` by `football-offers` alone.
 
 ```bash
 # Append today's per-player dynasty value rows (players + owned future picks) to the Dynasty Value Store
@@ -583,7 +583,7 @@ open http://localhost:8080/        # bootstrap: paste "test", register a passkey
 
 Required for the baseball (Fantrax) commands (via `.env` locally, SSM `/rosterbot/*` on AWS): `FANTRAX_USERNAME`, `FANTRAX_PASSWORD`, `FANTRAX_LEAGUE_ID`, `FANTRAX_TEAM_ID`, `FANTRAX_IL_SLOTS`, `FANTRAX_MINORS_SLOTS`.
 
-Required for the dynasty football (Sleeper) commands — `football-values`, `football-trades`, `football-offers`, `football-pickups` — and *only* those; no `FANTRAX_*` var is needed to run them: `SLEEPER_LEAGUE_ID`, plus `SLEEPER_USER_ID` for `football-trades`, `football-offers` and `football-pickups`, and `SLEEPER_TOKEN` for `football-offers`.
+Required for the dynasty football (Sleeper) commands — `football-values`, `football-trades`, `football-offers`, `football-pickups` — and *only* those; no `FANTRAX_*` var is needed to run them: `SLEEPER_LEAGUE_ID` for `football-values`, `SLEEPER_USER_ID` for `football-trades`, `football-offers` and `football-pickups`, and `SLEEPER_TOKEN` for `football-offers`.
 
 Optional:
 
@@ -604,7 +604,7 @@ Optional:
 | `APNS_KEY_ID` | unset | Key ID of the APNs auth key. |
 | `APNS_TEAM_ID` | unset | Apple developer team id the provider token signs as (set in infra; not a secret). |
 | `DYNASTY_FORMAT` | `sf_dynasty` | Which StatsGuy format `football-values`' printed summary reads. The multi-league jobs ignore it — each league's column comes from its own profile (superflex from roster slots, kind from `settings.type`, or `SLEEPER_FORMAT_OVERRIDES`). |
-| `SLEEPER_USER_ID` | — | The operator's Sleeper account id. `football-trades`, `football-offers` and `football-pickups` discover every non-complete NFL league from it and fail fast without it; `football-values` does not read it. |
+| `SLEEPER_USER_ID` | — | The operator's Sleeper account id. `football-trades`, `football-offers` and `football-pickups` discover every non-complete NFL league from it and fail fast without it; `football-values` does not read it. In the deployment it is a plain **String** SSM parameter (`/rosterbot/SLEEPER_USER_ID`) read at deploy time, not an ECS secret: the id is public, and a missing parameter then fails `cdk deploy` rather than every task launch. |
 | `SLEEPER_FORMAT_OVERRIDES` | — | `<league_id>=<format>,...` — pins the StatsGuy column for a league whose format the derivation from Sleeper's undocumented `settings.type` gets wrong. A malformed entry fails config load rather than being skipped. Every run prints the column each league resolved to and whether it was derived or overridden. |
 | `SLEEPER_TOKEN` | — | The operator's Sleeper session token, read by `football-offers` **only** (locally from `.env`; in AWS it reaches that one task from SSM `/rosterbot/SLEEPER_TOKEN`). It is the `token` value under the Sleeper web app's local storage (DevTools → Application → Local Storage → `sleeper.com`): account-scoped, full access, roughly a year's lifetime, and Sleeper does not document or support the API it unlocks. Never commit it. When it expires or is revoked, `football-offers` fails every run, and ops alerting sends a "failed" push on the **first** failing run (escalating on the third consecutive one, with a recovery push once a run succeeds), so an expired token pages within about an hour; paste a fresh one into the parameter to recover. Because the job is hourly and exits non-zero when any one league fails, a transient Sleeper CDN blip on a single league also costs a failed push and a recovered push, six times `football-trades`' exposure. |
 | `FOOTBALL_PUSHOVER_USER_KEY` | `PUSHOVER_USER_KEY` | Reserved. `football-trades` alerts now route through the notify dispatcher (activity feed + APNs + dual-send) rather than this key. |

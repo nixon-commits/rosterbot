@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -61,14 +60,8 @@ func runFootballTrades(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("sleeper state: %w", err)
 	}
-	leagues, err := discoverLeagues(ctx, sc, cfg, state, os.Stdout)
+	leagues, err := discoverLeaguesOrStop(cmd, ctx, sc, cfg, state)
 	if err != nil {
-		// An off-season stop has already printed its one line and recorded
-		// the outcome; silence cobra so the exit-0 path prints nothing else,
-		// exactly as checkSeasonGate does for the baseball commands.
-		if errors.Is(err, errOffSeason) {
-			cmd.SilenceUsage, cmd.SilenceErrors = true, true
-		}
 		return err
 	}
 	players, err := sc.PlayersNFL(ctx)
@@ -208,9 +201,10 @@ type leagueLoader func(ctx context.Context, leagueID string) ([]sleeper.Transact
 // leagueRunner grades and alerts one league's trades.
 type leagueRunner func(lc leagueContext, trades []sleeper.Transaction, names map[int]string) tradeRunResult
 
-// pollLeagues runs load → run for every league, isolating failures: a league
-// whose load fails is warned, named in failed, and skipped; the others still
-// run. Totals and log rows are accumulated across the leagues that ran.
+// pollLeagues runs load → run for every league with forEachLeague's
+// isolation: a league whose load fails is warned, named in failed, and
+// skipped; the others still run. Totals and log rows are accumulated across
+// the leagues that ran.
 //
 // This is the extracted body of runFootballTrades' non-relog loop (item I3 of
 // the 2026-09-22 branch review): that function calls initFootball() and
@@ -220,22 +214,25 @@ type leagueRunner func(lc leagueContext, trades []sleeper.Transaction, names map
 // later edit turning `continue` into `return err` would have passed every
 // existing test.
 func pollLeagues(ctx context.Context, leagues []leagueContext, load leagueLoader, run leagueRunner) (total tradeRunResult, found int, failed []string) {
-	for _, lc := range leagues {
-		trades, names, err := load(ctx, lc.League.LeagueID)
-		if err != nil {
-			warn("football-trades: %s: %v (continuing with the other leagues)", lc.League.Name, err)
-			failed = append(failed, lc.League.Name)
-			continue
-		}
-		found += len(trades)
-
-		res := run(lc, trades, names)
-		total.LogRows = append(total.LogRows, res.LogRows...)
-		total.Graded += res.Graded
-		total.Alerted += res.Alerted
-		total.Skipped += res.Skipped
-		total.Stale += res.Stale
+	type loaded struct {
+		trades []sleeper.Transaction
+		names  map[int]string
 	}
+	failed, _ = forEachLeague(ctx, "football-trades", leagues,
+		func(ctx context.Context, lc leagueContext) (loaded, error) {
+			trades, names, err := load(ctx, lc.League.LeagueID)
+			return loaded{trades, names}, err
+		},
+		nil,
+		func(lc leagueContext, in loaded) {
+			found += len(in.trades)
+			res := run(lc, in.trades, in.names)
+			total.LogRows = append(total.LogRows, res.LogRows...)
+			total.Graded += res.Graded
+			total.Alerted += res.Alerted
+			total.Skipped += res.Skipped
+			total.Stale += res.Stale
+		})
 	return total, found, failed
 }
 
@@ -531,6 +528,26 @@ func appendFootballTradeLog(reader dynasty.TradeLogReader, writer dynasty.TradeL
 // re-polling old weeks is nearly free: the dedup marker keys on
 // transaction_id regardless of which week surfaces the record, and each
 // week's transactions payload is small.
+// recentWeeks is the last back+1 week buckets ending at the current week,
+// floored at week 1 (Sleeper files offseason and preseason transactions under
+// week 1, and state.week can read 0 then). It is the window for a detector
+// that only looks a day or two back -- football-pickups' drop detector --
+// where polling every week since the opener (pollWeeks) is 18 requests per
+// league per run by December for a window two buckets could cover.
+//
+// football-trades deliberately keeps pollWeeks: a completed trade is filed
+// under the week its OFFER was created, and an offer can sit for weeks before
+// it is accepted, so a recent completion may live many buckets back.
+func recentWeeks(state *sleeper.NFLState, back int) []int {
+	week := max(state.Week, 1)
+	first := max(week-back, 1)
+	weeks := make([]int, 0, week-first+1)
+	for w := first; w <= week; w++ {
+		weeks = append(weeks, w)
+	}
+	return weeks
+}
+
 func pollWeeks(state *sleeper.NFLState) []int {
 	week := state.Week
 	if week < 1 {

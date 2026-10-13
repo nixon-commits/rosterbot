@@ -20,8 +20,12 @@ type League struct {
 
 // Roster is one team's roster within a league.
 type Roster struct {
-	RosterID int      `json:"roster_id"`
-	OwnerID  string   `json:"owner_id"`
+	RosterID int    `json:"roster_id"`
+	OwnerID  string `json:"owner_id"`
+	// CoOwners are the additional user ids that manage this roster. A user
+	// can be on a roster without being its owner_id, so ownership tests must
+	// consult both; null in the feed for most rosters.
+	CoOwners []string `json:"co_owners"`
 	LeagueID string   `json:"league_id"`
 	Players  []string `json:"players"` // Sleeper player_ids
 	Starters []string `json:"starters"`

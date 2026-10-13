@@ -460,3 +460,23 @@ func TestPollOffers_NoUnexpectedRowsIsSilent(t *testing.T) {
 		t.Errorf("stderr = %q, want no warning for a clean league", stderr)
 	}
 }
+
+// A co-owner is on a roster without being its owner_id. Matching owner_id
+// alone read every co-owned league as "no roster owned" and skipped it, so
+// its offers never alerted.
+func TestMyRosterID_MatchesOwnerOrCoOwner(t *testing.T) {
+	rosters := []sleeper.Roster{
+		{RosterID: 1, OwnerID: "other"},
+		{RosterID: 2, OwnerID: "someone", CoOwners: []string{"me", "friend"}},
+		{RosterID: 3, OwnerID: "me-as-owner"},
+	}
+	if got := myRosterID(rosters, "me"); got != 2 {
+		t.Errorf("co-owner: myRosterID = %d, want 2", got)
+	}
+	if got := myRosterID(rosters, "me-as-owner"); got != 3 {
+		t.Errorf("owner: myRosterID = %d, want 3", got)
+	}
+	if got := myRosterID(rosters, "nobody"); got != 0 {
+		t.Errorf("no roster: myRosterID = %d, want 0", got)
+	}
+}

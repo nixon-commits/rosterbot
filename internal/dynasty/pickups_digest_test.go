@@ -329,3 +329,18 @@ func TestBaselineStamp_IsTheFullUTCTimestamp(t *testing.T) {
 		t.Error("two baselines on one UTC date must not share a stamp")
 	}
 }
+
+// A head line that fits on its own but not beside the "…and N more" trailer
+// must still be sent: returning shown == 0 would make the caller mark it as
+// unshowable and never send it, though it was never too long.
+func TestFormatPickupDigest_HeadThatOnlyTheTrailerPushesOutIsStillSent(t *testing.T) {
+	head := PickupItem{Kind: "drop", Key: "drop-t1-p1", PlayerID: "p1", Line: strings.Repeat("x", pushover.MaxMessageLen-9), Priced: true, Value: 50}
+	second := PickupItem{Kind: "drop", Key: "drop-t2-p2", PlayerID: "p2", Line: "short line", Priced: true, Value: 40}
+	_, body, shown := FormatPickupDigest(LeagueProfile{Name: "L"}, []PickupItem{head, second})
+	if shown != 1 {
+		t.Fatalf("shown = %d, want 1: the head fits alone and must go out", shown)
+	}
+	if !strings.HasPrefix(body, head.Line) || strings.Contains(body, "more") {
+		t.Errorf("body must be the head line with no trailer; got %q", body)
+	}
+}

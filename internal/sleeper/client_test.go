@@ -525,3 +525,17 @@ func TestTransaction_CompletedMillisIsStatusUpdatedThenCreated(t *testing.T) {
 		t.Errorf("CompletedMillis = %d for a row with no timestamps, want 0 (unknown)", got)
 	}
 }
+
+func TestRoster_DecodesCoOwners(t *testing.T) {
+	const body = `[{"roster_id":3,"owner_id":"u1","co_owners":["u2","u3"],"players":[]},{"roster_id":4,"owner_id":"u9","co_owners":null}]`
+	var rosters []Roster
+	if err := json.Unmarshal([]byte(body), &rosters); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(rosters[0].CoOwners) != 2 || rosters[0].CoOwners[1] != "u3" {
+		t.Errorf("CoOwners = %v, want [u2 u3] decoded from \"co_owners\"", rosters[0].CoOwners)
+	}
+	if rosters[1].CoOwners != nil {
+		t.Errorf("CoOwners = %v for a null co_owners, want nil", rosters[1].CoOwners)
+	}
+}

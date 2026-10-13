@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -76,14 +75,8 @@ func runFootballPickups(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("sleeper state: %w", err)
 	}
-	leagues, err := discoverLeagues(ctx, sc, cfg, state, os.Stdout)
+	leagues, err := discoverLeaguesOrStop(cmd, ctx, sc, cfg, state)
 	if err != nil {
-		// An off-season stop has already printed its one line and recorded
-		// the outcome; silence cobra so the exit-0 path prints nothing else,
-		// exactly as checkSeasonGate does for the baseball commands.
-		if errors.Is(err, errOffSeason) {
-			cmd.SilenceUsage, cmd.SilenceErrors = true, true
-		}
 		return err
 	}
 	players, err := sc.PlayersNFL(ctx)
@@ -107,7 +100,8 @@ func runFootballPickups(cmd *cobra.Command, args []string) error {
 	// The pointer store is a HARD requirement: without it there is nothing to
 	// diff against and nothing to save, and a run that silently alerted on a
 	// full-dump "diff" would page on every starter in the league.
-	snapStore, err := statestore.FromEnv().FootballPickupSnapshot()
+	stores := statestore.FromEnv()
+	snapStore, err := stores.FootballPickupSnapshot()
 	if err != nil {
 		return fmt.Errorf("init pickup snapshot store: %w", err)
 	}
@@ -115,13 +109,13 @@ func runFootballPickups(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load prior snapshot: %w", err)
 	}
-	archiveWriter := statestore.FromEnv().ArchiveWriter
+	archiveWriter := stores.ArchiveWriter
 	if !found {
 		return writeFirstBaseline(os.Stdout, dryRun, now, cur, snapStore, archiveWriter)
 	}
 
 	// Soft: a marker store we cannot build disables dedup, not the digest.
-	markers, err := statestore.FromEnv().FootballPickupMarkers()
+	markers, err := stores.FootballPickupMarkers()
 	if err != nil {
 		warn("football-pickups: init markers: %v (dedup is off this run; an unsent tail will not hold the pointer)", err)
 		markers = nil
@@ -129,7 +123,7 @@ func runFootballPickups(cmd *cobra.Command, args []string) error {
 
 	total, failed := pollPickups(ctx, leagues,
 		func(ctx context.Context, lc leagueContext) (pickupLeagueInputs, error) {
-			return loadPickupLeague(ctx, sc, lc.League.LeagueID, state)
+			return loadPickupLeague(ctx, sc, lc.League.LeagueID, recentWeeks(state, 2))
 		},
 		func(lc leagueContext, in pickupLeagueInputs) pickupRunResult {
 			det := detectLeaguePickups(prev, cur, lc, in, players, bundle)
@@ -142,7 +136,7 @@ func runFootballPickups(cmd *cobra.Command, args []string) error {
 			printPickupCoverage(os.Stdout, lc.League.Name, prev.CapturedAt, prev.HasDepthData, cur.HasDepthData,
 				len(cur.Players), len(cur.Players)-countRostered(cur, in.rostered), res)
 			return res
-		})
+		}, os.Stdout)
 
 	// The persist error is remembered, not returned here: every league has
 	// already alerted, and the run's verdict is composed once at the end from
@@ -290,7 +284,7 @@ func persistPickupSnapshot(now time.Time, snap dynasty.PlayerSnapshot, snapStore
 	if !advance {
 		return nil
 	}
-	if err := savePickupSnapshot(snapStore, snap); err != nil {
+	if err := snapStore.Publish(pickupSnapshotKey, body); err != nil {
 		return fmt.Errorf("save snapshot pointer: %w", err)
 	}
 	return nil
@@ -308,6 +302,9 @@ func loadPickupSnapshot(ctx context.Context, store lineupapi.ObjectStore) (dynas
 	return snap, true, nil
 }
 
+// savePickupSnapshot writes snap as the pointer. persistPickupSnapshot
+// publishes the bytes it already encoded for the archive instead of calling
+// this, so a run marshals the snapshot once; tests seed a pointer through it.
 func savePickupSnapshot(store lineupapi.BlobStore, snap dynasty.PlayerSnapshot) error {
 	body, err := json.Marshal(snap)
 	if err != nil {
@@ -323,7 +320,10 @@ type pickupLeagueInputs struct {
 	names    map[int]string
 }
 
-func loadPickupLeague(ctx context.Context, sc *sleeper.Client, leagueID string, state *sleeper.NFLState) (pickupLeagueInputs, error) {
+// loadPickupLeague fetches one league's rosters, users and the transactions
+// of the given week buckets (recentWeeks: the drop detector looks back a day
+// past the baseline, so two buckets back is already generous).
+func loadPickupLeague(ctx context.Context, sc *sleeper.Client, leagueID string, weeks []int) (pickupLeagueInputs, error) {
 	rosters, err := sc.Rosters(ctx, leagueID)
 	if err != nil {
 		return pickupLeagueInputs{}, fmt.Errorf("sleeper rosters: %w", err)
@@ -333,7 +333,7 @@ func loadPickupLeague(ctx context.Context, sc *sleeper.Client, leagueID string, 
 		return pickupLeagueInputs{}, fmt.Errorf("sleeper users: %w", err)
 	}
 	in := pickupLeagueInputs{rostered: rosteredSet(rosters), names: dynasty.TeamNames(rosters, users)}
-	for _, week := range pollWeeks(state) {
+	for _, week := range weeks {
 		txns, err := sc.Transactions(ctx, leagueID, week)
 		if err != nil {
 			return pickupLeagueInputs{}, fmt.Errorf("sleeper transactions (week %d): %w", week, err)
@@ -428,16 +428,19 @@ type pickupRunResult struct {
 	Roles, Drops, Chops, New, Sent, Tail, SendFailed int
 }
 
-// pollPickups runs load -> run per league with the same isolation as
-// pollLeagues/pollOffers: a league whose load fails is warned, named in
-// failed and skipped; the others still run.
-func pollPickups(ctx context.Context, leagues []leagueContext, load pickupLoader, run pickupRunner) (total pickupRunResult, failed []string) {
-	for _, lc := range leagues {
-		in, err := load(ctx, lc)
-		if err != nil {
-			warn("football-pickups: %s: %v (continuing with the other leagues)", lc.League.Name, err)
-			failed = append(failed, lc.League.Name)
-			continue
+// pollPickups runs load -> run per league over forEachLeague (a league whose
+// load fails is warned, named in failed and skipped; the others still run),
+// and skips a league with nothing rostered, saying so on out.
+func pollPickups(ctx context.Context, leagues []leagueContext, load pickupLoader, run pickupRunner, out io.Writer) (total pickupRunResult, failed []string) {
+	failed, _ = forEachLeague(ctx, "football-pickups", leagues, load, nil, func(lc leagueContext, in pickupLeagueInputs) {
+		if len(in.rostered) == 0 {
+			// A league with nothing rostered has not drafted (a startup
+			// league before its draft; an offseason dynasty league keeps
+			// its rosters). Every depth-chart #1 would read as an unrostered
+			// pickup there, and nobody can add a player before the draft, so
+			// the league is skipped and the skip is said.
+			fmt.Fprintf(out, "football-pickups: %s: no rostered players (not drafted yet); skipped\n", lc.League.Name)
+			return
 		}
 		r := run(lc, in)
 		total.Roles += r.Roles
@@ -447,7 +450,7 @@ func pollPickups(ctx context.Context, leagues []leagueContext, load pickupLoader
 		total.Sent += r.Sent
 		total.Tail += r.Tail
 		total.SendFailed += r.SendFailed
-	}
+	})
 	return total, failed
 }
 

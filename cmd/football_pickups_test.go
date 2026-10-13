@@ -219,12 +219,12 @@ func TestPollPickups_OneFailingLeagueDoesNotStopTheOthers(t *testing.T) {
 			if lc.League.Name == "Bravo" {
 				return pickupLeagueInputs{}, errors.New("boom")
 			}
-			return pickupLeagueInputs{}, nil
+			return pickupLeagueInputs{rostered: map[string]bool{"p1": true}}, nil
 		},
 		func(lc leagueContext, in pickupLeagueInputs) pickupRunResult {
 			ran = append(ran, lc.League.Name)
 			return pickupRunResult{New: 1, Sent: 1, Tail: 3, SendFailed: 1}
-		})
+		}, io.Discard)
 	if strings.Join(ran, ",") != "Alpha,Charlie" || len(failed) != 1 || failed[0] != "Bravo" || total.Sent != 2 {
 		t.Errorf("ran=%v failed=%v total=%+v", ran, failed, total)
 	}
@@ -631,5 +631,33 @@ func TestDetectLeaguePickups_RoleChangesAreFilteredToTheLeaguesOwnPositions(t *t
 	}
 	if got := detectLeaguePickups(prev, cur, withKicker, pickupLeagueInputs{rostered: map[string]bool{}}, nil, nil); got.roles != 2 {
 		t.Errorf("a league that rosters kickers keeps the K role change: %+v", got)
+	}
+}
+
+// A league with nothing rostered has not drafted: every depth-chart #1 would
+// read as an unrostered pickup nobody can make. It is skipped, said, and not
+// counted as failed (nothing is wrong with it).
+func TestPollPickups_EmptyRosterLeagueIsSkippedAndSaid(t *testing.T) {
+	leagues := []leagueContext{
+		{League: sleeper.League{LeagueID: "1", Name: "Startup"}}, {League: sleeper.League{LeagueID: "2", Name: "Drafted"}},
+	}
+	var ran []string
+	var out strings.Builder
+	total, failed := pollPickups(context.Background(), leagues,
+		func(ctx context.Context, lc leagueContext) (pickupLeagueInputs, error) {
+			if lc.League.Name == "Startup" {
+				return pickupLeagueInputs{rostered: map[string]bool{}}, nil
+			}
+			return pickupLeagueInputs{rostered: map[string]bool{"p1": true}}, nil
+		},
+		func(lc leagueContext, in pickupLeagueInputs) pickupRunResult {
+			ran = append(ran, lc.League.Name)
+			return pickupRunResult{New: 1}
+		}, &out)
+	if strings.Join(ran, ",") != "Drafted" || len(failed) != 0 || total.New != 1 {
+		t.Errorf("ran=%v failed=%v total=%+v, want only Drafted to run and nothing failed", ran, failed, total)
+	}
+	if !strings.Contains(out.String(), "Startup") || !strings.Contains(out.String(), "skipped") {
+		t.Errorf("the skip must be said, naming the league; got %q", out.String())
 	}
 }

@@ -194,7 +194,17 @@ func FormatPickupDigest(profile LeagueProfile, items []PickupItem) (title, body 
 		// line mid-way. Size it for the worst case (every line left out) and
 		// refit: the prefix can only shrink, and the count printed is the
 		// count actually left out on this pass.
+		//
+		// Unless the reserve is what pushes the head line out: a head that
+		// fits alone but not beside the trailer must still go out, or the
+		// caller would read shown == 0 as "no digest can ever carry it" and
+		// mark it unsent for good. The first fit is sent instead, with no
+		// trailer -- the pointer hold carries the rest to the next run.
+		plain, first := body, shown
 		body, shown = fitLines(items, len(moreTrailer(len(items))))
+		if shown == 0 && first > 0 {
+			return title, pushover.Truncate(plain), first
+		}
 		body += moreTrailer(len(items) - shown)
 	}
 	return title, pushover.Truncate(body), shown
