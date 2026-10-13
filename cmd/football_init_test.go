@@ -2,10 +2,22 @@ package cmd
 
 import "testing"
 
-func TestLoadFootballConfigRequiresSleeperLeagueID(t *testing.T) {
+// SLEEPER_LEAGUE_ID is football-values' requirement alone: the multi-league
+// jobs discover their leagues from SLEEPER_USER_ID and never read it, so the
+// shared loader must not fail them over it.
+func TestLoadFootballConfig_SleeperLeagueIDIsOptionalAtLoad(t *testing.T) {
 	t.Setenv("SLEEPER_LEAGUE_ID", "")
-	if _, err := loadFootballConfig(); err == nil {
-		t.Fatal("loadFootballConfig: expected error when SLEEPER_LEAGUE_ID unset, got nil")
+	cfg, err := loadFootballConfig()
+	if err != nil {
+		t.Fatalf("loadFootballConfig must load without SLEEPER_LEAGUE_ID: %v", err)
+	}
+	if err := cfg.requireSleeperLeagueID(); err == nil {
+		t.Error("requireSleeperLeagueID must fail when unset -- football-values has nothing to read")
+	}
+	t.Setenv("SLEEPER_LEAGUE_ID", "lg1")
+	cfg, err = loadFootballConfig()
+	if err != nil || cfg.requireSleeperLeagueID() != nil {
+		t.Errorf("league id not read: %+v (%v)", cfg, err)
 	}
 }
 
@@ -93,13 +105,13 @@ func TestInitFootballRequiresNoFantraxCreds(t *testing.T) {
 	}
 }
 
-func TestInitFootballErrorsWithoutSleeperLeagueID(t *testing.T) {
+func TestInitFootballLoadsWithoutSleeperLeagueID(t *testing.T) {
 	t.Setenv("SLEEPER_LEAGUE_ID", "")
 	t.Setenv("STATE_BUCKET", "")
 	t.Setenv("RUN_ID", "")
 
-	if _, _, err := initFootball(); err == nil {
-		t.Fatal("initFootball: expected error when SLEEPER_LEAGUE_ID unset, got nil")
+	if _, _, err := initFootball(); err != nil {
+		t.Fatalf("initFootball must succeed without SLEEPER_LEAGUE_ID (the multi-league jobs never read it): %v", err)
 	}
 }
 
