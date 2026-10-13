@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"sort"
 	"strconv"
@@ -12,6 +14,7 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/dynasty"
 	"github.com/nixon-commits/rosterbot/internal/lineupapi"
 	"github.com/nixon-commits/rosterbot/internal/sleeper"
+	"github.com/spf13/cobra"
 )
 
 // leagueContext is one discovered league plus everything the multi-league
@@ -162,4 +165,45 @@ func previousSeason(s string) string {
 		return ""
 	}
 	return strconv.Itoa(y - 1)
+}
+
+// discoverLeaguesOrStop is discoverLeagues for a cobra command. On the
+// off-season stop discovery has already printed its one line and recorded the
+// ledger outcome, so cobra is silenced and the exit-0 path prints nothing
+// else, exactly as checkSeasonGate does for the baseball commands. One helper
+// rather than the same four lines in each football command.
+func discoverLeaguesOrStop(cmd *cobra.Command, ctx context.Context, sc leagueLister, cfg *FootballConfig, state *sleeper.NFLState) ([]leagueContext, error) {
+	leagues, err := discoverLeagues(ctx, sc, cfg, state, os.Stdout)
+	if err != nil && errors.Is(err, errOffSeason) {
+		cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	}
+	return leagues, err
+}
+
+// forEachLeague is the per-league loop every multi-league football job runs
+// (cmd/archive.go's per-source pattern): load a league's inputs, then run it,
+// isolating failures so one league's Sleeper hiccup never silences the rest.
+// A league whose load fails is warned under job's prefix, named in failed and
+// skipped; the caller exits non-zero at the end so ops alerting sees it.
+//
+// abort, when non-nil, names the one class of load error that ends the run
+// instead -- football-offers' ErrUnauthorized, where every league would fail
+// the same way and six warnings would read as six problems where there is
+// one: the returned error names the job and the league, and no further league
+// is loaded. The three pollers (pollLeagues, pollOffers, pollPickups) are
+// closures over this; accumulation stays with each job's own result type.
+func forEachLeague[I any](ctx context.Context, job string, leagues []leagueContext, load func(context.Context, leagueContext) (I, error), abort func(error) bool, run func(leagueContext, I)) (failed []string, err error) {
+	for _, lc := range leagues {
+		in, lerr := load(ctx, lc)
+		if lerr != nil {
+			if abort != nil && abort(lerr) {
+				return failed, fmt.Errorf("%s: %s: %w", job, lc.League.Name, lerr)
+			}
+			warn("%s: %s: %v (continuing with the other leagues)", job, lc.League.Name, lerr)
+			failed = append(failed, lc.League.Name)
+			continue
+		}
+		run(lc, in)
+	}
+	return failed, nil
 }
