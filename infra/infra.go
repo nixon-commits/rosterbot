@@ -335,6 +335,19 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			// on this to publish only into the operator's partition.
 			"OPERATOR_USER_ID": awsssm.StringParameter_ValueForStringParameter(
 				stack, jsii.String("/rosterbot/OPERATOR_USER_ID"), nil),
+			// SLEEPER_USER_ID is the operator's Sleeper account id, which the
+			// multi-league football jobs (football-trades, and the offers and
+			// pickups jobs that follow it) discover every league from; they
+			// fail fast without it (requireSleeperUserID). It is PUBLIC -- any
+			// Sleeper user can look it up -- so it is a plain String parameter
+			// read at DEPLOY time like OPERATOR_USER_ID above, not an ECS
+			// secret: a secret is resolved at every task launch, so a missing
+			// parameter would fail every job on this task definition
+			// (ResourceInitializationError), whereas a missing parameter here
+			// fails `cdk deploy` before any task is touched. It must exist, as
+			// type String (not SecureString), before this deploys.
+			"SLEEPER_USER_ID": awsssm.StringParameter_ValueForStringParameter(
+				stack, jsii.String("/rosterbot/SLEEPER_USER_ID"), nil),
 			// The Apple developer team the APNs provider token signs as (`iss`).
 			// Not a secret and stable, so it lives here rather than in Secrets —
 			// a name must appear in exactly one of the two maps, and cdk synth
@@ -368,20 +381,13 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 			// writing to the legacy prefix while the schedules wrote to the new
 			// one, splitting the same artifact across two locations.
 			//
-			// SLEEPER_LEAGUE_ID is the one hard requirement football-values/
-			// football-trades have (loadFootballConfig errors without it,
+			// SLEEPER_LEAGUE_ID is the one hard requirement football-values
+			// has (requireSleeperLeagueID errors without it,
 			// unlike DYNASTY_FORMAT and FOOTBALL_PUSHOVER_*, which fall back
 			// safely in code) — without this the FootballValues/FootballTrades
 			// EventBridge schedules fail every run with "missing required env
 			// var: SLEEPER_LEAGUE_ID" once deployed.
 			"SLEEPER_LEAGUE_ID": secret("SLEEPER_LEAGUE_ID"),
-			// SLEEPER_USER_ID is the operator's Sleeper account id. The
-			// multi-league football jobs (football-trades, and the offers and
-			// pickups jobs that follow it) discover every league from it;
-			// they fail fast without it (requireSleeperUserID). Same
-			// merge-order rule as APNS_AUTH_KEY below: the SSM parameter must
-			// exist before this deploys.
-			"SLEEPER_USER_ID": secret("SLEEPER_USER_ID"),
 			// APNs provider-token credentials (the .p8 body and its Key ID).
 			// MERGE-ORDER LOAD-BEARING: an ECS Secret naming an SSM parameter
 			// that does not exist fails EVERY task launch at provisioning

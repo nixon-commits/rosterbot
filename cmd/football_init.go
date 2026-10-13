@@ -13,9 +13,10 @@ import (
 // outright without the four FANTRAX_* vars, and football commands must never
 // need Fantrax credentials.
 type FootballConfig struct {
-	// SleeperLeagueID is the single league football-values reads. The
-	// multi-league jobs (football-trades, and Plans 2/3's offers and pickups)
-	// discover leagues from SleeperUserID instead and never read it.
+	// SleeperLeagueID is the single league football-values reads. Optional at
+	// load: the multi-league jobs (football-trades, offers, pickups) discover
+	// their leagues from SleeperUserID and never read it, so only
+	// football-values requires it (requireSleeperLeagueID).
 	SleeperLeagueID string
 	// SleeperUserID is the operator's Sleeper account id — stable where a
 	// username is not. Optional at load so football-values keeps working
@@ -31,9 +32,6 @@ type FootballConfig struct {
 
 func loadFootballConfig() (*FootballConfig, error) {
 	leagueID := os.Getenv("SLEEPER_LEAGUE_ID")
-	if leagueID == "" {
-		return nil, fmt.Errorf("missing required env var: SLEEPER_LEAGUE_ID")
-	}
 	overrides, err := dynasty.ParseFormatOverrides(os.Getenv("SLEEPER_FORMAT_OVERRIDES"))
 	if err != nil {
 		return nil, err
@@ -66,6 +64,17 @@ func loadFootballConfig() (*FootballConfig, error) {
 func (c *FootballConfig) requireSleeperUserID() error {
 	if c.SleeperUserID == "" {
 		return fmt.Errorf("missing required env var: SLEEPER_USER_ID (the operator's Sleeper account id; this job discovers leagues from it)")
+	}
+	return nil
+}
+
+// requireSleeperLeagueID is football-values' check: it is the one command
+// that reads a single configured league. The multi-league jobs discover
+// theirs from SLEEPER_USER_ID and must not fail over a variable they never
+// use.
+func (c *FootballConfig) requireSleeperLeagueID() error {
+	if c.SleeperLeagueID == "" {
+		return fmt.Errorf("missing required env var: SLEEPER_LEAGUE_ID (the league football-values reads)")
 	}
 	return nil
 }

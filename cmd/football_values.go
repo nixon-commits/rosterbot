@@ -48,6 +48,9 @@ func runFootballValues(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := cfg.requireSleeperLeagueID(); err != nil {
+		return err
+	}
 
 	league, err := sc.League(cmd.Context(), cfg.SleeperLeagueID)
 	if err != nil {
