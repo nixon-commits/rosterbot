@@ -147,9 +147,9 @@ func TestDiscoverLeagues_EveryLeagueCompleteIsAnOffSeasonStop(t *testing.T) {
 	}
 }
 
-// Zero leagues RETURNED is still a configuration fault (wrong id, wrong
-// seasons), never a quiet off-season: a job exiting 0 over it would read as a
-// quiet week forever.
+// Zero leagues RETURNED under every season asked -- the current ones and the
+// previous one -- is still a configuration fault (wrong id), never a quiet
+// off-season: a job exiting 0 over it would read as a quiet week forever.
 func TestDiscoverLeagues_ZeroLeaguesReturnedStaysAnError(t *testing.T) {
 	f := &fakeLeagueLister{bySeason: map[string][]sleeper.League{}}
 	var out strings.Builder
@@ -160,8 +160,68 @@ func TestDiscoverLeagues_ZeroLeaguesReturnedStaysAnError(t *testing.T) {
 	if exitCodeFor(err) != 1 {
 		t.Errorf("zero returned exits non-zero; got %d", exitCodeFor(err))
 	}
-	if !strings.Contains(err.Error(), "2026") || !strings.Contains(err.Error(), "2027") {
-		t.Errorf("the error must name both seasons it asked for: %v", err)
+	if len(f.asked) != 3 || f.asked[2] != "2025" {
+		t.Fatalf("zero returned must ask the previous season before failing; asked %v", f.asked)
+	}
+	for _, season := range []string{"2026", "2027", "2025"} {
+		if !strings.Contains(err.Error(), season) {
+			t.Errorf("the error must name every season it asked for (%s): %v", season, err)
+		}
+	}
+}
+
+// Between Sleeper moving `season` forward and the first commissioner renewing
+// a league, the current seasons list nothing and every league the operator has
+// is last season's complete object. That is the off-season, not a fault: the
+// hourly offers job would otherwise fail and page on every run until a renewal.
+func TestDiscoverLeagues_SeasonFlipBeforeRenewalIsAnOffSeasonStop(t *testing.T) {
+	outcome := filepath.Join(t.TempDir(), "outcome")
+	t.Setenv(runOutcomeFileEnv, outcome)
+	f := &fakeLeagueLister{bySeason: map[string][]sleeper.League{
+		"2026": {{LeagueID: "a", Name: "A", Status: "complete"}, {LeagueID: "b", Name: "B", Status: "complete"}},
+	}}
+	var out strings.Builder
+	got, err := discoverLeagues(context.Background(), f, withUser(), &sleeper.NFLState{Season: "2027", LeagueCreateSeason: "2027"}, &out)
+	if got != nil || !errors.Is(err, errOffSeason) {
+		t.Fatalf("last season's complete leagues after the flip are the off-season: got %v, err %v", got, err)
+	}
+	if len(f.asked) != 2 || f.asked[0] != "2027" || f.asked[1] != "2026" {
+		t.Fatalf("must ask the previous season only after the current ones returned nothing; asked %v", f.asked)
+	}
+	if exitCodeFor(err) != 0 {
+		t.Errorf("an off-season stop exits 0; got %d", exitCodeFor(err))
+	}
+	if !strings.Contains(out.String(), "Off-season") || !strings.Contains(out.String(), "2026") {
+		t.Errorf("the printed line must say off-season and name the season the leagues were found under; got:\n%s", out.String())
+	}
+}
+
+// A previous-season fetch that fails is a failure, like either current season.
+func TestDiscoverLeagues_PreviousSeasonFetchErrorFailsTheRun(t *testing.T) {
+	f := &fakeLeagueLister{
+		bySeason: map[string][]sleeper.League{},
+		errOn:    map[string]error{"2026": errors.New("sleeper GET: status 502")},
+	}
+	var out strings.Builder
+	if _, err := discoverLeagues(context.Background(), f, withUser(), &sleeper.NFLState{Season: "2027", LeagueCreateSeason: "2027"}, &out); err == nil || errors.Is(err, errOffSeason) {
+		t.Fatalf("a failed previous-season fetch must fail discovery, got %v", err)
+	}
+}
+
+// The previous season is asked ONLY when the current seasons returned nothing,
+// so an in-season run never pays for or lists last season's complete leagues.
+func TestDiscoverLeagues_PreviousSeasonIsNotAskedWhenLeaguesExist(t *testing.T) {
+	f := &fakeLeagueLister{bySeason: map[string][]sleeper.League{
+		"2026": {{LeagueID: "a", Name: "A", Status: "in_season"}},
+		"2025": {{LeagueID: "old", Name: "Old", Status: "complete"}},
+	}}
+	var out strings.Builder
+	got, err := discoverLeagues(context.Background(), f, withUser(), &sleeper.NFLState{Season: "2026", LeagueCreateSeason: "2026"}, &out)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	if len(f.asked) != 1 {
+		t.Fatalf("the previous season must not be asked when the current ones answered; asked %v", f.asked)
 	}
 }
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nixon-commits/rosterbot/internal/dynasty"
@@ -73,9 +75,16 @@ func discoverySeasons(state *sleeper.NFLState) []string {
 // visible on every run.
 //
 // Three outcomes are told apart, because they need different responses:
-//   - Zero leagues RETURNED is an error, not an empty success — a user id
-//     with no leagues in either season is a configuration fault (wrong id,
-//     wrong seasons) and a job that exits 0 over it would read as a quiet
+//   - Zero leagues RETURNED under those seasons is checked against the
+//     PREVIOUS season before anything is concluded. Between Sleeper moving
+//     `season` forward and the first commissioner renewing a league, every
+//     league the operator has is still last season's object and the current
+//     seasons list nothing; that is the off-season (the leagues found there
+//     are complete, and the next outcome handles them), not a fault, and
+//     without this check the hourly offers job failed and paged on every run
+//     through that gap. Nothing under any season asked is an error, not an
+//     empty success — a user id with no leagues anywhere is a configuration
+//     fault (wrong id) and a job that exits 0 over it would read as a quiet
 //     week forever.
 //   - Leagues returned but every one COMPLETE is the off-season: the fantasy
 //     playoffs have ended and Sleeper has not yet moved `season` forward. It
@@ -94,10 +103,10 @@ func discoverLeagues(ctx context.Context, sc leagueLister, cfg *FootballConfig, 
 		leagues []sleeper.League
 		seen    = map[string]bool{}
 	)
-	for _, season := range seasons {
+	fetch := func(season string) error {
 		ls, err := sc.LeaguesForUser(ctx, cfg.SleeperUserID, "nfl", season)
 		if err != nil {
-			return nil, fmt.Errorf("sleeper leagues for user %s (%s): %w", cfg.SleeperUserID, season, err)
+			return fmt.Errorf("sleeper leagues for user %s (%s): %w", cfg.SleeperUserID, season, err)
 		}
 		for _, lg := range ls {
 			if seen[lg.LeagueID] {
@@ -105,6 +114,24 @@ func discoverLeagues(ctx context.Context, sc leagueLister, cfg *FootballConfig, 
 			}
 			seen[lg.LeagueID] = true
 			leagues = append(leagues, lg)
+		}
+		return nil
+	}
+	for _, season := range seasons {
+		if err := fetch(season); err != nil {
+			return nil, err
+		}
+	}
+	if len(leagues) == 0 {
+		// Nothing under the seasons being played or created into: ask last
+		// season before calling it a fault (see the doc comment). Asked only
+		// now, so an in-season run never pays for or lists last season's
+		// complete leagues.
+		if prev := previousSeason(state.Season); prev != "" && !slices.Contains(seasons, prev) {
+			seasons = append(seasons, prev)
+			if err := fetch(prev); err != nil {
+				return nil, err
+			}
 		}
 	}
 	label := strings.Join(seasons, ", ")
@@ -125,4 +152,14 @@ func discoverLeagues(ctx context.Context, sc leagueLister, cfg *FootballConfig, 
 			p.Name, p.LeagueID, p.Kind, p.Superflex, p.Format, p.FormatSource)
 	}
 	return lcs, nil
+}
+
+// previousSeason is the season before s ("2027" -> "2026"), or "" when s is
+// not a year, in which case discovery has no previous season to ask.
+func previousSeason(s string) string {
+	y, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || y <= 0 {
+		return ""
+	}
+	return strconv.Itoa(y - 1)
 }
