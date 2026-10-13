@@ -52,6 +52,12 @@ type codeBuildAPI interface {
 	BatchGetBuilds(ctx context.Context, in *codebuild.BatchGetBuildsInput, opts ...func(*codebuild.Options)) (*codebuild.BatchGetBuildsOutput, error)
 }
 
+// githubToken authenticates the head read. Set once at cold start from the SSM
+// parameter named by GITHUB_TOKEN_PARAM; empty keeps the read anonymous, which
+// is what a public repository needs and what makes this deployable before the
+// parameter exists.
+var githubToken string
+
 // httpGet is the HTTP seam, replaced in tests so no test reaches github.com.
 var httpGet = func(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -60,6 +66,9 @@ var httpGet = func(ctx context.Context, url string) ([]byte, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "rosterbot-opsnotify")
+	if githubToken != "" {
+		req.Header.Set("Authorization", "Bearer "+githubToken)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -73,10 +82,13 @@ var httpGet = func(ctx context.Context, url string) ([]byte, error) {
 
 // headOfMain reads the newest commit on main from the GitHub REST API.
 //
-// Unauthenticated: rosterbot is a public repository, so this needs no token and
-// therefore no secret to rotate, and the 60-requests-per-hour anonymous limit is
-// untroubled by four calls a day. It is also the point of the check that this
-// source is INDEPENDENT of AWS — asking AWS what AWS built would answer a
+// Authenticated with githubToken when one is configured — the repository is
+// private, and GitHub answers an anonymous read of a private repository with
+// 404, byte-identical to the repository not existing — and anonymous otherwise,
+// which is what a public repository needs. The token is a fine-grained PAT with
+// Contents: read on this one repository and nothing else; its expiry is the
+// failure mode DriftBlind exists for. It is also the point of the check that
+// this source is INDEPENDENT of AWS — asking AWS what AWS built would answer a
 // different, useless question.
 //
 // A zero time on an unparseable date is deliberate and is handled by
@@ -182,13 +194,33 @@ func handleDrift(ctx context.Context) error {
 
 	head, at, err := headOfMain(ctx, repo)
 	if err != nil {
-		// Blindness, not a finding. Logged so it is visible in CloudWatch, and
-		// left un-alerted so the channel never carries news about itself.
+		// Configured, ran, could not see: a finding of its own, once per
+		// outage (opsalert.DriftBlind). The head read carries a credential
+		// that expires, and a private repository answers an anonymous read
+		// with 404 — both leave the check blind for exactly as long as nobody
+		// notices, and nobody notices silence. Still nil: a retry cannot help,
+		// and the alert has already said what a retry would say again.
 		log.Printf("drift: cannot read %s main: %v", repo, err)
+		b := opsalert.DriftBlind{}
+		prev, _ := markers.token(ctx, b.MarkerKey())
+		if !b.NeedsAlert(prev) {
+			log.Printf("drift: already alerted that %s main is unreadable; staying quiet", repo)
+			return nil
+		}
+		title, body := opsalert.FormatDriftBlind(repo, err)
+		if serr := send1(ctx, markers, alert{
+			key: b.MarkerKey(), note: b.AlertToken(), title: title, body: body,
+		}); serr != nil {
+			log.Printf("drift blind send: %v", serr)
+		}
 		return nil
 	}
+	clearBlindMarker(ctx, repo)
 	built, err := newestSuccessfulBuild(ctx, project)
 	if err != nil {
+		// AWS-side blindness stays a log line, not a finding: the CodeBuild
+		// reads run under the Lambda's own role, which has nothing to expire,
+		// so this is a hiccup the next tick retries for free.
 		log.Printf("drift: cannot read builds for %s: %v", project, err)
 		return nil
 	}
@@ -215,6 +247,19 @@ func handleDrift(ctx context.Context) error {
 		title: title,
 		body:  body,
 	})
+}
+
+// clearBlindMarker overwrites a blind marker once the head is readable again,
+// so the NEXT outage is news rather than being swallowed by the first alert's
+// marker for the life of the bucket. Overwrite rather than delete, because the
+// store has no delete — the DriftDark restore, one finding over. One extra
+// marker read per healthy tick is the cost, twelve a day.
+func clearBlindMarker(ctx context.Context, repo string) {
+	b := opsalert.DriftBlind{}
+	if prev, _ := markers.token(ctx, b.MarkerKey()); prev == opsalert.DriftBlindToken {
+		log.Printf("drift: %s main readable again; clearing blind marker", repo)
+		markers.record(b.MarkerKey(), opsalert.DriftBlindClearToken)
+	}
 }
 
 // handleDriftConfig asserts that the drift check is configured at all, and
