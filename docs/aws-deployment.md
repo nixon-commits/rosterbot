@@ -315,11 +315,22 @@ Verify cleared by re-running any `aws ecs run-task` above (expect a task ARN, no
 
 ### B. Enable CodeBuild (GitHub → AWS)
 
-CodeBuild's GitHub webhook source needs a one-time source credential:
+CodeBuild's GitHub webhook source needs a one-time source credential, and **the repository is
+private, so the credential must be able to read private repositories**: a classic PAT with `repo`
+(not only `public_repo`) plus `admin:repo_hook`, or a fine-grained PAT with this repository
+selected and Contents: read + Webhooks: read/write. `aws codebuild list-source-credentials` shows
+only the ARN and auth type, never the token or its scope, and a re-import reuses the ARN — so
+nothing on the AWS side proves which token is live; the first webhook build's `DOWNLOAD_SOURCE`
+phase after a change does.
 
 1. AWS console → CodeBuild → **Create project** (or Settings) → connect to GitHub via OAuth
    **once** (this stores the source credential account-wide), then cancel the wizard. *Or*
    import a GitHub PAT: `aws codebuild import-source-credentials --server-type GITHUB --auth-type PERSONAL_ACCESS_TOKEN --token <PAT>`.
+0. (Separate from, and far narrower than, the source credential.) Create the build-drift
+   check's read token — a fine-grained PAT with **this repository only** and **Contents: read** —
+   and store it: `aws ssm put-parameter --name /rosterbot/GITHUB_READ_TOKEN --type SecureString --value <PAT> --region us-west-1`.
+   Without it the check reads anonymously, which a private repository answers with 404, and
+   `DriftBlind` pages once per outage until it is fixed (see `docs/ops-alerting.md`).
 2. Deploy with the build project enabled:
    ```bash
    cd infra && cdk deploy --all -c enableBuild=true --require-approval never
