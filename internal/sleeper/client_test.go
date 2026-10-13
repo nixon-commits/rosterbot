@@ -511,3 +511,17 @@ func TestTransaction_DecodesStatusUpdatedAndZeroWhenAbsent(t *testing.T) {
 		t.Errorf("StatusUpdated = %d for a row without the field, want 0 (the Created fallback)", bare.StatusUpdated)
 	}
 }
+
+func TestTransaction_CompletedMillisIsStatusUpdatedThenCreated(t *testing.T) {
+	both := Transaction{Created: 1_000, StatusUpdated: 5_000}
+	if got := both.CompletedMillis(); got != 5_000 {
+		t.Errorf("CompletedMillis = %d, want status_updated (5000)", got)
+	}
+	createdOnly := Transaction{Created: 1_000}
+	if got := createdOnly.CompletedMillis(); got != 1_000 {
+		t.Errorf("CompletedMillis = %d, want the Created fallback (1000)", got)
+	}
+	if got := (Transaction{}).CompletedMillis(); got != 0 {
+		t.Errorf("CompletedMillis = %d for a row with no timestamps, want 0 (unknown)", got)
+	}
+}

@@ -313,12 +313,19 @@ func gradeAndAlertTrades(ctx context.Context, in tradeRunInputs) tradeRunResult 
 		// date -- exactly the mislabelling the Regraded badge exists to flag
 		// when --relog rebuilds an already-alerted trade. So: an unmarked
 		// trade older than the window is marked (so it never resurfaces
-		// under the same problem next poll) but neither sent nor logged. A
-		// zero Created (unknown trade date) is treated as NOT stale -- an
+		// under the same problem next poll) but neither sent nor logged.
+		//
+		// Age is measured from the trade's COMPLETION (CompletedMillis:
+		// status_updated, falling back to created), never from created
+		// alone, which is when the OFFER was proposed: an offer with no
+		// expiry can sit for weeks before it is accepted, and judged on
+		// created it would be marked stale on the very day it completed and
+		// never alerted -- the drops detector's waiver-claim lesson
+		// (2026-09-30). No usable timestamp is treated as NOT stale -- an
 		// unknown age is not evidence of age, and the alternative would
-		// silently swallow every trade whose timestamp Sleeper omitted.
-		if txn.Created > 0 {
-			tradeDate := time.UnixMilli(txn.Created).UTC()
+		// silently swallow every trade whose timestamps Sleeper omitted.
+		if ms := txn.CompletedMillis(); ms > 0 {
+			tradeDate := time.UnixMilli(ms).UTC()
 			if age := in.now.Sub(tradeDate); age > staleTradeWindow {
 				res.Stale++
 				line := fmt.Sprintf("stale trade %s (%s, %s): marked without alert",

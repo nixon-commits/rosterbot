@@ -123,8 +123,8 @@ const pickupOverlap = time.Hour
 // free-agent transactions that COMPLETED after since (less pickupOverlap) and
 // still unrostered now, and groups guillotine chops by transaction.
 //
-// Completion is Transaction.StatusUpdated, falling back to Created when the
-// feed carries none. Created is when a waiver claim was SUBMITTED; the claim
+// Completion is Transaction.CompletedMillis (StatusUpdated, falling back to
+// Created when the feed carries none). Created is when a waiver claim was SUBMITTED; the claim
 // completes when waivers process, hours or days later, and a pending claim is
 // invisible in the public feed. Filtering on Created therefore skipped every
 // claim submitted before the previous baseline and processed after it, on the
@@ -145,11 +145,7 @@ func DetectDrops(txns []sleeper.Transaction, since time.Time, rostered map[strin
 	sinceMillis := since.Add(-pickupOverlap).UnixMilli()
 	chopByTxn := map[string]*Chop{}
 	for _, t := range txns {
-		at := t.StatusUpdated
-		if at == 0 {
-			at = t.Created
-		}
-		if t.Status != "complete" || at <= sinceMillis {
+		if t.Status != "complete" || t.CompletedMillis() <= sinceMillis {
 			continue
 		}
 		if t.Type != "waiver" && t.Type != "free_agent" && t.Type != "chopped" {

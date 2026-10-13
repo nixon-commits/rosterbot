@@ -111,6 +111,22 @@ type Transaction struct {
 	Settings map[string]any `json:"settings"`
 }
 
+// CompletedMillis is the transaction's effective time, epoch millis: the
+// moment it reached its current status (StatusUpdated), falling back to
+// Created for a row the feed served without one. Zero means no usable
+// timestamp. It is the ONE definition every age or window test uses -- the
+// pickups drop window, the trades stale window and the trade log's date --
+// because judging any of them on Created alone reads a waiver claim's or an
+// offer's SUBMISSION time as its completion, and a transaction that completed
+// long after it was proposed then falls outside a window it belongs inside
+// (measured 2026-09-30: 42% of completed waiver drops in one league).
+func (t Transaction) CompletedMillis() int64 {
+	if t.StatusUpdated > 0 {
+		return t.StatusUpdated
+	}
+	return t.Created
+}
+
 // ExpiresAt returns settings.expires_at as a UTC time, when present.
 //
 // Sleeper stores it as epoch SECONDS while Created is epoch MILLIS; reading
