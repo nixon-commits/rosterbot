@@ -363,3 +363,32 @@ hand-run on Fargate and verified (compare their Pushover output to the GHA twins
 SSM params and state survive, so a later `cdk deploy --all -c enableBuild=true` brings it back
 (without the flag it comes back without CI). Destroy to stop the few dollars/month between
 experiments, and do the restore from `main` — see the warning under *Common operations*.
+
+**Winter 2026-27 posture (decided 2026-10-13): leave it running.** Measured that day, two
+weeks into the off-season: 32 task launches a day, of which 20 are stopped by the season gate
+within seconds (15 `optimize`, plus grade, gs-check, shadow, prospects, waivers) and 12 do
+year-round work (football-values, four football-trades polls, archive, transactions, claims,
+team-values, both projection-site renders, version-check). Gross run rate about $5.60/month:
+the CIS CloudWatch alarms $1.60 (the 4 metrics and 4 alarms above the always-free 10, posted
+late in the month), S3 ~$1.20 (the per-launch state sync's requests, plus storage), the KMS
+key $1.00, Fargate ~$0.90, Route 53 $0.50, ECR ~$0.25, and CodeBuild $0.38 per merge to main.
+Credits have covered every usage dollar since the June cutover; the only out-of-pocket charge
+so far is the $17 domain renewal, which credits do not cover. Two budgets watch this, both in
+us-east-1 with email to the operator: "My Monthly Cost Budget" at $10 measures usage *gross of
+credits* (its filter excludes Credit/Refund) and catches a usage regression such as the August
+S3 bloat; "Net spend after credits" at $5 has no filter and fires only when money actually
+leaves the account, which is what the credits running out looks like. The remaining credit
+balance and its expiry are visible only in the console (Billing → Credits); no API reports them.
+
+Two things the measurement settled, for whoever revisits this:
+
+- Pausing the eight baseball-only schedules for the winter would save about $1/month gross
+  (Fargate's one-minute minimum per launch, plus the sync's S3 requests). It is not built. If
+  it ever is, the same flag must drop those jobs from `JOB_SCHEDULES` in the same deploy, or
+  the heartbeat pages each of them as overdue all winter; and it must land on `main`, since a
+  branch deploy is reverted by the next push.
+- `cdk destroy --all` would save about $4/month gross. The hosted zone survives it (it is not a
+  stack resource; `infra/domain_test.go` pins that), as do the state bucket, ECR, the identity
+  table and the KMS key. The dashboard, recaps, API and every job including football go dark
+  until the restore, and the restore has its own traps (the cross-region certificate export,
+  passkey recovery).
