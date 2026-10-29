@@ -150,14 +150,11 @@ func TestHandleDrift_QuietWhenProductionIsCurrent(t *testing.T) {
 	}
 }
 
-// Blindness is never a finding, and never an error either: returning one would
-// make async-invoke retry a check that cannot succeed.
+// AWS-side blindness is never a finding, and never an error either: returning
+// one would make async-invoke retry a check that cannot succeed. (An unreadable
+// GitHub head is the exception — see TestHandleDrift_UnreadableHeadAlertsOncePerOutage.)
 func TestHandleDrift_UnreadableSourcesStayQuietAndDoNotRetry(t *testing.T) {
 	cases := map[string]func(t *testing.T){
-		"github unreachable": func(t *testing.T) {
-			withDriftEnv(t, okBuilds())
-			withGitHub(t, "", 0, errors.New("github 503"))
-		},
 		"codebuild unreachable": func(t *testing.T) {
 			withDriftEnv(t, &fakeBuilds{listErr: errors.New("throttled")})
 			withGitHub(t, dHead, 6*time.Hour, nil)

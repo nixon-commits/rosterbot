@@ -26,3 +26,11 @@ updates:
       go-modules:
         patterns:
           - "*"
+    # chromedp and cdproto can only move together with the go-fantrax fork:
+    # cdproto v0.157+ needs chromedp v0.18+, and chromedp v0.18+ is a generics
+    # rewrite the fork's auth_client does not compile against (#229 went red on
+    # exactly this). Held at main's pins until rosterbot-v9ig migrates the
+    # fork; bump all three by hand, together, and delete this block then.
+    ignore:
+      - dependency-name: "github.com/chromedp/chromedp"
+      - dependency-name: "github.com/chromedp/cdproto"
