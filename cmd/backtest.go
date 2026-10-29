@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nixon-commits/rosterbot/internal/jobreport"
+	"io"
 	"os"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/spf13/cobra"
@@ -174,27 +175,33 @@ func runBacktest(cmd *cobra.Command, args []string) error {
 	report.Shape = shape
 	report.LineupExcluded = lineupExcluded
 
-	jobwire.RecordOutput("backtest", backtestToWireResult(report))
+	return jobreport.Emit(cmd.Context(), jobreport.Report{
+		Job:  "backtest",
+		Wire: backtestToWireResult(report),
+		Text: func(w io.Writer) {
+			if backtestJSON {
+				enc := json.NewEncoder(w)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(report); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: encode backtest report: %v\n", err)
+				}
+				return
+			}
+			fmt.Fprintln(w)
+			fmt.Fprint(w, backtest.FormatReport(report))
 
-	if backtestJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(report)
-	}
-	fmt.Println()
-	fmt.Print(backtest.FormatReport(report))
-
-	if report.Gate != nil {
-		fmt.Print(backtest.FormatGateSummary(*report.Gate))
-	}
-	// Roster shape is the analytical companion to the gate summary: the gate
-	// measures which starts the cap declined, this measures the structural
-	// imbalance that keeps producing them. Printed after so the measurement
-	// comes before its explanation.
-	if report.Shape != nil {
-		fmt.Print(backtest.FormatRosterShape(*report.Shape))
-	}
-	return nil
+			if report.Gate != nil {
+				fmt.Fprint(w, backtest.FormatGateSummary(*report.Gate))
+			}
+			// Roster shape is the analytical companion to the gate summary: the gate
+			// measures which starts the cap declined, this measures the structural
+			// imbalance that keeps producing them. Printed after so the measurement
+			// comes before its explanation.
+			if report.Shape != nil {
+				fmt.Fprint(w, backtest.FormatRosterShape(*report.Shape))
+			}
+		},
+	}, jobreport.Options{DryRun: cfg.DryRun})
 }
 
 // backtestRangeOptions turns the CLI flags into a backtest.RangeOptions. Only

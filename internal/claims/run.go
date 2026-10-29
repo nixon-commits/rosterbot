@@ -3,15 +3,13 @@ package claims
 import (
 	"context"
 	"fmt"
+	"github.com/nixon-commits/rosterbot/internal/jobreport"
 	"io"
 	"log"
-	"os"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
-	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/statcast"
 )
@@ -53,13 +51,23 @@ func Run(ctx context.Context, ft ClaimsClient, today time.Time, opts Options) er
 		return fmt.Errorf("get recent transactions: %w", err)
 	}
 
-	// Fast no-op: no transactions at all since the cursor — skip HKB fetch entirely.
+	// Advanced last so a mid-run failure re-processes next time, and never in
+	// a dry run. WriteLedger is idempotent (overwrites per-date) but the push
+	// may duplicate if the cursor write fails after the send — accepted for
+	// an advisory notification.
+	cursor := jobreport.Effect{Name: "claims cursor", Do: func() error { return saveCursor(opts.CursorPath, today) }}
+	emit := jobreport.Options{DryRun: opts.DryRun}
+
+	// Fast no-op: no transactions at all since the cursor — skip HKB fetch
+	// entirely. It is still a Job Report: the run had a result (no moves) and
+	// the cursor is its one effect.
 	noop := func() error {
-		log.Println("No waiver claims processed since last run.")
-		if err := saveCursor(opts.CursorPath, today); err != nil {
-			log.Printf("WARNING: failed to save claims cursor: %v", err)
-		}
-		return nil
+		return jobreport.Emit(ctx, jobreport.Report{
+			Job:     "claims",
+			Wire:    toWireResult(BuildLedger(today, nil)),
+			Text:    func(w io.Writer) { fmt.Fprintln(w, "No waiver claims processed since last run.") },
+			Effects: []jobreport.Effect{cursor},
+		}, emit)
 	}
 	if len(txs) == 0 {
 		return noop()
@@ -100,36 +108,17 @@ func Run(ctx context.Context, ft ClaimsClient, today time.Time, opts Options) er
 	}
 
 	led := BuildLedger(today, moves)
-	jobwire.RecordOutput("claims", toWireResult(led))
-
-	// Output: stdout (color) always; GHA summary (no color) when configured.
-	fmt.Println(FormatReport(moves, opts.DropsMin, true))
-	if summaryPath := os.Getenv("GITHUB_STEP_SUMMARY"); summaryPath != "" {
-		notify.AppendGHASummary(summaryPath, func(w io.Writer) {
-			fmt.Fprint(w, FormatReport(moves, opts.DropsMin, false))
-		})
-	}
-
-	// Ledger (skipped in dry-run).
-	if !opts.DryRun {
-		if err := WriteLedger(opts.LedgerDir, led); err != nil {
-			log.Printf("WARNING: failed to write ledger: %v", err)
-		}
-	}
-
-	// Notification (skipped in dry-run: the dispatcher's feed write is durable,
-	// and a dry run must stay side-effect-free).
-	if !opts.DryRun {
-		if err := notify.Send(ctx, notify.Event{Kind: "claims", Title: "Waiver Claims", Message: FormatPushover(moves)}); err != nil {
-			log.Printf("notification failed: %v", err)
-		}
-	}
-
-	// Advance cursor LAST so a mid-run failure re-processes next time.
-	// WriteLedger is idempotent (overwrites per-date) but Pushover may duplicate
-	// if saveCursor fails after notifying — accepted for an advisory notification.
-	if err := saveCursor(opts.CursorPath, today); err != nil {
-		log.Printf("WARNING: failed to save claims cursor: %v", err)
-	}
-	return nil
+	return jobreport.Emit(ctx, jobreport.Report{
+		Job:  "claims",
+		Wire: toWireResult(led),
+		// stdout in colour; the GHA summary without.
+		Text:    func(w io.Writer) { fmt.Fprintln(w, FormatReport(moves, opts.DropsMin, true)) },
+		Summary: func(w io.Writer) { fmt.Fprint(w, FormatReport(moves, opts.DropsMin, false)) },
+		Title:   "Waiver Claims",
+		Body:    FormatPushover(moves),
+		Effects: []jobreport.Effect{
+			{Name: "claims ledger", Do: func() error { return WriteLedger(opts.LedgerDir, led) }},
+			cursor,
+		},
+	}, emit)
 }

@@ -3,6 +3,7 @@ package waivers
 import (
 	"context"
 	"fmt"
+	"github.com/nixon-commits/rosterbot/internal/jobreport"
 	"io"
 	"log"
 	"math"
@@ -12,8 +13,6 @@ import (
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
-	"github.com/nixon-commits/rosterbot/internal/notify"
 	positionspkg "github.com/nixon-commits/rosterbot/internal/positions"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/pushover"
@@ -176,23 +175,14 @@ func Run(ctx context.Context, ft FantraxClient, today time.Time, opts Options) e
 		report.Top = candidates
 	}
 
-	jobwire.RecordOutput("waivers", toWireResult(report))
-
-	printReport(report)
-
-	if path := os.Getenv("GITHUB_STEP_SUMMARY"); path != "" {
-		writeGHASummary(report, path)
-	}
-
-	if !opts.DryRun {
-		if msg := formatPushover(report); msg != "" {
-			if err := notify.Send(ctx, notify.Event{Kind: "waivers", Title: pushoverTitle, Message: msg}); err != nil {
-				log.Printf("WARNING: notification failed: %v", err)
-			}
-		}
-	}
-
-	return nil
+	return jobreport.Emit(ctx, jobreport.Report{
+		Job:     "waivers",
+		Wire:    toWireResult(report),
+		Text:    func(w io.Writer) { printReport(w, report) },
+		Summary: func(w io.Writer) { writeGHASummary(w, report) },
+		Title:   pushoverTitle,
+		Body:    formatPushover(report),
+	}, jobreport.Options{DryRun: opts.DryRun})
 }
 
 // filterFreeAgents reduces the league pool to MLB free agents (FA + waivers),
@@ -472,32 +462,32 @@ func signalColor(s statcast.Signal) string {
 	}
 }
 
-func printReport(r Report) {
+func printReport(w io.Writer, r Report) {
 	title := "Waiver Picks · " + r.Date.Format("2006-01-02")
-	fmt.Printf("\n  %s\n\n", title)
+	fmt.Fprintf(w, "\n  %s\n\n", title)
 	if len(r.Top) == 0 {
-		fmt.Println("  No upgrade candidates surfaced today.")
-		fmt.Println()
+		fmt.Fprintln(w, "  No upgrade candidates surfaced today.")
+		fmt.Fprintln(w)
 		return
 	}
-	fmt.Printf("  %-9s %-20s %-5s %-7s %5s   %-20s %5s   %5s   %s\n",
+	fmt.Fprintf(w, "  %-9s %-20s %-5s %-7s %5s   %-20s %5s   %5s   %s\n",
 		"Signal", "Add", "Team", "Pos", "FPG", "Drop", "FPG", "+Gap", "Detail")
-	fmt.Printf("  %s\n", strings.Repeat("─", 110))
+	fmt.Fprintf(w, "  %s\n", strings.Repeat("─", 110))
 	for _, c := range r.Top {
 		clr := signalColor(c.Signal)
 		add := truncate(c.Name, 18)
 		drop := truncate(c.DropName, 18)
 		pos := truncate(c.Position, 6)
-		fmt.Printf("  %s%-9s%s %-20s %-5s %-7s %5.2f   %-20s %5.2f   %s+%4.2f%s   %s\n",
+		fmt.Fprintf(w, "  %s%-9s%s %-20s %-5s %-7s %5.2f   %-20s %5.2f   %s+%4.2f%s   %s\n",
 			clr, c.Signal.String(), colorReset,
 			add, c.MLBTeam, pos, c.ProjectedFPG,
 			drop, c.DropFPG,
 			colorGreen, c.Gap, colorReset,
 			candidateDetail(c))
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 	if r.Total > len(r.Top) {
-		fmt.Printf("  %s(%d more upgrades found — showing top %d)%s\n\n",
+		fmt.Fprintf(w, "  %s(%d more upgrades found — showing top %d)%s\n\n",
 			colorGray, r.Total-len(r.Top), len(r.Top), colorReset)
 	}
 }
@@ -576,25 +566,23 @@ func omitLeadZeroPrec(v float64, prec int) string {
 // GHA markdown summary
 // ---------------------------------------------------------------------------
 
-func writeGHASummary(r Report, path string) {
-	notify.AppendGHASummary(path, func(f io.Writer) {
-		fmt.Fprintln(f, "## Waiver Picks")
-		fmt.Fprintln(f)
-		if len(r.Top) == 0 {
-			fmt.Fprintln(f, "No upgrade candidates surfaced today.")
-			return
-		}
-		fmt.Fprintln(f, "| Signal | Add | Team | Pos | FPG | Drop | DropFPG | +Gap | Detail |")
-		fmt.Fprintln(f, "|--------|-----|------|-----|-----|------|---------|------|--------|")
-		for _, c := range r.Top {
-			fmt.Fprintf(f, "| %s | %s | %s | %s | %.2f | %s | %.2f | +%.2f | %s |\n",
-				c.Signal.String(), c.Name, c.MLBTeam, c.Position, c.ProjectedFPG,
-				c.DropName, c.DropFPG, c.Gap, candidateDetail(c))
-		}
-		if r.Total > len(r.Top) {
-			fmt.Fprintf(f, "\n_%d more upgrades found — showing top %d._\n", r.Total-len(r.Top), len(r.Top))
-		}
-	})
+func writeGHASummary(f io.Writer, r Report) {
+	fmt.Fprintln(f, "## Waiver Picks")
+	fmt.Fprintln(f)
+	if len(r.Top) == 0 {
+		fmt.Fprintln(f, "No upgrade candidates surfaced today.")
+		return
+	}
+	fmt.Fprintln(f, "| Signal | Add | Team | Pos | FPG | Drop | DropFPG | +Gap | Detail |")
+	fmt.Fprintln(f, "|--------|-----|------|-----|-----|------|---------|------|--------|")
+	for _, c := range r.Top {
+		fmt.Fprintf(f, "| %s | %s | %s | %s | %.2f | %s | %.2f | +%.2f | %s |\n",
+			c.Signal.String(), c.Name, c.MLBTeam, c.Position, c.ProjectedFPG,
+			c.DropName, c.DropFPG, c.Gap, candidateDetail(c))
+	}
+	if r.Total > len(r.Top) {
+		fmt.Fprintf(f, "\n_%d more upgrades found — showing top %d._\n", r.Total-len(r.Top), len(r.Top))
+	}
 }
 
 // ---------------------------------------------------------------------------

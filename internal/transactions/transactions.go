@@ -3,6 +3,8 @@ package transactions
 import (
 	"context"
 	"fmt"
+	"github.com/nixon-commits/rosterbot/internal/jobreport"
+	"io"
 	"log"
 	"math"
 	"sort"
@@ -11,8 +13,6 @@ import (
 
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
-	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/pushover"
 	"github.com/nixon-commits/rosterbot/internal/tradevalue"
 	"github.com/pmurley/go-fantrax/models"
@@ -113,28 +113,28 @@ func CheckTrades(ctx context.Context, ft TradeClient, cacheDir string, dryRun bo
 	var pendingGrouped []Trade
 	if len(pendingTrades) > 0 {
 		pendingGrouped = groupPendingTrades(pendingTrades, lookup)
-		fmt.Println(formatTrades("Pending Trades", pendingGrouped, true))
 	}
 
 	var executedGrouped []Trade
 	if len(txs) > 0 {
 		executedGrouped = groupTrades(txs, lookup, players)
-		fmt.Println(formatTrades("Recent Trades", executedGrouped, true))
 	}
 
 	allTrades := append(append([]Trade{}, pendingGrouped...), executedGrouped...)
-	jobwire.RecordOutput("transactions", toWireResult(allTrades))
-
-	if dryRun {
-		return nil
-	}
-
-	if body := notifyBody(pendingGrouped, executedGrouped); body != "" {
-		if err := notify.Send(ctx, notify.Event{Kind: "transactions", Title: "Trade Alert", Message: body}); err != nil {
-			log.Printf("notification failed: %v", err)
-		}
-	}
-	return nil
+	return jobreport.Emit(ctx, jobreport.Report{
+		Job:  "transactions",
+		Wire: toWireResult(allTrades),
+		Text: func(w io.Writer) {
+			if len(pendingGrouped) > 0 {
+				fmt.Fprintln(w, formatTrades("Pending Trades", pendingGrouped, true))
+			}
+			if len(executedGrouped) > 0 {
+				fmt.Fprintln(w, formatTrades("Recent Trades", executedGrouped, true))
+			}
+		},
+		Title: "Trade Alert",
+		Body:  notifyBody(pendingGrouped, executedGrouped),
+	}, jobreport.Options{DryRun: dryRun})
 }
 
 // buildHKBLookup creates a map from normalized player name to HKB player.

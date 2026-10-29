@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/nixon-commits/rosterbot/internal/jobreport"
 	"os"
 	"sort"
 	"time"
@@ -9,7 +10,6 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/analysis"
 	"github.com/nixon-commits/rosterbot/internal/backtest"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/lineupgap"
 	"github.com/nixon-commits/rosterbot/internal/statestore"
 	"github.com/spf13/cobra"
@@ -425,7 +425,11 @@ func runGrade(cmd *cobra.Command, args []string) error {
 	// same "Re-runnable" list as one real one (rosterbot-u9u). A date that did
 	// grade rows is never marked, so the two signals can't contradict.
 	skips := ungradeableDays(days, counts)
-	jobwire.RecordOutput("grade", gradeToWireResult(counts, windowLog))
+	// grade's stdout is the store-write loop below, not a report, so only the
+	// wire surface of the Job Report is used.
+	if err := jobreport.Emit(cmd.Context(), jobreport.Report{Job: "grade", Wire: gradeToWireResult(counts, windowLog)}, jobreport.Options{DryRun: cfg.DryRun}); err != nil {
+		return err
+	}
 
 	if cfg.DryRun {
 		for _, sys := range shadowSystems {

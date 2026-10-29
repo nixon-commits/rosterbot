@@ -16,28 +16,46 @@ func (f fakeClient) GetRecentTransactions(since time.Time) ([]models.Transaction
 	return f.txs, nil
 }
 
-func TestRun_NoClaimsIsNoop(t *testing.T) {
-	dir := t.TempDir()
-	ledgerDir := filepath.Join(dir, "claims")
-	today := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
-
-	opts := Options{
+func noopOptions(dir string, today time.Time, dryRun bool) Options {
+	return Options{
 		CacheDir:   dir,
-		DryRun:     true,
+		DryRun:     dryRun,
 		NoSignals:  true,
 		Since:      today.AddDate(0, 0, -1),
-		LedgerDir:  ledgerDir,
+		LedgerDir:  filepath.Join(dir, "claims"),
 		CursorPath: filepath.Join(dir, "last-claims.json"),
 		HKBPlayers: []hkb.Player{}, // non-nil → skip network
 	}
+}
+
+func TestRun_NoClaimsIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	today := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	opts := noopOptions(dir, today, false)
+
 	if err := Run(t.Context(), fakeClient{txs: nil}, today, opts); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if _, err := os.Stat(ledgerDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(opts.LedgerDir); !os.IsNotExist(err) {
 		t.Errorf("expected no ledger dir on no-op, stat err = %v", err)
 	}
 	if loadCursor(opts.CursorPath).IsZero() {
 		t.Error("cursor should advance even on no-op")
+	}
+}
+
+// A dry run is side-effect-free, and the cursor is a side effect: advancing
+// it would make the next real run skip the claims this one only looked at.
+func TestRun_DryRunNoopLeavesTheCursorAlone(t *testing.T) {
+	dir := t.TempDir()
+	today := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	opts := noopOptions(dir, today, true)
+
+	if err := Run(t.Context(), fakeClient{txs: nil}, today, opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !loadCursor(opts.CursorPath).IsZero() {
+		t.Error("a dry run must not advance the claims cursor")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nixon-commits/rosterbot/internal/jobreport"
 	"io"
 	"log"
 	"os"
@@ -15,8 +16,6 @@ import (
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
 	"github.com/nixon-commits/rosterbot/internal/hkb"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
-	"github.com/nixon-commits/rosterbot/internal/notify"
 	"github.com/nixon-commits/rosterbot/internal/playername"
 	"github.com/nixon-commits/rosterbot/internal/projections"
 	"github.com/nixon-commits/rosterbot/internal/pushover"
@@ -350,25 +349,18 @@ func RunProspectReport(ctx context.Context, ft *fantrax.Client, cfg config.Confi
 		Upgrades: upgradeSets,
 	}
 
-	jobwire.RecordOutput("prospects", toWireResult(report))
-
-	printReport(report, rosterRanked, sourceNames)
-
-	if summaryPath := os.Getenv("GITHUB_STEP_SUMMARY"); summaryPath != "" {
-		writeGHASummary(report, summaryPath)
-	}
-
-	if msg := formatProspectPushover(report); msg != "" {
-		if err := notify.Send(ctx, notify.Event{Kind: "prospects", Title: "RosterBot: Prospect Alerts", Message: msg}); err != nil {
-			log.Printf("WARNING: prospect notification failed: %v", err)
-		}
-	}
-
-	if err := saveTxnCursor(today); err != nil {
-		log.Printf("WARNING: failed to save transaction cursor: %v", err)
-	}
-
-	return nil
+	return jobreport.Emit(ctx, jobreport.Report{
+		Job:     "prospects",
+		Wire:    toWireResult(report),
+		Text:    func(w io.Writer) { printReport(w, report, rosterRanked, sourceNames) },
+		Summary: func(w io.Writer) { writeGHASummary(w, report) },
+		Title:   "RosterBot: Prospect Alerts",
+		Body:    formatProspectPushover(report),
+		// Advanced last, and never in a dry run: a run that fails before here
+		// re-processes the same transactions next time, and a dry run leaves
+		// the real cursor where it was.
+		Effects: []jobreport.Effect{{Name: "transaction cursor", Do: func() error { return saveTxnCursor(today) }}},
+	}, jobreport.Options{DryRun: cfg.DryRun})
 }
 
 // lookupRank tries name-based lookup first, then falls back to MLBAM ID matching.
@@ -453,22 +445,22 @@ func priorityColor(prio string) string {
 	}
 }
 
-func printReport(r Report, roster []rosterRankEntry, sourceNames []string) {
+func printReport(w io.Writer, r Report, roster []rosterRankEntry, sourceNames []string) {
 	// Header
 	title := "Prospect Report · " + r.Date.Format("2006-01-02")
-	fmt.Printf("\n  %s\n\n", title)
+	fmt.Fprintf(w, "\n  %s\n\n", title)
 
 	// Minors roster with rankings from each source
 	if len(roster) > 0 {
-		fmt.Printf("  Minors Roster %s\n", strings.Repeat("─", colW-15))
+		fmt.Fprintf(w, "  Minors Roster %s\n", strings.Repeat("─", colW-15))
 
 		// Header row
-		fmt.Printf("  %-22s%-5s", "Player", "Team")
+		fmt.Fprintf(w, "  %-22s%-5s", "Player", "Team")
 		for _, name := range sourceNames {
-			fmt.Printf("  %-8s", name)
+			fmt.Fprintf(w, "  %-8s", name)
 		}
-		fmt.Println()
-		fmt.Printf("  %s\n", strings.Repeat("─", colW))
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "  %s\n", strings.Repeat("─", colW))
 
 		// Sort by first available rank ascending
 		sorted := make([]rosterRankEntry, len(roster))
@@ -489,28 +481,28 @@ func printReport(r Report, roster []rosterRankEntry, sourceNames []string) {
 			if len([]rune(name)) > 20 {
 				name = string([]rune(name)[:20])
 			}
-			fmt.Printf("  %-22s%-5s", name, entry.Team)
+			fmt.Fprintf(w, "  %-22s%-5s", name, entry.Team)
 			for _, srcName := range sourceNames {
 				found := false
 				for _, sr := range entry.Ranks {
 					if sr.Source == srcName {
-						fmt.Printf("  %s%-8s%s", green, fmt.Sprintf("#%d", sr.Rank), reset)
+						fmt.Fprintf(w, "  %s%-8s%s", green, fmt.Sprintf("#%d", sr.Rank), reset)
 						found = true
 						break
 					}
 				}
 				if !found {
-					fmt.Printf("  %s%-8s%s", gray, "-", reset)
+					fmt.Fprintf(w, "  %s%-8s%s", gray, "-", reset)
 				}
 			}
-			fmt.Println()
+			fmt.Fprintln(w)
 		}
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 
 	// Alerts
 	if len(r.Alerts) > 0 {
-		fmt.Printf("  Alerts %s\n", strings.Repeat("─", colW-8))
+		fmt.Fprintf(w, "  Alerts %s\n", strings.Repeat("─", colW-8))
 		for _, a := range r.Alerts {
 			color := priorityColor(a.Priority)
 			label := alertKindLabel(a.Kind)
@@ -518,20 +510,20 @@ func printReport(r Report, roster []rosterRankEntry, sourceNames []string) {
 			if team == "" {
 				team = "???"
 			}
-			fmt.Printf("  %s%-10s%s %-22s %-4s %s\n",
+			fmt.Fprintf(w, "  %s%-10s%s %-22s %-4s %s\n",
 				color, label, reset, a.PlayerName, team, a.Detail)
 		}
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 
 	// Upgrades
 	if hasUpgrades(r.Upgrades) {
 		for _, set := range r.Upgrades {
 			header := fmt.Sprintf("Upgrades (%s)", set.Source)
-			fmt.Printf("\n  %s %s\n", header, strings.Repeat("─", colW-len(header)-1))
-			fmt.Printf("  %-20s %6s    %-20s %6s  %s\n",
+			fmt.Fprintf(w, "\n  %s %s\n", header, strings.Repeat("─", colW-len(header)-1))
+			fmt.Fprintf(w, "  %-20s %6s    %-20s %6s  %s\n",
 				"Drop", "Rank", "Add", "Rank", "Gap")
-			fmt.Printf("  %s\n", strings.Repeat("─", colW))
+			fmt.Fprintf(w, "  %s\n", strings.Repeat("─", colW))
 			for _, u := range set.Candidates {
 				nearTerm := ""
 				if u.NearTerm {
@@ -545,17 +537,17 @@ func printReport(r Report, roster []rosterRankEntry, sourceNames []string) {
 				if len([]rune(addName)) > 18 {
 					addName = string([]rune(addName)[:18])
 				}
-				fmt.Printf("  %-20s %s%6s%s  → %-20s %s%6s%s  %s%-4s%s%s\n",
+				fmt.Fprintf(w, "  %-20s %s%6s%s  → %-20s %s%6s%s  %s%-4s%s%s\n",
 					dropName, gray, fmt.Sprintf("#%d", u.Drop.Rank), reset,
 					addName, green, fmt.Sprintf("#%d", u.Add.Rank), reset,
 					green, fmt.Sprintf("+%d", u.RankGap), reset, nearTerm)
 			}
 		}
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 
 	if len(r.Alerts) == 0 && !hasUpgrades(r.Upgrades) && len(roster) == 0 {
-		fmt.Println("  No prospect alerts today.")
+		fmt.Fprintln(w, "  No prospect alerts today.")
 	}
 }
 
@@ -736,45 +728,43 @@ func formatProspectPushover(r Report) string {
 // writeGHASummary — GHA markdown output
 // ---------------------------------------------------------------------------
 
-func writeGHASummary(r Report, path string) {
-	notify.AppendGHASummary(path, func(f io.Writer) {
-		fmt.Fprintln(f, "## Prospect Report")
+func writeGHASummary(f io.Writer, r Report) {
+	fmt.Fprintln(f, "## Prospect Report")
+	fmt.Fprintln(f)
+
+	if len(r.Alerts) == 0 && !hasUpgrades(r.Upgrades) {
+		fmt.Fprintln(f, "No prospect alerts today.")
+		return
+	}
+
+	if len(r.Alerts) > 0 {
+		fmt.Fprintln(f, "### Alerts")
+		fmt.Fprintln(f, "| Priority | Type | Player | Team | Detail |")
+		fmt.Fprintln(f, "|----------|------|--------|------|--------|")
+		for _, a := range r.Alerts {
+			prio := strings.ToUpper(a.Priority)
+			label := alertKindLabel(a.Kind)
+			team := a.MLBTeam
+			if team == "" {
+				team = "???"
+			}
+			fmt.Fprintf(f, "| %s | %s | %s | %s | %s |\n", prio, label, a.PlayerName, team, a.Detail)
+		}
 		fmt.Fprintln(f)
+	}
 
-		if len(r.Alerts) == 0 && !hasUpgrades(r.Upgrades) {
-			fmt.Fprintln(f, "No prospect alerts today.")
-			return
-		}
-
-		if len(r.Alerts) > 0 {
-			fmt.Fprintln(f, "### Alerts")
-			fmt.Fprintln(f, "| Priority | Type | Player | Team | Detail |")
-			fmt.Fprintln(f, "|----------|------|--------|------|--------|")
-			for _, a := range r.Alerts {
-				prio := strings.ToUpper(a.Priority)
-				label := alertKindLabel(a.Kind)
-				team := a.MLBTeam
-				if team == "" {
-					team = "???"
-				}
-				fmt.Fprintf(f, "| %s | %s | %s | %s | %s |\n", prio, label, a.PlayerName, team, a.Detail)
+	for _, set := range r.Upgrades {
+		fmt.Fprintf(f, "### Upgrades (%s)\n", set.Source)
+		fmt.Fprintln(f, "| Drop | Add | Rank Gap | Near-Term |")
+		fmt.Fprintln(f, "|------|-----|----------|-----------|")
+		for _, u := range set.Candidates {
+			nearTerm := ""
+			if u.NearTerm {
+				nearTerm = "yes"
 			}
-			fmt.Fprintln(f)
+			fmt.Fprintf(f, "| %s (#%d) | %s (#%d) | +%d | %s |\n",
+				u.Drop.Name, u.Drop.Rank, u.Add.Name, u.Add.Rank, u.RankGap, nearTerm)
 		}
-
-		for _, set := range r.Upgrades {
-			fmt.Fprintf(f, "### Upgrades (%s)\n", set.Source)
-			fmt.Fprintln(f, "| Drop | Add | Rank Gap | Near-Term |")
-			fmt.Fprintln(f, "|------|-----|----------|-----------|")
-			for _, u := range set.Candidates {
-				nearTerm := ""
-				if u.NearTerm {
-					nearTerm = "yes"
-				}
-				fmt.Fprintf(f, "| %s (#%d) | %s (#%d) | +%d | %s |\n",
-					u.Drop.Name, u.Drop.Rank, u.Add.Name, u.Add.Rank, u.RankGap, nearTerm)
-			}
-			fmt.Fprintln(f)
-		}
-	})
+		fmt.Fprintln(f)
+	}
 }
