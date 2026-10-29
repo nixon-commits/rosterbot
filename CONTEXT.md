@@ -110,6 +110,12 @@ _Avoid_: the HKB bug, the Garcia fix (it was never one team).
 The durable dedup record behind a one-shot operational alert, and the discipline that governs it: check → send → mark (never claim-then-send), every marker-store failure degrading to a duplicate alert and never to silence, a nil store disabling dedup rather than the alert, and dry-run skipping both send and mark. The discipline lives once in `internal/alertmarker` (a stdlib-only leaf; `lineupapi.BlobStore` satisfies its `Store` structurally); what stays per-site is the key grammar — which facts identify "this alert" (player+date, season+period, cache key+episode, transaction id) — and the dry-run guard. Sites: the stale-cache, IL-start, GS-floor and football-trade alerts, plus the `opsnotify` Lambda's task/heartbeat/drift/alarm markers under `layout.OpsAlertMarkers`.
 _Avoid_: dedup flag, sent-file, alert cache (it is durable state, not a Cache — a marker is never TTL-evicted while its condition stands).
 
+### Jobs
+
+**Job Report**:
+The four-surface output of one scheduled job — the run's wire result, stdout, the GHA step summary, and the activity feed with its push — emitted in one fixed order by `jobreport.Emit`: record, print, summary, then (never in a dry run) the pre-send step, the send, and the after-send effects such as a ledger write or a cursor advance. A dry run stops before the first side effect, a failed feed write fails the job, and an empty body sends nothing; each job keeps only its formatters and its wire-result mapping.
+_Avoid_: fan-out, output, notification (the feed event is one surface of it).
+
 ## Dynasty Football
 
 Sleeper (league/roster state, public read-only API, no key) + StatsGuy (dynasty valuations, `api.statsguyfantasy.com`, no key). Read-only throughout: Sleeper has no lineup-write endpoint, so the optimize-and-apply spine (Slot, Weekly Period, ApplyLineup, …) has no football counterpart — football's two commands are a value store and a trade monitor, not an optimizer.

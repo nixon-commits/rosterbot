@@ -3,13 +3,14 @@ package gscheck
 import (
 	"context"
 	"fmt"
+	"github.com/nixon-commits/rosterbot/internal/jobreport"
+	"io"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/config"
 	"github.com/nixon-commits/rosterbot/internal/fantrax"
-	"github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 	"github.com/nixon-commits/rosterbot/internal/notify"
 )
 
@@ -352,65 +353,72 @@ func RunGSCheckPeriod(ctx context.Context, ft GSCheckClient, cfg config.Config, 
 		}
 	}
 
-	jobwire.RecordOutput("gs-check", toWireResult(violations, periodLabel, gsMax, gsMin))
-
 	// Print report.
 	sort.Slice(results, func(i, j int) bool { return results[i].gs > results[j].gs })
-	fmt.Printf("\n--- GS Report: %s (max=%d", periodLabel, gsMax)
-	if gsMin > 0 {
-		fmt.Printf(", min=%d", gsMin)
-	}
-	fmt.Println(") ---")
-	for _, r := range results {
-		flag := ""
-		if r.gs > gsMax {
-			flag = " *** OVER MAX ***"
-		} else if periodComplete && gsMin > 0 && r.gs < gsMin {
-			flag = " *** UNDER MIN ***"
+	text := func(w io.Writer) {
+		fmt.Fprintf(w, "\n--- GS Report: %s (max=%d", periodLabel, gsMax)
+		if gsMin > 0 {
+			fmt.Fprintf(w, ", min=%d", gsMin)
 		}
-		fmt.Printf("  %s: %d GS%s\n", r.name, r.gs, flag)
-	}
-	if len(skipped) > 0 {
-		fmt.Printf("\n*** INCOMPLETE: %d of %d team(s) could not be checked ***\n", len(skipped), len(teamMap))
-		for _, sk := range skipped {
-			fmt.Printf("  %s: %v\n", sk.name, sk.err)
+		fmt.Fprintln(w, ") ---")
+		for _, r := range results {
+			flag := ""
+			if r.gs > gsMax {
+				flag = " *** OVER MAX ***"
+			} else if periodComplete && gsMin > 0 && r.gs < gsMin {
+				flag = " *** UNDER MIN ***"
+			}
+			fmt.Fprintf(w, "  %s: %d GS%s\n", r.name, r.gs, flag)
 		}
+		if len(skipped) > 0 {
+			fmt.Fprintf(w, "\n*** INCOMPLETE: %d of %d team(s) could not be checked ***\n", len(skipped), len(teamMap))
+			for _, sk := range skipped {
+				fmt.Fprintf(w, "  %s: %v\n", sk.name, sk.err)
+			}
+		}
+		if len(violations) == 0 {
+			fmt.Fprintln(w, "\nNo violations found.")
+			return
+		}
+		fmt.Fprintf(w, "\n%d violation(s) found.\n", len(violations))
 	}
 
-	if len(violations) == 0 {
-		fmt.Println("\nNo violations found.")
-		return coverageErr(skipped)
+	// An empty body is the "no violations" case: Emit sends nothing and runs
+	// no Before, so the league hears from this job only when there is a
+	// violation to hear about.
+	var shortSummary string
+	if len(violations) > 0 {
+		_, shortSummary = BuildReport(violations, periodLabel, gsMax, gsMin, uncheckedNames)
 	}
 
-	fmt.Printf("\n%d violation(s) found.\n", len(violations))
-	_, shortSummary := BuildReport(violations, periodLabel, gsMax, gsMin, uncheckedNames)
-
-	if cfg.DryRun {
-		fmt.Println("\n[DRY RUN] Would send Pushover notification:")
-		fmt.Printf("  %s\n", shortSummary)
-		return coverageErr(skipped)
-	}
-
-	// The league broadcast goes FIRST, and the ordering is load-bearing. It
-	// reaches managers who are not app users and therefore cannot be ported
-	// to APNs — only narrowed, kept, or duplicated (D3). It is duplicated,
-	// permanently: anyone on both the Pushover group and the app hears GS
-	// alerts twice, which is inherent to keeping the broadcast, not a defect
-	// to fix later. Were the dispatcher call first, a transient feed-write
-	// failure would abort this function before the broadcast — degrading to
-	// silence for the whole league over an S3 hiccup unrelated to Pushover's
-	// health. This way the worst case of either half failing is a duplicate
-	// on the rerun, never a missed alert (rosterbot-chs's direction).
-	if err := notify.SendPushover(ctx, cfg.PushoverGroupKey, cfg.PushoverAPIToken, "Fantrax GS Alert", shortSummary); err != nil {
-		return fmt.Errorf("send pushover: %w", err)
-	}
-	fmt.Println("Pushover notification sent.")
-
-	// Dispatcher half: the durable feed record plus APNs to app users. Errors
-	// only on a failed feed write — fatal so the run is marked failed and
-	// rerun, since the feed record is the durable obligation.
-	if err := notify.Send(ctx, notify.Event{Kind: "gs-check", Title: "Fantrax GS Alert", Message: shortSummary}); err != nil {
-		return fmt.Errorf("record gs alert: %w", err)
+	err = jobreport.Emit(ctx, jobreport.Report{
+		Job:   "gs-check",
+		Wire:  toWireResult(violations, periodLabel, gsMax, gsMin),
+		Text:  text,
+		Title: "Fantrax GS Alert",
+		Body:  shortSummary,
+		// The league broadcast goes FIRST, and the ordering is load-bearing. It
+		// reaches managers who are not app users and therefore cannot be ported
+		// to APNs — only narrowed, kept, or duplicated (D3). It is duplicated,
+		// permanently: anyone on both the Pushover group and the app hears GS
+		// alerts twice, which is inherent to keeping the broadcast, not a defect
+		// to fix later. Were the dispatcher call first, a transient feed-write
+		// failure would abort this function before the broadcast — degrading to
+		// silence for the whole league over an S3 hiccup unrelated to Pushover's
+		// health. This way the worst case of either half failing is a duplicate
+		// on the rerun, never a missed alert (rosterbot-chs's direction). Emit's
+		// Before step is exactly that slot; its error, like the send's, fails
+		// the run so it is rerun.
+		Before: func(ctx context.Context) error {
+			if err := notify.SendPushover(ctx, cfg.PushoverGroupKey, cfg.PushoverAPIToken, "Fantrax GS Alert", shortSummary); err != nil {
+				return fmt.Errorf("send pushover: %w", err)
+			}
+			fmt.Println("Pushover notification sent.")
+			return nil
+		},
+	}, jobreport.Options{DryRun: cfg.DryRun})
+	if err != nil {
+		return err
 	}
 
 	return coverageErr(skipped)

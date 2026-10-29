@@ -5,7 +5,8 @@ import "github.com/nixon-commits/rosterbot/internal/lineupapi/jobwire"
 // toWireResult maps the daily claims Ledger to the iOS wire shape (one row per
 // added player; the first dropped player, if any, is attributed to the row).
 func toWireResult(led Ledger) jobwire.ClaimsResult {
-	out := jobwire.ClaimsResult{}
+	// A no-op run records an empty list, never null.
+	out := jobwire.ClaimsResult{Claims: []jobwire.ClaimOut{}}
 	for _, e := range led.Entries {
 		c := jobwire.ClaimOut{
 			Team:      e.Team,

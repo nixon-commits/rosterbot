@@ -1,6 +1,8 @@
 package prospects
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,13 +103,9 @@ func TestFormatReport_Markdown(t *testing.T) {
 		},
 	}
 
-	tmpFile := filepath.Join(t.TempDir(), "summary.md")
-	writeGHASummary(report, tmpFile)
-
-	data, err := os.ReadFile(tmpFile)
-	if err != nil {
-		t.Fatalf("failed to read summary file: %v", err)
-	}
+	var buf bytes.Buffer
+	writeGHASummary(&buf, report)
+	data := buf.Bytes()
 	content := string(data)
 
 	// Check header
@@ -145,13 +143,9 @@ func TestFormatReport_Markdown_NoAlerts(t *testing.T) {
 		Date: time.Date(2026, 3, 23, 0, 0, 0, 0, time.UTC),
 	}
 
-	tmpFile := filepath.Join(t.TempDir(), "summary.md")
-	writeGHASummary(report, tmpFile)
-
-	data, err := os.ReadFile(tmpFile)
-	if err != nil {
-		t.Fatalf("failed to read summary file: %v", err)
-	}
+	var buf bytes.Buffer
+	writeGHASummary(&buf, report)
+	data := buf.Bytes()
 	content := string(data)
 
 	if !strings.Contains(content, "No prospect alerts today.") {
@@ -159,34 +153,25 @@ func TestFormatReport_Markdown_NoAlerts(t *testing.T) {
 	}
 }
 
-func TestFormatReport_Markdown_Appends(t *testing.T) {
-	tmpFile := filepath.Join(t.TempDir(), "summary.md")
-
-	// Write some pre-existing content
-	if err := os.WriteFile(tmpFile, []byte("## Previous Section\n\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
+// Appending to a summary file that already holds another job's section is
+// jobreport.Emit's contract now (TestEmit_LiveRunTouchesEverySurfaceInOrder
+// pre-seeds the file); this renderer only writes its own section.
+func TestFormatReport_Markdown_Section(t *testing.T) {
 	report := Report{
 		Date: time.Date(2026, 3, 23, 0, 0, 0, 0, time.UTC),
 		Alerts: []ProspectAlert{
 			{Kind: CalledUp, Priority: "high", PlayerName: "Test Player", MLBTeam: "NYY", Detail: "test"},
 		},
 	}
-	writeGHASummary(report, tmpFile)
+	var buf bytes.Buffer
+	writeGHASummary(&buf, report)
+	content := buf.String()
 
-	data, err := os.ReadFile(tmpFile)
-	if err != nil {
-		t.Fatalf("failed to read summary file: %v", err)
-	}
-	content := string(data)
-
-	// Verify both sections exist (append mode)
-	if !strings.Contains(content, "## Previous Section") {
-		t.Error("pre-existing content was overwritten")
-	}
 	if !strings.Contains(content, "## Prospect Report") {
-		t.Error("new content was not appended")
+		t.Error("section heading missing")
+	}
+	if !strings.Contains(content, "Test Player") {
+		t.Errorf("alert row missing; got %q", content)
 	}
 }
 
@@ -199,8 +184,11 @@ func TestPrintReport_NoAlerts(t *testing.T) {
 	report := Report{
 		Date: time.Date(2026, 3, 23, 0, 0, 0, 0, time.UTC),
 	}
-	// printReport writes to stdout — we just verify no panic
-	printReport(report, nil, nil)
+	var out bytes.Buffer
+	printReport(&out, report, nil, nil)
+	if out.Len() == 0 {
+		t.Error("printReport wrote nothing")
+	}
 }
 
 func TestPrintReport_WithAlerts(t *testing.T) {
@@ -223,8 +211,11 @@ func TestPrintReport_WithAlerts(t *testing.T) {
 			},
 		},
 	}
-	// printReport writes to stdout — we just verify no panic
-	printReport(report, nil, nil)
+	var out bytes.Buffer
+	printReport(&out, report, nil, nil)
+	if out.Len() == 0 {
+		t.Error("printReport wrote nothing")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -275,16 +266,12 @@ func TestRunProspectReport_DegradedNoRankings(t *testing.T) {
 	}
 
 	// printReport should handle empty data gracefully
-	printReport(report, nil, nil)
+	printReport(io.Discard, report, nil, nil)
 
 	// writeGHASummary should handle empty data gracefully
-	summaryFile := filepath.Join(tmpDir, "summary.md")
-	writeGHASummary(report, summaryFile)
-
-	data, err := os.ReadFile(summaryFile)
-	if err != nil {
-		t.Fatalf("failed to read summary: %v", err)
-	}
+	var summary bytes.Buffer
+	writeGHASummary(&summary, report)
+	data := summary.Bytes()
 	if !strings.Contains(string(data), "No prospect alerts today.") {
 		t.Error("expected 'No prospect alerts today.' in degraded summary")
 	}
