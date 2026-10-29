@@ -248,6 +248,30 @@ var (
 	// silence the completed-trade alert (or the reverse).
 	FootballOffers = Artifact{Name: "Football Offer Markers", S3Prefix: "football/offers/", LocalDir: ".football/offers", Durable: true, Producer: "FootballOffers"}
 
+	// FootballPickups holds one dedup marker per pickup EVENT football-pickups
+	// has alerted: a role change keyed (league, player, baseline capture timestamp),
+	// a drop or chop keyed (league, transaction, player). Same shape and
+	// reasoning as FootballTrades/FootballOffers: durable, no MaxAge, absent
+	// from All().
+	FootballPickups = Artifact{Name: "Football Pickup Markers", S3Prefix: "football/pickups/", LocalDir: ".football/pickups", Durable: true, Producer: "FootballPickups"}
+
+	// FootballPickupSnapshot is the ONE object football-pickups diffs against:
+	// latest.json, the most recent filtered player capture the job FINISHED
+	// delivering against (the diff baseline). It is overwritten after a run whose
+	// alerts all went out, and HELD (left on the older capture) when a league
+	// failed, a send failed or a digest left items unsent (the last only while a
+	// marker store exists to keep the resend quiet), so the next run re-detects
+	// those events instead of skipping past them; the history
+	// partition is written either way. It exists because the Daily Archive
+	// store is write-only — the history goes there as source sleeper-players —
+	// and the diff needs "the most recent prior capture, whenever that was",
+	// which a pointer answers without listing. Rewritten daily when healthy, so
+	// it belongs in All() with a MaxAge: its age is the job's health, and a
+	// hold that persists past the MaxAge reads as the stale job it is. A
+	// sibling of the marker prefix, never nested, on the same reasoning as
+	// FootballOffers.
+	FootballPickupSnapshot = Artifact{Name: "Football Pickup Snapshot", S3Prefix: "football/pickups-snapshot/", LocalDir: ".football/pickups-snapshot", Durable: true, MaxAge: 2 * Day, Producer: "FootballPickups"}
+
 	// ILStarts holds one dedup marker per (player, start date) for the
 	// "IL-slotted player has an announced start" alert. Same shape and same
 	// reasoning as FootballTrades: no MaxAge and absent from All(), because a
@@ -331,7 +355,7 @@ var (
 // double-count the same objects.
 func All() []Artifact {
 	return []Artifact{
-		TeamValues, TradeOffers, Analysis, LineupGaps, FootballValues, Archive, Backtest,
+		TeamValues, TradeOffers, Analysis, LineupGaps, FootballValues, FootballPickupSnapshot, Archive, Backtest,
 		Lineup, Trades, TradeValues, AvailablePool, RosterValues, Reports, RunLedger, RunOutput, Notification, Claims,
 		Session, Cache, TenantRoster,
 	}

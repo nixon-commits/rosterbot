@@ -24,6 +24,17 @@ const MeQuery = `{ me { user_id } }`
 // status; roster_id filters server-side, and league_transactions needs no
 // leg, unlike league_transactions_by_status. The selection is the REST
 // transaction's fields plus creator, consenter_ids and settings.
+//
+// Checked against Sleeper's live schema by unauthenticated introspection on
+// 2026-10-13 (the __schema/__type meta fields are snake_case: query_type,
+// of_type): RootQueryType.league_transactions takes status, type, limit, leg,
+// league_id (Snowflake!) and roster_id, returns LeagueTransaction, and that
+// type carries every field selected here plus status_updated. A renamed
+// argument or field is therefore not a silent failure: GraphQL rejects the
+// document outright. What introspection cannot settle is SEMANTICS -- that
+// "proposed" is the live-offer status, and the field order inside a
+// string-form draft pick -- which only the operator-run probe in
+// diag_proposed_test.go can, against a league with a live offer.
 const ProposedTradesQuery = `query($league_id: Snowflake!, $roster_id: Int!) {
   league_transactions(league_id: $league_id, status: "proposed", type: "trade", roster_id: $roster_id) {
     transaction_id type status roster_ids adds drops draft_picks waiver_budget

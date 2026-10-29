@@ -32,3 +32,29 @@ func TestPollWeeks_WeekOneReturnsJustWeekOne(t *testing.T) {
 		t.Errorf("pollWeeks = %v, want %v", got, want)
 	}
 }
+
+// recentWeeks is the drop detector's window: the current bucket and `back`
+// before it, floored at week 1 like pollWeeks.
+func TestRecentWeeks_LastBucketsFlooredAtWeekOne(t *testing.T) {
+	cases := []struct {
+		week, back int
+		want       []int
+	}{
+		{10, 2, []int{8, 9, 10}},
+		{2, 2, []int{1, 2}},
+		{1, 2, []int{1}},
+		{0, 2, []int{1}},
+		{5, 0, []int{5}},
+	}
+	for _, tc := range cases {
+		got := recentWeeks(&sleeper.NFLState{Week: tc.week}, tc.back)
+		if len(got) != len(tc.want) {
+			t.Fatalf("recentWeeks(week=%d, back=%d) = %v, want %v", tc.week, tc.back, got, tc.want)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("recentWeeks(week=%d, back=%d) = %v, want %v", tc.week, tc.back, got, tc.want)
+			}
+		}
+	}
+}
