@@ -11,9 +11,16 @@ version: 0.2
 # first build that creates those resources also publishes the static site.
 env:
   variables:
-    # Go is selected via runtime-versions below, not downloaded here. Match the cdk
-    # library version the infra module builds against.
-    CDK_VERSION: "2.1128.1"
+    # Go is selected via runtime-versions below, not downloaded here. The CLI
+    # must be able to READ the cloud-assembly schema that the aws-cdk-go
+    # library in infra/go.mod emits: a library bump past the CLI's maximum
+    # fails `cdk deploy` with "Cloud assembly schema version mismatch ... You
+    # need at least CLI version X" AFTER the image has been pushed, leaving
+    # main undeployed (build 6c197eec, 2026-10-29: lib v2.274.0 emitted schema
+    # 55 against CLI 2.1128.1, which reads 54.x). Dependabot bumps the library
+    # but nothing bumps this pin, so re-check it on every aws-cdk-go bump
+    # (`npm view aws-cdk version`).
+    CDK_VERSION: "2.1146.1"
     # Pinned explicitly rather than inherited from the image's goenv, so the
     # cache: paths: block at the bottom names the directories Go actually
     # writes. These carry the compiled aws-cdk-go bindings + module downloads

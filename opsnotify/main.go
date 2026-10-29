@@ -112,6 +112,7 @@ func main() {
 	// roster is: a failure here disables one check, and must not take the
 	// failure and crash paths down with it.
 	builds = codebuild.NewFromConfig(cfg)
+	githubToken = loadGitHubToken(ctx, ssmc)
 
 	schedules = loadSchedules()
 
@@ -171,6 +172,44 @@ func sendOrLog(ctx context.Context, title, body string) error {
 		return err
 	}
 	return nil
+}
+
+// githubTokenParamEnv names the SSM parameter holding the GitHub read token the
+// drift check sends. The CDK sets it beside GITHUB_REPO, under the same
+// `if buildProject != nil`, so a stack without the build project names no
+// parameter and pays no read.
+const githubTokenParamEnv = "GITHUB_TOKEN_PARAM"
+
+// paramAPI is the slice of the SSM client loadGitHubToken needs, named so tests
+// substitute a double instead of reaching AWS.
+type paramAPI interface {
+	GetParameter(ctx context.Context, in *ssm.GetParameterInput, opts ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
+}
+
+// loadGitHubToken reads the drift check's GitHub token, or returns "" when no
+// parameter is named or the read fails. Unlike mustParam it never exits: the
+// failure and crash alert paths are the load-bearing ones and must not go down
+// with a check that can run anonymously — and when anonymous is not enough,
+// the blind alert says so.
+func loadGitHubToken(ctx context.Context, c paramAPI) string {
+	name := os.Getenv(githubTokenParamEnv)
+	if name == "" {
+		return ""
+	}
+	withDecryption := true
+	out, err := c.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           &name,
+		WithDecryption: &withDecryption,
+	})
+	if err != nil {
+		log.Printf("drift: read %s: %v; head read stays anonymous", name, err)
+		return ""
+	}
+	if out.Parameter == nil || out.Parameter.Value == nil {
+		log.Printf("drift: %s has no value; head read stays anonymous", name)
+		return ""
+	}
+	return *out.Parameter.Value
 }
 
 func mustParam(ctx context.Context, c *ssm.Client, name string) string {

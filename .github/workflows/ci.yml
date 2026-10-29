@@ -2,7 +2,11 @@ name: CI
 
 # PR gate. NOTE: the scheduled bot jobs do NOT run on GitHub Actions (they run
 # as ECS Fargate tasks launched by EventBridge — see docs/aws-deployment.md).
-# Actions is used only for this build/test gate and for CodeQL.
+# Actions is used only for this build/test gate and the stale-branch check.
+# CodeQL was retired when the repository went private (rosterbot-s9v1): code
+# scanning on a private repository needs a GitHub Code Security license, which
+# only Team/Enterprise organizations can buy, and its three matrix jobs were
+# the largest consumer of the 2,000 Actions minutes a private repo gets.
 on:
   pull_request:
   push:

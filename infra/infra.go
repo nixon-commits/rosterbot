@@ -1849,6 +1849,22 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	if buildProject != nil {
 		opsNotifyFn.AddEnvironment(jsii.String("GITHUB_REPO"), jsii.String(ghOwner+"/"+ghRepo), nil)
 		opsNotifyFn.AddEnvironment(jsii.String("BUILD_PROJECT"), buildProject.ProjectName(), nil)
+		// The head read authenticates: the repository is private, and GitHub
+		// answers an anonymous read of a private repository with 404, which
+		// left the check blind with nothing red anywhere (rosterbot-s9v1).
+		// Only the parameter NAME ships in the environment; the Lambda reads
+		// the value at cold start the way it reads the Pushover creds, and a
+		// missing parameter degrades to an anonymous read, so this deploys
+		// cleanly before the parameter exists. Under this branch on purpose:
+		// a stack without the build project has no drift check, so it names
+		// no parameter and holds no grant for it. The value is a fine-grained
+		// PAT, Contents: read, this one repository — see docs/ops-alerting.md.
+		const githubTokenParam = "/rosterbot/GITHUB_READ_TOKEN"
+		opsNotifyFn.AddEnvironment(jsii.String("GITHUB_TOKEN_PARAM"), jsii.String(githubTokenParam), nil)
+		opsNotifyFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Actions:   jsii.Strings("ssm:GetParameter"),
+			Resources: jsii.Strings("arn:aws:ssm:us-west-1:476646938644:parameter" + githubTokenParam),
+		}))
 		// Read build metadata for this project only. The check never starts a
 		// build, and never needs to: it compares what already happened.
 		opsNotifyFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{

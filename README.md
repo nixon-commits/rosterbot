@@ -8,7 +8,7 @@ It sets the lineup every hour, works the waiver wire, watches the league, and gr
 <img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white&labelColor=1A2B4A" alt="Go 1.26">
 <img src="https://img.shields.io/badge/deploy-AWS_Fargate-FF9900?style=flat-square&logo=amazonwebservices&logoColor=white&labelColor=1A2B4A" alt="Deploy: AWS Fargate">
 <img src="https://img.shields.io/badge/league-Fantrax_H2H-2E7D32?style=flat-square&labelColor=1A2B4A" alt="League: Fantrax H2H">
-<img src="https://img.shields.io/badge/CI-CodeQL_+_modules-8957e5?style=flat-square&logo=github&logoColor=white&labelColor=1A2B4A" alt="CI: CodeQL + modules">
+<img src="https://img.shields.io/badge/CI-lint_+_test_+_modules-8957e5?style=flat-square&logo=github&logoColor=white&labelColor=1A2B4A" alt="CI: lint + test + modules">
 
 </div>
 
