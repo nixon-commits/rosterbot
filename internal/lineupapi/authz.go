@@ -110,6 +110,7 @@ var leagueWideJobs = map[string]bool{
 	"projection-site": true,
 	"football-values": true,
 	"football-trades": true,
+	"football-offers": true,
 }
 
 func isAdminOnlyPath(path string) bool {

@@ -57,7 +57,7 @@ check-pins:
 # Pinned so an upstream golangci-lint release cannot turn CI red with no code
 # change. CI installs exactly this version via `make lint-install`, so the
 # version developers run and the version that gates a PR are one string.
-GOLANGCI_LINT_VERSION ?= v2.14.0
+GOLANGCI_LINT_VERSION ?= v2.13.1
 
 # One .golangci.yml at the repo root serves all four modules — golangci-lint
 # walks up from each module dir to find it, so there is a single definition of
@@ -170,6 +170,7 @@ run-all:
 	@echo "=== team-values --dry-run ===";               time go run . team-values --dry-run &&                            echo
 	@echo "=== football-values --dry-run ===";           if [ -n "$$SLEEPER_LEAGUE_ID" ]; then time go run . football-values --dry-run; else echo "SKIPPED (SLEEPER_LEAGUE_ID unset; it lives in SSM for the deployment)"; fi && echo
 	@echo "=== football-trades --dry-run ===";           if [ -n "$$SLEEPER_USER_ID" ]; then time go run . football-trades --dry-run; else echo "SKIPPED (SLEEPER_USER_ID unset)"; fi && echo
+	@echo "=== football-offers --dry-run ===";           m=""; [ -z "$$SLEEPER_TOKEN" ] && m="$$m SLEEPER_TOKEN"; [ -z "$$SLEEPER_USER_ID" ] && m="$$m SLEEPER_USER_ID"; if [ -z "$$m" ]; then time go run . football-offers --dry-run; else echo "SKIPPED: unset in the shell environment (make does not read .env):$$m (football-offers needs the operator's Sleeper session token)"; fi && echo
 	@echo "=== backtest ===";                             time go run . backtest &&                                         echo
 	@echo "=== backtest --recency-experiment ===";        time go run . backtest --recency-experiment --dates 2026-05-01:2026-05-07 || echo "(tolerated: needs archived snapshots that may not exist locally)" && echo
 	@echo "=== recap --out /tmp/recap.html ===";          time go run . recap --out /tmp/recap.html &&                      echo

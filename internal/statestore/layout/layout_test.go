@@ -356,7 +356,7 @@ func TestOpsAlertMarkers_LayoutChoicesArePinned(t *testing.T) {
 	if a.S3Prefix != "opsalert/" {
 		t.Errorf("S3Prefix = %q, want opsalert/ — the CDK lifecycle rule and IAM grant restate this literal", a.S3Prefix)
 	}
-	for _, other := range []Artifact{ILStarts, GSFloorAlerts, StaleCacheAlerts, FootballTrades, Notification} {
+	for _, other := range []Artifact{ILStarts, GSFloorAlerts, StaleCacheAlerts, FootballTrades, FootballOffers, Notification} {
 		if a.S3Prefix == other.S3Prefix {
 			t.Errorf("shares a prefix with %s; one marker family would overwrite the other", other.Name)
 		}
@@ -384,5 +384,25 @@ func TestOpsAlertMarkers_LayoutChoicesArePinned(t *testing.T) {
 		if listed.S3Prefix == a.S3Prefix {
 			t.Error("in All(): the status page would show a healthy deployment as missing")
 		}
+	}
+}
+
+func TestFootballOffers_IsAMarkerFamilyLikeFootballTrades(t *testing.T) {
+	a := FootballOffers
+	if a.S3Prefix != "football/offers/" || a.LocalDir != ".football/offers" {
+		t.Errorf("prefix/dir = %q/%q", a.S3Prefix, a.LocalDir)
+	}
+	if !a.Durable || a.MaxAge != 0 || a.PerTenant || a.Partitioned || a.NoBackfill {
+		t.Errorf("flags: %+v — markers are durable, ageless, deployment-wide, flat", a)
+	}
+	for _, x := range All() {
+		if x.Name == a.Name {
+			t.Errorf("FootballOffers must be absent from All(): a quiet league writes no markers for weeks and an age check would read that as stale")
+		}
+	}
+	// A sibling of football/trades/, not nested under it: neither the trade
+	// markers nor the trade log may see an offer marker, and vice versa.
+	if strings.HasPrefix(a.S3Prefix, FootballTrades.S3Prefix) || strings.HasPrefix(FootballTrades.S3Prefix, a.S3Prefix) {
+		t.Errorf("FootballOffers %q nests with FootballTrades %q", a.S3Prefix, FootballTrades.S3Prefix)
 	}
 }
