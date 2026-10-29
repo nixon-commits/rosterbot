@@ -2,10 +2,22 @@ package cmd
 
 import "testing"
 
-func TestLoadFootballConfigRequiresSleeperLeagueID(t *testing.T) {
+// SLEEPER_LEAGUE_ID is football-values' requirement alone: the multi-league
+// jobs discover their leagues from SLEEPER_USER_ID and never read it, so the
+// shared loader must not fail them over it.
+func TestLoadFootballConfig_SleeperLeagueIDIsOptionalAtLoad(t *testing.T) {
 	t.Setenv("SLEEPER_LEAGUE_ID", "")
-	if _, err := loadFootballConfig(); err == nil {
-		t.Fatal("loadFootballConfig: expected error when SLEEPER_LEAGUE_ID unset, got nil")
+	cfg, err := loadFootballConfig()
+	if err != nil {
+		t.Fatalf("loadFootballConfig must load without SLEEPER_LEAGUE_ID: %v", err)
+	}
+	if err := cfg.requireSleeperLeagueID(); err == nil {
+		t.Error("requireSleeperLeagueID must fail when unset -- football-values has nothing to read")
+	}
+	t.Setenv("SLEEPER_LEAGUE_ID", "lg1")
+	cfg, err = loadFootballConfig()
+	if err != nil || cfg.requireSleeperLeagueID() != nil {
+		t.Errorf("league id not read: %+v (%v)", cfg, err)
 	}
 }
 
@@ -93,13 +105,13 @@ func TestInitFootballRequiresNoFantraxCreds(t *testing.T) {
 	}
 }
 
-func TestInitFootballErrorsWithoutSleeperLeagueID(t *testing.T) {
+func TestInitFootballLoadsWithoutSleeperLeagueID(t *testing.T) {
 	t.Setenv("SLEEPER_LEAGUE_ID", "")
 	t.Setenv("STATE_BUCKET", "")
 	t.Setenv("RUN_ID", "")
 
-	if _, _, err := initFootball(); err == nil {
-		t.Fatal("initFootball: expected error when SLEEPER_LEAGUE_ID unset, got nil")
+	if _, _, err := initFootball(); err != nil {
+		t.Fatalf("initFootball must succeed without SLEEPER_LEAGUE_ID (the multi-league jobs never read it): %v", err)
 	}
 }
 
@@ -127,5 +139,41 @@ func TestInitFootballSetsClientCacheDirUnlessNoCache(t *testing.T) {
 	}
 	if sc.CacheDir != "" {
 		t.Errorf("CacheDir = %q, want empty (--no-cache set)", sc.CacheDir)
+	}
+}
+
+func TestLoadFootballConfig_SleeperUserIDIsOptionalAtLoad(t *testing.T) {
+	t.Setenv("SLEEPER_LEAGUE_ID", "L")
+	t.Setenv("SLEEPER_USER_ID", "")
+	cfg, err := loadFootballConfig()
+	if err != nil {
+		t.Fatalf("football-values must still load without SLEEPER_USER_ID: %v", err)
+	}
+	if err := cfg.requireSleeperUserID(); err == nil {
+		t.Errorf("requireSleeperUserID must fail when unset")
+	}
+	t.Setenv("SLEEPER_USER_ID", "738883211463155712")
+	cfg, err = loadFootballConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SleeperUserID != "738883211463155712" || cfg.requireSleeperUserID() != nil {
+		t.Errorf("user id not read: %+v", cfg)
+	}
+}
+
+func TestLoadFootballConfig_FormatOverridesParsedAndRejected(t *testing.T) {
+	t.Setenv("SLEEPER_LEAGUE_ID", "L")
+	t.Setenv("SLEEPER_FORMAT_OVERRIDES", "1=sf_redraft")
+	cfg, err := loadFootballConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FormatOverrides["1"] != "sf_redraft" {
+		t.Errorf("override not parsed: %v", cfg.FormatOverrides)
+	}
+	t.Setenv("SLEEPER_FORMAT_OVERRIDES", "1=nope")
+	if _, err := loadFootballConfig(); err == nil {
+		t.Errorf("a malformed override must fail config load, not be skipped")
 	}
 }

@@ -1,6 +1,7 @@
 package sleeper
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -409,5 +410,21 @@ func assertNoEscape(t *testing.T, outside string, hits int) {
 	}
 	if hits != 0 {
 		t.Errorf("upstream was called %d times for a rejected argument, want 0", hits)
+	}
+}
+
+func TestTransaction_DecodesCreatorAndConsenters(t *testing.T) {
+	const body = `{"transaction_id":"t1","type":"trade","status":"pending",
+	  "roster_ids":[3,7],"creator":"738883211463155712","consenter_ids":[3],
+	  "adds":{"4984":3},"drops":{"9509":7},"created":1758400000000}`
+	var txn Transaction
+	if err := json.Unmarshal([]byte(body), &txn); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if txn.Creator != "738883211463155712" {
+		t.Errorf("Creator = %q, want the proposer's user id", txn.Creator)
+	}
+	if len(txn.ConsenterIDs) != 1 || txn.ConsenterIDs[0] != 3 {
+		t.Errorf("ConsenterIDs = %v, want [3]", txn.ConsenterIDs)
 	}
 }

@@ -403,6 +403,13 @@ function tradeCard(trade, format) {
   // card, and an h3 keeps its bottom margin, pushing the date off the flex row's
   // vertical centre relative to the badge beside it.
   head.appendChild(el("h2", null, trade.tradeDate || "Date unknown"));
+  // League chip. Blank on rows written before football-trades went
+  // multi-league: those render a dash with the reason in the tooltip rather
+  // than a guessed name — every such row happens to be from one league, but
+  // the log does not say so and the view must not either.
+  const league = el("span", "badge badge-info", trade.leagueName || "—");
+  if (!trade.leagueName) league.title = "League not recorded — this row predates multi-league polling";
+  head.appendChild(league);
   head.appendChild(verdictBadge(verdict));
   if (trade.regraded) {
     head.appendChild(el("span", "badge badge-info", "Regraded"));

@@ -36,6 +36,10 @@ type TradeLogModel struct {
 // TradeLogEntry is one graded trade, as the dashboard reads it.
 type TradeLogEntry struct {
 	TransactionID string `json:"transactionId"`
+	// LeagueID / LeagueName as on TradeLogRow; blank on rows that predate
+	// multi-league polling, which the view renders as a dash, not a guess.
+	LeagueID   string `json:"leagueId,omitempty"`
+	LeagueName string `json:"leagueName,omitempty"`
 	// TradeDate is YYYY-MM-DD, or "" when Sleeper gave no usable timestamp.
 	// Empty means unknown; it never silently becomes the epoch.
 	TradeDate string `json:"tradeDate,omitempty"`
@@ -154,6 +158,8 @@ func entryFor(r TradeLogRow) TradeLogEntry {
 
 	return TradeLogEntry{
 		TransactionID:   r.TransactionID,
+		LeagueID:        r.LeagueID,
+		LeagueName:      r.LeagueName,
 		TradeDate:       tradeDate,
 		GradedAt:        r.GradedAt.UTC().Format("2006-01-02"),
 		AlertFormat:     r.AlertFormat,
