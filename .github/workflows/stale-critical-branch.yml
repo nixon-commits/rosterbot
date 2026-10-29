@@ -3,7 +3,7 @@ name: Stale critical-path branch check
 # Repo-hygiene check, not one of the Fantrax-dependent scheduled jobs — those
 # run on ECS Fargate (see docs/aws-deployment.md). This one only needs read
 # access to branches, which Actions provides for free via actions/checkout;
-# it sits alongside ci.yml/codeql.yml, not in place of them.
+# it sits alongside ci.yml, not in place of it.
 on:
   schedule:
     - cron: '0 */6 * * *'

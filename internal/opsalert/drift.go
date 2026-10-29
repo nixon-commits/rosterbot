@@ -208,3 +208,58 @@ func FormatDriftDark() (title, body string) {
 		"No push to main will build until it is redeployed with the flag."
 	return title, body
 }
+
+// DriftBlind is the finding that the drift check cannot read main at all: the
+// GitHub head read failed, so the check ran and could not judge.
+//
+// While the repository was public that read was anonymous and its only failure
+// mode was a GitHub outage, which the next tick retried for free — so blindness
+// was logged and never alerted. The read now carries a token, and a token is a
+// credential with an expiry: a 401 from an expired or revoked
+// /rosterbot/GITHUB_READ_TOKEN, or a 404 from a private repository the token
+// cannot see, leaves the check blind for as long as nobody notices, and nobody
+// notices silence. This raises it once per outage; the alert IS the rotation
+// reminder. CodeBuild reads are deliberately not covered: they use the Lambda's
+// own role, which has nothing to expire, so a failure there is still an AWS
+// hiccup the next tick retries.
+//
+// Distinct from Drift (the check ran and production is behind) and from
+// DriftDark (the check is not configured): this one is configured, ran, and
+// could not see.
+type DriftBlind struct{}
+
+// MarkerKey names the blind-check marker. Separate from both the drift key
+// (whose token is a built sha) and the dark key (whose token is a config state).
+func (DriftBlind) MarkerKey() string { return "builddrift-source" }
+
+// DriftBlindToken is what an alert records under MarkerKey. When the head is
+// readable again the tick overwrites it with DriftBlindClearToken, so the
+// marker distinguishes "alerted, still blind" from "alerted once, since
+// recovered" — the same restore rule DriftDark relies on, for the same reason:
+// the store has no delete, and without the overwrite the first alert's marker
+// would swallow every later outage.
+const DriftBlindToken = "blind"
+
+// DriftBlindClearToken is what a readable tick records over a blind marker.
+const DriftBlindClearToken = "readable"
+
+// AlertToken is the token recorded when the blind alert fires.
+func (DriftBlind) AlertToken() string { return DriftBlindToken }
+
+// NeedsAlert reports whether the blind finding is news, given prev — the token
+// under MarkerKey, empty when none. Anything but the blind token means the last
+// thing recorded was a recovery (or nothing), so an outage is news.
+func (DriftBlind) NeedsAlert(prev string) bool { return prev != DriftBlindToken }
+
+// FormatDriftBlind renders the Pushover title and body for a blind check. The
+// body names the repository, the error verbatim, and the credential the
+// operator rotates — the two likely causes read differently (401 vs 404) and
+// the fix is the same parameter either way.
+func FormatDriftBlind(repo string, err error) (title, body string) {
+	title = "Rosterbot deploy check cannot read main"
+	body = fmt.Sprintf("⚠️ OpsNotify could not read %s main from GitHub: %v. "+
+		"401 means /rosterbot/GITHUB_READ_TOKEN has expired or been revoked; "+
+		"404 means the repository is private and the token cannot see it. "+
+		"Rotate the SSM parameter; the next tick clears this.", repo, err)
+	return title, body
+}

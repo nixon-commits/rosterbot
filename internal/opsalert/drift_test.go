@@ -1,6 +1,7 @@
 package opsalert
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -194,5 +195,51 @@ func TestFormatDriftDark_NamesTheFlag(t *testing.T) {
 	}
 	if !strings.Contains(body, "enableBuild") || !strings.Contains(body, "BUILD_PROJECT") {
 		t.Errorf("body %q must name both the missing env var and the context flag that restores it", body)
+	}
+}
+
+// A private repository answers the anonymous head read with 404, and an
+// expired or revoked read token answers 401 — both leave the check unable to
+// judge, and both used to be logged as blindness and otherwise swallowed. An
+// unreadable head is now a finding of its own, once per outage: the token is a
+// credential the operator must rotate, and the alert is what reminds them.
+func TestDriftBlind_AlertsOnceUntilReadable(t *testing.T) {
+	b := DriftBlind{}
+	if !b.NeedsAlert("") {
+		t.Fatal("first unreadable tick with no marker must alert")
+	}
+	if b.NeedsAlert(b.AlertToken()) {
+		t.Fatal("a later unreadable tick during the same outage must stay quiet")
+	}
+}
+
+// After a readable tick the marker holds the clear token, not the blind one,
+// so a SECOND outage is news rather than being swallowed by the first alert's
+// marker forever — the same restore rule DriftDark pins.
+func TestDriftBlind_ASecondOutageAfterRecoveryAlertsAgain(t *testing.T) {
+	if !(DriftBlind{}).NeedsAlert(DriftBlindClearToken) {
+		t.Fatal("a marker recording a readable head must not suppress a fresh outage")
+	}
+}
+
+func TestDriftBlind_MarkerKeyIsDistinctFromDriftAndDark(t *testing.T) {
+	k := (DriftBlind{}).MarkerKey()
+	if k == (Drift{}).MarkerKey() || k == (DriftDark{}).MarkerKey() {
+		t.Fatalf("blind marker key %q must not share a key with the drift or dark alerts: their token grammars differ", k)
+	}
+}
+
+// The body has to name what failed and the credential the operator rotates,
+// because the symptom alone (a 404 or 401 from GitHub) does not say which.
+func TestFormatDriftBlind_NamesTheRepoTheErrorAndTheToken(t *testing.T) {
+	title, body := FormatDriftBlind("nixon-commits/rosterbot",
+		errors.New("github https://api.github.com/repos/nixon-commits/rosterbot/commits/main: 404 Not Found"))
+	if title == "" {
+		t.Fatal("title must not be the stay-quiet signal")
+	}
+	for _, want := range []string{"nixon-commits/rosterbot", "404 Not Found", "GITHUB_READ_TOKEN"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body %q must contain %q", body, want)
+		}
 	}
 }
