@@ -20,8 +20,12 @@ type League struct {
 
 // Roster is one team's roster within a league.
 type Roster struct {
-	RosterID int      `json:"roster_id"`
-	OwnerID  string   `json:"owner_id"`
+	RosterID int    `json:"roster_id"`
+	OwnerID  string `json:"owner_id"`
+	// CoOwners are the additional user ids that manage this roster. A user
+	// can be on a roster without being its owner_id, so ownership tests must
+	// consult both; null in the feed for most rosters.
+	CoOwners []string `json:"co_owners"`
 	LeagueID string   `json:"league_id"`
 	Players  []string `json:"players"` // Sleeper player_ids
 	Starters []string `json:"starters"`
@@ -82,6 +86,18 @@ type Transaction struct {
 	DraftPicks    []TransactionDraftPick `json:"draft_picks"`
 	WaiverBudget  []WaiverBudgetTransfer `json:"waiver_budget"`
 	Created       int64                  `json:"created"` // epoch millis
+	// StatusUpdated is when the transaction reached its current status, epoch
+	// millis. On a waiver claim that is the moment waivers PROCESSED it
+	// (about 08:00 UTC), not the moment it was submitted: Created is the
+	// submission time, and a claim can sit pending for hours or days before it
+	// completes. The public feed lists only complete and failed rows, so a
+	// pending claim is invisible until StatusUpdated. Measured 2026-09-30 in
+	// one league, rounds 1-4: 10 of 24 completed waiver transactions carrying a
+	// drop completed in a later daily capture window than they were created in,
+	// while free-agent moves (0 of 128) always carry StatusUpdated == Created. Zero
+	// means the feed did not carry the field; read the effective time as
+	// StatusUpdated, falling back to Created.
+	StatusUpdated int64 `json:"status_updated"`
 
 	// Creator is the Sleeper USER id (not roster id) that proposed the
 	// transaction. For a trade it is who sent the offer, which is what
@@ -97,6 +113,22 @@ type Transaction struct {
 	// values are not all one type and a single mistyped key would fail the
 	// whole row's decode. Read expires_at through ExpiresAt.
 	Settings map[string]any `json:"settings"`
+}
+
+// CompletedMillis is the transaction's effective time, epoch millis: the
+// moment it reached its current status (StatusUpdated), falling back to
+// Created for a row the feed served without one. Zero means no usable
+// timestamp. It is the ONE definition every age or window test uses -- the
+// pickups drop window, the trades stale window and the trade log's date --
+// because judging any of them on Created alone reads a waiver claim's or an
+// offer's SUBMISSION time as its completion, and a transaction that completed
+// long after it was proposed then falls outside a window it belongs inside
+// (measured 2026-09-30: 42% of completed waiver drops in one league).
+func (t Transaction) CompletedMillis() int64 {
+	if t.StatusUpdated > 0 {
+		return t.StatusUpdated
+	}
+	return t.Created
 }
 
 // ExpiresAt returns settings.expires_at as a UTC time, when present.
@@ -140,6 +172,15 @@ type Player struct {
 	FantasyPositions []string `json:"fantasy_positions"`
 	Status           string   `json:"status"`
 	InjuryStatus     string   `json:"injury_status"`
+
+	// DepthChartPosition/DepthChartOrder are Sleeper's editorial depth chart:
+	// the slot name ("QB", "RB", "LWR", "RWR", "SWR", "TE", ...) and 1 for the
+	// starter. Order is a pointer because Sleeper sends null for most of the
+	// pool; nil means "no recorded slot", which the pickups detector treats as
+	// distinct from 2+. Measured 2026-09-21: Drew Lock and Carson Wentz both
+	// read QB/1 the week they were picked up for real FAAB.
+	DepthChartPosition string `json:"depth_chart_position"`
+	DepthChartOrder    *int   `json:"depth_chart_order"`
 
 	// SearchRank is Sleeper's own depth-chart/relevance ranking (lower =
 	// more relevant; undrafted/irrelevant players carry a large sentinel

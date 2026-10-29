@@ -74,14 +74,8 @@ func runFootballOffers(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("sleeper state: %w", err)
 	}
-	leagues, err := discoverLeagues(ctx, sc, cfg, state, os.Stdout)
+	leagues, err := discoverLeaguesOrStop(cmd, ctx, sc, cfg, state)
 	if err != nil {
-		// An off-season stop has already printed its one line and recorded
-		// the outcome; silence cobra so the exit-0 path prints nothing else,
-		// exactly as checkSeasonGate does for the baseball commands.
-		if errors.Is(err, errOffSeason) {
-			cmd.SilenceUsage, cmd.SilenceErrors = true, true
-		}
 		return err
 	}
 	players, err := sc.PlayersNFL(ctx)
@@ -152,15 +146,13 @@ type offerLoader func(ctx context.Context, lc leagueContext) (leagueOffers, erro
 // offerRunner grades and alerts one league's kept offers.
 type offerRunner func(lc leagueContext, li leagueOffers, keep []sleeper.Transaction) offerRunResult
 
-// pollOffers runs load -> select -> run for every league: the extracted body of
-// runFootballOffers' loop, on pollLeagues' precedent, so the four rules that
-// live in it are asserted rather than read.
+// pollOffers runs load -> select -> run for every league: forEachLeague's
+// isolation (one league's hiccup is warned and skipped, the rest still run)
+// with the four rules of this job asserted rather than read.
 //
 //   - ErrUnauthorized aborts the run at once and no further league is loaded:
 //     every league would fail the same way, and six warnings read as six
-//     problems where there is one.
-//   - Any other load error is warned, names the league in failed, and the
-//     loop continues, so one league's hiccup never silences the rest.
+//     problems where there is one (forEachLeague's abort predicate).
 //   - A league where the operator owns no roster prints a skip line.
 //   - Every other league prints the coverage line unconditionally, zero case
 //     included: a league with no offers and a query that returns nothing look
@@ -170,37 +162,30 @@ type offerRunner func(lc leagueContext, li leagueOffers, keep []sleeper.Transact
 //     query semantics differ from what the code assumes, so it is named in a
 //     warning rather than dropped.
 func pollOffers(ctx context.Context, leagues []leagueContext, myUserID string, now time.Time, load offerLoader, run offerRunner, out io.Writer) (total offerRunResult, found int, failed []string, err error) {
-	for _, lc := range leagues {
-		li, lerr := load(ctx, lc)
-		if lerr != nil {
-			if errors.Is(lerr, sleeperauth.ErrUnauthorized) {
-				return total, found, failed, fmt.Errorf("football-offers: %s: %w", lc.League.Name, lerr)
+	failed, err = forEachLeague(ctx, "football-offers", leagues, load,
+		func(e error) bool { return errors.Is(e, sleeperauth.ErrUnauthorized) },
+		func(lc leagueContext, li leagueOffers) {
+			if li.myRoster == 0 {
+				fmt.Fprintf(out, "football-offers: %s: no roster owned by %s; skipped\n", lc.League.Name, myUserID)
+				return
 			}
-			warn("football-offers: %s: %v (continuing with the other leagues)", lc.League.Name, lerr)
-			failed = append(failed, lc.League.Name)
-			continue
-		}
-		if li.myRoster == 0 {
-			fmt.Fprintf(out, "football-offers: %s: no roster owned by %s; skipped\n", lc.League.Name, myUserID)
-			continue
-		}
-		sel := selectOffers(li.offers, li.myRoster, myUserID, now)
-		found += len(li.offers)
-		total.Expired += sel.Expired
-		total.Answered += sel.Answered
-		total.SentByMe += sel.SentByMe
-		if len(sel.Unexpected) > 0 {
-			warn("football-offers: %s: %d unexpected row(s) from the proposed-trades query (ids %s) — the server filter did not hold; check the query",
-				lc.League.Name, len(sel.Unexpected), strings.Join(sel.Unexpected, ","))
-		}
-		fmt.Fprintf(out, "football-offers: %s: %d proposed for roster %d, %d to me and live\n", lc.League.Name, len(li.offers), li.myRoster, len(sel.Keep))
+			sel := selectOffers(li.offers, li.myRoster, myUserID, now)
+			found += len(li.offers)
+			total.Expired += sel.Expired
+			total.Answered += sel.Answered
+			total.SentByMe += sel.SentByMe
+			if len(sel.Unexpected) > 0 {
+				warn("football-offers: %s: %d unexpected row(s) from the proposed-trades query (ids %s) — the server filter did not hold; check the query",
+					lc.League.Name, len(sel.Unexpected), strings.Join(sel.Unexpected, ","))
+			}
+			fmt.Fprintf(out, "football-offers: %s: %d proposed for roster %d, %d to me and live\n", lc.League.Name, len(li.offers), li.myRoster, len(sel.Keep))
 
-		res := run(lc, li, sel.Keep)
-		total.Graded += res.Graded
-		total.Alerted += res.Alerted
-		total.Skipped += res.Skipped
-	}
-	return total, found, failed, nil
+			res := run(lc, li, sel.Keep)
+			total.Graded += res.Graded
+			total.Alerted += res.Alerted
+			total.Skipped += res.Skipped
+		})
+	return total, found, failed, err
 }
 
 // leagueOffers is one league's inputs: the operator's roster id there (0 when
@@ -220,12 +205,7 @@ func loadLeagueOffers(ctx context.Context, sc *sleeper.Client, auth *sleeperauth
 	if err != nil {
 		return leagueOffers{}, fmt.Errorf("sleeper users: %w", err)
 	}
-	li := leagueOffers{names: dynasty.TeamNames(rosters, users)}
-	for _, r := range rosters {
-		if r.OwnerID == userID {
-			li.myRoster = r.RosterID
-		}
-	}
+	li := leagueOffers{names: dynasty.TeamNames(rosters, users), myRoster: myRosterID(rosters, userID)}
 	if li.myRoster == 0 {
 		return li, nil
 	}
@@ -234,6 +214,20 @@ func loadLeagueOffers(ctx context.Context, sc *sleeper.Client, auth *sleeperauth
 		return leagueOffers{}, fmt.Errorf("proposed trades: %w", err)
 	}
 	return li, nil
+}
+
+// myRosterID is the roster userID manages in a league, or 0 when none: the
+// one whose owner_id is userID, or that lists userID among its co_owners. A
+// co-owner is on the roster without being its owner_id, and matching owner_id
+// alone read every co-owned league as "no roster owned" and skipped it, so
+// its offers never alerted (rosterbot review 2026-10-13).
+func myRosterID(rosters []sleeper.Roster, userID string) int {
+	for _, r := range rosters {
+		if r.OwnerID == userID || slices.Contains(r.CoOwners, userID) {
+			return r.RosterID
+		}
+	}
+	return 0
 }
 
 // offerSelection is selectOffers' account of EVERY row the proposed-trades

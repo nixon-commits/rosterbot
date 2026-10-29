@@ -465,3 +465,77 @@ func TestTransaction_ExpiresAtAbsentOrMalformedIsNoExpiry(t *testing.T) {
 		}
 	}
 }
+
+func TestPlayer_DecodesDepthChartAndNullOrder(t *testing.T) {
+	var starter, bench Player
+	if err := json.Unmarshal([]byte(`{"player_id":"1","position":"QB","team":"MIN","depth_chart_position":"QB","depth_chart_order":1}`), &starter); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(`{"player_id":"2","position":"WR","team":"FA","depth_chart_position":null,"depth_chart_order":null}`), &bench); err != nil {
+		t.Fatal(err)
+	}
+	if starter.DepthChartPosition != "QB" || starter.DepthChartOrder == nil || *starter.DepthChartOrder != 1 {
+		t.Errorf("starter = %+v", starter)
+	}
+	if bench.DepthChartPosition != "" || bench.DepthChartOrder != nil {
+		t.Errorf("null order must decode to nil, got %+v", bench)
+	}
+}
+
+// The pickups detector's completion-time rule (DetectDrops) is only as good
+// as this one struct tag: nothing else in the tree decodes `status_updated`
+// from real JSON, and the dynasty fixtures set the field directly. A typo in
+// the tag would make every row read StatusUpdated == 0, fall back to Created,
+// and silently restore the 42% waiver-drop loss with every test green
+// (fix-wave re-review, 2026-09-30).
+func TestTransaction_DecodesStatusUpdatedAndZeroWhenAbsent(t *testing.T) {
+	const withField = `{"transaction_id":"w1","type":"waiver","status":"complete",
+	  "created":1759212660000,"status_updated":1759222200000,"drops":{"9509":7}}`
+	var txn Transaction
+	if err := json.Unmarshal([]byte(withField), &txn); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if txn.StatusUpdated != 1759222200000 {
+		t.Errorf("StatusUpdated = %d, want 1759222200000 decoded from \"status_updated\"", txn.StatusUpdated)
+	}
+	if txn.Created != 1759212660000 {
+		t.Errorf("Created = %d, want 1759212660000", txn.Created)
+	}
+
+	const without = `{"transaction_id":"f1","type":"free_agent","status":"complete","created":1759212660000}`
+	var bare Transaction
+	if err := json.Unmarshal([]byte(without), &bare); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if bare.StatusUpdated != 0 {
+		t.Errorf("StatusUpdated = %d for a row without the field, want 0 (the Created fallback)", bare.StatusUpdated)
+	}
+}
+
+func TestTransaction_CompletedMillisIsStatusUpdatedThenCreated(t *testing.T) {
+	both := Transaction{Created: 1_000, StatusUpdated: 5_000}
+	if got := both.CompletedMillis(); got != 5_000 {
+		t.Errorf("CompletedMillis = %d, want status_updated (5000)", got)
+	}
+	createdOnly := Transaction{Created: 1_000}
+	if got := createdOnly.CompletedMillis(); got != 1_000 {
+		t.Errorf("CompletedMillis = %d, want the Created fallback (1000)", got)
+	}
+	if got := (Transaction{}).CompletedMillis(); got != 0 {
+		t.Errorf("CompletedMillis = %d for a row with no timestamps, want 0 (unknown)", got)
+	}
+}
+
+func TestRoster_DecodesCoOwners(t *testing.T) {
+	const body = `[{"roster_id":3,"owner_id":"u1","co_owners":["u2","u3"],"players":[]},{"roster_id":4,"owner_id":"u9","co_owners":null}]`
+	var rosters []Roster
+	if err := json.Unmarshal([]byte(body), &rosters); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(rosters[0].CoOwners) != 2 || rosters[0].CoOwners[1] != "u3" {
+		t.Errorf("CoOwners = %v, want [u2 u3] decoded from \"co_owners\"", rosters[0].CoOwners)
+	}
+	if rosters[1].CoOwners != nil {
+		t.Errorf("CoOwners = %v for a null co_owners, want nil", rosters[1].CoOwners)
+	}
+}

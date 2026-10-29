@@ -327,6 +327,17 @@ func TestBuildTradeLogRow_MissingCreatedIsUnknownNotTheEpoch(t *testing.T) {
 	}
 }
 
+// status_updated is the completion time; created is only when the offer was
+// proposed. When both are present the row carries the completion.
+func TestBuildTradeLogRow_TradeDateIsCompletionWhenStatusUpdatedIsSet(t *testing.T) {
+	txn, players, bundle, names := tradeLogFixture()
+	txn.StatusUpdated = time.Date(2026, 2, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
+	row := BuildTradeLogRow(time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC), txn, players, bundle, names, "sf_dynasty")
+	if got, want := row.TradeDate.Format("2006-01-02"), "2026-02-01"; got != want {
+		t.Errorf("TradeDate = %q, want %q (status_updated, the completion), not the proposal date", got, want)
+	}
+}
+
 func TestBuildTradeLogRow_TradeDateComesFromCreatedMillis(t *testing.T) {
 	txn, players, bundle, names := tradeLogFixture()
 	row := BuildTradeLogRow(time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC), txn, players, bundle, names, "sf_dynasty")

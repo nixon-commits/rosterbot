@@ -436,6 +436,32 @@ func TestGradeAndAlertTrades_UnknownCreatedIsNotStale(t *testing.T) {
 	}
 }
 
+// Age is measured from COMPLETION, not from Created, which is only when the
+// offer was proposed: an offer that sat for weeks and was accepted yesterday
+// is news, and judged on Created it would be marked stale on the day it
+// completed and never alerted (the drops detector's waiver-claim lesson). The
+// log row carries the completion date too.
+func TestGradeAndAlertTrades_OldOfferAcceptedRecentlyIsNotStale(t *testing.T) {
+	in, sent := tradeAlertFixture(t)
+	in.trades[0].Created = in.now.Add(-60 * 24 * time.Hour).UnixMilli()
+	in.trades[0].StatusUpdated = in.now.Add(-24 * time.Hour).UnixMilli()
+
+	res := gradeAndAlertTrades(context.Background(), in)
+
+	if res.Stale != 0 {
+		t.Fatalf("Stale = %d, want 0: a trade completed yesterday is not stale however long its offer sat", res.Stale)
+	}
+	if res.Graded != 1 || res.Alerted != 1 || len(*sent) != 1 {
+		t.Errorf("graded=%d alerted=%d sent=%d, want 1/1/1", res.Graded, res.Alerted, len(*sent))
+	}
+	if len(res.LogRows) != 1 {
+		t.Fatalf("logged %d rows, want 1", len(res.LogRows))
+	}
+	if got, want := res.LogRows[0].TradeDate, in.now.Add(-24*time.Hour).UTC().Truncate(time.Millisecond); !got.Equal(want) {
+		t.Errorf("TradeDate = %v, want the completion time %v, not the proposal time", got, want)
+	}
+}
+
 // ---------------------------------------------------------- pollLeagues (I3)
 
 // The one behaviour the spec calls out by name: a league whose load fails is

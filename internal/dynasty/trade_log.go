@@ -84,9 +84,10 @@ type TradeLogRow struct {
 	// that in would write an assumption as a fact.
 	LeagueID   string `json:"league_id,omitempty"`
 	LeagueName string `json:"league_name,omitempty"`
-	// TradeDate is when Sleeper says the trade completed. Zero when the
-	// transaction carried no usable Created timestamp — read it as unknown,
-	// never as the epoch.
+	// TradeDate is when Sleeper says the trade completed
+	// (Transaction.CompletedMillis: status_updated, falling back to created,
+	// which is only when the offer was proposed). Zero when the transaction
+	// carried no usable timestamp — read it as unknown, never as the epoch.
 	TradeDate time.Time `json:"trade_date"`
 	GradedAt  time.Time `json:"graded_at"`
 	// AlertFormat is the league's LeagueProfile.Format — the StatsGuy column
@@ -158,8 +159,8 @@ func BuildTradeLogRow(gradedAt time.Time, txn sleeper.Transaction, players map[s
 	}
 
 	var tradeDate time.Time
-	if txn.Created > 0 {
-		tradeDate = time.UnixMilli(txn.Created).UTC()
+	if ms := txn.CompletedMillis(); ms > 0 {
+		tradeDate = time.UnixMilli(ms).UTC()
 	}
 
 	return TradeLogRow{
