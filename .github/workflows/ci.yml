@@ -31,9 +31,9 @@ jobs:
     # metered minutes.
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -68,7 +68,7 @@ jobs:
 
       - name: Cache golangci-lint binary
         id: golangci-lint-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.GOLANGCI_LINT_BIN }}
           key: golangci-lint-${{ runner.os }}-${{ env.GOTOOLVERSION }}-${{ env.GOLANGCI_LINT_VERSION }}
