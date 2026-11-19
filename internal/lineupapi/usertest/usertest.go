@@ -76,6 +76,36 @@ func Run(t *testing.T, newStore func(t *testing.T) lineupapi.UserStore) {
 		}
 	})
 
+	// POST /v1/signup's cap and cleanup key on Origin, and they read it back
+	// through ListUsers — so a store that dropped it on either path would
+	// silently stop bounding the one unauthenticated route.
+	t.Run("OriginRoundTripsThroughGetAndList", func(t *testing.T) {
+		s := newStore(t)
+		u := newUser("signed-up")
+		u.Origin = lineupapi.UserOriginSignup
+		if err := s.CreateUser(ctx, u); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		if err := s.CreateUser(ctx, newUser("invited")); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		got, ok, err := s.GetUser(ctx, "signed-up")
+		if err != nil || !ok || got.Origin != lineupapi.UserOriginSignup {
+			t.Fatalf("GetUser origin = %q (ok=%v err=%v), want %q", got.Origin, ok, err, lineupapi.UserOriginSignup)
+		}
+		all, err := s.ListUsers(ctx)
+		if err != nil {
+			t.Fatalf("ListUsers: %v", err)
+		}
+		origins := map[lineupapi.UserID]string{}
+		for _, lu := range all {
+			origins[lu.ID] = lu.Origin
+		}
+		if origins["signed-up"] != lineupapi.UserOriginSignup || origins["invited"] != "" {
+			t.Fatalf("ListUsers origins = %v, want only the signed-up user marked", origins)
+		}
+	})
+
 	t.Run("MembershipsRoundTrip", func(t *testing.T) {
 		// Memberships is a slice of structs containing a time.Time, and it
 		// crosses two entirely different codecs: JSON by field tag in

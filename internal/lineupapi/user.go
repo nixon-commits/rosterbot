@@ -80,6 +80,9 @@ const (
 	UserParked UserStatus = "parked"
 )
 
+// UserOriginSignup is the only value User.Origin is ever given.
+const UserOriginSignup = "signup"
+
 // Errors a UserStore returns for the conditions callers must handle
 // distinctly. Everything else is an ordinary error.
 var (
@@ -152,6 +155,18 @@ type User struct {
 	// from a verified one.
 	EmailAttestedBy UserID    `json:"email_attested_by,omitempty"`
 	EmailAttestedAt time.Time `json:"email_attested_at,omitempty"`
+
+	// Origin records HOW the account came to exist, and only one value is
+	// ever written: UserOriginSignup, by POST /v1/signup. Empty means an admin
+	// made it (invite, bootstrap, migration) — which is every record that
+	// predates the field, so the zero value is the truth for them.
+	//
+	// It exists because signup is the one unauthenticated route that creates
+	// tenants, and what bounds it (the cap, the cleanup, replacing an
+	// abandoned attempt — signup.go) must never count or delete an account an
+	// admin vouched for. Nothing else may branch on it: it is not a role, a
+	// status, or a statement about what the account may do.
+	Origin string `json:"origin,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 

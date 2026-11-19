@@ -83,6 +83,11 @@ type Config struct {
 	Users       UserStore
 	Enrollments EnrollmentStore
 
+	// SignupMaxUnproven caps how many accounts POST /v1/signup may have
+	// outstanding that hold no proven Fantrax team. Zero means
+	// defaultSignupMaxUnproven. See signup.go.
+	SignupMaxUnproven int
+
 	// PushDevices is the APNs device registry behind /v1/push/devices. Nil
 	// answers 501, matching the other optional stores; production wires the
 	// same DynamoDB store as Users, `serve` the same file store.
@@ -107,7 +112,8 @@ type Config struct {
 // either a valid session cookie (the everyday passkey-login path) or the
 // legacy bearer token (break-glass / CLI use) — except /v1/auth/*, where each
 // handler gates itself: login is open, register accepts session-or-token,
-// and passkey management (list/revoke) requires a session only.
+// and passkey management (list/revoke) requires a session only — and
+// POST /v1/signup, which is open by design and bounded in signup.go.
 //
 // The table below is EXHAUSTIVE, and TestHandlerDocListsEveryRoute pins it to
 // the registrations rather than trusting anyone to keep it current. It was
@@ -152,6 +158,7 @@ type Config struct {
 //	GET    /v1/tenants/{id}/runs/{runID}         -> that tenant's detail for one run (log tail, connect verdict)
 //	GET    /v1/tenants/{id}/runs/{runID}/output  -> that tenant's captured stdout for one run
 //	POST   /v1/me/preferences                    -> update the caller's own auto_apply
+//	POST   /v1/signup                            -> create an account with no invite (unauthenticated, capped), 201
 //	POST   /v1/connect                           -> store sealed Fantrax credentials
 //	GET    /v1/connect                           -> Fantrax connection status
 //	POST   /v1/push/devices                      -> register an APNs device
@@ -209,6 +216,9 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/tenants/{id}/runs/{runID}", cfg.handleTenantRun)
 	mux.HandleFunc("GET /v1/tenants/{id}/runs/{runID}/output", cfg.handleTenantRunOutput)
 	mux.HandleFunc("POST /v1/me/preferences", cfg.handleSetPreferences)
+	// Self-serve signup. Registered like any other route, but REACHED without
+	// a caller: see the gate at the bottom of this function.
+	mux.HandleFunc("POST /v1/signup", cfg.handleSignup)
 	mux.HandleFunc("POST /v1/connect", cfg.handleConnect)
 	mux.HandleFunc("GET /v1/connect", cfg.handleConnectStatus)
 	// APNs device registry. Session-gated like everything else here, and each
@@ -231,7 +241,16 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("POST /v1/auth/logout", cfg.handleLogout)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v1/auth/") {
+		// TWO things skip cfg.authorize, and the list is closed. /v1/auth/*
+		// gates itself per handler. /v1/signup is the ONLY tenant-creating
+		// route reachable with no caller at all — an exact path, never a
+		// prefix, so nothing registered beneath it later inherits the bypass.
+		// What bounds it lives in signup.go: a cap on unproven signup
+		// accounts and a cleanup of abandoned ones; what an account it makes
+		// can DO is bounded by AuthorizeRun (no connection record, no run).
+		// Being absent from adminOnlyRoutes is NOT what makes a route public:
+		// that list only separates members from admins.
+		if strings.HasPrefix(r.URL.Path, "/v1/auth/") || r.URL.Path == signupPath {
 			mux.ServeHTTP(w, r)
 			return
 		}
