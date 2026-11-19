@@ -97,3 +97,28 @@ func TestAggregate_Empty(t *testing.T) {
 		t.Fatalf("empty view should have N=0")
 	}
 }
+
+// TestWithProduction pins the split rosterbot-gaa2 asked for: the tenant's
+// production systems drive the caption and the default Detail selection, while
+// legacy attribution stays on analysis.LegacySystem.
+func TestWithProduction(t *testing.T) {
+	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	m := Aggregate(nil, now, now)
+	if m.Production != nil || m.DetailSystem != analysis.LegacySystem {
+		t.Fatalf("fresh model: Production=%v DetailSystem=%q, want nil and the legacy system", m.Production, m.DetailSystem)
+	}
+
+	m.WithProduction("steamer-ros", "atc-ros")
+	if m.Production == nil || m.Production.Hitter != "steamer-ros" || m.Production.Pitcher != "atc-ros" {
+		t.Fatalf("Production = %+v, want steamer-ros/atc-ros", m.Production)
+	}
+	if m.DetailSystem != "steamer-ros" {
+		t.Fatalf("DetailSystem = %q, want the hitter production system", m.DetailSystem)
+	}
+
+	// An unresolved role must not publish half a caption.
+	m2 := Aggregate(nil, now, now).WithProduction("steamer-ros", "")
+	if m2.Production != nil || m2.DetailSystem != analysis.LegacySystem {
+		t.Fatalf("partial input changed the model: Production=%v DetailSystem=%q", m2.Production, m2.DetailSystem)
+	}
+}

@@ -254,7 +254,7 @@ function autoApplyCard(me) {
 // saved. The names are the base families; the run applies the rest-of-season
 // variant itself in season.
 const PROJECTION_CHOICES = [
-  ["", "Default (Depth Charts)"],
+  ["", "Default (Steamer)"],
   ["steamer", "Steamer"],
   ["depthcharts", "Depth Charts"],
   ["thebatx", "THE BAT X"],

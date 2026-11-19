@@ -259,8 +259,9 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		})
 	}
 
-	// Task role: read/write its S3 prefixes, read the rosterbot SSM secrets, and
-	// invalidate the two CloudFront distributions after publishing a site.
+	// Task role: read/write its S3 prefixes, read the ONE plain SSM parameter the
+	// bot fetches at run time, and invalidate the two CloudFront distributions
+	// after publishing a site.
 	stateBucket.GrantReadWrite(taskDef.TaskRole(), nil)
 	siteBucket.GrantReadWrite(taskDef.TaskRole(), nil)
 	// Read-only, and scoped to recap/: projection-site reads these logs to build
@@ -268,8 +269,17 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// able to alter or delete the readership record it reports on.
 	recapLogBucket.GrantRead(taskDef.TaskRole(), jsii.String("recap/*"))
 	taskDef.TaskRole().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
-		Actions:   jsii.Strings("ssm:GetParameters", "ssm:GetParameter"),
-		Resources: jsii.Strings("arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/*"),
+		// Exactly the dashboard distribution id (cmd/sync.go dashboardCFDistID),
+		// by literal name: a reference to the parameter construct would close
+		// the same CloudFormation cycle the parameter exists to break.
+		//
+		// NOT /rosterbot/*. Secrets reach the container through the EXECUTION
+		// role, so the wildcard gave the job's own code nothing and gave any
+		// compromised dependency the admin API token, the dashboard session
+		// secret, the Sleeper token and the APNs key. Pinned by
+		// TestNoRoleReadsTheWholeRosterbotParameterTree.
+		Actions:   jsii.Strings("ssm:GetParameter"),
+		Resources: jsii.Strings("arn:aws:ssm:us-west-1:476646938644:parameter/rosterbot/DASHBOARD_CF_DIST_ID"),
 	}))
 	taskDef.TaskRole().AddToPrincipalPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Actions:   jsii.Strings("cloudfront:CreateInvalidation"),

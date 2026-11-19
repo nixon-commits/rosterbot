@@ -75,6 +75,13 @@ func runProjectionSite(cmd *cobra.Command, args []string) error {
 	}
 
 	m := report.Aggregate(rows, time.Now().UTC(), seasonStart)
+	// Caption the system this tenant's lineup runs actually use as production
+	// (rosterbot-gaa2), not the legacy attribution constant.
+	prodHitter, prodPitcher, prodWarnings := tenantProductionSystems(cmd.Context())
+	for _, w := range prodWarnings {
+		warn("projection-site: %s", w)
+	}
+	m.WithProduction(prodHitter, prodPitcher)
 
 	// The three private reports go to the state bucket's reports/ prefix, which
 	// no CloudFront distribution serves; the SPA reads them back through the

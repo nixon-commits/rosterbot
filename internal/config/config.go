@@ -36,6 +36,12 @@ type Config struct {
 	GSTrackingEnabled bool // enables GS-budget tracking (optimizer) and gs-check; the real min/max are always fetched live from Fantrax, never guessed
 	BlendMinGP        int  // min games played before blending recent stats (default 2)
 
+	// HitterRecencyBlend turns the hitter recency blend back on
+	// (HITTER_RECENCY_BLEND, default false). Off since the 2026 season review
+	// (rosterbot-jyt0.3): hitters are valued from the base projection alone.
+	// The pitcher blend has no switch and is always on.
+	HitterRecencyBlend bool
+
 	// Prospect report settings (all optional, with defaults).
 	ProspectRollingDays    int
 	ProspectMinGames       int
@@ -76,6 +82,8 @@ func Load(dryRun bool, dates []time.Time) (*Config, error) {
 		MinorsSlots:       envInt("FANTRAX_MINORS_SLOTS", 0),
 		GSTrackingEnabled: envBool("GS_TRACKING_ENABLED", false),
 		BlendMinGP:        envInt("BLEND_MIN_GP", 2),
+
+		HitterRecencyBlend: envBool("HITTER_RECENCY_BLEND", false),
 
 		ProspectRollingDays:    envInt("PROSPECT_ROLLING_DAYS", 14),
 		ProspectMinGames:       envInt("PROSPECT_MIN_GAMES", 8),
