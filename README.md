@@ -213,8 +213,8 @@ The dashboard's admin **Tenants** tab mints the same invite and recovery links
 per-tenant management controls: park/reactivate (`POST /v1/tenants/{id}/status`
 — a parked tenant can't sign in and their scheduled jobs stop), a
 lineup-writes kill switch (`POST /v1/tenants/{id}/auto-apply`), team binding
-(`POST /v1/tenants/{id}/team` — the twin of `user set-team` below, and the only
-control on this page that clears connect's `no_team` refusal; it *re*assigns
+(`POST /v1/tenants/{id}/team` — the twin of `user set-team` below; it names a
+team for connect to *verify* instead of discover, and *re*assigns
 nothing, since taking a second claim without releasing the first would leave
 the old team owned by nobody), and permanent
 removal (`DELETE /v1/tenants/{id}` — deletes the account, passkeys and Fantrax
@@ -250,10 +250,16 @@ stored, so a leak of the identity table yields no usable links. The link is
 single-use, scoped to one user, and redeemed only when a registration actually
 completes — an abandoned ceremony leaves it usable.
 
-`--team` is optional to the flag, but a user without one **cannot connect
-Fantrax** — `connect` refuses with `no_team`, because an empty team gives the
-ownership check nothing to prove against. Repair an existing record from the
-Tenants tab's **Set team** control, or with `user set-team` below.
+`--team` is optional. With one, `connect` **verifies** that the invitee's
+Fantrax credentials control that team. Without one, `connect` **discovers**
+the team from Fantrax's own answer: exactly one owned team in this league is
+adopted, none fails with `no_team`, and two or more fail with
+`ambiguous_team` until the user chooses in the app (or an admin names the team
+from the Tenants tab's **Set team** control, or with `user set-team` below).
+
+People can also create their own account with no invite: the iOS app calls
+`POST /v1/signup`, which is unauthenticated and bounded by a cap and a cleanup
+— see `docs/user-registration.md`.
 
 </details>
 

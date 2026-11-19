@@ -113,7 +113,8 @@ Run history (scheduled + manual), newest first.
   - `verdict`: `verified` | `failed`. **Colour on this and nothing else.**
   - `last_error`: a connect failure class (`bad_credentials`,
     `two_factor_required`, `bot_challenge`, `login_challenge_or_timeout`,
-    `team_not_owned`, `no_team`, `team_claimed`, `verification_interrupted`),
+    `team_not_owned`, `no_team`, `ambiguous_team`, `team_claimed`,
+    `verification_interrupted`, `check_failed`),
     omitted on a `verified` verdict. Treat an unrecognised class as a failure
     with an unknown reason rather than dropping the row's failure state.
   - **`status` and `verdict` legitimately disagree.** A connect that fails for a
