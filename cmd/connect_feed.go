@@ -138,7 +138,7 @@ func connectFailureMessage(class string) string {
 		return "Fantrax rejected that username or password. Reconnect in Settings with the correct details."
 	case lineupapi.ConnErrTwoFactor:
 		return "Fantrax asked for a two-factor code, which rosterbot cannot answer. " +
-			"This account can only be connected with two-factor auth turned off."
+			"rosterbot cannot connect to a Fantrax account that uses two-factor authentication."
 	case lineupapi.ConnErrTeamNotOwned:
 		return "Those credentials do not control the team you were invited for."
 	case lineupapi.ConnErrNoTeam:

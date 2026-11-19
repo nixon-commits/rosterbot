@@ -39,8 +39,8 @@ export const CONNECTION_COPY = {
 export const FAILURE_COPY = {
   bad_credentials: "Fantrax rejected that username or password.",
   two_factor_required:
-    "Fantrax asked for a two-factor code. rosterbot cannot answer one, so this " +
-    "account can only be connected with two-factor auth turned off.",
+    "Fantrax asked for a two-factor code, which rosterbot cannot answer. " +
+    "rosterbot cannot connect to a Fantrax account that uses two-factor authentication.",
   bot_challenge:
     "Fantrax blocked the sign-in as automated traffic. This one is not your " +
     "fault and not something you can fix — it has been reported.",
