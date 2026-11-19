@@ -27,7 +27,8 @@ const connectInFlightWindow = 10 * time.Minute
 const connectInterruptedCooldown = time.Minute
 
 // handleConnect accepts a tenant's Fantrax credentials, seals them, and launches
-// the task that verifies them.
+// the task that verifies them. It also accepts the answer to an ambiguous_team
+// result — a bare team choice — and launches the same task for it.
 //
 // THE CALLER MUST BE A SESSION, never the bearer token. A token caller has no
 // UserID by construction (see Caller), so there is no account it could be
@@ -56,6 +57,10 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		// TeamID is a TEAM CHOICE, valid only as the whole request: see
+		// teamChoiceRefusal. It is never an assertion that rides along with
+		// credentials.
+		TeamID string `json:"team_id"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&body); err != nil {
 		// Deliberately does not echo the decode error: a malformed body may be
@@ -63,7 +68,18 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "could not read credentials")
 		return
 	}
-	if body.Username == "" || body.Password == "" {
+	// TWO REQUEST SHAPES, never mixed. Credentials start a fresh check. A bare
+	// team_id answers an ambiguous_team result: it re-runs the check on the
+	// credentials already sealed on the record, with the chosen team named.
+	// A body carrying both is refused rather than guessed at — honouring the
+	// team beside new credentials would let a caller assert the team for a
+	// Fantrax account the server has never seen.
+	choosing := body.TeamID != ""
+	if choosing && (body.Username != "" || body.Password != "") {
+		writeErr(w, http.StatusBadRequest, "send credentials or a team choice, not both")
+		return
+	}
+	if !choosing && (body.Username == "" || body.Password == "") {
 		writeErr(w, http.StatusBadRequest, "username and password are both required")
 		return
 	}
@@ -88,24 +104,49 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	plain, err := json.Marshal(FantraxCreds{Username: body.Username, Password: body.Password})
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not prepare credentials")
-		return
-	}
-	sealed, err := cfg.Sealer.Seal(r.Context(), caller.UserID, plain)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "could not seal credentials")
-		return
+	// The team on the USER record — set by an invite, or by ClaimTeam once a
+	// connection has been proven. Read before the branch because both shapes
+	// need it: the credentials path copies it onto the record for the connect
+	// task to VERIFY, and the choice path must not override it.
+	var userTeam string
+	if cfg.Users != nil {
+		u, uok, uerr := cfg.Users.GetUser(r.Context(), caller.UserID)
+		switch {
+		case uerr == nil && uok:
+			userTeam = u.TeamID
+		case choosing:
+			// Fails closed for a choice only. The credentials path has always
+			// tolerated this read failing (the connect task then discovers or
+			// refuses on its own); a choice that could not see the user record
+			// could not tell whether a team is already named.
+			writeErr(w, http.StatusBadGateway, "user directory unavailable")
+			return
+		}
 	}
 
-	// The team comes from the user's own record — set by the invite — not from
-	// the request. A caller naming their own team would be asserting the thing
-	// the connect task exists to prove.
-	var teamID string
-	if cfg.Users != nil {
-		if u, ok, err := cfg.Users.GetUser(r.Context(), caller.UserID); err == nil && ok {
-			teamID = u.TeamID
+	var sealed []byte
+	teamID := userTeam
+	if choosing {
+		if code, msg := teamChoiceRefusal(cur, ok, userTeam, body.TeamID); code != 0 {
+			writeErr(w, code, msg)
+			return
+		}
+		// THE CHOICE IS CHECKED HERE AND PROVEN THERE. It was just matched
+		// against the set the connect task stored from Fantrax's own answer;
+		// naming it on the record sends the next connect run down proveTeam's
+		// VERIFY branch, which asks Fantrax again. Nothing is claimed on the
+		// strength of this request.
+		teamID = body.TeamID
+	} else {
+		plain, err := json.Marshal(FantraxCreds{Username: body.Username, Password: body.Password})
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "could not prepare credentials")
+			return
+		}
+		sealed, err = cfg.Sealer.Seal(r.Context(), caller.UserID, plain)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "could not seal credentials")
+			return
 		}
 	}
 
@@ -124,11 +165,19 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// task landing "verified" in the window is fine to replace; a second
 	// submission landing "pending" is not (see ConnectionStore).
 	for attempt := 1; ; attempt++ {
+		creds := sealed
+		if choosing {
+			// The credentials Fantrax accepted on the ambiguous run, carried
+			// over still sealed — this handler cannot open them. Taken from the
+			// record as read THIS iteration, which teamChoiceRefusal has
+			// passed.
+			creds = cur.CredsCiphertext
+		}
 		conn := &FantraxConnection{
 			UserID:          caller.UserID,
 			TeamID:          teamID,
 			Status:          ConnPending,
-			CredsCiphertext: sealed,
+			CredsCiphertext: creds,
 			UpdatedAt:       time.Now().UTC(),
 		}
 		if ok {
@@ -157,6 +206,14 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if ok {
 			if msg := connectInFlightRefusal(cur); msg != "" {
 				writeErr(w, http.StatusConflict, msg)
+				return
+			}
+		}
+		if choosing {
+			// The record that won the race is the one the choice must be valid
+			// against: a connect run may have replaced the ambiguous result.
+			if code, msg := teamChoiceRefusal(cur, ok, userTeam, body.TeamID); code != 0 {
+				writeErr(w, code, msg)
 				return
 			}
 		}
@@ -205,13 +262,59 @@ func (cfg Config) handleConnectStatus(w http.ResponseWriter, r *http.Request) {
 	// Only the fields a user needs. The ciphertexts are not serialized here even
 	// though they are opaque — an endpoint that returns them invites someone to
 	// build a client that stores them.
-	writeJSON(w, http.StatusOK, connectStatusOut{
+	out := connectStatusOut{
 		Connected:      conn.Status == ConnVerified,
 		Status:         conn.Status,
 		TeamID:         conn.TeamID,
 		LastError:      conn.LastError,
 		LastVerifiedAt: wiretime.New(conn.LastVerifiedAt),
-	})
+	}
+	// Present for ONE class only, checked here as well as cleared by the
+	// connect task: the list is an offer to choose, and offering it beside any
+	// other state would invite a choice teamChoiceRefusal then refuses.
+	if awaitingTeamChoice(conn) {
+		out.OwnedTeams = conn.OwnedTeams
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// awaitingTeamChoice reports whether a record is the ambiguous_team result a
+// team choice answers. One definition, shared by the status response (which
+// offers the choice) and teamChoiceRefusal (which accepts it), so the two
+// cannot disagree about when a choice is on the table.
+func awaitingTeamChoice(c *FantraxConnection) bool {
+	return c != nil && c.Status == ConnNeedsReconnect && c.LastError == ConnErrAmbiguousTeam
+}
+
+// teamChoiceRefusal decides whether a caller may name teamID as their team,
+// returning the status and message to refuse with, or 0 when the choice may
+// proceed.
+//
+// This is the ONE place a caller names their own team, and it is permitted
+// only because every input the decision rests on was written by the server:
+// the record's state and its OwnedTeams come from the connect task, which got
+// them from Fantrax's MyTeamIDs after a login Fantrax accepted. The request
+// contributes nothing but which member of that set. Even then nothing is
+// claimed here — the connect task proves the choice again (see handleConnect).
+func teamChoiceRefusal(cur *FantraxConnection, ok bool, userTeam, teamID string) (int, string) {
+	if !ok || !awaitingTeamChoice(cur) {
+		return http.StatusConflict, "there is no team choice to make; connect with your Fantrax credentials"
+	}
+	if userTeam != "" {
+		// A team an admin named (or one already proven) is never overridden
+		// from a request. Unreachable through the connect task, which only
+		// reports ambiguity when no team was named — refused all the same.
+		return http.StatusConflict, "this account already has a team"
+	}
+	if len(cur.CredsCiphertext) == 0 {
+		return http.StatusConflict, "the saved sign-in is gone; connect with your Fantrax credentials"
+	}
+	for _, t := range cur.OwnedTeams {
+		if t.ID == teamID {
+			return 0, ""
+		}
+	}
+	return http.StatusBadRequest, "that team is not one of the teams this Fantrax account controls"
 }
 
 // connectStatusOut is GET /v1/connect's body for a tenant that has a connection
@@ -233,6 +336,11 @@ type connectStatusOut struct {
 	TeamID         string        `json:"team_id"`
 	LastError      string        `json:"last_error"`
 	LastVerifiedAt wiretime.Time `json:"last_verified_at"`
+
+	// OwnedTeams is the set to choose between, present only while LastError
+	// is ambiguous_team and omitted otherwise. POST /v1/connect {"team_id"}
+	// answers it.
+	OwnedTeams []OwnedTeam `json:"owned_teams,omitempty"`
 }
 
 // connectPutAttempts bounds handleConnect's re-read-and-retry on a lost
