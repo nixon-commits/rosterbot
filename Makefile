@@ -1,4 +1,4 @@
-.PHONY: build build-modules check-pins install lint lint-install lint-version test test-modules run dry-run run-all clean-cache
+.PHONY: build build-modules check-pins check-cdk-cli cdk-version install lint lint-install lint-version test test-modules run dry-run run-all clean-cache
 
 build: check-pins build-modules
 	go build -o rosterbot .
@@ -53,6 +53,41 @@ check-pins:
 	n=$$(sort -u "$$tmp" | wc -l | tr -d ' '); \
 	rm -f "$$tmp"; \
 	printf '  pins agree (%s version-pinned replace site(s))\n' "$$n"
+
+# The CDK CLI version CodeBuild installs. buildspec.yml is its ONE home; this
+# target reads it so the check below and CI can never test a different string
+# than the deploy uses.
+cdk-version:
+	@sed -n 's/^ *CDK_VERSION: *"\(.*\)" *$$/\1/p' buildspec.yml
+
+# Synthesize infra/ with the PINNED CDK CLI (rosterbot-ggbr).
+#
+# dependabot bumps aws-cdk-go in infra/go.mod, but the CLI pin is an npm
+# version in buildspec.yml that nothing bumps. The library writes a cloud
+# assembly whose schema the CLI must be new enough to read. When the library
+# outgrows the pin, every Go gate stays green (it is a CLI-reads-output
+# failure, not a compile failure) and the first signal is a failed `cdk deploy`
+# in CodeBuild AFTER the image was pushed (2026-10-29, build 6c197eec).
+#
+# Running the same synth here turns that into a failed PR. Measured
+# 2026-11-18 against aws-cdk-go 2.277.0: CLI 2.1146.1 synthesizes, CLI
+# 2.1128.1 fails with "Cloud assembly schema version mismatch", so the check
+# does go red on the defect it exists for. It needs no AWS credentials.
+#
+# Not part of `make build`: it needs npm and the network. A missing npx or an
+# unreadable pin is a hard error, not a skip, for the reason check-pins gives.
+check-cdk-cli:
+	@command -v npx >/dev/null 2>&1 || { echo "check-cdk-cli: npx not found (required)" >&2; exit 1; }
+	@v=$$($(MAKE) -s cdk-version); \
+	[ -n "$$v" ] || { echo "check-cdk-cli: no CDK_VERSION found in buildspec.yml" >&2; exit 1; }; \
+	if out=$$( cd infra && npx --yes "aws-cdk@$$v" synth --all -c enableBuild=true --quiet 2>&1 ); then \
+	  printf '  cdk synth ok with pinned CLI %s\n' "$$v"; \
+	else \
+	  printf '%s\n' "$$out" | tail -20 >&2; \
+	  echo "check-cdk-cli: synth FAILED with pinned CLI $$v" >&2; \
+	  echo "  if the message is a schema version mismatch, raise CDK_VERSION in buildspec.yml" >&2; \
+	  exit 1; \
+	fi
 
 # Pinned so an upstream golangci-lint release cannot turn CI red with no code
 # change. CI installs exactly this version via `make lint-install`, so the

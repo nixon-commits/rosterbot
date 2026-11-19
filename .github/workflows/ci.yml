@@ -94,6 +94,15 @@ jobs:
       - name: Build nested Go modules (lambda/, opsnotify/, infra/)
         run: make build-modules
 
+      # Synthesize with the CDK CLI version CodeBuild installs. A dependabot
+      # bump to aws-cdk-go can outgrow that pin with every Go gate still green;
+      # until this step the first signal was a failed `cdk deploy` on main,
+      # after the image had been pushed (rosterbot-ggbr). The pin is read from
+      # buildspec.yml by the make target, so there is no second copy here.
+      # Node and npx are preinstalled on the runner image.
+      - name: Synth with the pinned CDK CLI
+        run: make check-cdk-cli
+
       # `make test`, not `go test ./internal/...`. The nested modules
       # (lambda/, opsnotify/, infra/) have their own go.mod, so the root test
       # run never descends into them — and CI called the root run directly,
