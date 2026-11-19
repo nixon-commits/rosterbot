@@ -38,7 +38,12 @@ var userCmd = &cobra.Command{
 // was connect itself, which can no longer reach that line. A teamless record
 // was therefore unrepairable without hand-editing DynamoDB.
 //
-// The operator's own record is the case that matters: neither migrate-identity
+// Since self-serve signup (rosterbot-kr89) connect DISCOVERS the team when the
+// record names none, so a teamless record is no longer stuck — this command is
+// now how an operator names a team deliberately, for instance to settle which
+// of several owned teams an invited account is for.
+//
+// The operator's own record was the case that mattered: neither migrate-identity
 // nor the invite bootstrap sets a TeamID.
 var userSetTeamCmd = &cobra.Command{
 	Use:   "set-team",

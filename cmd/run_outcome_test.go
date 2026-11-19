@@ -25,8 +25,11 @@ func TestConnectTenant_RouteTenantFailureRecordsTheRunOutcome(t *testing.T) {
 	t.Setenv(runOutcomeFileEnv, path)
 
 	conns := pendingConn(t)
-	conns.conn.TeamID = "" // no team assigned: an ordinary tenant fault
+	conns.conn.TeamID = "" // no team named...
 	d := postAuthDeps(t, conns, &memFeed{}, &bytes.Buffer{})
+	// ...and Fantrax reports none: an ordinary tenant fault (no_team). An empty
+	// team alone no longer fails since discovery (rosterbot-kr89).
+	d.teams = ownedTeams()
 
 	if err := connectTenant(context.Background(), "alice", d); err != nil {
 		t.Fatalf("connectTenant returned %v; a tenant-actionable failure must exit 0", err)

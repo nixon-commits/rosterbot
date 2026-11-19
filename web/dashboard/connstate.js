@@ -49,9 +49,12 @@ export const FAILURE_COPY = {
     "sometimes works.",
   team_not_owned: "Those credentials do not control the team you were invited for.",
   no_team:
-    "Your Fantrax sign-in worked. What's missing is a team: this account has " +
-    "no Fantrax team assigned, and only an admin can assign one — re-entering " +
-    "your password won't change this.",
+    "Your Fantrax sign-in worked, but that Fantrax account does not control a " +
+    "team in this league. Reconnect with the Fantrax account that owns your team.",
+  ambiguous_team:
+    "Your Fantrax sign-in worked, but that Fantrax account controls more than " +
+    "one team in this league. Choose your team in the RosterBot app to finish " +
+    "connecting.",
   team_claimed: "That Fantrax team is already claimed by another account.",
   verification_interrupted:
     "Your Fantrax sign-in worked — your password is not the problem. Something " +
@@ -76,7 +79,8 @@ export const CONNECT_CHIP = {
   bot_challenge: "blocked as a bot",
   login_challenge_or_timeout: "sign-in did not complete",
   team_not_owned: "team not owned",
-  no_team: "no team assigned",
+  no_team: "no team in this league",
+  ambiguous_team: "several teams, none chosen",
   team_claimed: "team already claimed",
   verification_interrupted: "sign-in worked, check did not finish",
   check_failed: "check never reached fantrax",

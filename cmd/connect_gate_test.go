@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ func TestProveTeam(t *testing.T) {
 		team  string
 		owned []string
 		want  string
+		proof string // the team a passing case must prove; defaults to team
 	}{
 		{
 			name:  "team is among those the credentials control",
@@ -42,28 +44,43 @@ func TestProveTeam(t *testing.T) {
 			want:  lineupapi.ConnErrTeamNotOwned,
 		},
 		{
-			name:  "no team on the record, so there is nothing to prove",
+			// DISCOVERY (self-serve signup, spec D3). This case used to pin the
+			// opposite — rosterbot-crq.18 kept a sole owned team un-bound so the
+			// admin's invite stayed a cross-check — and it was edited rather
+			// than deleted, as that case's own comment asked: the trade was
+			// revisited on purpose, for accounts that have no invite at all.
+			name:  "no team named and Fantrax reports exactly one: adopt it",
 			team:  "",
 			owned: []string{"team-3"},
-			want:  lineupapi.ConnErrNoTeam,
+			want:  "",
+			proof: "team-3",
 		},
 		{
-			// Pins the decision taken in rosterbot-crq.18 rather than merely the
-			// current behaviour. Binding the sole owned team here would be a
-			// defensible product choice, but it discards the admin's invite as
-			// an independent cross-check on a misdirected invitation. If that
-			// trade is revisited it should be by editing this case, not by
-			// discovering the gate quietly stopped firing.
-			name:  "a single owned team is still not auto-bound",
+			name:  "no team named and Fantrax reports several: never pick one",
 			team:  "",
-			owned: []string{"team-3"},
-			want:  lineupapi.ConnErrNoTeam,
+			owned: []string{"team-3", "team-7"},
+			want:  lineupapi.ConnErrAmbiguousTeam,
 		},
 		{
-			name:  "ownership could not be determined and no team was named",
+			name:  "no team named and Fantrax reports none",
 			team:  "",
 			owned: nil,
 			want:  lineupapi.ConnErrNoTeam,
+		},
+		{
+			name:  "an empty id is not a team to adopt",
+			team:  "",
+			owned: []string{""},
+			want:  lineupapi.ConnErrNoTeam,
+		},
+		{
+			// The invite path is UNCHANGED by discovery: a named team is still
+			// verified, even when it is one of several.
+			name:  "a named team among several owned is verified, not ambiguous",
+			team:  "team-7",
+			owned: []string{"team-3", "team-7"},
+			want:  "",
+			proof: "team-7",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,8 +88,12 @@ func TestProveTeam(t *testing.T) {
 			if class != tc.want {
 				t.Fatalf("proveTeam(%q, %v) class = %q, want %q", tc.team, tc.owned, class, tc.want)
 			}
-			if tc.want == "" && proof.teamID != tc.team {
-				t.Errorf("a proven team yielded proof %q, want %q", proof.teamID, tc.team)
+			wantProof := tc.proof
+			if wantProof == "" {
+				wantProof = tc.team
+			}
+			if tc.want == "" && proof.teamID != wantProof {
+				t.Errorf("a proven team yielded proof %q, want %q", proof.teamID, wantProof)
 			}
 			if tc.want != "" && proof.teamID != "" {
 				t.Errorf("a REJECTED team still yielded a usable proof %q", proof.teamID)
@@ -81,14 +102,25 @@ func TestProveTeam(t *testing.T) {
 	}
 }
 
-// TestProveTeam_EmptyTeamNeverReportsProven states the security-carrying half
-// on its own: a caller treating "" as proven marks a tenant verified without
-// Fantrax having confirmed anything.
-func TestProveTeam_EmptyTeamNeverReportsProven(t *testing.T) {
-	for _, owned := range [][]string{nil, {}, {"team-1"}, {"team-1", "team-2"}} {
-		if _, class := proveTeam("", owned); class == "" {
-			t.Fatalf("proveTeam(\"\", %v) reported the team as proven; an empty team "+
-				"means there is nothing MyTeamIDs could have confirmed", owned)
+// TestProveTeam_NeverProvesATeamFantraxDidNotName states the security-carrying
+// half on its own. It replaced TestProveTeam_EmptyTeamNeverReportsProven when
+// discovery landed: an empty team may now be proven, but ONLY as a team
+// MyTeamIDs itself named, and only when that answer is a single team.
+func TestProveTeam_NeverProvesATeamFantraxDidNotName(t *testing.T) {
+	for _, team := range []string{"", "team-9"} {
+		for _, owned := range [][]string{nil, {}, {""}, {"team-1"}, {"team-1", "team-2"}} {
+			proof, class := proveTeam(team, owned)
+			if class != "" {
+				continue
+			}
+			if proof.teamID == "" || !slices.Contains(owned, proof.teamID) {
+				t.Fatalf("proveTeam(%q, %v) proved %q, which Fantrax did not name",
+					team, owned, proof.teamID)
+			}
+			if team == "" && len(owned) != 1 {
+				t.Fatalf("proveTeam(\"\", %v) picked %q out of %d teams",
+					owned, proof.teamID, len(owned))
+			}
 		}
 	}
 }

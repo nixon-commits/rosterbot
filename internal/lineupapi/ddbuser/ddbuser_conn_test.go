@@ -215,3 +215,42 @@ func TestConnection_WriteAtAVersionAfterTheRecordIsGoneIsRefused(t *testing.T) {
 		t.Fatal("a refused write resurrected the deleted record")
 	}
 }
+
+// TestConnection_OwnedTeamsRoundTripAndClear: the owned set is what a team
+// choice is checked against (lineupapi.handleConnect), so a store that dropped
+// it would turn every ambiguous connection into a dead end, and one that kept
+// it after the connect task cleared it would keep offering a stale choice.
+func TestConnection_OwnedTeamsRoundTripAndClear(t *testing.T) {
+	st := ddbuser.NewWithAPI(ddbusertest.New(), "test-table")
+	ctx := context.Background()
+
+	want := []lineupapi.OwnedTeam{{ID: "7", Name: "Dingers"}, {ID: "12"}}
+	if err := st.PutConnection(ctx, &lineupapi.FantraxConnection{
+		UserID:     "alice",
+		Status:     lineupapi.ConnNeedsReconnect,
+		LastError:  lineupapi.ConnErrAmbiguousTeam,
+		OwnedTeams: want,
+	}); err != nil {
+		t.Fatalf("PutConnection: %v", err)
+	}
+	got, ok, err := st.GetConnection(ctx, "alice")
+	if err != nil || !ok {
+		t.Fatalf("GetConnection = (%v, %v, %v)", got, ok, err)
+	}
+	if len(got.OwnedTeams) != 2 || got.OwnedTeams[0] != want[0] || got.OwnedTeams[1] != want[1] {
+		t.Fatalf("OwnedTeams = %+v, want %+v", got.OwnedTeams, want)
+	}
+
+	got.OwnedTeams = nil
+	got.Status, got.LastError = lineupapi.ConnVerified, ""
+	if err := st.PutConnection(ctx, got); err != nil {
+		t.Fatalf("PutConnection (clear): %v", err)
+	}
+	again, _, err := st.GetConnection(ctx, "alice")
+	if err != nil {
+		t.Fatalf("GetConnection: %v", err)
+	}
+	if len(again.OwnedTeams) != 0 {
+		t.Fatalf("OwnedTeams = %+v after a write that cleared it", again.OwnedTeams)
+	}
+}

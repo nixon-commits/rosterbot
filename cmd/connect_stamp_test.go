@@ -29,8 +29,11 @@ func cloudflareLogin(lineupapi.FantraxCreds) loginEvidence {
 func TestConnectTenant_StampsTheRunOntoTheTenantFaultItWrites(t *testing.T) {
 	t.Setenv("RUN_ID", "task-1")
 	conns := pendingConn(t)
-	conns.conn.TeamID = "" // no team assigned: the failure Jon actually saw
+	conns.conn.TeamID = "" // no team named: the failure Jon actually saw...
 	d := postAuthDeps(t, conns, &memFeed{}, &bytes.Buffer{})
+	// ...which since discovery (rosterbot-kr89) is reached only when Fantrax
+	// also reports no team for the credentials.
+	d.teams = ownedTeams()
 
 	if err := connectTenant(context.Background(), "alice", d); err != nil {
 		t.Fatalf("connectTenant returned %v; a tenant-actionable failure must exit 0", err)
