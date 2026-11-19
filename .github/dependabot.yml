@@ -34,3 +34,37 @@ updates:
     ignore:
       - dependency-name: "github.com/chromedp/chromedp"
       - dependency-name: "github.com/chromedp/cdproto"
+
+  # The workflow actions (checkout, setup-go, cache). Nothing else moves them,
+  # and an action on a retired Node runtime fails the PR gate with no code
+  # change. One grouped PR a week (rosterbot-nhpg).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The Dockerfile's base images.
+  #
+  # Know what this does NOT do: both bases use floating tags
+  # (golang:1.26-bookworm, debian:bookworm-slim), and Dependabot opens a PR
+  # only when a tag's VERSION changes. A patched image behind the same tag
+  # arrives through the next image build, not through a PR here, and a name
+  # tag such as bookworm-slim has no version to compare. What catches an aged
+  # image is the ECR scan on push (infra/infra.go).
+  #
+  # golang minor and major bumps are held back on purpose: the Go version is
+  # also stated in go.mod, in buildspec.yml's runtime-versions and implied by
+  # the pinned golangci-lint, and all of them must move together by hand.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "golang"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"

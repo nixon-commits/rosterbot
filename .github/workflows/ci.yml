@@ -15,10 +15,21 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR cancels that PR's older run: its result no longer
+# describes the head. A push to main is never cancelled, because each main
+# commit is deployed and its own result must exist (rosterbot-2jxo).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     name: build + test
     runs-on: ubuntu-latest
+    # A normal run takes 2 to 5 minutes. Without a limit a hung step runs for
+    # the 360-minute default, which matters most on a private repository's
+    # metered minutes.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
