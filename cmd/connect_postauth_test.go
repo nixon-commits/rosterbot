@@ -27,6 +27,7 @@ type postAuthConns struct {
 
 	claimErr error
 	putErr   error
+	claimed  []string // every team ClaimTeam was asked for, in order
 
 	// getErr, when set, makes GetConnection fail outright — the "we could not
 	// even read the record" case (rosterbot-spb9), distinct from conn == nil
@@ -53,7 +54,8 @@ func (c *postAuthConns) PutConnection(_ context.Context, conn *lineupapi.Fantrax
 	return nil
 }
 
-func (c *postAuthConns) ClaimTeam(context.Context, lineupapi.UserID, string) error {
+func (c *postAuthConns) ClaimTeam(_ context.Context, _ lineupapi.UserID, teamID string) error {
+	c.claimed = append(c.claimed, teamID)
 	return c.claimErr
 }
 
@@ -76,7 +78,7 @@ func postAuthDeps(t *testing.T, conns *postAuthConns, feed *memFeed, out *bytes.
 		opener: stubOpener{},
 		sealer: stubSealer{},
 		login:  provenLogin,
-		teams:  func() ([]string, error) { return []string{"tenant-team"}, nil },
+		teams:  func() ([]lineupapi.OwnedTeam, error) { return []lineupapi.OwnedTeam{{ID: "tenant-team"}}, nil },
 		feed:   feed,
 		push:   func(string) { t.Error("a post-auth failure pushed to the operator's phone") },
 		out:    out,
@@ -104,7 +106,7 @@ func pendingConn(t *testing.T) *postAuthConns {
 func TestConnectTenant_PostLoginTeamLookupFailureDoesNotBlameTheTenant(t *testing.T) {
 	conns, feed, out := pendingConn(t), &memFeed{}, &bytes.Buffer{}
 	d := postAuthDeps(t, conns, feed, out)
-	d.teams = func() ([]string, error) { return nil, errors.New("fantrax: connection reset by peer") }
+	d.teams = func() ([]lineupapi.OwnedTeam, error) { return nil, errors.New("fantrax: connection reset by peer") }
 
 	err := connectTenant(context.Background(), "alice", d)
 
@@ -197,7 +199,7 @@ func TestConnectTenant_NoPostProofFailureIsLeftPending(t *testing.T) {
 		{
 			name: "the team-ownership lookup fails",
 			apply: func(d *connectDeps, _ *postAuthConns) {
-				d.teams = func() ([]string, error) { return nil, errors.New("fantrax 502") }
+				d.teams = func() ([]lineupapi.OwnedTeam, error) { return nil, errors.New("fantrax 502") }
 			},
 		},
 		{
@@ -659,11 +661,12 @@ func TestProvenRunOwnershipFault_RefusesANonOwnershipClass(t *testing.T) {
 		}
 	}
 
-	// The three real ones still go through, or the guard would be a wall.
+	// The real ones still go through, or the guard would be a wall.
 	for _, class := range []string{
 		lineupapi.ConnErrTeamNotOwned,
 		lineupapi.ConnErrNoTeam,
 		lineupapi.ConnErrTeamClaimed,
+		lineupapi.ConnErrAmbiguousTeam,
 	} {
 		conns.put = nil
 		if err := p.ownershipFault(class); err != nil {

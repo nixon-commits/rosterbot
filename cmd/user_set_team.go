@@ -38,7 +38,12 @@ var userCmd = &cobra.Command{
 // was connect itself, which can no longer reach that line. A teamless record
 // was therefore unrepairable without hand-editing DynamoDB.
 //
-// The operator's own record is the case that matters: neither migrate-identity
+// Since self-serve signup (rosterbot-kr89) connect DISCOVERS the team when the
+// record names none, so a teamless record is no longer stuck — this command is
+// now how an operator names a team deliberately, for instance to settle which
+// of several owned teams an invited account is for.
+//
+// The operator's own record was the case that mattered: neither migrate-identity
 // nor the invite bootstrap sets a TeamID.
 var userSetTeamCmd = &cobra.Command{
 	Use:   "set-team",
@@ -91,11 +96,11 @@ func setTeam(ctx context.Context, users lineupapi.UserStore, uid lineupapi.UserI
 	if uid == "" {
 		return fmt.Errorf("user set-team: --user is required")
 	}
-	// An empty team is precisely the state connect refuses with no_team, so
-	// writing one would be a command whose only effect is recreating the bug it
-	// exists to fix.
+	// An empty team names nothing for connect to verify; connect would then
+	// discover the team itself (rosterbot-kr89), so writing one is not an
+	// assignment.
 	if teamID == "" {
-		return fmt.Errorf("user set-team: --team is required (an empty team is what connect refuses as no_team)")
+		return fmt.Errorf("user set-team: --team is required")
 	}
 
 	u, ok, err := users.GetUser(ctx, uid)

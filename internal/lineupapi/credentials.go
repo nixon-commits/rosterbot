@@ -110,21 +110,33 @@ const (
 	// the invite named. Fantrax's own MyTeamIDs is the authority here.
 	ConnErrTeamNotOwned = "team_not_owned"
 
-	// ConnErrNoTeam — the user's record names no team, so there is nothing for
-	// MyTeamIDs to confirm.
+	// ConnErrNoTeam — that Fantrax account controls no team in this league.
 	//
-	// This is an ADMIN error surfaced as a connection failure: `invite` treats
-	// --team as optional, and neither migrate-identity nor the invite bootstrap
-	// sets one, so a perfectly valid Fantrax login can arrive with no team
-	// attached. It is a distinct class from TeamNotOwned
-	// because the remedy is different — the user's credentials are fine and
-	// re-entering them cannot help; someone has to assign the team.
+	// The remedy is the USER's: sign in with the Fantrax account that owns the
+	// team. Until self-serve signup this class meant something else — the
+	// record named no team and "someone has to assign the team" — because the
+	// connect task could only VERIFY a team an admin had named. It now
+	// DISCOVERS the team when none was named (proveTeam in cmd/connect.go), so
+	// an empty team on the record no longer reaches this class by itself; an
+	// empty MyTeamIDs does. Records written before that change failed it for
+	// the admin reason and carry the same string.
 	//
 	// Without this class the empty team was not an error at all: both ownership
 	// checks were guarded on a non-empty TeamID and the ConnVerified assignment
 	// after them was not, so the connection was marked proven having proven
 	// nothing (rosterbot-crq.18).
 	ConnErrNoTeam = "no_team"
+
+	// ConnErrAmbiguousTeam — the record named no team and Fantrax says these
+	// credentials control MORE THAN ONE team in this league.
+	//
+	// A new class because the remedy is new: the user chooses. Taking the
+	// first would bind an account to the wrong roster and, with AutoApply on,
+	// eventually write to it. The teams to choose between travel on the
+	// record (FantraxConnection.OwnedTeams) — written by the connect task
+	// from Fantrax's own answer — and POST /v1/connect accepts a choice only
+	// from that set, after which the connect task proves it again.
+	ConnErrAmbiguousTeam = "ambiguous_team"
 
 	// ConnErrTeamClaimed — another tenant already holds that team.
 	ConnErrTeamClaimed = "team_claimed"
@@ -219,6 +231,13 @@ var ErrConnectionConflict = errors.New("lineupapi: fantrax connection changed co
 // enforce.
 const ConnUnversioned IdentityVersion = "0"
 
+// OwnedTeam is one Fantrax team a set of credentials controls. Name is for
+// display only — a team choice is matched on ID.
+type OwnedTeam struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
 // FantraxConnection is one tenant's link to their Fantrax account.
 //
 // The two ciphertext fields are never decrypted by anything that serves HTTP —
@@ -239,6 +258,24 @@ type FantraxConnection struct {
 
 	Status    ConnStatus `json:"status"`
 	LastError string     `json:"last_error,omitempty"`
+
+	// OwnedTeams is the set Fantrax said these credentials control, kept ONLY
+	// while LastError is ConnErrAmbiguousTeam. It is what a team choice is
+	// checked against (handleConnect), so it is written by the connect task
+	// alone and never from a request. Every other outcome clears it: a stale
+	// set would let a later choice name a team Fantrax no longer confirms —
+	// the connect task would still refuse it, but the API should not offer it.
+	OwnedTeams []OwnedTeam `json:"owned_teams,omitempty"`
+
+	// ConnectAttempts and ConnectWindowStart are the connect budget for an
+	// account with no proven team (connectBudget in connect.go): how many
+	// checks this account has started since the window opened. Written by
+	// POST /v1/connect alone; every other writer reads the record and puts it
+	// back whole, which carries them along. The window is Unix seconds rather
+	// than a time.Time because attributevalue marshals a zero time as a real
+	// year-1 timestamp instead of omitting it.
+	ConnectAttempts    int   `json:"connect_attempts,omitempty"`
+	ConnectWindowStart int64 `json:"connect_window_start,omitempty"`
 
 	// LastConnectRun attributes the two fields above to the connect run that
 	// produced them, so GET /v1/runs can say what a specific row concluded

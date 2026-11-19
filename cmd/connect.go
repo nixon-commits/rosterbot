@@ -114,7 +114,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		opener: opener,
 		sealer: sealer,
 		login:  fantraxLogin,
-		teams:  myTeamIDs,
+		teams:  myTeams,
 		feed:   feed,
 		push:   notifyOperator,
 		out:    out,
@@ -149,7 +149,7 @@ type connectDeps struct {
 	// login and teams are the two Fantrax round trips, seams because Chrome and
 	// a real account are not available to a unit test.
 	login func(lineupapi.FantraxCreds) loginEvidence
-	teams func() ([]string, error)
+	teams func() ([]lineupapi.OwnedTeam, error)
 
 	feed feedWriter
 	push func(string)
@@ -527,11 +527,13 @@ func (p provenRun) interrupted(stage string, cause error) error {
 
 // ownershipFault records the one kind of post-login failure that IS about the
 // tenant: Fantrax says these credentials do not control the team they were
-// invited for, no team is assigned, or another account holds it. Those demote,
-// and should — re-connecting with the right account is the remedy.
+// invited for, control no team in this league, control several with none
+// named, or another account holds the team. Those demote, and should —
+// re-connecting with the right account, or choosing the team, is the remedy.
 func (p provenRun) ownershipFault(class string) error {
 	switch class {
-	case lineupapi.ConnErrTeamNotOwned, lineupapi.ConnErrNoTeam, lineupapi.ConnErrTeamClaimed:
+	case lineupapi.ConnErrTeamNotOwned, lineupapi.ConnErrNoTeam, lineupapi.ConnErrTeamClaimed,
+		lineupapi.ConnErrAmbiguousTeam:
 	default:
 		return fmt.Errorf("connect: refusing to blame %s's credentials for %s, which is "+
 			"not an ownership failure", p.run.uid, class)
@@ -543,10 +545,11 @@ func (p provenRun) ownershipFault(class string) error {
 func (p provenRun) finish(info *fantraxUserInfo) error {
 	c := p.run
 
-	// OWNERSHIP IS PROVEN, NOT ASSERTED. The invite carries the team an admin
-	// BELIEVES this person manages; MyTeamIDs is Fantrax stating which teams
-	// these credentials actually control.
-	owned, err := c.teams()
+	// OWNERSHIP IS PROVEN, NOT ASSERTED. An invite carries the team an admin
+	// BELIEVES this person manages, and a signed-up account carries none;
+	// MyTeamIDs is Fantrax stating which teams these credentials actually
+	// control, and it is the only thing a proof is built from either way.
+	ownedTeams, err := c.teams()
 	if err != nil {
 		// THE BEAD'S HEADLINE SITE. This used to record
 		// login_challenge_or_timeout and needs_reconnect: a network blip
@@ -554,15 +557,31 @@ func (p provenRun) finish(info *fantraxUserInfo) error {
 		// accepted no longer work.
 		return p.interrupted("the Fantrax team-ownership lookup", err)
 	}
+	owned := make([]string, 0, len(ownedTeams))
+	for _, t := range ownedTeams {
+		owned = append(owned, t.ID)
+	}
 	proof, class := proveTeam(c.conn.TeamID, owned)
+	// The owned set rides on the record for ONE class only: it is what the
+	// user's choice is checked against (lineupapi.handleConnect). Cleared
+	// here for every other outcome, verified included, so a set from an
+	// earlier ambiguous run cannot outlive the answer that replaced it.
+	c.conn.OwnedTeams = nil
 	if class != "" {
-		if class == lineupapi.ConnErrTeamNotOwned {
+		switch class {
+		case lineupapi.ConnErrTeamNotOwned:
 			fmt.Fprintf(c.w(), "credentials control %v, not %s\n", owned, c.conn.TeamID)
+		case lineupapi.ConnErrAmbiguousTeam:
+			c.conn.OwnedTeams = ownedTeams
+			fmt.Fprintf(c.w(), "credentials control %v and the record names no team; "+
+				"the tenant must choose\n", owned)
 		}
 		return p.ownershipFault(class)
 	}
-	// Claimed from the PROOF, not from conn.TeamID. They hold the same value
-	// here, but reading it off the proof means a future edit that drops
+	// Claimed from the PROOF, not from conn.TeamID. On the verify branch they
+	// hold the same value; on the discovery branch conn.TeamID is still empty
+	// and the proof is the ONLY place the team exists. Reading it off the
+	// proof also means a future edit that drops
 	// proveTeam stops compiling instead of silently claiming an unproven team —
 	// which is exactly how the previous `if conn.TeamID != ""` guards managed to
 	// look deliberate at both sites while nothing rejected an empty team at
@@ -821,8 +840,12 @@ func printLoginEvidence(out io.Writer, ev loginEvidence) {
 
 type fantraxUserInfo struct{ UserID, Email string }
 
-// myTeamIDs asks Fantrax which teams the current session controls.
-func myTeamIDs() ([]string, error) {
+// myTeams asks Fantrax which teams the current session controls.
+//
+// The ids are the authority (MyTeamIDs); the names are joined from the same
+// response's fantasyTeams list purely so an ambiguous-team picker has
+// something a person can read. A missing name is not an error.
+func myTeams() ([]lineupapi.OwnedTeam, error) {
 	client, err := auth_client.NewClient(os.Getenv("FANTRAX_LEAGUE_ID"), false)
 	if err != nil {
 		return nil, err
@@ -838,7 +861,16 @@ func myTeamIDs() ([]string, error) {
 	if len(resp.Responses) == 0 {
 		return nil, fmt.Errorf("fantrax returned no roster payload")
 	}
-	return resp.Responses[0].Data.MyTeamIDs, nil
+	data := resp.Responses[0].Data
+	names := make(map[string]string, len(data.FantasyTeams))
+	for _, ft := range data.FantasyTeams {
+		names[ft.ID] = ft.Name
+	}
+	owned := make([]lineupapi.OwnedTeam, 0, len(data.MyTeamIDs))
+	for _, id := range data.MyTeamIDs {
+		owned = append(owned, lineupapi.OwnedTeam{ID: id, Name: names[id]})
+	}
+	return owned, nil
 }
 
 // teamProof is evidence that Fantrax itself confirmed this tenant controls a
@@ -853,17 +885,40 @@ func myTeamIDs() ([]string, error) {
 // value is inert and markVerified refuses it.
 type teamProof struct{ teamID string }
 
-// proveTeam decides whether Fantrax has confirmed these credentials control the
-// team named on the tenant's record. It returns a usable proof and "" when they
-// do, and a zero proof plus a failure class when they do not.
+// proveTeam decides which team Fantrax has confirmed these credentials
+// control. It returns a usable proof and "" when there is exactly one answer,
+// and a zero proof plus a failure class when there is not.
 //
-// An empty team is a failure, never a pass. Binding the sole owned team instead
-// would be defensible, but it discards the admin's invite as an independent
-// cross-check on a misdirected invitation — a trade to take deliberately rather
-// than a default to fall into (rosterbot-crq.18).
+// TWO BRANCHES. A record that NAMES a team (an invite, or a choice the API
+// checked against OwnedTeams) is VERIFIED: the named team must be among those
+// Fantrax reports, exactly as before. A record that names none is DISCOVERED:
+// Fantrax's own answer is adopted when it is a single team.
+//
+// Discovery reverses rosterbot-crq.18, deliberately. That bead kept the empty
+// team a failure so the admin's invite stayed an independent cross-check on a
+// misdirected invitation. Self-serve signup has no invite to cross-check
+// against — the account was created by the person themselves — and the
+// authority is the same one the verify branch uses: Fantrax, asked directly
+// (RosterbotApp docs/superpowers/specs/2026-09-02-self-serve-signup-design.md,
+// D3). What crq.18 actually fixed still holds: no branch returns a proof
+// without MyTeamIDs having named that team.
+//
+// Two or more owned teams are NEVER resolved by taking the first.
 func proveTeam(connTeamID string, owned []string) (teamProof, string) {
 	if connTeamID == "" {
-		return teamProof{}, lineupapi.ConnErrNoTeam
+		switch len(owned) {
+		case 0:
+			return teamProof{}, lineupapi.ConnErrNoTeam
+		case 1:
+			if owned[0] == "" {
+				// An empty id is not a team; adopting it would forge the inert
+				// proof markVerified refuses.
+				return teamProof{}, lineupapi.ConnErrNoTeam
+			}
+			return teamProof{teamID: owned[0]}, ""
+		default:
+			return teamProof{}, lineupapi.ConnErrAmbiguousTeam
+		}
 	}
 	if !slices.Contains(owned, connTeamID) {
 		return teamProof{}, lineupapi.ConnErrTeamNotOwned
@@ -892,6 +947,7 @@ func markVerified(conn *lineupapi.FantraxConnection, p teamProof, fxrmSealed []b
 	conn.FantraxEmail = info.Email
 	conn.Status = lineupapi.ConnVerified
 	conn.LastError = ""
+	conn.OwnedTeams = nil
 	conn.LastVerifiedAt = now.UTC()
 	return nil
 }

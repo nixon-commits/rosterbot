@@ -130,6 +130,7 @@ func TestConnectFeed_EveryClassIsRoutedSomewhere(t *testing.T) {
 		lineupapi.ConnErrLoginChallengeOrTimeout,
 		lineupapi.ConnErrTeamNotOwned,
 		lineupapi.ConnErrNoTeam,
+		lineupapi.ConnErrAmbiguousTeam,
 		lineupapi.ConnErrTeamClaimed,
 		lineupapi.ConnErrVerificationInterrupted,
 		lineupapi.ConnErrCheckFailed,

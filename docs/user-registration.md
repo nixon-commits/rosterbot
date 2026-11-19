@@ -72,23 +72,92 @@ email and team uniqueness constraints are enforced while you are still looking
 at the terminal, rather than surfacing as a confusing failure when the invitee
 clicks their link.
 
-### A user with no team cannot connect
+### A user with no team: connect discovers it
 
-`--team` remains optional to the flag, because a record is still useful without
-one — the invitee can sign in and read the dashboard. What they cannot do is
-connect their Fantrax account: `connect` fails with `no_team`.
+`--team` is optional. The connect task proves ownership against Fantrax's own
+`MyTeamIDs` either way; what differs is what it compares.
 
-That refusal is deliberate and it is not a formality. The connect task exists to
-prove ownership against Fantrax's own `MyTeamIDs`, and an empty team gives it
-nothing to compare. Before this was enforced, an empty team skipped the
-ownership check entirely and the connection was recorded **verified** having
-proven nothing (rosterbot-crq.18).
+- **A team is named** (an invite with `--team`, `user set-team`, or a choice
+  the API accepted): connect **verifies** it. Not among the owned teams →
+  `team_not_owned`.
+- **No team is named** (an invite without `--team`, or a self-serve signup):
+  connect **discovers** it (rosterbot-kr89). Exactly one owned team in this
+  deployment's league is adopted and claimed. None → `no_team`. Two or more →
+  `ambiguous_team`; nothing is picked.
 
-`no_team` is an admin error wearing a user's clothes. The invitee's credentials
-are fine and re-entering them cannot help — someone has to assign the team. Note
-that the operator's own record is affected: neither `migrate-identity` nor the
-bootstrap profile sets a `TeamID`, so **the operator must have a team assigned
-before their own connect will succeed.**
+Discovery reverses rosterbot-crq.18's "an empty team is a failure" on purpose.
+What that bead fixed still holds: no path reaches **verified** without
+`MyTeamIDs` having named that exact team. Before crq.18 an empty team skipped
+the ownership check and the connection was recorded verified having proven
+nothing.
+
+`no_team` therefore now means **that Fantrax account controls no team in this
+league**, and the remedy is the user's: reconnect with the right Fantrax
+account. Records written before this change failed `no_team` for the old
+reason (no team assigned) and carry the same string.
+
+`ambiguous_team` stores the owned teams (id and name) on the connection
+record. `GET /v1/connect` serves them as `owned_teams` for that class only, and
+`POST /v1/connect {"team_id":"…"}` answers with a choice. The API accepts a
+choice only from that stored set, carries the sealed credentials over, and
+starts the connect task again — which then *verifies* the chosen team against
+Fantrax. A caller never asserts a team the server has not seen Fantrax report.
+
+## Self-serve signup
+
+`POST /v1/signup` (rosterbot-0kjf) lets a person create their own account with
+no invite. It is the **only** tenant-creating route reachable without a caller.
+
+```
+POST /v1/signup   {"email":"someone@example.com","display_name":"Someone"}
+201  {"user_id":"…","enrollment_token":"…"}
+400  malformed body, invalid email, display name over 80 characters
+409  the email already has an account (or a signup for it began under 2 minutes ago)
+429  too many unproven signup accounts exist (Retry-After: 3600)
+501  user or enrollment store not configured
+```
+
+The account is an ordinary active member with no team, marked
+`origin: "signup"`. The enrollment token is the same primitive an invite uses,
+with a 15-minute life, and the client spends it at once on
+`/v1/auth/register/*`. The email is **unattested**: nobody vouched for it.
+
+**What the account can do** is bounded where it always was. With no connection
+record `AuthorizeRun` denies every job and the dispatch fan-out skips it. It
+becomes a usable tenant only by proving, through a live Fantrax login, that it
+controls an unclaimed team in this league (`ClaimTeam`).
+
+**How many can exist** is bounded in `internal/lineupapi/signup.go`, by three
+rules that share one predicate (created by signup, no proven team) and so never
+touch an account an admin made:
+
+| Rule | Effect |
+|---|---|
+| Cap | At most `Config.SignupMaxUnproven` (default 50) such accounts; then `429`. A soft limit, not a security boundary. |
+| Cleanup | Runs inside each signup request. Deletes such an account with no passkey after 1 hour, and any such account — connected or not — 7 days after creation. A failed connection therefore cannot hold a slot for ever. Any read it cannot make keeps the account. |
+| Replace | A repeat signup with the same email deletes an attempt that never got a passkey, once that attempt is 2 minutes old. Younger than that it answers `409`, so a person who merely knows the address cannot delete a ceremony in progress. |
+
+**Connect budget.** Signup makes `POST /v1/connect` reachable by anyone, and
+each submission is a headless Fantrax login from this deployment whose verdict
+`GET /v1/connect` reports. An account with **no proven team** may therefore
+start 5 checks per 24 hours (`connectBudget` in `connect.go`); the sixth
+answers `429` with `Retry-After`. A team choice spends from the same budget. A
+tenant with a proven team is never counted. Known limit: the count lives on the
+connection record, so deleting the account and signing up again starts a new
+budget — bounded by the signup cap and a passkey ceremony per five attempts,
+but not a deployment-wide ceiling.
+
+`register/finish` re-reads the user after writing the passkey and takes the
+passkey back if the account was deleted during the ceremony.
+
+Accepted risks: `409` reveals that an address has an account (there is no mail
+infrastructure to do better), an address can be claimed by someone who does not
+own it, and an attacker can hold the cap full for up to 7 days per batch of 50
+passkey ceremonies.
+
+The route is reached through an **exact-path** exception to `cfg.authorize` in
+`Handler`. Being absent from `adminOnlyRoutes` does not make a route public;
+that list only separates members from admins.
 
 On AWS the command needs `STATE_BUCKET` and `IDENTITY_TABLE`; locally it writes
 to `.lineup/` and needs neither.

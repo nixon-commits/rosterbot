@@ -142,7 +142,11 @@ func connectFailureMessage(class string) string {
 	case lineupapi.ConnErrTeamNotOwned:
 		return "Those credentials do not control the team you were invited for."
 	case lineupapi.ConnErrNoTeam:
-		return "No Fantrax team is assigned to your account yet — ask the admin to set one."
+		return "That Fantrax account does not control a team in this league. " +
+			"Reconnect with the Fantrax account that owns your team."
+	case lineupapi.ConnErrAmbiguousTeam:
+		return "That Fantrax account controls more than one team in this league. " +
+			"Choose your team in the app to finish connecting."
 	case lineupapi.ConnErrTeamClaimed:
 		return "That Fantrax team is already claimed by another account."
 	case lineupapi.ConnErrVerificationInterrupted:

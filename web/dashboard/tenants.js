@@ -104,9 +104,9 @@ function tenantRow(t, root) {
   if (parked) who.append(el("span", "badge badge-failed", "parked"));
   tr.append(who);
 
-  // An unset team is not blank information: connect refuses a tenant whose
-  // record names no team (no_team), so this cell reads the same way the Passkey
-  // column's "None yet" does — invited, but not yet able to finish.
+  // An unset team is not blank information: nobody has named a team, so
+  // connect will discover it from the tenant's own Fantrax login (and it stays
+  // unset until that connect is proven).
   //
   // Only the EMPTY case is claimed here. team_id is a merged field
   // (internal/lineupapi/tenants.go falls back to the connection record's team
@@ -526,9 +526,9 @@ function inviteCard(root) {
   name.placeholder = "display name";
   const team = el("input");
   team.type = "text";
-  // Named for its consequence, not its optionality: every pilot tester was
-  // invited with this box empty and hit connect's no_team wall.
-  team.placeholder = "Fantrax team id (optional — without it they cannot connect yet)";
+  // Optional since rosterbot-kr89: with a team, connect verifies it; without
+  // one, connect discovers it from the invitee's Fantrax login.
+  team.placeholder = "Fantrax team id (optional — connect finds it if left empty)";
   const submit = el("button", "primary", "Mint invite link");
   const status = el("p", "muted small");
   form.append(email, name, team, submit, status);

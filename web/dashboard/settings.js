@@ -83,12 +83,15 @@ function fantraxCard(me) {
   let [label, tone] = conn
     ? CONNECTION_COPY[conn.status] || [conn.status, "badge-info"]
     : ["Not connected", "badge-info"];
-  // no_team is the one failure where the credentials are FINE — the sign-in
-  // succeeded and the refusal came from the missing team assignment. The
+  // no_team and ambiguous_team are the failures where the credentials are
+  // FINE — the sign-in succeeded and the refusal was about which team. The
   // generic needs_reconnect headline ("your saved credentials no longer
   // work") sent people back to re-typing a password that was never wrong.
   if (conn && conn.last_error === "no_team") {
-    [label, tone] = ["Not connected — no team assigned to this account", "badge-failed"];
+    [label, tone] = ["Not connected — that Fantrax account has no team in this league", "badge-failed"];
+  }
+  if (conn && conn.last_error === "ambiguous_team") {
+    [label, tone] = ["Not connected — choose your team in the app", "badge-failed"];
   }
 
   const badge = el("span", "badge " + tone, label);
