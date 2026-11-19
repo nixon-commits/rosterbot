@@ -51,5 +51,7 @@ ENV CHROME_BIN=/usr/bin/chromium
 WORKDIR /app
 COPY --from=build /out/rosterbot /app/rosterbot
 COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+# entrypoint.sh runs the bot under coreutils `timeout`. Fail the BUILD if the
+# base image ever stops shipping it, rather than every job at launch.
+RUN chmod +x /app/entrypoint.sh && command -v timeout
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]

@@ -117,9 +117,29 @@ trap on_term TERM INT
 # most -- a bot that is hung and will never return on its own. `wait` IS
 # interrupted by a trapped signal. The braces+echo still capture the bot's real
 # exit code through the pipe (POSIX sh has no PIPESTATUS).
-{ ./rosterbot "$@" 2>&1; echo $? >/tmp/rosterbot.rc; } | tee /tmp/rosterbot.log &
+#
+# The bot also runs under a TIME LIMIT (RUN_TIMEOUT_SECONDS, default 3 hours).
+# Without one, a bot that never returns stays RUNNING: the task bills until a
+# person notices, the STOPPED-event alert never fires because nothing stopped,
+# and the heartbeat counts the RUNNING record as a launch. `timeout` turns that
+# into exit 124, which is an ordinary FAILED ledger row on the existing alert
+# path. -k 30 sends KILL to a bot that ignores TERM. The default is far above
+# any job's normal duration on purpose: it bounds a hang, it does not police a
+# slow run.
+RUN_TIMEOUT_SECONDS="${RUN_TIMEOUT_SECONDS:-10800}"
+{ timeout -k 30 "$RUN_TIMEOUT_SECONDS" ./rosterbot "$@" 2>&1; echo $? >/tmp/rosterbot.rc; } | tee /tmp/rosterbot.log &
 wait $!
 rc=$(cat /tmp/rosterbot.rc 2>/dev/null || echo 1)
+
+# 124 = the limit expired. Same policy as on_term: record it, and do NOT
+# publish a partial ./dist. A bot that also ignored TERM exits 137 instead; that
+# code is shared with an out-of-memory kill, so it takes the ordinary failed
+# path below, where statesync.Up refuses a partial ./dist on its own.
+if [ "$rc" = 124 ]; then
+  echo "entrypoint: bot exceeded RUN_TIMEOUT_SECONDS=${RUN_TIMEOUT_SECONDS}; recording the run as FAILED ($rc), not publishing" | tee -a /tmp/rosterbot.log >&2
+  terminal_ledger "$rc"
+  exit "$rc"
+fi
 
 terminal_ledger "$rc"
 
