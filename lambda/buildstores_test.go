@@ -30,6 +30,10 @@ var nonStoreFields = map[string]string{
 	"Tenants":       "per-caller store provider, built in main from the state bucket",
 	"DefaultTenant": "the bearer caller's stand-in user id, set in main from ROSTERBOT_USER_ID",
 	"DefaultTeamID": "serve-only FANTRAX_TEAM_ID fallback; the Lambda resolves the team through DefaultTenant",
+	// Not a store and not nilable: an int limit. Zero is the wired value on
+	// purpose, because signup.go reads zero as defaultSignupMaxUnproven and no
+	// deployment overrides it.
+	"SignupMaxUnproven": "POST /v1/signup abuse limit; zero selects the default in signup.go",
 }
 
 // TestBuildStores_WiresEveryStoreField is the regression guard for the class of
