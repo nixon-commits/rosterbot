@@ -443,8 +443,9 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	}
 	prog.Logf("fangraphs pitching projections loaded (%s, %d players)", projDisplayName[pitLoadResult.System], fgPitSrc.Len())
 	// --- Blend the base sources with recent Fantrax production ---
-	// Hitters use a trailing 30-day window, pitchers season-to-date YTD; that
-	// asymmetry is backtest-justified and documented on BlendSources.
+	// Hitters run on the base projection alone unless HITTER_RECENCY_BLEND is
+	// set (rosterbot-jyt0.3); pitchers blend season-to-date YTD. Both choices
+	// are backtest-justified and documented on BlendSources.
 	blend := BlendSources(ft, BlendInputs{
 		HitterBase:     projections.NewChainedSource(fgSrc, projections.NewRollingSource()),
 		PitcherBase:    projections.NewPitcherChainedSource(fgPitSrc, projections.NewPitcherRollingSource()),
@@ -460,6 +461,7 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 		CurrentPeriod:  currentPeriod,
 		PeriodErr:      periodErr,
 		BlendMinGP:     cfg.BlendMinGP,
+		HitterBlend:    cfg.HitterRecencyBlend,
 		NoCache:        opts.NoCache,
 		SystemName:     displayNameFor(opts.HitterSystem, opts.PitcherSystem),
 	})
@@ -474,7 +476,13 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	prog.Done("Projections", "batting + pitching loaded")
 
 	prog.Start("Recent stats")
-	prog.Done("Recent stats", fmt.Sprintf("%d hitters · %d pitchers", blend.RecentHitterCount, blend.RecentPitcherCount))
+	if cfg.HitterRecencyBlend {
+		prog.Done("Recent stats", fmt.Sprintf("%d hitters · %d pitchers", blend.RecentHitterCount, blend.RecentPitcherCount))
+	} else {
+		// Named rather than printed as "0 hitters", which is what a blend that
+		// failed to load also prints (rosterbot-jyt0.3).
+		prog.Done("Recent stats", fmt.Sprintf("hitter blend off · %d pitchers", blend.RecentPitcherCount))
+	}
 
 	// Extract pitcher FIP for matchup adjustments.
 	prog.Start("Pitcher info")

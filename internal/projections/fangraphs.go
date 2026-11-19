@@ -43,6 +43,16 @@ const (
 	ProjectionATCRoS         = "atc-ros"
 )
 
+// DefaultSystem is the deployment default projection family: what a run uses
+// when no --projections flag was typed and the tenant stored no preference.
+// It is a BASE name on purpose, so the loader resolves RoS-first in season and
+// falls back to the preseason feed before the opener.
+//
+// Steamer since the 2026 season review (rosterbot-jyt0.1): over the
+// four-system shadow 2026-06-30..09-13, steamer-ros led depthcharts-ros on
+// within-day rank skill and was the only system with near-zero hitter bias.
+const DefaultSystem = ProjectionSteamer
+
 // ValidBaseSystem reports whether system names one of the four projection
 // families a stored per-tenant preference may carry (rosterbot-5qvs). Base
 // names only, no -ros variants: an explicit RoS system skips the preseason
@@ -340,6 +350,16 @@ var rosVariant = map[string]string{
 	ProjectionDepthCharts: ProjectionDepthChartsRoS,
 	ProjectionBatX:        ProjectionBatXRoS,
 	ProjectionATC:         ProjectionATCRoS,
+}
+
+// RoSVariant returns the rest-of-season system a base family resolves to in
+// season. A name that is already a RoS system, or that is unknown, comes back
+// unchanged.
+func RoSVariant(system string) string {
+	if ros, ok := rosVariant[system]; ok {
+		return ros
+	}
+	return system
 }
 
 // LoadResult describes what projection source was loaded and whether fallback occurred.

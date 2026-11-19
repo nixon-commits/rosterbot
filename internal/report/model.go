@@ -42,13 +42,18 @@ type View struct {
 // production projection). Compare/CompareTrends span every system too, keyed
 // "window|role" → system, for the head-to-head panel.
 type Model struct {
-	GeneratedAt   string                             `json:"generatedAt"`
-	SeasonStart   string                             `json:"seasonStart"`
-	LatestDate    string                             `json:"latestDate"`
-	Windows       []int                              `json:"windows"`       // [7,14,30,0]; 0 = season
-	Roles         []string                           `json:"roles"`         // ["all","hitters","pitchers"]
-	Systems       []string                           `json:"systems"`       // projection systems present, sorted
-	DetailSystem  string                             `json:"detailSystem"`  // default system for Views/Trends
+	GeneratedAt  string   `json:"generatedAt"`
+	SeasonStart  string   `json:"seasonStart"`
+	LatestDate   string   `json:"latestDate"`
+	Windows      []int    `json:"windows"`      // [7,14,30,0]; 0 = season
+	Roles        []string `json:"roles"`        // ["all","hitters","pitchers"]
+	Systems      []string `json:"systems"`      // projection systems present, sorted
+	DetailSystem string   `json:"detailSystem"` // default system for Views/Trends
+	// Production names the system this tenant's lineup runs use for each role
+	// (rosterbot-gaa2). Nil on a Model nobody called WithProduction on, and on
+	// every model.json written before the field existed; the SPA then falls
+	// back to DetailSystem for both roles.
+	Production    *ProductionSystems                 `json:"production,omitempty"`
 	Trends        map[string][]TrendPoint            `json:"trends"`        // keyed "system|window|role"
 	Views         map[string]View                    `json:"views"`         // keyed "system|window|role"
 	Compare       map[string][]SystemScore           `json:"compare"`       // keyed "window|role" → systems ranked by rho descending; nil for role "all"
@@ -67,17 +72,41 @@ type Model struct {
 	Excluded []ExcludedPair `json:"excluded,omitempty"`
 }
 
+// ProductionSystems is the per-role projection system a tenant's lineup runs
+// on. The values are RESOLVED system names ("steamer-ros"), the same axis the
+// graded rows are keyed on, never a stored base-family preference.
+type ProductionSystems struct {
+	Hitter  string `json:"hitter"`
+	Pitcher string `json:"pitcher"`
+}
+
+// WithProduction records which system is production for each role and makes
+// the hitter system the default Detail selection. An empty argument leaves the
+// Model unchanged, so a caller that could not resolve the preference keeps the
+// legacy default rather than publishing an empty caption.
+//
+// It deliberately does not touch the legacy attribution: un-attributed rows
+// stay credited to analysis.LegacySystem, which is a historical fact about
+// those partitions and not a statement about what any tenant runs today.
+func (m *Model) WithProduction(hitter, pitcher string) *Model {
+	if hitter == "" || pitcher == "" {
+		return m
+	}
+	m.Production = &ProductionSystems{Hitter: hitter, Pitcher: pitcher}
+	m.DetailSystem = hitter
+	return m
+}
+
 var (
 	stdWindows = []int{7, 14, 30, 0}
 	stdRoles   = []string{"all", "hitters", "pitchers"}
 )
 
-// detailSystem is the default-selected system for the detailed dashboard
-// (scorecard, by-position, calibration, misses) when the page loads. It is the
-// bot's production system — the same one legacy pre-migration grades are
-// attributed to — so the default view keeps meaning "how accurate is what we
-// ship". The Detail panel's system picker can switch to any other captured
-// system client-side.
+// detailSystem is the system legacy pre-migration grades are attributed to,
+// and the default Detail selection until WithProduction names the tenant's
+// own. Those two meanings used to coincide; since the per-tenant projection
+// preference (rosterbot-5qvs) only the first is fixed, which is why
+// Model.Production exists (rosterbot-gaa2).
 const detailSystem = analysis.LegacySystem
 
 func windowLabel(w int) string {

@@ -128,7 +128,7 @@ rosterbot optimize --dry-run --matchup
 # Show the full hitter adjustment pipeline: base → blend → park → platoon → opp SP → final
 rosterbot optimize --dry-run --pipeline
 
-# Swap projection system (default: depthcharts; in-season: depthcharts-ros)
+# Swap projection system (default: steamer; in-season: steamer-ros)
 #   steamer · depthcharts · thebatx · atc  (+ each system's -ros rest-of-season variant)
 rosterbot optimize --dry-run --projections atc
 rosterbot optimize --dry-run --projections steamer-ros
@@ -291,7 +291,7 @@ The settings page also lets each user pick the **projection model** their
 lineup runs use — hitters and pitchers independently, from Steamer / Depth
 Charts / THE BAT X / ATC (`POST /v1/me/preferences`, fields
 `hitter_projection` / `pitcher_projection`). Unset means "follow the
-deployment default" (Depth Charts); in season the rest-of-season variant is
+deployment default" (Steamer); in season the rest-of-season variant is
 applied automatically, and an explicitly typed `--projections` flag still
 overrides both roles for that run.
 
@@ -439,7 +439,7 @@ Projections blend FanGraphs season numbers with recent Fantrax scoring, weighted
 | Many (≈66)             | 50% | 50% |
 | Stabilized (150+)      | 30% (floor) | 70% |
 
-For **hitters**, only games inside the trailing 30 days count (caps around 26), so recent weight tops out near ~28% while reflecting current form only. The 30-day window replaced unbounded season-to-date after a full-season backtest showed it earns ~1 more realized point per game each day (`backtest --recency-experiment`). For **pitchers**, it's season-to-date games with role-aware stabilization (SP reaches 50/50 at 15 GP, RP at 25 GP, floor 35%) — recency was measured immaterial for pitchers, so they stay on season-to-date. Both require `BLEND_MIN_GP` (default 2) games before recent stats factor in, and fall back to 100% projection when there's no recent data.
+**The hitter blend is off by default.** A full-season replay (173 days) showed that the base projection alone earned more realized points than every recency window, because a rest-of-season projection already includes the in-season signal. Set `HITTER_RECENCY_BLEND=true` to turn it back on; the rest of this paragraph describes that mode. For **hitters**, only games inside the trailing 30 days count (caps around 26), so recent weight tops out near ~28% while reflecting current form only. The 30-day window replaced unbounded season-to-date after a full-season backtest showed it earns ~1 more realized point per game each day (`backtest --recency-experiment`). For **pitchers**, it's season-to-date games with role-aware stabilization (SP reaches 50/50 at 15 GP, RP at 25 GP, floor 35%) — recency was measured immaterial for pitchers, so they stay on season-to-date. Both require `BLEND_MIN_GP` (default 2) games before recent stats factor in, and fall back to 100% projection when there's no recent data.
 
 Matchup adjustments (opposing-pitcher FIP + platoon splits) layer on top.
 
@@ -591,6 +591,7 @@ Optional:
 |---|---|---|
 | `GS_TRACKING_ENABLED` | `false` | Enables games-started tracking (optimizer budget + `gs-check`). Real min/max are always fetched live from Fantrax — never a fixed number. |
 | `BLEND_MIN_GP` | `2` | Minimum games played before recent stats blend into a projection. |
+| `HITTER_RECENCY_BLEND` | `false` | Turns the hitter recency blend back on. Off by default: hitters are valued from the base projection alone. The pitcher blend is always on. |
 | `PROSPECT_ROLLING_DAYS` | `14` | Days of MiLB stats used for breakout detection. |
 | `PROSPECT_MIN_GAMES` | `8` | Minimum games for prospect breakout eligibility. |
 | `PROSPECT_RANK_CACHE_HOURS` | `168` | Hours to cache prospect rankings. |

@@ -225,9 +225,7 @@ function paint(el, model, gap, state) {
   renderCompare(el, model, state);
 
   el.detailSysLabel.textContent = sysLabel(state.system || "");
-  el.detailSub.textContent = state.system === model.detailSystem
-    ? "The bot's production projection, broken down below."
-    : "Captured for comparison — not used in production lineups.";
+  el.detailSub.textContent = prodCaption(model, state.system);
 
   el.calibNote.replaceChildren(
     document.createTextNode("Calibration only, not a scoreboard "),
@@ -248,6 +246,27 @@ function paint(el, model, gap, state) {
 //   compareKey =                fmt.Sprintf("%d|%s", window, role)  → "30|all"
 // state.window is a Number; string concatenation coerces it to its int form, so
 // no zero-padding or float formatting sneaks in.
+// prodRoles answers which roles run on `sys` in production, as the role words
+// the page already uses. model.production is absent on a model.json written
+// before rosterbot-gaa2; detailSystem then stands for both roles, which is what
+// the tab claimed before.
+function prodRoles(model, sys) {
+  const p = model.production || { hitter: model.detailSystem, pitcher: model.detailSystem };
+  const roles = [];
+  if (sys === p.hitter) roles.push("hitters");
+  if (sys === p.pitcher) roles.push("pitchers");
+  return roles;
+}
+
+// prodCaption: a system that is production for one role only is named for that
+// role, never collapsed to "production" for the whole panel.
+function prodCaption(model, sys) {
+  const roles = prodRoles(model, sys);
+  if (roles.length === 2) return "The bot's production projection, broken down below.";
+  if (roles.length === 1) return `The bot's production projection for ${roles[0]}, broken down below.`;
+  return "Captured for comparison — not used in production lineups.";
+}
+
 const detailKey = (s) => s.system + "|" + s.window + "|" + s.role;
 const compareKey = (s) => s.window + "|" + s.role;
 
@@ -423,7 +442,9 @@ function renderCompareTable(el, model, state, role, append = false) {
   const head = `<tr><th>System</th><th class="num">Rank skill</th><th class="num">MAE</th><th class="num">Bias</th><th class="num">RMSE</th><th class="num">Shared sample</th></tr>`;
   const body = scores.map((s) => {
     if (s.n === 0) return "";
-    const prod = s.system === model.detailSystem ? ` <span class="badge">prod</span>` : "";
+    const roles = prodRoles(model, s.system);
+    const prod = roles.length === 2 ? ` <span class="badge">prod</span>`
+      : roles.length === 1 ? ` <span class="badge">prod · ${roles[0]}</span>` : "";
     const best = s.best ? ` <span class="badge">best</span>` : "";
     const sw = `<span class="swatch" style="background:${colorFor(s.system)}"></span>`;
     const rho = s.rho && s.rho.days

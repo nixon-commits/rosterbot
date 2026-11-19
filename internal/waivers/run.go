@@ -69,7 +69,7 @@ func Run(ctx context.Context, ft FantraxClient, today time.Time, opts Options) e
 	})
 
 	g.Go(func() error {
-		src, _, err := projections.LoadBattingProjections(ctx, projections.ProjectionSteamer, opts.CacheDir, projTTL)
+		src, _, err := projections.LoadBattingProjections(ctx, projections.DefaultSystem, opts.CacheDir, projTTL)
 		if err != nil {
 			log.Printf("WARNING: batting projections unavailable: %v", err)
 			return nil
@@ -79,7 +79,7 @@ func Run(ctx context.Context, ft FantraxClient, today time.Time, opts Options) e
 	})
 
 	g.Go(func() error {
-		src, _, err := projections.LoadPitcherProjections(ctx, projections.ProjectionSteamer, opts.CacheDir, projTTL)
+		src, _, err := projections.LoadPitcherProjections(ctx, projections.DefaultSystem, opts.CacheDir, projTTL)
 		if err != nil {
 			log.Printf("WARNING: pitcher projections unavailable: %v", err)
 			return nil

@@ -177,6 +177,9 @@ func blendInputs() BlendInputs {
 		// uses cfg.BlendMinGP.
 		BlendMinGP: 1,
 		SystemName: "DepthCharts RoS",
+		// On, so the tests below keep exercising the blend path the switch
+		// re-enables. The production default (off) has its own tests.
+		HitterBlend: true,
 	}
 }
 
@@ -431,4 +434,57 @@ func TestBlendSources_ZeroRowRecencyIsUnavailableNotSuccess(t *testing.T) {
 				got.RecentHitterCount, got.RecentPitcherCount)
 		}
 	})
+}
+
+// TestBlendSources_HitterBlendOffUsesTheBaseAndSaysSo pins the production
+// default (rosterbot-jyt0.3): hitters come back as the base source untouched,
+// no hitter recency fetch is made, the run output states that the blend is
+// off, and the pitcher blend is unchanged.
+func TestBlendSources_HitterBlendOffUsesTheBaseAndSaysSo(t *testing.T) {
+	ft := healthyBlendClient()
+	in := blendInputs()
+	in.HitterBlend = false
+	got := BlendSources(ft, in)
+
+	if got.Hitters != in.HitterBase {
+		t.Fatalf("Hitters = %T, want the base source itself", got.Hitters)
+	}
+	if got.RecentHitterCount != 0 {
+		t.Fatalf("RecentHitterCount = %d, want 0 with the blend off", got.RecentHitterCount)
+	}
+	if _, ok := got.Pitchers.(*projections.PitcherBlendedSource); !ok {
+		t.Fatalf("Pitchers = %T, want the blended source: the switch is hitter-only", got.Pitchers)
+	}
+	if got.RecentPitcherCount != 1 {
+		t.Fatalf("RecentPitcherCount = %d, want 1", got.RecentPitcherCount)
+	}
+
+	var said bool
+	for _, l := range got.Logs {
+		if strings.Contains(l, "hitter recency blend off") {
+			said = true
+		}
+		if strings.Contains(l, "fetching recent hitter stats") {
+			t.Fatalf("hitter recency was fetched with the blend off: %q", l)
+		}
+	}
+	if !said {
+		t.Fatalf("no log line states the hitter blend is off; logs = %q", got.Logs)
+	}
+}
+
+// TestBlendSources_HitterBlendOffIsSilentBeforeTheOpener keeps the pre-season
+// output unchanged: "blend off" is an in-season statement, and before the
+// opener the existing "season not started" line already explains the base-only
+// run for both roles.
+func TestBlendSources_HitterBlendOffIsSilentBeforeTheOpener(t *testing.T) {
+	in := blendInputs()
+	in.HitterBlend = false
+	in.CurrentPeriod = 1
+	got := BlendSources(healthyBlendClient(), in)
+	for _, l := range got.Logs {
+		if strings.Contains(l, "hitter recency blend off") {
+			t.Fatalf("blend-off line printed before the opener: %q", l)
+		}
+	}
 }

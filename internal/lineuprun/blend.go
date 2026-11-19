@@ -50,6 +50,11 @@ type BlendInputs struct {
 	BlendMinGP int
 	NoCache    bool
 
+	// HitterBlend enables the hitter recency blend. False is the production
+	// default (rosterbot-jyt0.3): hitters run on the base projection alone and
+	// no hitter recency data is fetched. The pitcher blend ignores it.
+	HitterBlend bool
+
 	// SystemName is the display name of the projection system, used only in the
 	// degraded-mode log lines ("… — using DepthCharts RoS only").
 	SystemName string
@@ -76,6 +81,22 @@ func (r *BlendResult) logf(format string, args ...any) {
 
 // BlendSources wraps the base projection sources with recent Fantrax
 // production, one strategy per role.
+//
+// # The hitter blend is OFF by default (rosterbot-jyt0.3)
+//
+// Unless BlendInputs.HitterBlend is set, hitters are valued from the base
+// projection alone. The full-season replay of `backtest --recency-experiment`
+// (173 days, depthcharts-ros base) ranked realized points base 8,512 > w14
+// 8,453 > w30 8,450 > decay21 8,394 > ytd 8,338: every window lost to no
+// blend, because a rest-of-season projection already carries the in-season
+// signal and blending on top double-counts it. That supersedes rosterbot-2nd's
+// June reading, which compared windows against each other and held (w30 still
+// beats ytd) but never showed a window beating the base.
+//
+// The blend code, the switch and the harness all stay, so the mid-May re-run
+// on a steamer-ros base (rosterbot-jyt0.4) is one command and reverting is one
+// env var (HITTER_RECENCY_BLEND=true). Everything below about the hitter
+// window describes the path that switch re-enables.
 //
 // # The asymmetry is deliberate — do not unify it
 //
@@ -119,11 +140,16 @@ func BlendSources(ft blendClient, in BlendInputs) BlendResult {
 	// in-season production to blend, for either role.
 	seasonUnderway := in.PeriodErr == nil && in.CurrentPeriod > 1
 
-	// --- Hitters: trailing 30-day window ---
+	// --- Hitters: base projection only, unless the blend is switched on ---
 	if !seasonUnderway {
 		if in.CurrentPeriod <= 1 {
 			r.logf("season not started (period %d) — using %s only", in.CurrentPeriod, in.SystemName)
 		}
+		r.Hitters = in.HitterBase
+	} else if !in.HitterBlend {
+		// Stated on every in-season run, so "no hitter recency line" can never
+		// be mistaken for a blend that silently failed to load.
+		r.logf("hitter recency blend off — hitters valued from %s only (HITTER_RECENCY_BLEND=true to enable)", in.SystemName)
 		r.Hitters = in.HitterBase
 	} else {
 		r.logf("fetching recent hitter stats (trailing %dd window as of %s)...",
