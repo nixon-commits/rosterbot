@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Support — rosterbot</title>
+<meta name="description" content="Help with the rosterbot iOS app: sign-in, Fantrax connection, notifications, and how to contact us.">
+<!--
+  Deliberately self-contained, like privacy.html: no <link> to style.css, no
+  scripts, no external requests. This is the Support URL in App Store Connect,
+  so it has to render correctly regardless of what the dashboard SPA's
+  stylesheet is doing. The <style> block is a copy of privacy.html's; keep the
+  two in step by hand.
+-->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #2563eb;
+    --prose: 68ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --fg: #e5e7eb;
+      --muted: #9ca3af;
+      --border: #2a2d33;
+      --accent: #60a5fa;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2rem 1.25rem 4rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: var(--prose); margin: 0 auto; }
+  h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .25rem; }
+  h2 { font-size: 1.15rem; margin: 2.25rem 0 .5rem; }
+  p, li { margin: 0 0 .75rem; }
+  ul { padding-left: 1.25rem; }
+  a { color: var(--accent); }
+  .muted { color: var(--muted); }
+  .dateline { margin: 0 0 1.5rem; font-size: .9rem; }
+  .summary {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem .5rem;
+    margin: 1.5rem 0 0;
+  }
+  .summary p:last-child { margin-bottom: .75rem; }
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    font-size: .9rem;
+    color: var(--muted);
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .9em;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>rosterbot Support</h1>
+<p class="dateline muted">Help with the rosterbot iOS app</p>
+
+<div class="summary">
+  <p><strong>Need help?</strong> Write to
+  <a href="mailto:privacy@rosterbot.dev">privacy@rosterbot.dev</a>. rosterbot is a small service run by
+  one person, so a reply can take a few days. Say which iPhone and iOS version you use and what you
+  saw on screen. Never send your Fantrax password by email.</p>
+</div>
+
+<h2>What rosterbot does</h2>
+<p>rosterbot reads your Fantrax fantasy baseball roster, works out the best lineup for the day, and
+can set that lineup for you. It also shows waiver and trade information for your team, and it can
+show your Sleeper football matchup in a Home Screen widget.</p>
+
+<h2>What you need</h2>
+<ul>
+  <li>An iPhone with iOS 27 or later.</li>
+  <li>A Fantrax account that owns a team in a league rosterbot supports. If rosterbot cannot find
+  your team after you connect, write to the address above.</li>
+</ul>
+
+<h2>Signing in</h2>
+<p>rosterbot uses a passkey. There is no password to remember. To start, open the app and choose
+<strong>Create Account</strong>, or open an invite link if the operator sent you one. Your iPhone
+then asks you to save a passkey.</p>
+<p>Your passkey is kept in your Passwords app and, if you use iCloud Keychain, on your other Apple
+devices. If you lose every device that has your passkey, write to the address above and ask for a
+recovery link.</p>
+
+<h2>Connecting Fantrax</h2>
+<p>After you create your passkey, the app asks for your Fantrax sign-in so that rosterbot can read
+and set your lineup. The check can take a minute or two.</p>
+<ul>
+  <li><strong>Two-factor authentication.</strong> rosterbot cannot connect to a Fantrax account that
+  uses two-factor authentication.</li>
+  <li><strong>You changed your Fantrax password.</strong> Open Settings in the app and connect
+  Fantrax again with the new password.</li>
+  <li><strong>The check did not finish.</strong> Wait a minute and try again. Your password is
+  probably not the problem.</li>
+</ul>
+
+<h2>Lineup changes</h2>
+<p>Automatic lineup changes are off until you turn them on. You can turn <strong>Auto-apply
+lineups</strong> on or off at any time in Settings. When it is off, rosterbot only shows you the
+lineup it recommends.</p>
+
+<h2>Notifications</h2>
+<p>The app asks for permission to send notifications after you sign in. If you said no and want
+them now, open the iOS Settings app, find rosterbot, and allow notifications.</p>
+
+<h2>Sleeper leagues and the widget</h2>
+<p>You can add your Sleeper leagues in Settings. rosterbot can read Sleeper leagues but never changes
+them. After you add a league, add the rosterbot widget from the Home Screen widget gallery.</p>
+
+<h2>Deleting your account</h2>
+<p>Open Settings in the app and choose <strong>Delete Account</strong>. This is permanent. The
+<a href="/privacy.html">privacy policy</a> says what is removed and what is not.</p>
+
+<h2>Privacy</h2>
+<p>Read the <a href="/privacy.html">privacy policy</a> for what rosterbot collects and why.</p>
+
+<footer>
+  <p><a href="/">rosterbot</a> &middot; Support &middot; <a href="/privacy.html">Privacy Policy</a></p>
+</footer>
+
+</main>
+</body>
+</html>
