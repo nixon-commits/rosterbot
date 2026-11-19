@@ -233,6 +233,54 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// Created before the container so their distribution IDs can be injected as
 	// env vars; entrypoint.sh invalidates them after each S3 sync so a freshly
 	// rendered page is served immediately instead of after the ~24h cache TTL.
+	// Security response headers for both distributions (rosterbot-j05q). Until
+	// this, neither sent HSTS, a content policy or any frame protection, so the
+	// passkey login and the job-launch UI could be framed by another site.
+	//
+	// The two policies differ in exactly one header, the content policy,
+	// because the two sites are built differently:
+	//
+	//   - The dashboard SPA loads only its own scripts (app.js as a module plus
+	//     the vendored chart.min.js) and has no inline script, so script-src is
+	//     'self' with no 'unsafe-inline'. Styles DO need 'unsafe-inline': the
+	//     render code writes style="" attributes and privacy.html carries a
+	//     <style> block. Images come from third-party CDNs (Fantrax and MLB
+	//     logos, Sleeper avatars), hence img-src https:. The API is same-origin
+	//     under /v1/*, hence connect-src 'self'.
+	//   - The recap pages are self-contained generated HTML with an inline
+	//     <script> (the week picker) and inline styles. A script-src there would
+	//     break the picker, so that policy restricts only what cannot break a
+	//     static page: framing, <base> and plugins.
+	//
+	// Override is true everywhere so an origin can never weaken a header.
+	securityHeaders := func(id, csp string) awscloudfront.ResponseHeadersPolicy {
+		return awscloudfront.NewResponseHeadersPolicy(stack, jsii.String(id), &awscloudfront.ResponseHeadersPolicyProps{
+			Comment: jsii.String("rosterbot security response headers"),
+			SecurityHeadersBehavior: &awscloudfront.ResponseSecurityHeadersBehavior{
+				ContentSecurityPolicy: &awscloudfront.ResponseHeadersContentSecurityPolicy{
+					ContentSecurityPolicy: jsii.String(csp),
+					Override:              jsii.Bool(true),
+				},
+				ContentTypeOptions: &awscloudfront.ResponseHeadersContentTypeOptions{Override: jsii.Bool(true)},
+				FrameOptions: &awscloudfront.ResponseHeadersFrameOptions{
+					FrameOption: awscloudfront.HeadersFrameOption_DENY,
+					Override:    jsii.Bool(true),
+				},
+				ReferrerPolicy: &awscloudfront.ResponseHeadersReferrerPolicy{
+					ReferrerPolicy: awscloudfront.HeadersReferrerPolicy_STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+					Override:       jsii.Bool(true),
+				},
+				StrictTransportSecurity: &awscloudfront.ResponseHeadersStrictTransportSecurity{
+					AccessControlMaxAge: awscdk.Duration_Days(jsii.Number(365)),
+					IncludeSubdomains:   jsii.Bool(false),
+					Override:            jsii.Bool(true),
+				},
+			},
+		})
+	}
+	siteHeaders := securityHeaders("SiteSecurityHeaders", siteCSP)
+	dashboardHeaders := securityHeaders("DashboardSecurityHeaders", dashboardCSP)
+
 	dist := awscloudfront.NewDistribution(stack, jsii.String("SiteCdn"), &awscloudfront.DistributionProps{
 		DefaultRootObject: jsii.String("index.html"),
 		// Adding an alias does NOT retire the default cloudfront.net name —
@@ -241,8 +289,9 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		DomainNames: jsii.Strings(recapHost),
 		Certificate: siteCert,
 		DefaultBehavior: &awscloudfront.BehaviorOptions{
-			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(siteBucket, nil),
-			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
+			Origin:                awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(siteBucket, nil),
+			ViewerProtocolPolicy:  awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
+			ResponseHeadersPolicy: siteHeaders,
 		},
 		// Readership signal for the recap site. Cookies are deliberately excluded:
 		// the site sets none, and logging them would only widen what these files
@@ -872,8 +921,9 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		DomainNames: jsii.Strings(dashboardHosts...),
 		Certificate: siteCert,
 		DefaultBehavior: &awscloudfront.BehaviorOptions{
-			Origin:               awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(dashboardBucket, nil),
-			ViewerProtocolPolicy: awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
+			Origin:                awscloudfrontorigins.S3BucketOrigin_WithOriginAccessControl(dashboardBucket, nil),
+			ViewerProtocolPolicy:  awscloudfront.ViewerProtocolPolicy_REDIRECT_TO_HTTPS,
+			ResponseHeadersPolicy: dashboardHeaders,
 			FunctionAssociations: &[]*awscloudfront.FunctionAssociation{{
 				Function:  dashboardViewerRequest,
 				EventType: awscloudfront.FunctionEventType_VIEWER_REQUEST,
@@ -886,6 +936,10 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 				AllowedMethods:       awscloudfront.AllowedMethods_ALLOW_ALL(),
 				CachePolicy:          awscloudfront.CachePolicy_CACHING_DISABLED(),
 				OriginRequestPolicy:  awscloudfront.OriginRequestPolicy_ALL_VIEWER_EXCEPT_HOST_HEADER(),
+				// Same policy as the SPA: CloudFront attaches a policy per
+				// behavior, so the default behavior alone would leave every
+				// API response without the headers.
+				ResponseHeadersPolicy: dashboardHeaders,
 			},
 		},
 	})

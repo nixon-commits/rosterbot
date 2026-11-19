@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make build              # build binary + lambda module (or: go build -o rosterbot .)
 make build-modules      # cross-compile every nested Go module (lambda/, opsnotify/, infra/)
 make check-pins         # assert shared `replace` pins agree across all four go.mod files
+make check-cdk-cli      # cdk synth with the CLI version pinned in buildspec.yml (needs npx + network; CI runs it)
 make lint               # golangci-lint across all four modules (hard-fails if not installed)
 make lint-install       # install the pinned golangci-lint (GOLANGCI_LINT_VERSION in the Makefile)
 make install            # install to $GOPATH/bin
