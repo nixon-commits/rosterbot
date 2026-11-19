@@ -3,6 +3,7 @@ package lineupapi
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/nixon-commits/rosterbot/internal/projections"
@@ -107,6 +108,53 @@ func (cfg Config) handleMe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleDeleteMe deletes the caller's own account: the member self-service
+// path that App Store Guideline 5.1.1(v) requires the app to offer.
+//
+// The store contract (UserStore.DeleteUser) carries the substance, the same
+// call handleDeleteTenant makes: profile, credentials, connection record, and
+// the email and team claims released.
+//
+// AN ADMIN IS REFUSED, for the reason handleDeleteTenant refuses self-delete:
+// deleting an admin is a lockout without a recovery. An admin is removed
+// out-of-band, with the bearer-token break-glass. Only a member gets this
+// route, and it is deliberately NOT under adminOnlyRoutes.
+//
+// The session cookie is cleared only AFTER DeleteUser succeeds. A failure
+// answers 502 and leaves the user signed in, so the iOS client reads any
+// non-2xx as "not deleted" and can retry.
+func (cfg Config) handleDeleteMe(w http.ResponseWriter, r *http.Request) {
+	caller := CallerFrom(r.Context())
+	if caller.UserID == "" {
+		writeErr(w, http.StatusForbidden, "this endpoint requires a passkey session")
+		return
+	}
+	if cfg.Users == nil {
+		writeErr(w, http.StatusNotImplemented, "user directory not configured")
+		return
+	}
+	u, ok, err := cfg.Users.GetUser(r.Context(), caller.UserID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "user directory unavailable")
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such user")
+		return
+	}
+	if u.Role == RoleAdmin {
+		writeErr(w, http.StatusForbidden, "an admin account cannot be deleted in the app")
+		return
+	}
+	if err := cfg.Users.DeleteUser(r.Context(), caller.UserID); err != nil {
+		log.Printf("lineupapi: DELETE /v1/me failed for user %q: %v", caller.UserID, err)
+		writeErr(w, http.StatusBadGateway, "could not delete account")
+		return
+	}
+	clearSessionCookie(w)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleSetPreferences updates the caller's own preferences.

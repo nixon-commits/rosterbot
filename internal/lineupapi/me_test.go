@@ -3,6 +3,7 @@ package lineupapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -288,5 +289,136 @@ func TestSetAutoApply_PreservesTheRestOfTheProfile(t *testing.T) {
 	got, _, _ := users.GetUser(context.Background(), "alice")
 	if got.TeamID != "team-7" || got.Role != RoleAdmin || got.DisplayName != "Alice" {
 		t.Errorf("profile lost fields: %+v", got)
+	}
+}
+
+func deleteMe(t *testing.T, h http.Handler, secret []byte, uid UserID) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, signedReq(t, secret, http.MethodDelete, "/v1/me", uid, 0))
+	return rec
+}
+
+// TestDeleteMe_MemberDeletesTheirOwnAccount. App Store Guideline 5.1.1(v): the
+// app must let a user delete their account. 204 is the only success signal the
+// iOS client reads, so it must mean the profile is gone and the cookie is dead.
+func TestDeleteMe_MemberDeletesTheirOwnAccount(t *testing.T) {
+	h, users, secret := meFixture(t, &User{ID: "alice", DisplayName: "Alice",
+		Email: "alice@example.test", Role: RoleMember, Status: UserActive, TeamID: "team-7"})
+
+	rec := deleteMe(t, h, secret, "alice")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204: %s", rec.Code, rec.Body)
+	}
+	if _, ok, err := users.GetUser(t.Context(), "alice"); err != nil || ok {
+		t.Errorf("GetUser after delete = ok %v, err %v; want absent", ok, err)
+	}
+
+	logout := httptest.NewRecorder()
+	h.ServeHTTP(logout, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/logout", nil))
+	want := logout.Result().Cookies()
+	got := rec.Result().Cookies()
+	if len(want) != 1 || len(got) != 1 {
+		t.Fatalf("cookies: delete %d, logout %d; want 1 each", len(got), len(want))
+	}
+	if got[0].Name != want[0].Name || got[0].MaxAge != want[0].MaxAge || got[0].Value != "" {
+		t.Errorf("delete cookie = %+v, want the logout expiry %+v", got[0], want[0])
+	}
+
+	// The email and team claims are released, so the person can be re-invited.
+	again := &User{ID: "alice2", Email: "alice@example.test", Role: RoleMember,
+		Status: UserActive, TeamID: "team-7"}
+	if err := users.CreateUser(t.Context(), again); err != nil {
+		t.Errorf("CreateUser with the released email and team: %v", err)
+	}
+}
+
+// TestDeleteMe_TheOldCookieIsDeadAfterwards. A copy of the cookie kept by
+// another device must stop working once the profile is gone.
+func TestDeleteMe_TheOldCookieIsDeadAfterwards(t *testing.T) {
+	h, _, secret := meFixture(t, &User{ID: "alice", Email: "a@example.test",
+		Role: RoleMember, Status: UserActive})
+
+	if rec := deleteMe(t, h, secret, "alice"); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status %d", rec.Code)
+	}
+	if code, _ := getMe(t, h, secret, "alice"); code != http.StatusUnauthorized {
+		t.Errorf("GET /v1/me after delete = %d, want 401", code)
+	}
+}
+
+// TestDeleteMe_RefusesAnAdmin. Deleting the last admin is a lockout without a
+// recovery, the same reasoning as handleDeleteTenant's self-delete refusal.
+func TestDeleteMe_RefusesAnAdmin(t *testing.T) {
+	h, users, secret := meFixture(t, &User{ID: "root", Email: "root@example.test",
+		Role: RoleAdmin, Status: UserActive})
+
+	rec := deleteMe(t, h, secret, "root")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status %d, want 403", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "an admin account cannot be deleted in the app") {
+		t.Errorf("body %q lacks the refusal text", rec.Body)
+	}
+	if _, ok, _ := users.GetUser(t.Context(), "root"); !ok {
+		t.Error("admin was deleted despite the refusal")
+	}
+}
+
+// TestDeleteMe_RefusesTheTokenCaller. The bearer token has no UserID, so there
+// is no account for it to delete.
+func TestDeleteMe_RefusesTheTokenCaller(t *testing.T) {
+	users := NewFileUserStore(t.TempDir())
+	h := Handler(Config{Token: "tok", Users: users, Enrollments: users,
+		SessionSecret: []byte("s"), WebAuthn: testWebAuthn(t)})
+
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/v1/me", nil)
+	r.Header.Set("Authorization", "Bearer tok")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("token caller DELETE /v1/me = %d, want 403", rec.Code)
+	}
+}
+
+// failingDeleteStore makes DeleteUser fail and nothing else.
+type failingDeleteStore struct{ *FileUserStore }
+
+func (failingDeleteStore) DeleteUser(context.Context, UserID) error {
+	return errors.New("boom")
+}
+
+// TestDeleteMe_AStoreFailureKeepsTheSession. A 502 means "not deleted", so the
+// cookie must survive: the user is still signed in and can retry.
+func TestDeleteMe_AStoreFailureKeepsTheSession(t *testing.T) {
+	users := NewFileUserStore(t.TempDir())
+	if err := users.CreateUser(t.Context(), &User{ID: "alice", Email: "a@example.test",
+		Role: RoleMember, Status: UserActive}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	secret := []byte("s")
+	h := Handler(Config{Users: failingDeleteStore{users}, Enrollments: users,
+		SessionSecret: secret, WebAuthn: testWebAuthn(t), Connections: &memConnections{}})
+
+	rec := deleteMe(t, h, secret, "alice")
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status %d, want 502", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "could not delete account") {
+		t.Errorf("body %q lacks the failure text", rec.Body)
+	}
+	if v := rec.Header().Values("Set-Cookie"); len(v) != 0 {
+		t.Errorf("Set-Cookie = %v, want none", v)
+	}
+}
+
+// TestDeleteMe_IsNotUnderTheAdminGate. A member must reach this route, so no
+// adminOnlyRoutes prefix may cover it.
+func TestDeleteMe_IsNotUnderTheAdminGate(t *testing.T) {
+	for _, p := range adminOnlyRoutes {
+		if strings.HasPrefix("/v1/me", p) {
+			t.Errorf("adminOnlyRoutes entry %q covers /v1/me", p)
+		}
 	}
 }
