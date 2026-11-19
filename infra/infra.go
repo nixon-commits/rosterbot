@@ -57,9 +57,15 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 	// --- Phase 1: foundation (ECR, S3 state + site buckets, log group) ---
 
 	// ECR repo for the container image; keep only the last 10 images.
+	//
+	// Scan on push (basic scanning, no charge): the image carries a pinned
+	// chromium and floating base tags and is rebuilt only on a push to main,
+	// so it can age for months in a quiet winter with nothing reporting it
+	// (rosterbot-nhpg). The scan gives each pushed image a findings list.
 	repo := awsecr.NewRepository(stack, jsii.String("Repo"), &awsecr.RepositoryProps{
-		RepositoryName: jsii.String("rosterbot"),
-		LifecycleRules: &[]*awsecr.LifecycleRule{{MaxImageCount: jsii.Number(10)}},
+		RepositoryName:  jsii.String("rosterbot"),
+		ImageScanOnPush: jsii.Bool(true),
+		LifecycleRules:  &[]*awsecr.LifecycleRule{{MaxImageCount: jsii.Number(10)}},
 	})
 
 	// Durable state bucket (cache/, session/, claims/ prefixes synced by the entrypoint).
