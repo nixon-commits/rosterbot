@@ -267,6 +267,16 @@ type FantraxConnection struct {
 	// the connect task would still refuse it, but the API should not offer it.
 	OwnedTeams []OwnedTeam `json:"owned_teams,omitempty"`
 
+	// ConnectAttempts and ConnectWindowStart are the connect budget for an
+	// account with no proven team (connectBudget in connect.go): how many
+	// checks this account has started since the window opened. Written by
+	// POST /v1/connect alone; every other writer reads the record and puts it
+	// back whole, which carries them along. The window is Unix seconds rather
+	// than a time.Time because attributevalue marshals a zero time as a real
+	// year-1 timestamp instead of omitting it.
+	ConnectAttempts    int   `json:"connect_attempts,omitempty"`
+	ConnectWindowStart int64 `json:"connect_window_start,omitempty"`
+
 	// LastConnectRun attributes the two fields above to the connect run that
 	// produced them, so GET /v1/runs can say what a specific row concluded
 	// instead of showing the ledger's exit status alone (rosterbot-jg92).

@@ -1,11 +1,14 @@
 package lineupapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The ambiguous-team choice (rosterbot-eq6n): GET /v1/connect offers the owned
@@ -252,5 +255,129 @@ func TestConnect_TeamChoiceIsRevalidatedAfterALostRace(t *testing.T) {
 	}
 	if conns.conn.TeamID != "" || conns.conn.Status == ConnPending {
 		t.Errorf("record = %q/%q; the stale choice must not have been written", conns.conn.Status, conns.conn.TeamID)
+	}
+}
+
+// unreadableUsers resolves the session and then fails the handler's own read
+// of the user record — the DynamoDB blip between authorize and handleConnect.
+type unreadableUsers struct {
+	*FileUserStore
+	reads int
+}
+
+func (u *unreadableUsers) GetUser(ctx context.Context, id UserID) (*User, bool, error) {
+	u.reads++
+	if u.reads > 1 {
+		return nil, false, errors.New("dynamodb: throughput exceeded")
+	}
+	return u.FileUserStore.GetUser(ctx, id)
+}
+
+// TestConnect_AnUnreadableUserRecordFailsClosed: before discovery an
+// unreadable record left the team empty and the connect task refused with
+// no_team. Now an empty team is DISCOVERED, so tolerating the failed read
+// would turn "verify the invited team" into "adopt whatever the credentials
+// control" on a store blip.
+func TestConnect_AnUnreadableUserRecordFailsClosed(t *testing.T) {
+	files := NewFileUserStore(t.TempDir())
+	if err := files.CreateUser(context.Background(), &User{ID: "alice", Email: "alice@example.test",
+		Role: RoleMember, Status: UserActive, TeamID: "team-7"}); err != nil {
+		t.Fatal(err)
+	}
+	conns := &memConnections{}
+	jobs := &recordingJobs{conns: conns}
+	h := Handler(Config{Token: testToken, SessionSecret: testSecret,
+		Users: &unreadableUsers{FileUserStore: files}, Connections: conns,
+		Sealer: &recordingSealer{}, Jobs: jobs})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, asAlice(t, http.MethodPost, `{"username":"a@fantrax","password":"pw"}`))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status %d (%s), want 502", rec.Code, rec.Body)
+	}
+	if jobs.launched || conns.puts != 0 {
+		t.Errorf("launched=%v puts=%d; nothing may be written or started without the user's team",
+			jobs.launched, conns.puts)
+	}
+}
+
+// --- the connect budget -------------------------------------------------------
+
+func submitCreds(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, asAlice(t, http.MethodPost, `{"username":"a@fantrax","password":"guess"}`))
+	return rec
+}
+
+// settle stands in for the connect task finishing with a tenant fault: it puts
+// the record it read back, whole, with a new status — which is what carries
+// the budget fields across a run.
+func settle(conns *memConnections) {
+	conns.conn.Status, conns.conn.LastError = ConnNeedsReconnect, ConnErrBadCredentials
+}
+
+// TestConnect_AnAccountWithNoProvenTeamHasABudget: with public signup, anyone
+// can reach this route, and each submission is a Fantrax login from our
+// address whose verdict we then report.
+func TestConnect_AnAccountWithNoProvenTeamHasABudget(t *testing.T) {
+	h, conns, jobs, _ := connectFixture(t, "")
+
+	for i := 1; i <= connectBudgetAttempts; i++ {
+		if rec := submitCreds(t, h); rec.Code != http.StatusAccepted {
+			t.Fatalf("attempt %d = %d, want 202: %s", i, rec.Code, rec.Body)
+		}
+		if conns.conn.ConnectAttempts != i {
+			t.Fatalf("after attempt %d the record counts %d", i, conns.conn.ConnectAttempts)
+		}
+		settle(conns)
+	}
+
+	jobs.launched = false
+	puts := conns.puts
+	rec := submitCreds(t, h)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("attempt over budget = %d, want 429: %s", rec.Code, rec.Body)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("429 carries no Retry-After")
+	}
+	if jobs.launched || conns.puts != puts {
+		t.Error("an over-budget attempt still wrote the record or launched a Fantrax login")
+	}
+
+	// A team choice spends from the same budget: it launches the same login.
+	conns.conn = ambiguousConn()
+	conns.conn.ConnectAttempts, conns.conn.ConnectWindowStart = connectBudgetAttempts, time.Now().Unix()
+	choice := httptest.NewRecorder()
+	h.ServeHTTP(choice, asAlice(t, http.MethodPost, `{"team_id":"7"}`))
+	if choice.Code != http.StatusTooManyRequests {
+		t.Fatalf("team choice over budget = %d, want 429: %s", choice.Code, choice.Body)
+	}
+
+	// The window expires.
+	conns.conn.Status, conns.conn.LastError = ConnNeedsReconnect, ConnErrBadCredentials
+	conns.conn.ConnectWindowStart = time.Now().Add(-connectBudgetWindow - time.Minute).Unix()
+	if rec := submitCreds(t, h); rec.Code != http.StatusAccepted {
+		t.Fatalf("attempt after the window = %d, want 202: %s", rec.Code, rec.Body)
+	}
+	if conns.conn.ConnectAttempts != 1 {
+		t.Errorf("a new window opened at %d attempts, want 1", conns.conn.ConnectAttempts)
+	}
+}
+
+// TestConnect_AProvenTenantIsNeverBudgeted: a working tenant re-entering a
+// changed password must not be counted, however often.
+func TestConnect_AProvenTenantIsNeverBudgeted(t *testing.T) {
+	h, conns, _, _ := connectFixture(t, "team-7")
+	for i := 1; i <= connectBudgetAttempts+3; i++ {
+		if rec := submitCreds(t, h); rec.Code != http.StatusAccepted {
+			t.Fatalf("attempt %d for a tenant with a team = %d, want 202: %s", i, rec.Code, rec.Body)
+		}
+		settle(conns)
+	}
+	if conns.conn.ConnectAttempts != 0 {
+		t.Errorf("a proven tenant's record counts %d attempts, want none", conns.conn.ConnectAttempts)
 	}
 }

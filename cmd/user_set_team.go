@@ -96,11 +96,11 @@ func setTeam(ctx context.Context, users lineupapi.UserStore, uid lineupapi.UserI
 	if uid == "" {
 		return fmt.Errorf("user set-team: --user is required")
 	}
-	// An empty team is precisely the state connect refuses with no_team, so
-	// writing one would be a command whose only effect is recreating the bug it
-	// exists to fix.
+	// An empty team names nothing for connect to verify; connect would then
+	// discover the team itself (rosterbot-kr89), so writing one is not an
+	// assignment.
 	if teamID == "" {
-		return fmt.Errorf("user set-team: --team is required (an empty team is what connect refuses as no_team)")
+		return fmt.Errorf("user set-team: --team is required")
 	}
 
 	u, ok, err := users.GetUser(ctx, uid)

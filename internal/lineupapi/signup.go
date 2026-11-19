@@ -33,16 +33,19 @@ import (
 //
 //   - a CAP on unproven signup accounts, deployment-wide;
 //   - a CLEANUP, run inside the request, of signup accounts abandoned before
-//     a passkey existed (signupNoPasskeyTTL) or never connected to Fantrax
-//     (signupNeverConnectedTTL);
+//     a passkey existed (signupNoPasskeyTTL) or that never proved a team
+//     (signupUnprovenTTL) — connected or not, so a failed connection cannot
+//     hold a slot under the cap for ever;
 //   - a repeat signup REPLACES an attempt that never got a passkey, so a
 //     person who cancels the passkey sheet is not locked out of their own
-//     address.
+//     address — but only once the attempt is older than signupReplaceAfter,
+//     so somebody who merely knows the address cannot delete a ceremony that
+//     is in progress.
 //
 // The cap is SOFT: two concurrent requests can both pass at cap-1. It bounds
 // table growth to "about the cap", which is all it is for; it is not a
 // security boundary. An attacker can hold the cap full and block signup until
-// the cleanup frees it. That trade (no growth, short denial) was chosen over
+// the cleanup frees it. That trade (no growth, bounded denial) was chosen over
 // no limit.
 //
 // ACCEPTED RISK: 409 tells a caller that an address has an account. There is
@@ -57,9 +60,21 @@ const (
 	// so an account with no credential an hour later was abandoned.
 	signupNoPasskeyTTL = time.Hour
 
-	// signupNeverConnectedTTL: a passkey but no connection record at all — the
-	// Fantrax form was never submitted.
-	signupNeverConnectedTTL = 7 * 24 * time.Hour
+	// signupUnprovenTTL: a passkey, and still no proven team a week later —
+	// whether the Fantrax form was never submitted or every attempt failed.
+	// Without the second half an account with a failed connection counted
+	// against the cap for ever, so fifty of them closed signup permanently.
+	// The person signs up again; nothing they proved is lost, because nothing
+	// was proven.
+	signupUnprovenTTL = 7 * 24 * time.Hour
+
+	// signupReplaceAfter: how old a passkey-less attempt must be before a
+	// repeat signup with the same address may delete it. The ceremony follows
+	// signup within seconds, and the app keeps its token when the sheet is
+	// cancelled, so an immediate replace is only ever needed after the app was
+	// closed — whereas replacing at once let anyone who knew the address
+	// delete the account out from under an open passkey sheet, repeatedly.
+	signupReplaceAfter = 2 * time.Minute
 
 	// signupEnrollmentTTL is deliberately far shorter than an invite link's 72
 	// hours: this token is returned to the caller and spent at once.
@@ -208,13 +223,12 @@ func normalizeSignupEmail(raw string) (string, bool) {
 // An account is deleted when it matches unprovenSignup AND one of:
 //
 //   - it has no passkey and is older than signupNoPasskeyTTL;
-//   - it has no passkey and holds the address this request is signing up with
-//     (the repeat signup; age does not matter, the ceremony never finished);
-//   - it has a passkey, no connection record, and is older than
-//     signupNeverConnectedTTL.
+//   - it has no passkey, holds the address this request is signing up with,
+//     and is older than signupReplaceAfter (the repeat signup);
+//   - it has a passkey and is older than signupUnprovenTTL. unprovenSignup
+//     has already established it holds no team.
 //
-// EVERY UNCERTAINTY KEEPS THE ACCOUNT. A credential read that fails, a
-// connection read that fails, an unconfigured connection store, a zero
+// EVERY UNCERTAINTY KEEPS THE ACCOUNT. A credential read that fails, a zero
 // CreatedAt, a delete that fails: each leaves the row in place and counted.
 // Deleting on a guess would remove a real person's account for a DynamoDB
 // blip; keeping on a guess costs one slot under the cap.
@@ -245,15 +259,15 @@ func (cfg Config) signupAbandoned(ctx context.Context, u *User, email string, no
 	if err != nil {
 		return false
 	}
-	if len(creds) == 0 {
-		if strings.EqualFold(u.Email, email) {
-			return true
-		}
-		return !u.CreatedAt.IsZero() && now.Sub(u.CreatedAt) > signupNoPasskeyTTL
-	}
-	if cfg.Connections == nil || u.CreatedAt.IsZero() || now.Sub(u.CreatedAt) <= signupNeverConnectedTTL {
+	if u.CreatedAt.IsZero() {
 		return false
 	}
-	_, ok, err := cfg.Connections.GetConnection(ctx, u.ID)
-	return err == nil && !ok
+	age := now.Sub(u.CreatedAt)
+	if len(creds) == 0 {
+		if strings.EqualFold(u.Email, email) {
+			return age > signupReplaceAfter
+		}
+		return age > signupNoPasskeyTTL
+	}
+	return age > signupUnprovenTTL
 }

@@ -269,13 +269,41 @@ func TestSignup_DuplicateEmail(t *testing.T) {
 		}
 	})
 
-	t.Run("an abandoned attempt is replaced and its token dies", func(t *testing.T) {
+	t.Run("an attempt still in its ceremony is NOT replaced", func(t *testing.T) {
+		// Somebody who merely knows the address must not be able to delete an
+		// account out from under an open passkey sheet.
+		start := time.Now().UTC()
+		atTime(t, start)
 		h, users, _, cfg := signupFixture(t)
 		first, a := postSignup(t, h, `{"email":"me@example.test"}`)
 		if first.Code != http.StatusCreated {
 			t.Fatalf("first signup = %d: %s", first.Code, first.Body)
 		}
 
+		atTime(t, start.Add(signupReplaceAfter-time.Second))
+		second, _ := postSignup(t, h, `{"email":"ME@example.test"}`)
+		if second.Code != http.StatusConflict {
+			t.Fatalf("repeat signup inside the window = %d, want 409: %s", second.Code, second.Body)
+		}
+		if !userExists(t, users, a.UserID) {
+			t.Fatal("the in-progress attempt was deleted")
+		}
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/register/begin", nil)
+		if _, ok := cfg.registrationSubject(req, a.EnrollmentToken); !ok {
+			t.Error("the in-progress attempt's token stopped working")
+		}
+	})
+
+	t.Run("an abandoned attempt is replaced and its token dies", func(t *testing.T) {
+		start := time.Now().UTC()
+		atTime(t, start)
+		h, users, _, cfg := signupFixture(t)
+		first, a := postSignup(t, h, `{"email":"me@example.test"}`)
+		if first.Code != http.StatusCreated {
+			t.Fatalf("first signup = %d: %s", first.Code, first.Body)
+		}
+
+		atTime(t, start.Add(signupReplaceAfter+time.Second))
 		second, b := postSignup(t, h, `{"email":"ME@example.test"}`)
 		if second.Code != http.StatusCreated {
 			t.Fatalf("repeat signup = %d, want 201: %s", second.Code, second.Body)
@@ -311,6 +339,8 @@ func TestSignup_Cleanup(t *testing.T) {
 	seedSignupUser(t, users, &User{ID: "s-key-8d-noconn", Email: "c@x.test", Origin: UserOriginSignup, CreatedAt: ago(8 * 24 * time.Hour)}, true)
 	seedSignupUser(t, users, &User{ID: "s-key-6d-noconn", Email: "d@x.test", Origin: UserOriginSignup, CreatedAt: ago(6 * 24 * time.Hour)}, true)
 	seedSignupUser(t, users, &User{ID: "s-key-8d-conn", Email: "e@x.test", Origin: UserOriginSignup, CreatedAt: ago(8 * 24 * time.Hour)}, true)
+	seedSignupUser(t, users, &User{ID: "s-key-6d-conn", Email: "e2@x.test", Origin: UserOriginSignup, CreatedAt: ago(6 * 24 * time.Hour)}, true)
+	seedSignupUser(t, users, &User{ID: "s-key-nodate", Email: "e3@x.test", Origin: UserOriginSignup}, true)
 	seedSignupUser(t, users, &User{ID: "s-proven-old", Email: "f@x.test", Origin: UserOriginSignup, TeamID: "team-1", CreatedAt: ago(90 * 24 * time.Hour)}, false)
 	seedSignupUser(t, users, &User{ID: "s-nokey-nodate", Email: "g@x.test", Origin: UserOriginSignup}, false)
 	// Accounts an admin made: never counted, never deleted.
@@ -319,6 +349,7 @@ func TestSignup_Cleanup(t *testing.T) {
 
 	conns.byUser = map[UserID]*FantraxConnection{
 		"s-key-8d-conn": {UserID: "s-key-8d-conn", Status: ConnNeedsReconnect},
+		"s-key-6d-conn": {UserID: "s-key-6d-conn", Status: ConnNeedsReconnect},
 	}
 
 	rec, _ := postSignup(t, h, `{"email":"new@x.test"}`)
@@ -329,9 +360,11 @@ func TestSignup_Cleanup(t *testing.T) {
 	for id, want := range map[UserID]bool{
 		"s-nokey-2h":      false, // no passkey after an hour
 		"s-nokey-30m":     true,  // still inside the hour
-		"s-key-8d-noconn": false, // never connected in a week
+		"s-key-8d-noconn": false, // no proven team in a week
 		"s-key-6d-noconn": true,  // still inside the week
-		"s-key-8d-conn":   true,  // has a connection record, even a failed one
+		"s-key-8d-conn":   false, // a FAILED connection does not hold a slot for ever
+		"s-key-6d-conn":   true,  // still inside the week
+		"s-key-nodate":    true,  // age unknown: keep
 		"s-proven-old":    true,  // holds a team
 		"s-nokey-nodate":  true,  // age unknown: keep
 		"invited-old":     true,
@@ -343,21 +376,28 @@ func TestSignup_Cleanup(t *testing.T) {
 	}
 }
 
-// TestSignup_UncertaintyKeepsTheAccount: a connection store that cannot be
-// read must not turn into deletions.
-func TestSignup_UncertaintyKeepsTheAccount(t *testing.T) {
+// TestSignup_TheCapCannotBeHeldFullForEver is the review finding that changed
+// the cleanup: fifty accounts with a passkey and a failed connection used to
+// count against the cap at any age, closing signup until an admin intervened.
+func TestSignup_TheCapCannotBeHeldFullForEver(t *testing.T) {
 	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
 	atTime(t, now)
-	h, users, conns, _ := signupFixture(t)
-	seedSignupUser(t, users, &User{ID: "old", Email: "c@x.test", Origin: UserOriginSignup,
-		CreatedAt: now.Add(-30 * 24 * time.Hour)}, true)
-	conns.getErr = context.DeadlineExceeded
-
-	if rec, _ := postSignup(t, h, `{"email":"new@x.test"}`); rec.Code != http.StatusCreated {
-		t.Fatalf("signup = %d: %s", rec.Code, rec.Body)
+	users := NewFileUserStore(t.TempDir())
+	conns := &signupConns{byUser: map[UserID]*FantraxConnection{}}
+	h := Handler(Config{Users: users, Enrollments: users, SessionSecret: []byte("s"),
+		WebAuthn: testWebAuthn(t), Connections: conns, SignupMaxUnproven: 3})
+	for _, id := range []UserID{"h1", "h2", "h3"} {
+		seedSignupUser(t, users, &User{ID: id, Email: string(id) + "@x.test",
+			Origin: UserOriginSignup, CreatedAt: now.Add(-time.Hour)}, true)
+		conns.byUser[id] = &FantraxConnection{UserID: id, Status: ConnNeedsReconnect, LastError: ConnErrBadCredentials}
 	}
-	if !userExists(t, users, "old") {
-		t.Fatal("an account was deleted because its connection could not be READ")
+
+	if rec, _ := postSignup(t, h, `{"email":"new@x.test"}`); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("signup at the cap = %d, want 429", rec.Code)
+	}
+	atTime(t, now.Add(signupUnprovenTTL))
+	if rec, _ := postSignup(t, h, `{"email":"new@x.test"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("signup a week later = %d, want 201: the held slots must expire: %s", rec.Code, rec.Body)
 	}
 }
 

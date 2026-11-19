@@ -112,7 +112,7 @@ no invite. It is the **only** tenant-creating route reachable without a caller.
 POST /v1/signup   {"email":"someone@example.com","display_name":"Someone"}
 201  {"user_id":"…","enrollment_token":"…"}
 400  malformed body, invalid email, display name over 80 characters
-409  the email already has an account
+409  the email already has an account (or a signup for it began under 2 minutes ago)
 429  too many unproven signup accounts exist (Retry-After: 3600)
 501  user or enrollment store not configured
 ```
@@ -134,12 +134,26 @@ touch an account an admin made:
 | Rule | Effect |
 |---|---|
 | Cap | At most `Config.SignupMaxUnproven` (default 50) such accounts; then `429`. A soft limit, not a security boundary. |
-| Cleanup | Runs inside each signup request. Deletes such an account with no passkey after 1 hour, and with a passkey but no connection record after 7 days. Any read it cannot make keeps the account. |
-| Replace | A repeat signup with the same email deletes an attempt that never got a passkey, so cancelling the passkey sheet does not lock a person out of their own address. |
+| Cleanup | Runs inside each signup request. Deletes such an account with no passkey after 1 hour, and any such account — connected or not — 7 days after creation. A failed connection therefore cannot hold a slot for ever. Any read it cannot make keeps the account. |
+| Replace | A repeat signup with the same email deletes an attempt that never got a passkey, once that attempt is 2 minutes old. Younger than that it answers `409`, so a person who merely knows the address cannot delete a ceremony in progress. |
+
+**Connect budget.** Signup makes `POST /v1/connect` reachable by anyone, and
+each submission is a headless Fantrax login from this deployment whose verdict
+`GET /v1/connect` reports. An account with **no proven team** may therefore
+start 5 checks per 24 hours (`connectBudget` in `connect.go`); the sixth
+answers `429` with `Retry-After`. A team choice spends from the same budget. A
+tenant with a proven team is never counted. Known limit: the count lives on the
+connection record, so deleting the account and signing up again starts a new
+budget — bounded by the signup cap and a passkey ceremony per five attempts,
+but not a deployment-wide ceiling.
+
+`register/finish` re-reads the user after writing the passkey and takes the
+passkey back if the account was deleted during the ceremony.
 
 Accepted risks: `409` reveals that an address has an account (there is no mail
 infrastructure to do better), an address can be claimed by someone who does not
-own it, and an attacker can hold the cap full until the cleanup frees it.
+own it, and an attacker can hold the cap full for up to 7 days per batch of 50
+passkey ceremonies.
 
 The route is reached through an **exact-path** exception to `cfg.authorize` in
 `Handler`. Being absent from `adminOnlyRoutes` does not make a route public;

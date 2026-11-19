@@ -286,6 +286,22 @@ func (cfg Config) handleAuthRegisterFinish(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, "could not save passkey")
 		return
 	}
+	// THE ACCOUNT MAY HAVE BEEN DELETED WHILE THE CEREMONY RAN. That was an
+	// admin-only event until POST /v1/signup, whose cleanup and replace-on-retry
+	// delete passkey-less signup accounts from an unauthenticated route
+	// (signup.go). The user read at the top of this handler is then stale, and
+	// the unconditional write above has just stored a credential for a profile
+	// that no longer exists — rows nothing lists and nothing sweeps, and a
+	// passkey on the person's device that can never sign in. Re-read, and take
+	// the credential back rather than answer "registered" for an account that
+	// is gone. A failed READ is not evidence of deletion and changes nothing.
+	if _, ok, err := cfg.Users.GetUser(r.Context(), u.ID); err == nil && !ok {
+		if derr := cfg.Users.DeleteCredential(r.Context(), u.ID, cred.ID); derr != nil {
+			log.Printf("lineupapi: could not remove the passkey written for deleted user %q: %v", u.ID, derr)
+		}
+		writeErr(w, http.StatusForbidden, "enrollment link is no longer valid")
+		return
+	}
 	// Stamp the registration date, best-effort: the credential above is what
 	// signs the user in, and failing a working registration over a missing
 	// date would be exactly backwards. An unstamped passkey reads as

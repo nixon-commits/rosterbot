@@ -130,9 +130,9 @@ var (
 // the wrong team confers nothing — it makes that tenant's next connect fail
 // with team_not_owned.
 func SetTeam(ctx context.Context, users UserStore, id UserID, teamID string) error {
-	// An empty team is precisely the state connect refuses as no_team, so
-	// writing one would be a control whose only effect is recreating the wall
-	// it exists to clear.
+	// An empty team names nothing for connect to verify. Since rosterbot-kr89
+	// connect would then DISCOVER the team instead, so writing one here would
+	// be a control that looks like an assignment and is not.
 	if teamID == "" {
 		return ErrTeamRequired
 	}
@@ -156,8 +156,10 @@ func SetTeam(ctx context.Context, users UserStore, id UserID, teamID string) err
 // handleSetTenantTeam binds a Fantrax team to a tenant — the dashboard twin of
 // `rosterbot user set-team`, and the last management action that was CLI-only
 // (rosterbot-yupr). Every pilot tester was invited with the invite form's
-// optional team field skipped, aiming each of them at connect's no_team wall
-// that nothing on this page could clear.
+// optional team field skipped, aiming each of them at what was then connect's
+// no_team wall, which nothing on this page could clear. (Connect has since
+// learned to discover the team when none is named — rosterbot-kr89 — so this
+// is now how an admin NAMES one deliberately, e.g. to settle an ambiguous_team.)
 func (cfg Config) handleSetTenantTeam(w http.ResponseWriter, r *http.Request) {
 	if cfg.Users == nil {
 		writeErr(w, http.StatusNotImplemented, "user directory not configured")
@@ -177,7 +179,7 @@ func (cfg Config) handleSetTenantTeam(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 	case errors.Is(err, ErrTeamRequired):
-		writeErr(w, http.StatusBadRequest, "a fantrax team id is required (an empty team is what connect refuses as no_team)")
+		writeErr(w, http.StatusBadRequest, "a fantrax team id is required")
 		return
 	case errors.Is(err, errNoSuchUser):
 		writeErr(w, http.StatusNotFound, "no such user")

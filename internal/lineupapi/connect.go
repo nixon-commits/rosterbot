@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/nixon-commits/rosterbot/internal/wiretime"
@@ -25,6 +26,55 @@ const connectInFlightWindow = 10 * time.Minute
 // minute is what the tenant-facing copy already promises, in both
 // connectFailureMessage and settings.js's FAILURE_COPY.
 const connectInterruptedCooldown = time.Minute
+
+// The connect budget: how many checks an account with NO PROVEN TEAM may start
+// per window.
+//
+// Until self-serve signup, only people an admin had invited could reach
+// POST /v1/connect. Now anyone can create an account, and every submission
+// here is a headless login against Fantrax from this deployment's address
+// whose verdict GET /v1/connect then reports — a free oracle for testing
+// stolen Fantrax passwords, an ECS task per guess, and the documented route to
+// Cloudflare blocking the address for every tenant. The in-flight guard bounds
+// how FAST that goes; nothing bounded how MUCH.
+//
+// It applies while the user record names no team and stops applying the moment
+// a team is proven (ClaimTeam writes it), so a working tenant re-entering a
+// changed password is never counted. A team choice spends from the same
+// budget: it launches the same login.
+//
+// KNOWN LIMIT: the count lives on the connection record, so deleting the
+// account (DELETE /v1/me) and signing up again starts a fresh budget. That
+// costs a new signup and a new passkey ceremony per five guesses and stays
+// inside the signup cap, but it is not a hard deployment-wide ceiling.
+const (
+	connectBudgetAttempts = 5
+	connectBudgetWindow   = 24 * time.Hour
+)
+
+// connectBudget reports how many attempts the current window has used and when
+// that window opened, as of now. An expired or absent window reads as a fresh
+// one opening now.
+func connectBudget(cur *FantraxConnection, ok bool, now time.Time) (used int, windowStart int64) {
+	if ok && cur.ConnectWindowStart != 0 &&
+		now.Sub(time.Unix(cur.ConnectWindowStart, 0)) < connectBudgetWindow {
+		return cur.ConnectAttempts, cur.ConnectWindowStart
+	}
+	return 0, now.Unix()
+}
+
+// connectBudgetRefusal writes the 429 for an account that has spent its
+// budget, and reports whether it did.
+func connectBudgetRefusal(w http.ResponseWriter, userTeam string, used int, windowStart int64, now time.Time) bool {
+	if userTeam != "" || used < connectBudgetAttempts {
+		return false
+	}
+	retry := time.Unix(windowStart, 0).Add(connectBudgetWindow).Sub(now)
+	w.Header().Set("Retry-After", strconv.Itoa(max(int(retry.Seconds()), 1)))
+	writeErr(w, http.StatusTooManyRequests,
+		"too many Fantrax sign-in attempts for this account today; try again tomorrow")
+	return true
+}
 
 // handleConnect accepts a tenant's Fantrax credentials, seals them, and launches
 // the task that verifies them. It also accepts the answer to an ambiguous_team
@@ -114,11 +164,16 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case uerr == nil && uok:
 			userTeam = u.TeamID
-		case choosing:
-			// Fails closed for a choice only. The credentials path has always
-			// tolerated this read failing (the connect task then discovers or
-			// refuses on its own); a choice that could not see the user record
-			// could not tell whether a team is already named.
+		default:
+			// FAILS CLOSED, for both shapes. This read used to be tolerated: an
+			// unreadable record left the team empty and the connect task then
+			// refused with no_team. Since discovery an empty team is no longer
+			// refused — the task ADOPTS whatever single team the credentials
+			// control — so tolerating a failed read here would silently turn
+			// "verify the team the invite named" into "discover a team", and
+			// one DynamoDB blip would skip the admin's cross-check. The caller
+			// resolved through this same store a moment ago, so !uok is a
+			// deletion mid-request and gets the same answer.
 			writeErr(w, http.StatusBadGateway, "user directory unavailable")
 			return
 		}
@@ -148,6 +203,15 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadGateway, "could not seal credentials")
 			return
 		}
+	}
+
+	// The budget is checked on the record as read, and again on every re-read
+	// below, for the reason the in-flight guard is: the record that won a race
+	// is the one the limit must hold against.
+	now := time.Now().UTC()
+	used, windowStart := connectBudget(cur, ok, now)
+	if connectBudgetRefusal(w, userTeam, used, windowStart, now) {
+		return
 	}
 
 	// Written BEFORE the task is launched. If the launch fails the record shows
@@ -180,6 +244,9 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 			CredsCiphertext: creds,
 			UpdatedAt:       time.Now().UTC(),
 		}
+		if userTeam == "" {
+			conn.ConnectAttempts, conn.ConnectWindowStart = used+1, windowStart
+		}
 		if ok {
 			conn.Version = cur.Version
 		}
@@ -208,6 +275,10 @@ func (cfg Config) handleConnect(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusConflict, msg)
 				return
 			}
+		}
+		used, windowStart = connectBudget(cur, ok, now)
+		if connectBudgetRefusal(w, userTeam, used, windowStart, now) {
+			return
 		}
 		if choosing {
 			// The record that won the race is the one the choice must be valid
