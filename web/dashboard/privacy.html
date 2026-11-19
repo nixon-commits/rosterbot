@@ -88,20 +88,26 @@
 <code>recaps.rosterbot.dev</code>, and the backend service behind them. rosterbot is operated by an
 individual, not a company, as a personal project.</p>
 
-<p>rosterbot is invite-only. You cannot create an account without an invite link issued by the
-operator.</p>
+<p>You can create an account yourself in the iOS app, or the operator can send you an invite link.
+An account does nothing until you connect a Fantrax account that manages a team in the league this
+service is set up for.</p>
 
 <h2>2. What we collect</h2>
 
-<p><strong>Account information.</strong> Your email address and display name. Your email is entered by
-the operator when your invite is created and is checked against the address on your Fantrax account
-when you connect; we record who vouched for it and when. We do not send you email, and there is no
-mailing list.</p>
+<p><strong>Account information.</strong> Your email address and display name. If you create your own
+account, you enter them yourself: the name is optional, and the email address is not verified. If you
+were invited, the operator entered your email when the invite was created, and we record who vouched
+for it and when. In both cases the address is compared with the one on your Fantrax account when you
+connect. We also record how the account was created (by you or by invite). We do not send you email,
+and there is no mailing list.</p>
 
 <p><strong>Fantasy platform credentials.</strong> To set your lineup, rosterbot signs in to your
 Fantrax account as you. It stores your Fantrax username and password, and the session cookie obtained
 from them. These are encrypted before storage &mdash; see &ldquo;How credentials are protected&rdquo;
-below. It also stores your Fantrax user ID and the ID of the team you manage.</p>
+below. It also stores your Fantrax user ID and the ID of the team you manage, which it reads from
+Fantrax when you connect. If your Fantrax account manages more than one team in the league, it keeps
+the list of those teams (ID and name) until you choose one. It keeps a count of your recent connection
+attempts, to limit how often a new account can try a Fantrax sign-in.</p>
 
 <p><strong>Passkeys.</strong> When you register a passkey, rosterbot stores its public key, credential
 ID, and signature counter. A passkey&rsquo;s private key never leaves your device and is never
@@ -171,6 +177,10 @@ you use rosterbot from outside the United States, your data is processed there.<
 <p>Account data is kept for as long as your account exists. You can delete your account at any time in
 the iOS app: open Settings and choose Delete Account. The operator can also delete an account from the
 dashboard.</p>
+<p>An account you created yourself and did not finish setting up is deleted automatically: after one
+hour if no passkey was registered, and after seven days if no Fantrax team was connected. If you start
+again with the same email address before a passkey exists, the earlier unfinished account is
+replaced.</p>
 
 <p>Deleting an account removes your profile, your email address, your registered passkeys, and your
 encrypted fantasy-platform credentials and connection record, and releases your email address and team
@@ -203,9 +213,8 @@ not sell personal information as those laws define it. Exercise any of these rig
 below.</p>
 
 <h2>9. Children</h2>
-<p>rosterbot is not directed at children under 13, and we do not knowingly collect data from them. The
-service is invite-only, so accounts are not created without the operator&rsquo;s involvement. If you
-believe a child has an account, contact us and it will be removed.</p>
+<p>rosterbot is not directed at children under 13, and we do not knowingly collect data from them. If
+you believe a child has an account, contact us and it will be removed.</p>
 
 <h2>10. Changes to this policy</h2>
 <p>If this policy changes materially, the effective date at the top will be updated and, where the

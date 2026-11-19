@@ -92,8 +92,15 @@ const (
 
 	// ConnErrTwoFactor — Fantrax asked for a second factor, which means the
 	// username and password were ACCEPTED. Distinct from BadCredentials because
-	// the remedy is the opposite: re-entering the password cannot help, and the
-	// user must disable two-factor auth or the account cannot be automated.
+	// the remedy is the opposite: re-entering the password cannot help. An
+	// account with two-factor auth on cannot be automated at all.
+	//
+	// THE USER-FACING COPY STATES THAT LIMIT AND STOPS THERE (connect_feed.go,
+	// connstate.js, the iOS app). It used to tell the person to turn two-factor
+	// auth off, which is advice to weaken a security control on somebody else's
+	// service — acceptable between friends on a TestFlight, not from a public
+	// App Store listing. Whether to change their Fantrax security is theirs to
+	// decide; all we owe them is the fact.
 	ConnErrTwoFactor = "two_factor_required"
 
 	// ConnErrBotChallenge — a Cloudflare interstitial stood in front of the
