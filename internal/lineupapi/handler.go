@@ -136,6 +136,7 @@ type Config struct {
 //	GET    /v1/reports/{name}                    -> private dashboard report (model|gap|views)
 //	POST   /v1/jobs/{name}                       -> launch a job (async), 202
 //	GET    /v1/me                                -> the caller's own profile + Fantrax status
+//	DELETE /v1/me                                -> delete the caller's own account (members only), 204
 //	GET    /v1/sleeper/leagues                   -> discover a Sleeper account's leagues by username
 //	GET    /v1/memberships                       -> the caller's own leagues
 //	POST   /v1/memberships                       -> add a Sleeper league
@@ -182,6 +183,7 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /v1/reports/{name}", cfg.handleReport)
 	mux.HandleFunc("POST /v1/jobs/{name}", cfg.handleJob)
 	mux.HandleFunc("GET /v1/me", cfg.handleMe)
+	mux.HandleFunc("DELETE /v1/me", cfg.handleDeleteMe)
 	mux.HandleFunc("GET /v1/sleeper/leagues", cfg.handleSleeperLeagues)
 	mux.HandleFunc("GET /v1/memberships", cfg.handleListMemberships)
 	mux.HandleFunc("POST /v1/memberships", cfg.handleAddMembership)
