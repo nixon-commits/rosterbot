@@ -118,6 +118,16 @@ above.</p>
 trades, game-start budgets, and the historical analytics derived from them. This is data about your
 fantasy team, retrieved from your league, and it is what the service is for.</p>
 
+<p><strong>Notification device information.</strong> If you allow notifications in the iOS app, the app
+sends us the device token that Apple issues for it, the device&rsquo;s hardware model identifier (for
+example, <code>iPhone17,1</code>), the app&rsquo;s bundle identifier, and whether the token is for
+Apple&rsquo;s production or development service. We record when the device was registered and when it
+was last seen. We use these to send notifications to that device and for nothing else. Signing out in the app removes the registration.</p>
+
+<p><strong>Sleeper leagues.</strong> If you add a Sleeper league, rosterbot stores the league&rsquo;s ID
+and name and the ID of your Sleeper user in that league. To find your leagues it sends the Sleeper
+username you type to Sleeper. It does not ask for or store a Sleeper password.</p>
+
 <p><strong>Server logs.</strong> The public recap site is served through a content delivery network
 that records standard web access logs, including IP addresses and requested URLs. Those logs are
 deleted automatically after 90 days. They are used to count how many people read the weekly recap and
@@ -158,12 +168,24 @@ with the following services:</p>
 <ul>
   <li><strong>Fantrax</strong> &mdash; your own fantasy account, signed in as you, to read your roster
   and set your lineup. This is the purpose of the service.</li>
-  <li><strong>Pushover</strong> &mdash; delivers your notifications. Notification text (for example, a
-  lineup change or a trade alert) passes through it.</li>
+  <li><strong>Apple</strong> &mdash; the Apple Push Notification service delivers notifications to the
+  iOS app. Each notification&rsquo;s title and a short summary of its text (for example, a lineup
+  change or a trade alert) pass through Apple, addressed to your device token.</li>
+  <li><strong>Pushover</strong> &mdash; while notifications move to Apple&rsquo;s service, a copy of
+  each notification&rsquo;s text is also sent through Pushover to the operator&rsquo;s own Pushover
+  account, labelled with your display name. League-wide alerts (for example, a team that is near its
+  weekly game-start limit) are sent through Pushover to league members who joined the league&rsquo;s
+  Pushover group. rosterbot gives Pushover no email address, credential, or device token of
+  yours.</li>
+  <li><strong>Sleeper</strong> &mdash; if you add a Sleeper league, rosterbot sends your Sleeper
+  username to Sleeper to find your leagues. The iOS home-screen widget then reads that league&rsquo;s
+  matchups, rosters, and member list from Sleeper&rsquo;s public API directly from your device, so
+  Sleeper receives the league ID and your device&rsquo;s IP address. rosterbot also reads public
+  football data from Sleeper.</li>
   <li><strong>Amazon Web Services</strong> &mdash; hosts the service and stores its data.</li>
   <li><strong>Read-only data sources</strong> &mdash; MLB Stats API, FanGraphs, Baseball Savant,
-  HittersKeepBatting, Sleeper, and StatsGuy. rosterbot fetches public statistics and projections from
-  these. It sends them no personal information about you.</li>
+  HittersKeepBatting, and StatsGuy. rosterbot fetches public statistics and projections from these. It
+  sends them no personal information about you.</li>
 </ul>
 
 <p>We may also disclose data where required by law, or where necessary to protect the rights or safety
@@ -182,8 +204,9 @@ hour if no passkey was registered, and after seven days if no Fantrax team was c
 again with the same email address before a passkey exists, the earlier unfinished account is
 replaced.</p>
 
-<p>Deleting an account removes your profile, your email address, your registered passkeys, and your
-encrypted fantasy-platform credentials and connection record, and releases your email address and team
+<p>Deleting an account removes your profile, your email address, your registered passkeys, your
+notification device registrations, and your encrypted fantasy-platform credentials and connection
+record, and releases your email address and team
 so they can be used again.</p>
 
 <p>To be precise about what deletion does <em>not</em> remove: historical fantasy analytics files
