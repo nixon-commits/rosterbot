@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/fgretry"
 )
 
 // fgBackoff is the pause before each RETRY, so len(fgBackoff)+1 is the attempt
@@ -29,6 +31,11 @@ var fgBackoff = []time.Duration{time.Second, 4 * time.Second}
 // 5xx, a rate-limit) that used to burn a whole hourly run's fetch. The real
 // protection against the challenge window is the stale fallback plus the fact
 // that some run in the clean window lands the refresh.
+//
+// That 17:00-03:00 map is no longer accurate, and nothing should be scheduled
+// against it. From 2026-11-24 the block held at 14:15 UTC on four consecutive
+// days, which is inside what used to be the clean morning window, so the
+// window has either widened or become continuous. Treat its shape as unknown.
 func fetchJSON(ctx context.Context, url, label string, out any) error {
 	client := &http.Client{Timeout: 15 * time.Second}
 
@@ -54,7 +61,7 @@ func fetchJSON(ctx context.Context, url, label string, out any) error {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("%s: status %d", label, resp.StatusCode)
-			if !retryableStatus(resp.StatusCode) {
+			if !fgretry.Retryable(resp.StatusCode) {
 				return lastErr
 			}
 			continue
@@ -71,18 +78,4 @@ func fetchJSON(ctx context.Context, url, label string, out any) error {
 		return nil
 	}
 	return lastErr
-}
-
-// retryableStatus reports whether a status is worth another attempt.
-//
-// 403 is included, which is not the usual rule — normally a 403 is a durable
-// authorization answer and retrying it is waste. Here it is the status
-// Cloudflare returns for an unsolved challenge, and that IS intermittent, so
-// treating it as permanent would give up on the one failure this path most
-// often sees. Nothing on this endpoint is authenticated, so there is no real
-// 403 for the looser rule to mask.
-func retryableStatus(code int) bool {
-	return code == http.StatusForbidden ||
-		code == http.StatusTooManyRequests ||
-		code >= http.StatusInternalServerError
 }

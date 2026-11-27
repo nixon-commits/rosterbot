@@ -19,6 +19,7 @@ import (
 
 var archiveDate string
 var archiveDryRun bool
+var archiveCatchUp bool
 
 var archiveCmd = &cobra.Command{
 	Use:   "archive",
@@ -29,6 +30,8 @@ var archiveCmd = &cobra.Command{
 func init() {
 	archiveCmd.Flags().StringVar(&archiveDate, "date", "", "capture date YYYY-MM-DD (default: today UTC)")
 	archiveCmd.Flags().BoolVar(&archiveDryRun, "dry-run", false, "fetch and report sizes without writing")
+	archiveCmd.Flags().BoolVar(&archiveCatchUp, "catch-up", false,
+		"fetch only the sources today has not captured yet; the hourly ArchiveCatchUp schedule runs this")
 	rootCmd.AddCommand(archiveCmd)
 }
 
@@ -47,7 +50,10 @@ func init() {
 // only honest response is to leave it.
 //
 // Today is allowed, and is the one date the fetches actually describe — that is
-// the legitimate same-day retry after a failed 14:15 UTC run.
+// the legitimate same-day retry after a failed 14:15 UTC run. That retry is no
+// longer only a manual one: the ArchiveCatchUp schedule fires `archive
+// --catch-up` hourly from 15:15 to 23:15 UTC, and this rule is why it stops at
+// 23:15 rather than running through the night.
 //
 // A future date is refused too, for that reason plus one of its own: a dt=
 // ahead of today makes LatestPartition permanently fresh, so the Infra row
@@ -100,15 +106,17 @@ func runArchive(cmd *cobra.Command, args []string) error {
 		archive.FuncSource{N: "prospects", F: prospects.ArchiveArtifacts},
 	}
 	// Dry-run must not need a store: it only fetches and reports sizes, and the
-	// S3 constructor would otherwise demand credentials to do nothing.
+	// S3 constructor would otherwise demand credentials to do nothing. A
+	// catch-up is the exception even when it is a dry run, because the mode IS
+	// a question to the store about what today already holds.
 	var w archive.Writer
-	if !archiveDryRun {
+	if !archiveDryRun || archiveCatchUp {
 		w, err = statestore.FromEnv().ArchiveWriter()
 		if err != nil {
 			return fmt.Errorf("archive store: %w", err)
 		}
 	}
-	return runArchiveSources(context.Background(), sources, w, date, archiveDryRun, os.Stdout)
+	return runArchiveSources(context.Background(), sources, w, date, archiveRun{dryRun: archiveDryRun, catchUp: archiveCatchUp}, os.Stdout)
 }
 
 // runArchiveSources runs each source independently and reports the run as a
@@ -126,6 +134,28 @@ func runArchive(cmd *cobra.Command, args []string) error {
 // anyone diffed S3 by hand. A line that prints only on failure cannot prove a
 // success happened; the count can.
 //
+// --catch-up (opt.catchUp) changes which sources are attempted, and nothing
+// else. Each source is skipped when the store says this day already holds
+// artifacts for it, so a day the 14:15 run captured in full costs one listing
+// per source and no upstream traffic. That cheapness is the point: it is what
+// lets the ArchiveCatchUp schedule fire every hour to 23:15 UTC, which is the
+// only real defence against a Cloudflare challenge that lasts hours. A store
+// read that FAILS fetches the source anyway — "I could not look" is not
+// "already captured", and the opposite reading would silence every catch-up
+// fire during an S3 incident.
+//
+// The exit policy below is deliberately unchanged for a catch-up: a day still
+// missing a source fails the run however many times it has been attempted. A
+// SUCCESS record from a fire that captured nothing is the precise trap the
+// positive control above was built to close, and it would be worse here, since
+// the later fires are the ones an operator would read as the final word.
+//
+// One limit worth stating: the skip is per SOURCE, not per artifact. A
+// partition holding six of projections' eight blobs reads as captured, so a
+// later clean hour will not complete it. That matches the grain of the exit
+// policy below, where a partial loss inside a source is already that source's
+// own warning rather than a lost day.
+//
 // The exit policy escalates by GRAIN. A whole source lost — fetch error, write
 // error, or a fetch that produced zero artifacts, which is the same absent
 // partition by another route — fails the run, so the ledger records FAILED and
@@ -134,12 +164,35 @@ func runArchive(cmd *cobra.Command, args []string) error {
 // source (projections archiving six of its eight FanGraphs blobs) is that
 // source's own warning to stderr and stays one: the day has a partition, and
 // the shortfall is named where it happened.
-func runArchiveSources(ctx context.Context, sources []archive.Source, w archive.Writer, date time.Time, dryRun bool, out io.Writer) error {
+// archiveRun carries the run's modes. A struct rather than two bool
+// parameters: `false, false` at a call site says nothing about which mode is
+// which, and both are read in more than one place below.
+type archiveRun struct {
+	dryRun  bool
+	catchUp bool
+}
+
+func runArchiveSources(ctx context.Context, sources []archive.Source, w archive.Writer, date time.Time, opt archiveRun, out io.Writer) error {
 	if len(sources) == 0 {
 		return nil
 	}
-	var written, lost []string
+	day := date.UTC().Format("2006-01-02")
+	var written, lost, already []string
 	for _, s := range sources {
+		if opt.catchUp {
+			has, err := w.Has(date, s.Name())
+			switch {
+			case err != nil:
+				// "I could not look" is not "already captured". Reading it as
+				// the latter would turn every catch-up fire into a no-op
+				// during exactly the kind of incident that makes them matter,
+				// so an unreadable partition is fetched.
+				fmt.Fprintf(out, "archive: cannot tell whether %s is captured (%v); fetching it\n", s.Name(), err)
+			case has:
+				already = append(already, s.Name())
+				continue
+			}
+		}
 		arts, err := s.Fetch(ctx, date)
 		switch {
 		case err != nil:
@@ -151,7 +204,7 @@ func runArchiveSources(ctx context.Context, sources []archive.Source, w archive.
 			lost = append(lost, s.Name())
 			continue
 		}
-		if dryRun {
+		if opt.dryRun {
 			var total int
 			for _, a := range arts {
 				total += len(a.Bytes)
@@ -168,11 +221,43 @@ func runArchiveSources(ctx context.Context, sources []archive.Source, w archive.
 		written = append(written, s.Name())
 	}
 
+	// The label is resolved before either exit below, so both catch-up exits
+	// carry the same one. They disagreed when each built its own: the
+	// already-complete line said "(catch-up)" while the reconciling line under
+	// the same flags said "(dry-run)".
+	//
+	// Both modes are named when both are set. --dry-run --catch-up is a human
+	// diagnostic the schedules never pass, and it used to print the dry-run
+	// label over the catch-up body, whose "already captured" clause only means
+	// anything for a catch-up. The VERB still follows the write: a dry run
+	// fetched, it did not fill.
 	verb, prefix := "wrote", "archive"
-	if dryRun {
+	switch {
+	case opt.dryRun && opt.catchUp:
+		verb, prefix = "fetched", "archive (catch-up, dry-run)"
+	case opt.dryRun:
 		verb, prefix = "fetched", "archive (dry-run)"
+	case opt.catchUp:
+		verb, prefix = "filled", "archive (catch-up)"
+	}
+
+	// A catch-up that found nothing to do still says so. Silence would have to
+	// be interpreted, and this job's whole history is about not making anyone
+	// interpret silence.
+	if opt.catchUp && len(already) == len(sources) {
+		fmt.Fprintf(out, "%s: dt=%s already complete; all %d sources captured\n", prefix, day, len(sources))
+		return nil
 	}
 	summary := fmt.Sprintf("%s: %s %d/%d sources (%s)", prefix, verb, len(written), len(sources), strings.Join(written, ", "))
+	if opt.catchUp {
+		// The denominator is what this fire ATTEMPTED, not the source count:
+		// "filled 1/4" on a day with three sources already captured reads as
+		// three losses.
+		summary = fmt.Sprintf("%s: dt=%s %s %d/%d attempted (%s)", prefix, day, verb, len(written), len(sources)-len(already), strings.Join(written, ", "))
+		if len(already) > 0 {
+			summary += fmt.Sprintf("; already captured %d (%s)", len(already), strings.Join(already, ", "))
+		}
+	}
 	if len(lost) > 0 {
 		summary += fmt.Sprintf("; lost %d (%s)", len(lost), strings.Join(lost, ", "))
 	}

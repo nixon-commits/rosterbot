@@ -1,7 +1,9 @@
 // Package archive captures faithful daily snapshots of ephemeral upstream data
 // (data that only exists "as of now" and is unrecoverable once the day passes).
-// It is a leaf: it imports only the standard library. Concrete Sources live in
-// their home packages and are wired together by cmd/archive.go.
+// It is a leaf: it imports the standard library plus internal/fgretry, itself a
+// stdlib-only leaf that holds the FanGraphs retry predicate this package shares
+// with internal/projections. Concrete Sources live in their home packages and
+// are wired together by cmd/archive.go.
 package archive
 
 import (
@@ -12,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/fgretry"
 )
 
 // Artifact is one file to archive: the upstream response bytes verbatim plus the
@@ -49,6 +53,20 @@ type Store interface {
 	// WritePartition writes every artifact under dir (slash-separated, e.g.
 	// "hkb/dt=2026-08-18"), replacing whatever was there.
 	WritePartition(dir string, arts []Artifact) error
+
+	// HasPartition reports whether dir already holds at least one artifact.
+	//
+	// It is what makes `archive --catch-up` affordable. One fixed daily slot
+	// is one chance at an upstream that can be blocked for hours, so the
+	// catch-up schedule fires again every hour; re-fetching HKB, five Savant
+	// CSVs and eight FanGraphs blobs on each of those fires would be the
+	// whole cost of the feature. Asking the store first makes a healthy day
+	// cost one listing per source.
+	//
+	// An EMPTY partition reports false. cmd/archive.go already counts a
+	// source that produced zero artifacts as lost, and a read that disagreed
+	// would make the catch-up skip the one hole it exists to fill.
+	HasPartition(dir string) (bool, error)
 }
 
 // PartitionDir is the single place the layout <source>/dt=YYYY-MM-DD is built.
@@ -87,6 +105,21 @@ func (f *FileStore) WritePartition(dir string, arts []Artifact) error {
 	return os.Rename(tmp, full)
 }
 
+// HasPartition reports whether this day's directory exists and holds anything.
+// A missing directory is the ordinary answer for a day not yet captured, so it
+// is false with no error; only a real I/O failure is an error, because the
+// caller must not read "I could not look" as "already captured".
+func (f *FileStore) HasPartition(dir string) (bool, error) {
+	entries, err := os.ReadDir(filepath.Join(f.Root, filepath.FromSlash(dir)))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(entries) > 0, nil
+}
+
 // Writer resolves (source, date) to a partition and hands it to a Store.
 type Writer struct{ Store Store }
 
@@ -97,6 +130,14 @@ func NewFileWriter(dir string) Writer { return Writer{Store: NewFileStore(dir)} 
 // Write persists one source's artifacts for one capture date.
 func (w Writer) Write(date time.Time, source string, arts []Artifact) error {
 	return w.Store.WritePartition(PartitionDir(source, date), arts)
+}
+
+// Has reports whether this source already captured this date. It resolves the
+// partition the same way Write does, which is the point: a read that built the
+// layout itself could drift from the write and answer about a path nothing
+// ever writes to.
+func (w Writer) Has(date time.Time, source string) (bool, error) {
+	return w.Store.HasPartition(PartitionDir(source, date))
 }
 
 // archiveHTTPClient is the shared client for raw archival fetches. Timeout is
@@ -111,8 +152,17 @@ var getRetryBackoff = []time.Duration{500 * time.Millisecond, 1 * time.Second, 2
 // single fetch primitive every Source uses, so the GET+status+read block is not
 // duplicated across the hkb/projections/waivers/prospects archive files.
 //
-// Transient failures (transport errors and 5xx responses) are retried according
-// to getRetryBackoff. 4xx responses are permanent and returned immediately.
+// Transient failures are retried according to getRetryBackoff: transport errors
+// always, plus the statuses fgretry.Retryable names -- 5xx, 429, and 403, the
+// last being what Cloudflare answers for an unsolved challenge on FanGraphs.
+// Any other status is a durable answer and is returned immediately.
+//
+// 403 used to sit in the permanent group with the rest of 4xx, and that is the
+// defect which turned the challenge beginning 2026-11-24 into four lost
+// partitions: the run failed in 1-2 seconds on each of four consecutive days
+// without a single retry. hkb and savant come through here too, where a 403 is
+// likelier to be real than intermittent, but four attempts over 3.5 seconds is
+// a cheap price on data that cannot be recovered once the day ends.
 func Get(ctx context.Context, url string) ([]byte, error) {
 	maxAttempts := 1 + len(getRetryBackoff)
 	var lastErr error
@@ -134,11 +184,12 @@ func Get(ctx context.Context, url string) ([]byte, error) {
 			io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining is best-effort; the status below is the diagnosis and a drain failure cannot change it
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
-			if resp.StatusCode < 500 {
-				// 4xx: permanent failure — do not retry.
+			if !fgretry.Retryable(resp.StatusCode) {
+				// A durable answer about the request — do not retry.
 				return nil, lastErr
 			}
-			// 5xx: retryable (fall through to sleep + next attempt).
+			// Retryable (5xx, 429, or Cloudflare's 403): fall through to
+			// sleep + next attempt.
 		}
 
 		// Retryable failure: sleep before the next attempt if one remains.

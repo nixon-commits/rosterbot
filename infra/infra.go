@@ -1531,6 +1531,7 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		sixHourlyGap    = 8 * time.Hour      // 6h nominal + 2h slack; runs all day, no Lineup-style window
 		allDayHourlyGap = 3 * time.Hour      // 1h nominal + 2h slack; runs all day, unlike Lineup's windowed hourlyGap
 		dailyGap        = 26 * time.Hour     // 24h + 2h slack
+		catchUpGap      = 18 * time.Hour     // ArchiveCatchUp: 16h overnight gap (23:15 -> 15:15 UTC) + 2h slack
 		weeklyGap       = 8 * 24 * time.Hour // 7d + 1d slack
 	)
 	type job struct {
@@ -1632,6 +1633,30 @@ func NewInfraStack(scope constructs.Construct, id string, props *InfraStackProps
 		{"ProjectionReports", "cron(5 15 * * ? *)", jsii.Strings("projection-site", "--scope", "tenant"), dailyGap},
 		// daily capture of ephemeral upstream data (HKB, projections, Savant, prospects) after upstreams' once-daily refresh
 		{"Archive", "cron(15 14 * * ? *)", jsii.Strings("archive"), dailyGap},
+		// The same capture retried hourly until the day is complete, because
+		// one fixed slot is one chance at an upstream that blocks for HOURS.
+		// FanGraphs answered 403 to the 14:15 run on four consecutive days
+		// from 2026-11-24, and dt=2026-11-24..27 of projections and prospects
+		// are gone for good -- FanGraphs publishes no history, so nothing can
+		// backfill them. internal/projections/fetch.go had already named the
+		// real protection against that Cloudflare challenge, "some run in the
+		// clean window lands the refresh", and archive was the one FanGraphs
+		// caller with no second run to do it.
+		//
+		// --catch-up asks the store what today already holds and fetches only
+		// the rest, so a healthy day costs four listings and zero upstream
+		// fetches. That is what makes nine extra fires affordable; a plain
+		// `archive` on this cron would re-capture HKB, five Savant CSVs and
+		// eight FanGraphs blobs nine more times a day.
+		//
+		// The window is 15:15-23:15 UTC and cannot be widened past midnight:
+		// resolveArchiveDate accepts today only, so a fire after 00:00 UTC
+		// would be working on a fresh day with nothing to catch up on, and the
+		// day just lost would stay lost. Do NOT re-cut these slots against the
+		// old 17:00-03:00 challenge map either -- the block held at 14:15,
+		// inside what used to be the clean morning window, so its shape is now
+		// unknown and spreading the attempts IS the strategy.
+		{"ArchiveCatchUp", "cron(15 15-23 * * ? *)", jsii.Strings("archive", "--catch-up"), catchUpGap},
 		// Appends today's per-team aggregate HKB dynasty value to the Team Value
 		// Store. Runs 14:30 UTC (after Archive's HKB refresh, before ProjectionSite
 		// at 15:00) so value.json renders today's point same-day. Accumulates

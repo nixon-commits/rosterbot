@@ -75,7 +75,7 @@ var fantraxBackoff = []time.Duration{2 * time.Second, 8 * time.Second}
 // retryableFantraxStatus reports whether a Fantrax status is worth another
 // attempt.
 //
-// This is deliberately NOT projections.retryableStatus. That one retries 403,
+// This is deliberately NOT fgretry.Retryable. That one retries 403,
 // which is correct there and wrong here: FanGraphs' /api/projections is
 // unauthenticated, so its 403 is only ever Cloudflare's unsolved-challenge
 // status and there is no real 403 for the looser rule to mask. Every call on

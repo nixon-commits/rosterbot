@@ -323,6 +323,20 @@ func (m *memArchive) WritePartition(dir string, _ []archive.Artifact) error {
 	return nil
 }
 
+// HasPartition answers from the same record WritePartition keeps, so the fake
+// cannot claim a day it never wrote.
+func (m *memArchive) HasPartition(dir string) (bool, error) {
+	if m.err != nil {
+		return false, m.err
+	}
+	for _, d := range m.dirs {
+		if d == dir {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (m *memArchive) provider(calls *int) archiveWriterFunc {
 	return func() (archive.Writer, error) {
 		if calls != nil {
