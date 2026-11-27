@@ -1,7 +1,9 @@
 // Package archive captures faithful daily snapshots of ephemeral upstream data
 // (data that only exists "as of now" and is unrecoverable once the day passes).
-// It is a leaf: it imports only the standard library. Concrete Sources live in
-// their home packages and are wired together by cmd/archive.go.
+// It is a leaf: it imports the standard library plus internal/fgretry, itself a
+// stdlib-only leaf that holds the FanGraphs retry predicate this package shares
+// with internal/projections. Concrete Sources live in their home packages and
+// are wired together by cmd/archive.go.
 package archive
 
 import (
@@ -12,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/fgretry"
 )
 
 // Artifact is one file to archive: the upstream response bytes verbatim plus the
@@ -111,8 +115,17 @@ var getRetryBackoff = []time.Duration{500 * time.Millisecond, 1 * time.Second, 2
 // single fetch primitive every Source uses, so the GET+status+read block is not
 // duplicated across the hkb/projections/waivers/prospects archive files.
 //
-// Transient failures (transport errors and 5xx responses) are retried according
-// to getRetryBackoff. 4xx responses are permanent and returned immediately.
+// Transient failures are retried according to getRetryBackoff: transport errors
+// always, plus the statuses fgretry.Retryable names -- 5xx, 429, and 403, the
+// last being what Cloudflare answers for an unsolved challenge on FanGraphs.
+// Any other status is a durable answer and is returned immediately.
+//
+// 403 used to sit in the permanent group with the rest of 4xx, and that is the
+// defect which turned the challenge beginning 2026-11-24 into four lost
+// partitions: the run failed in 1-2 seconds on each of four consecutive days
+// without a single retry. hkb and savant come through here too, where a 403 is
+// likelier to be real than intermittent, but four attempts over 3.5 seconds is
+// a cheap price on data that cannot be recovered once the day ends.
 func Get(ctx context.Context, url string) ([]byte, error) {
 	maxAttempts := 1 + len(getRetryBackoff)
 	var lastErr error
@@ -134,11 +147,12 @@ func Get(ctx context.Context, url string) ([]byte, error) {
 			io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining is best-effort; the status below is the diagnosis and a drain failure cannot change it
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
-			if resp.StatusCode < 500 {
-				// 4xx: permanent failure — do not retry.
+			if !fgretry.Retryable(resp.StatusCode) {
+				// A durable answer about the request — do not retry.
 				return nil, lastErr
 			}
-			// 5xx: retryable (fall through to sleep + next attempt).
+			// Retryable (5xx, 429, or Cloudflare's 403): fall through to
+			// sleep + next attempt.
 		}
 
 		// Retryable failure: sleep before the next attempt if one remains.

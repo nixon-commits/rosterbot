@@ -388,7 +388,7 @@ func (c *Client) fetchMLBGameLog(mlbamID int, group string, season int) ([]mlbGa
 // deep inside http.Get.
 // retryableMLBStatus reports whether a statsapi status is worth another try.
 //
-// Deliberately NOT projections.retryableStatus: that one also retries 403,
+// Deliberately NOT fgretry.Retryable: that one also retries 403,
 // which is right for FanGraphs (an unauthenticated endpoint where a 403 is
 // only ever Cloudflare's unsolved challenge) and wrong here. statsapi is
 // unauthenticated too, but it answers a genuinely unknown player with a 4xx

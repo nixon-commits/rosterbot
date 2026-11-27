@@ -37,7 +37,7 @@ func TestWithRetry_RecoversFromASingle524(t *testing.T) {
 	}
 }
 
-// The whole point of not copying projections.retryableStatus: Fantrax is
+// The whole point of not copying fgretry.Retryable: Fantrax is
 // authenticated, so a 403 is a real session answer that the session ladder
 // re-logins for. Retrying it burns wall-clock and cannot succeed.
 func TestWithRetry_DoesNotRetryAnAuthAnswer(t *testing.T) {

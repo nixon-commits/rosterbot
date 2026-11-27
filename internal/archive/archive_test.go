@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nixon-commits/rosterbot/internal/fgretry"
 )
 
 func TestWriterWritesDatePartition(t *testing.T) {
@@ -148,5 +150,67 @@ func TestGetDoesNotRetry4xx(t *testing.T) {
 	}
 	if n := calls.Load(); n != 1 {
 		t.Errorf("handler called %d times, want 1 (no retry on 4xx)", n)
+	}
+}
+
+// 403 is what Cloudflare answers for an unsolved challenge on FanGraphs, and
+// that clears on a scale of hours rather than being a verdict about the
+// request. Get used to class every 4xx as permanent, so the challenge that
+// began 2026-11-24 cost four permanently lost partitions in runs that lasted
+// 1-2 seconds and never retried once.
+func TestGetRetries403ThenSucceeds(t *testing.T) {
+	orig := getRetryBackoff
+	getRetryBackoff = []time.Duration{0, 0}
+	defer func() { getRetryBackoff = orig }()
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusForbidden) // cf-mitigated: challenge
+			return
+		}
+		w.Write([]byte("OK"))
+	}))
+	defer srv.Close()
+
+	got, err := Get(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("a challenge that clears on retry must not lose the source: %v", err)
+	}
+	if string(got) != "OK" {
+		t.Fatalf("body = %q, want OK", got)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("handler called %d times, want 2", n)
+	}
+}
+
+// Pins this path to the shared predicate, which is the half of the fix that
+// stops the two FanGraphs fetch paths from drifting apart again. The sibling
+// of this test lives in internal/projections.
+func TestGetRetryPolicyFollowsSharedPredicate(t *testing.T) {
+	orig := getRetryBackoff
+	getRetryBackoff = []time.Duration{0, 0}
+	defer func() { getRetryBackoff = orig }()
+
+	for _, code := range []int{400, 401, 403, 404, 410, 429, 500, 502, 503, 524} {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.WriteHeader(code)
+		}))
+		if _, err := Get(context.Background(), srv.URL); err == nil {
+			t.Errorf("status %d: want an error", code)
+		}
+		srv.Close()
+
+		want := int32(1)
+		if fgretry.Retryable(code) {
+			want = int32(len(getRetryBackoff) + 1)
+		}
+		if n := calls.Load(); n != want {
+			t.Errorf("status %d: handler called %d times, want %d (fgretry.Retryable = %v)",
+				code, n, want, fgretry.Retryable(code))
+		}
 	}
 }
