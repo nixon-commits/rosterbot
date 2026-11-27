@@ -112,12 +112,17 @@ type failingStore struct{}
 
 func (failingStore) WritePartition(string, []archive.Artifact) error { return errors.New("s3 down") }
 
+// Nothing is ever captured in a store whose writes all fail, so the catch-up
+// read answers "missing" rather than erroring: the write is the thing under
+// test here, and a read error would mask it.
+func (failingStore) HasPartition(string) (bool, error) { return false, nil }
+
 var archiveTestDate = time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC)
 
 func TestRunArchiveSources_CleanRunPrintsOneSummaryNamingEverySource(t *testing.T) {
 	var out strings.Builder
 	err := runArchiveSources(context.Background(), []archive.Source{okSource("hkb", 1), okSource("savant", 5)},
-		archive.NewFileWriter(t.TempDir()), archiveTestDate, false, &out)
+		archive.NewFileWriter(t.TempDir()), archiveTestDate, archiveRun{}, &out)
 	if err != nil {
 		t.Fatalf("clean run: %v", err)
 	}
@@ -133,7 +138,7 @@ func TestRunArchiveSources_OneLostSourceIsNamedWrittenAroundAndFailsTheRun(t *te
 	root := t.TempDir()
 	var out strings.Builder
 	err := runArchiveSources(context.Background(), []archive.Source{okSource("hkb", 1), badSource("projections"), okSource("savant", 1)},
-		archive.NewFileWriter(root), archiveTestDate, false, &out)
+		archive.NewFileWriter(root), archiveTestDate, archiveRun{}, &out)
 
 	// Isolation: the surviving sources are written regardless.
 	for _, name := range []string{"hkb", "savant"} {
@@ -161,7 +166,7 @@ func TestRunArchiveSources_OneLostSourceIsNamedWrittenAroundAndFailsTheRun(t *te
 func TestRunArchiveSources_AllLostIsAnErrorAndSaysSo(t *testing.T) {
 	var out strings.Builder
 	err := runArchiveSources(context.Background(), []archive.Source{badSource("hkb")},
-		archive.NewFileWriter(t.TempDir()), archiveTestDate, false, &out)
+		archive.NewFileWriter(t.TempDir()), archiveTestDate, archiveRun{}, &out)
 	if err == nil {
 		t.Fatal("all sources failing must return an error")
 	}
@@ -176,7 +181,7 @@ func TestRunArchiveSources_ZeroArtifactsIsALostSource(t *testing.T) {
 	root := t.TempDir()
 	var out strings.Builder
 	err := runArchiveSources(context.Background(), []archive.Source{okSource("prospects", 0), okSource("hkb", 1)},
-		archive.NewFileWriter(root), archiveTestDate, false, &out)
+		archive.NewFileWriter(root), archiveTestDate, archiveRun{}, &out)
 	if err == nil {
 		t.Fatal("a source that produced zero artifacts is a lost source and must fail the run")
 	}
@@ -194,7 +199,7 @@ func TestRunArchiveSources_ZeroArtifactsIsALostSource(t *testing.T) {
 func TestRunArchiveSources_WriteFailureIsALostSource(t *testing.T) {
 	var out strings.Builder
 	err := runArchiveSources(context.Background(), []archive.Source{okSource("hkb", 1)},
-		archive.NewWriter(failingStore{}), archiveTestDate, false, &out)
+		archive.NewWriter(failingStore{}), archiveTestDate, archiveRun{}, &out)
 	if err == nil {
 		t.Fatal("a fetched source whose write failed was not archived and must fail the run")
 	}
@@ -209,7 +214,7 @@ func TestRunArchiveSources_WriteFailureIsALostSource(t *testing.T) {
 func TestRunArchiveSources_PartialFeedInsideASourceIsNotALoss(t *testing.T) {
 	var out strings.Builder
 	err := runArchiveSources(context.Background(), []archive.Source{okSource("projections", 6)},
-		archive.NewFileWriter(t.TempDir()), archiveTestDate, false, &out)
+		archive.NewFileWriter(t.TempDir()), archiveTestDate, archiveRun{}, &out)
 	if err != nil {
 		t.Fatalf("a source that archived some of its feeds is written, not lost: %v", err)
 	}
@@ -222,7 +227,7 @@ func TestRunArchiveSources_DryRunWritesNothingAndSaysFetched(t *testing.T) {
 	root := t.TempDir()
 	var out strings.Builder
 	if err := runArchiveSources(context.Background(), []archive.Source{okSource("hkb", 1)}, archive.NewFileWriter(root),
-		archiveTestDate, true, &out); err != nil {
+		archiveTestDate, archiveRun{dryRun: true}, &out); err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "hkb")); !os.IsNotExist(err) {
@@ -230,5 +235,144 @@ func TestRunArchiveSources_DryRunWritesNothingAndSaysFetched(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "archive (dry-run): fetched 1/1 sources (hkb)") {
 		t.Errorf("a dry run must say it fetched rather than wrote; got:\n%s", out.String())
+	}
+}
+
+// --- catch-up: the second, third and later chances at the same day ---
+//
+// One fixed daily slot is one chance, and FanGraphs' Cloudflare challenge
+// lasts hours. From 2026-11-24 the 14:15Z run was blocked on four consecutive
+// days, so four days of projections and prospects are gone for good. What
+// fetch.go already names as the real protection against the challenge --
+// "some run in the clean window lands the refresh" -- archive did not have.
+//
+// It does now: the ArchiveCatchUp schedule fires hourly from 15:15Z to 23:15Z
+// and each fire asks the store what today already holds. That read is what
+// makes the extra fires cheap enough to be worth having, and it is also what
+// keeps them honest -- a run that re-fetched everything would turn a healthy
+// day into nine more full captures of HKB and five Savant CSVs.
+
+// memStore records what it was asked to write and answers the catch-up read
+// from the same map, so a test can seed a partially captured day.
+type memStore struct {
+	captured map[string]bool
+	hasErr   error
+}
+
+func newMemStore(capturedDirs ...string) *memStore {
+	m := &memStore{captured: map[string]bool{}}
+	for _, d := range capturedDirs {
+		m.captured[d] = true
+	}
+	return m
+}
+
+func (m *memStore) WritePartition(dir string, arts []archive.Artifact) error {
+	m.captured[dir] = len(arts) > 0
+	return nil
+}
+
+func (m *memStore) HasPartition(dir string) (bool, error) {
+	if m.hasErr != nil {
+		return false, m.hasErr
+	}
+	return m.captured[dir], nil
+}
+
+// countingSource reports how many times it was fetched, which is the whole
+// assertion for a skip: a skipped source must not touch the upstream at all.
+func countingSource(name string, calls *int) archive.FuncSource {
+	return archive.FuncSource{N: name, F: func(_ context.Context, _ time.Time) ([]archive.Artifact, error) {
+		*calls++
+		return []archive.Artifact{{Filename: "0.json", Bytes: []byte("1")}}, nil
+	}}
+}
+
+func TestRunArchiveSources_CatchUpDoesNotRefetchASourceAlreadyCapturedToday(t *testing.T) {
+	var hkbCalls int
+	store := newMemStore("hkb/dt=2026-06-30")
+	var out strings.Builder
+
+	err := runArchiveSources(context.Background(),
+		[]archive.Source{countingSource("hkb", &hkbCalls), okSource("projections", 8)},
+		archive.NewWriter(store), archiveTestDate, archiveRun{catchUp: true}, &out)
+	if err != nil {
+		t.Fatalf("filling the one hole is a successful catch-up: %v", err)
+	}
+	if hkbCalls != 0 {
+		t.Errorf("hkb was fetched %d times; a source already captured today must not be re-fetched -- "+
+			"nine extra fires a day only pay for themselves if a healthy day costs nothing", hkbCalls)
+	}
+	if !store.captured["projections/dt=2026-06-30"] {
+		t.Error("the missing source must actually be written")
+	}
+	got := out.String()
+	if !strings.Contains(got, "archive (catch-up): dt=2026-06-30 filled 1/1 attempted (projections); already captured 1 (hkb)") {
+		t.Errorf("the summary must reconcile filled against already-captured; got:\n%s", got)
+	}
+}
+
+func TestRunArchiveSources_CatchUpOnACompleteDayFetchesNothingAndSucceeds(t *testing.T) {
+	var hkbCalls, projCalls int
+	store := newMemStore("hkb/dt=2026-06-30", "projections/dt=2026-06-30")
+	var out strings.Builder
+
+	err := runArchiveSources(context.Background(),
+		[]archive.Source{countingSource("hkb", &hkbCalls), countingSource("projections", &projCalls)},
+		archive.NewWriter(store), archiveTestDate, archiveRun{catchUp: true}, &out)
+	if err != nil {
+		t.Fatalf("a day that is already complete is not a failure: %v", err)
+	}
+	if hkbCalls+projCalls != 0 {
+		t.Errorf("a complete day must cost zero upstream fetches; got %d", hkbCalls+projCalls)
+	}
+	if !strings.Contains(out.String(), "archive (catch-up): dt=2026-06-30 already complete; all 2 sources captured") {
+		t.Errorf("an idle catch-up must still say what it found, so silence never has to be interpreted; got:\n%s", out.String())
+	}
+}
+
+// The exit code is the ledger's only summary of the day, so a catch-up that
+// could not close the hole must stay FAILED. A SUCCESS record from a run that
+// captured nothing is the exact trap the positive-control work closed
+// (rosterbot-kvgw).
+func TestRunArchiveSources_CatchUpStillFailsWhileTheHoleRemains(t *testing.T) {
+	store := newMemStore("hkb/dt=2026-06-30")
+	var out strings.Builder
+
+	err := runArchiveSources(context.Background(),
+		[]archive.Source{okSource("hkb", 1), badSource("projections")},
+		archive.NewWriter(store), archiveTestDate, archiveRun{catchUp: true}, &out)
+	if err == nil {
+		t.Fatal("a day still missing a source must fail the run, however many times it has been attempted")
+	}
+	got := out.String()
+	if !strings.Contains(got, "archive: LOST source projections: boom") {
+		t.Errorf("the loss must use the same line a log filter already matches; got:\n%s", got)
+	}
+	if !strings.Contains(got, "lost 1 (projections)") {
+		t.Errorf("the summary must still name the loss; got:\n%s", got)
+	}
+}
+
+// A store read that fails tells us nothing about the day. Treating "I could
+// not look" as "already captured" would silently convert every catch-up fire
+// into a no-op during an S3 incident, which is the one time they matter most.
+func TestRunArchiveSources_CatchUpFetchesWhenItCannotReadTheStore(t *testing.T) {
+	var calls int
+	store := newMemStore("hkb/dt=2026-06-30")
+	store.hasErr = errors.New("list denied")
+	var out strings.Builder
+
+	err := runArchiveSources(context.Background(),
+		[]archive.Source{countingSource("hkb", &calls)},
+		archive.NewWriter(store), archiveTestDate, archiveRun{catchUp: true}, &out)
+	if err != nil {
+		t.Fatalf("an unreadable store must not fail a run that then captured the source anyway: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("hkb was fetched %d times, want 1: an unreadable partition must be fetched, not assumed present", calls)
+	}
+	if !strings.Contains(out.String(), "archive: cannot tell whether hkb is captured (list denied); fetching it") {
+		t.Errorf("the degraded read must be named, so a day of needless re-fetching is explicable; got:\n%s", out.String())
 	}
 }

@@ -52,3 +52,19 @@ func (s *Store) WritePartition(dir string, arts []archive.Artifact) error {
 	}
 	return nil
 }
+
+// HasPartition lists under the partition and reports whether anything is
+// there. It lists rather than heading a known key because the filenames inside
+// a partition belong to the source, and this store deliberately does not know
+// them -- that is the same reason WritePartition takes a whole artifact set.
+//
+// The trailing separator is load-bearing. Without it "dt=2026-11-2" is a
+// prefix of "dt=2026-11-24", so a truncated day would read as captured.
+func (s *Store) HasPartition(dir string) (bool, error) {
+	prefix := dir + "/"
+	keys, err := s.blob.List(context.Background(), prefix)
+	if err != nil {
+		return false, fmt.Errorf("s3archive: list %s: %w", s.blob.Key(prefix), err)
+	}
+	return len(keys) > 0, nil
+}

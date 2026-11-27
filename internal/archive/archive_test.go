@@ -214,3 +214,79 @@ func TestGetRetryPolicyFollowsSharedPredicate(t *testing.T) {
 		}
 	}
 }
+
+// --- the catch-up read ---
+//
+// The catch-up fires need one fact the Store could not previously answer: does
+// this day already hold anything for this source? Without it every extra fire
+// is a full re-capture of HKB, five Savant CSVs and eight FanGraphs blobs, and
+// the cost of nine extra fires a day rules them out.
+
+func TestFileStoreHasPartitionAnswersPerDay(t *testing.T) {
+	root := t.TempDir()
+	st := NewFileStore(root)
+	date := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
+	dir := PartitionDir("projections", date)
+
+	has, err := st.HasPartition(dir)
+	if err != nil {
+		t.Fatalf("an unwritten day is missing, not an error: %v", err)
+	}
+	if has {
+		t.Error("a day nothing was written for must read as missing")
+	}
+
+	if err := st.WritePartition(dir, []Artifact{{Filename: "steamer-ros-bat.json", Bytes: []byte("[]")}}); err != nil {
+		t.Fatalf("WritePartition: %v", err)
+	}
+	if has, err = st.HasPartition(dir); err != nil || !has {
+		t.Fatalf("HasPartition after a write = %v, %v; want true, nil", has, err)
+	}
+
+	// Per DAY, not per source: yesterday being captured says nothing about today.
+	if has, err = st.HasPartition(PartitionDir("projections", date.AddDate(0, 0, 1))); err != nil || has {
+		t.Errorf("the next day = %v, %v; want false, nil", has, err)
+	}
+}
+
+// An empty directory is not a capture. A partition can exist and hold nothing
+// after a write of zero artifacts, and cmd/archive.go already treats zero
+// artifacts as a lost source -- so the read has to agree with it, or a
+// catch-up would skip the very hole it exists to fill.
+func TestFileStoreHasPartitionTreatsAnEmptyDirAsMissing(t *testing.T) {
+	root := t.TempDir()
+	st := NewFileStore(root)
+	dir := PartitionDir("prospects", time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC))
+
+	if err := st.WritePartition(dir, nil); err != nil {
+		t.Fatalf("WritePartition with no artifacts: %v", err)
+	}
+	has, err := st.HasPartition(dir)
+	if err != nil {
+		t.Fatalf("HasPartition: %v", err)
+	}
+	if has {
+		t.Error("an empty partition captured nothing and must read as missing")
+	}
+}
+
+// recordingStore captures the dir Writer.Has resolved, which is the only
+// behaviour Has adds over the Store call it forwards.
+type recordingStore struct{ asked string }
+
+func (r *recordingStore) WritePartition(string, []Artifact) error { return nil }
+func (r *recordingStore) HasPartition(dir string) (bool, error) {
+	r.asked = dir
+	return true, nil
+}
+
+func TestWriterHasResolvesThroughThePartitionLayout(t *testing.T) {
+	st := &recordingStore{}
+	has, err := NewWriter(st).Has(time.Date(2026, 11, 24, 18, 30, 0, 0, time.UTC), "hkb")
+	if err != nil || !has {
+		t.Fatalf("Has = %v, %v; want true, nil", has, err)
+	}
+	if st.asked != "hkb/dt=2026-11-24" {
+		t.Errorf("asked for %q, want %q -- the read must use the same layout the write does", st.asked, "hkb/dt=2026-11-24")
+	}
+}

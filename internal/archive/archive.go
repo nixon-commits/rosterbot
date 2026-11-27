@@ -53,6 +53,20 @@ type Store interface {
 	// WritePartition writes every artifact under dir (slash-separated, e.g.
 	// "hkb/dt=2026-08-18"), replacing whatever was there.
 	WritePartition(dir string, arts []Artifact) error
+
+	// HasPartition reports whether dir already holds at least one artifact.
+	//
+	// It is what makes `archive --catch-up` affordable. One fixed daily slot
+	// is one chance at an upstream that can be blocked for hours, so the
+	// catch-up schedule fires again every hour; re-fetching HKB, five Savant
+	// CSVs and eight FanGraphs blobs on each of those fires would be the
+	// whole cost of the feature. Asking the store first makes a healthy day
+	// cost one listing per source.
+	//
+	// An EMPTY partition reports false. cmd/archive.go already counts a
+	// source that produced zero artifacts as lost, and a read that disagreed
+	// would make the catch-up skip the one hole it exists to fill.
+	HasPartition(dir string) (bool, error)
 }
 
 // PartitionDir is the single place the layout <source>/dt=YYYY-MM-DD is built.
@@ -91,6 +105,21 @@ func (f *FileStore) WritePartition(dir string, arts []Artifact) error {
 	return os.Rename(tmp, full)
 }
 
+// HasPartition reports whether this day's directory exists and holds anything.
+// A missing directory is the ordinary answer for a day not yet captured, so it
+// is false with no error; only a real I/O failure is an error, because the
+// caller must not read "I could not look" as "already captured".
+func (f *FileStore) HasPartition(dir string) (bool, error) {
+	entries, err := os.ReadDir(filepath.Join(f.Root, filepath.FromSlash(dir)))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(entries) > 0, nil
+}
+
 // Writer resolves (source, date) to a partition and hands it to a Store.
 type Writer struct{ Store Store }
 
@@ -101,6 +130,14 @@ func NewFileWriter(dir string) Writer { return Writer{Store: NewFileStore(dir)} 
 // Write persists one source's artifacts for one capture date.
 func (w Writer) Write(date time.Time, source string, arts []Artifact) error {
 	return w.Store.WritePartition(PartitionDir(source, date), arts)
+}
+
+// Has reports whether this source already captured this date. It resolves the
+// partition the same way Write does, which is the point: a read that built the
+// layout itself could drift from the write and answer about a path nothing
+// ever writes to.
+func (w Writer) Has(date time.Time, source string) (bool, error) {
+	return w.Store.HasPartition(PartitionDir(source, date))
 }
 
 // archiveHTTPClient is the shared client for raw archival fetches. Timeout is

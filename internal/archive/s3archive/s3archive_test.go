@@ -66,3 +66,38 @@ func TestWritePartition_EmptyArtifactListWritesNothing(t *testing.T) {
 		t.Fatalf("wrote %v, want nothing", f.Keys())
 	}
 }
+
+// HasPartition is the read the hourly catch-up fires depend on. It lists under
+// the partition rather than heading a key, because the filenames inside a
+// partition are the source's business and this store must not learn them.
+func TestHasPartition_TrueOnlyForADayThatHoldsObjects(t *testing.T) {
+	f := s3blobtest.New()
+	s := newStore(f)
+
+	has, err := s.HasPartition("projections/dt=2026-11-24")
+	if err != nil {
+		t.Fatalf("an unwritten day is missing, not an error: %v", err)
+	}
+	if has {
+		t.Error("a day with no objects must read as missing")
+	}
+
+	if err := s.WritePartition("projections/dt=2026-11-24", []archive.Artifact{
+		{Filename: "steamer-ros-bat.json", Bytes: []byte("[]")},
+	}); err != nil {
+		t.Fatalf("WritePartition: %v", err)
+	}
+
+	if has, err = s.HasPartition("projections/dt=2026-11-24"); err != nil || !has {
+		t.Fatalf("HasPartition after a write = %v, %v; want true, nil", has, err)
+	}
+	if has, err = s.HasPartition("projections/dt=2026-11-25"); err != nil || has {
+		t.Errorf("a neighbouring day = %v, %v; want false, nil", has, err)
+	}
+	// The listing must be bounded by the partition boundary. Without a
+	// trailing separator, dt=2026-11-2 is a prefix of dt=2026-11-24 and a
+	// truncated or mistyped day would read as captured.
+	if has, err = s.HasPartition("projections/dt=2026-11-2"); err != nil || has {
+		t.Errorf("a partial day prefix = %v, %v; want false, nil -- the read must stop at the partition boundary", has, err)
+	}
+}
