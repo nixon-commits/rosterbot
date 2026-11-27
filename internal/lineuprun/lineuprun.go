@@ -359,6 +359,18 @@ func Run(ctx context.Context, ft LineupClient, cfg *config.Config, opts Options)
 	if pitLoadResult.NoData {
 		prog.Logf("WARNING: pitching projections unavailable — running on schedule + recent stats only")
 	}
+	// A lineup is an ACTION, and no stage below this point can tell how old
+	// the numbers it acts on are. The stale fallback that produced them has no
+	// age ceiling of its own, so this is the only place that can refuse. It
+	// refuses rather than warns: a warning is precisely what this path already
+	// did while scoring with a four-day-old copy anyway (reproduced
+	// 2026-11-27). Both roles are judged, and an absent stamp is unknown
+	// rather than old -- see staleProjectionInput.
+	if err := staleProjectionInput(today, batLoadResult, pitLoadResult); err != nil {
+		sendOptimizeNotify(ctx, err.Error())
+		return Result{}, err
+	}
+
 	result := Result{
 		HittersNoData:  batLoadResult.NoData,
 		PitchersNoData: pitLoadResult.NoData,
