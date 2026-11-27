@@ -376,3 +376,46 @@ func TestRunArchiveSources_CatchUpFetchesWhenItCannotReadTheStore(t *testing.T) 
 		t.Errorf("the degraded read must be named, so a day of needless re-fetching is explicable; got:\n%s", out.String())
 	}
 }
+
+// --dry-run --catch-up is a human diagnostic (the schedule never passes both),
+// and it used to print a line that contradicted itself: the "archive
+// (dry-run)" label with the catch-up body, whose "already captured" clause
+// only means anything for a catch-up. The two catch-up exits also disagreed --
+// the already-complete line said "(catch-up)" under the very same flags. A
+// summary is the job's positive control, so a label that misnames the mode it
+// describes is the one thing it cannot do.
+func TestRunArchiveSources_CatchUpDryRunNamesBothModes(t *testing.T) {
+	store := newMemStore("hkb/dt=2026-06-30")
+	var out strings.Builder
+
+	err := runArchiveSources(context.Background(),
+		[]archive.Source{okSource("hkb", 1), okSource("projections", 8)},
+		archive.NewWriter(store), archiveTestDate, archiveRun{dryRun: true, catchUp: true}, &out)
+	if err != nil {
+		t.Fatalf("dry-run catch-up: %v", err)
+	}
+	// "fetched", not "filled": a dry run wrote nothing, and the verb has to
+	// keep saying so even in the catch-up shape.
+	want := "archive (catch-up, dry-run): dt=2026-06-30 fetched 1/1 attempted (projections); already captured 1 (hkb)"
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("summary must name both modes;\n got:\n%s\nwant to contain:\n%s", out.String(), want)
+	}
+	if store.captured["projections/dt=2026-06-30"] {
+		t.Error("a dry-run catch-up must still write nothing")
+	}
+}
+
+func TestRunArchiveSources_CatchUpDryRunOnACompleteDayUsesTheSameLabel(t *testing.T) {
+	store := newMemStore("hkb/dt=2026-06-30", "projections/dt=2026-06-30")
+	var out strings.Builder
+
+	if err := runArchiveSources(context.Background(),
+		[]archive.Source{okSource("hkb", 1), okSource("projections", 8)},
+		archive.NewWriter(store), archiveTestDate, archiveRun{dryRun: true, catchUp: true}, &out); err != nil {
+		t.Fatalf("dry-run catch-up on a complete day: %v", err)
+	}
+	want := "archive (catch-up, dry-run): dt=2026-06-30 already complete; all 2 sources captured"
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("both catch-up exits must carry the same label;\n got:\n%s\nwant to contain:\n%s", out.String(), want)
+	}
+}

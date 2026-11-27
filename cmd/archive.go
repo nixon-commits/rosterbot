@@ -221,20 +221,32 @@ func runArchiveSources(ctx context.Context, sources []archive.Source, w archive.
 		written = append(written, s.Name())
 	}
 
-	// A catch-up that found nothing to do still says so. Silence would have to
-	// be interpreted, and this job's whole history is about not making anyone
-	// interpret silence.
-	if opt.catchUp && len(already) == len(sources) {
-		fmt.Fprintf(out, "archive (catch-up): dt=%s already complete; all %d sources captured\n", day, len(sources))
-		return nil
-	}
-
+	// The label is resolved before either exit below, so both catch-up exits
+	// carry the same one. They disagreed when each built its own: the
+	// already-complete line said "(catch-up)" while the reconciling line under
+	// the same flags said "(dry-run)".
+	//
+	// Both modes are named when both are set. --dry-run --catch-up is a human
+	// diagnostic the schedules never pass, and it used to print the dry-run
+	// label over the catch-up body, whose "already captured" clause only means
+	// anything for a catch-up. The VERB still follows the write: a dry run
+	// fetched, it did not fill.
 	verb, prefix := "wrote", "archive"
 	switch {
+	case opt.dryRun && opt.catchUp:
+		verb, prefix = "fetched", "archive (catch-up, dry-run)"
 	case opt.dryRun:
 		verb, prefix = "fetched", "archive (dry-run)"
 	case opt.catchUp:
 		verb, prefix = "filled", "archive (catch-up)"
+	}
+
+	// A catch-up that found nothing to do still says so. Silence would have to
+	// be interpreted, and this job's whole history is about not making anyone
+	// interpret silence.
+	if opt.catchUp && len(already) == len(sources) {
+		fmt.Fprintf(out, "%s: dt=%s already complete; all %d sources captured\n", prefix, day, len(sources))
+		return nil
 	}
 	summary := fmt.Sprintf("%s: %s %d/%d sources (%s)", prefix, verb, len(written), len(sources), strings.Join(written, ", "))
 	if opt.catchUp {
